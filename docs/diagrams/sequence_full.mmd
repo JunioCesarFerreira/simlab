@@ -1,0 +1,70 @@
+sequenceDiagram
+    autonumber
+
+    participant API as REST API
+    participant MDB as MongoDB + GridFS
+    participant ENG as mo-engine
+    participant MN as master-node
+    box rgba(0,0,0,0) Cooja Workers (Docker containers)
+      participant CW1 as cooja1
+      participant CWN as coojaN
+    end
+
+    %% --- Source repository (upload & register) ---
+    API->>+MDB: POST /source (multipart) → GridFS<br/>Insert SourceRepository {source_files[]}
+    MDB-->>-API: 201 Created (source_repository_id)
+
+    %% --- Experiment creation ---
+    API->>+MDB: POST /experiment → insert Experiment {status:"Waiting"}
+    MDB-->>API: 201 Created (experiment_id)
+
+    %% --- Engine reacts to new experiment ---
+    MDB-->>ENG: ChangeStream: Experiment(status="Waiting")
+    ENG->>ENG: Select strategy (simple/nsga3)
+    ENG->>+MDB: Insert Generations {status:"Waiting"}<br/>Insert Simulations {status:"Waiting"} (refs to SourceRepository & GridFS)
+    MDB-->>-ENG: generation_ids, simulation_ids
+
+    %% --- Master-Node reacts to new generations ---
+    MDB-->>MN: ChangeStream: Generation(status="Waiting")
+    MN->>+MDB: Update Generation → Running (start_time)
+    MN->>MN: Enqueue all generation.simulations_ids into sim_queue
+
+    %% --- Parallel execution on Cooja containers ---
+    par For each available container
+      MN-->>CW1: SCP upload inputs (simulation.csc, positions.dat, sources…)
+      MN->>CW1: SSH start cooja (java -jar cooja.jar -nogui=simulation.csc)
+      CW1->>CW1: Run headless simulation (produce COOJA.testlog, outputs)
+      CW1-->>MN: Stream stdout/stderr (for logs)
+      MN-->>CW1: SCP download outputs (COOJA.testlog, CSVs, images)
+      MN->>+MDB: Upload results to GridFS (log_cooja_id, runtime_log_id, csv_log_id, topology_picture_id)
+      MN->>+MDB: Update Simulation status → Done | Error (end_time)
+      MN-->>MN: Ack finished
+    and
+      MN-->>CWN: SCP upload inputs
+      MN->>CWN: SSH start cooja
+      CWN->>CWN: Run headless simulation
+      CWN-->>MN: Stream outputs
+      MN-->>CWN: SCP download outputs
+      MN->>+MDB: Upload results & update Simulation status
+      MN-->>MN: Ack finished
+    end
+
+    %% --- Generation completion & engine loop ---
+    MN->>+MDB: If all simulations Done → Update Generation → Done (end_time)
+    MDB-->>-MN: OK
+
+    opt Iterative optimization
+      MDB-->>ENG: ChangeStream: Generation Done
+      ENG->>ENG: Evaluate fitness / selection
+      ENG->>+MDB: (Optional) Insert next Generation + Simulations
+      MDB-->>-ENG: OK
+    end
+
+    %% --- Downloads via API ---
+    API->>+MDB: GET /source/{id}/download → stream .zip (GridFS)
+    MDB-->>-API: 200 (zip)
+    API->>+MDB: GET /simulation/{id}/download/{field} → stream file from GridFS
+    MDB-->>-API: 200 (file)
+
+    Note right of MDB: Status flow<br/>Experiment: Waiting→Running→Done/Error<br/>Generation: Waiting→Running→Done/Error<br/>Simulation: Waiting→Running→Done/Error
+    Note right of MN: sim_queue governs throughput<br/>workers pull when available.
