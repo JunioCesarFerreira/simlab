@@ -11,13 +11,16 @@ from bson import ObjectId
 from paramiko import SSHClient
 from scp import SCPClient
 
+# lib master-node
+from .lib import sshscp
+
 # --------------------------------------------------------------------
-# SysPath para módulos locais
+# SysPath for common modules
 project_path = os.path.abspath(os.path.join(os.getcwd(), ".."))
 if project_path not in sys.path:
     sys.path.insert(0, project_path)
 
-from pylib import sshscp, mongo_db  
+from pylib import mongo_db  
 from dto import Simulation, Experiment, SourceRepository
 # --------------------------------------------------------------------
 

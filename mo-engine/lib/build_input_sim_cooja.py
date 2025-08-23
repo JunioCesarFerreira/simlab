@@ -1,6 +1,6 @@
 import os, tempfile
 from pathlib import Path
-from pylib import files
+from pylib import cooja_files
 from pylib.dto import SimulationConfig
 from pylib.mongo_db import MongoGridFSHandler
 
@@ -14,7 +14,7 @@ def create_files(sim_config: SimulationConfig, grid_fs: MongoGridFSHandler)-> di
         out_dat = tmp_path / "positions.dat"       
 
         # Gera os arquivos a partir do template
-        files.convert_simulation_files(sim_config, TEMPLATE_XML, out_xml, out_dat)
+        cooja_files.convert_simulation_files(sim_config, TEMPLATE_XML, out_xml, out_dat)
 
         # Envia para o GridFS
         xml_id = str(grid_fs.upload_file(str(out_xml), "simulation.xml"))

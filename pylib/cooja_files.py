@@ -1,6 +1,6 @@
 from dto import SimulationConfig
-from parse_json_pos import generate_positions_from_json
-from replace_xml import update_simulation_xml 
+from cooja_builder.parse_json_pos_dat import generate_positions_from_json
+from cooja_builder.replace_xml import update_simulation_xml 
 import os
 
 def convert_simulation_files(

@@ -4,7 +4,7 @@ from matplotlib.patches import Circle
 import json
 from dto import SimulationConfig
 
-def build_plot_network(
+def _build_plot_network(
     points: list[tuple[float, float]],
     region: tuple[float, float, float, float],
     radius: float,
@@ -157,28 +157,7 @@ def build_plot_network(
                 ys_total.extend(y_vals)
 
             ax.plot(xs_total, ys_total, linestyle='--', color='blue', alpha=0.6)
-
-def plot_network_show(
-    points: list[tuple[float, float]],
-    region: tuple[float, float, float, float],
-    radius: float,
-    interference_radius: float,
-    paths: list[list[str]] = None
-    ) -> None:
-    build_plot_network(points, region, radius, interference_radius, paths)
-    plt.show()
-    
-def plot_network_save(
-    file_path: str,
-    points: list[tuple[float, float]],
-    region: tuple[float, float, float, float],
-    radius: float,
-    interference_radius: float,
-    paths: list[list[str]] = None
-    ) -> None:
-    build_plot_network(points, region, radius, interference_radius, paths)
-    plt.savefig(file_path)
-
+  
 def plot_network_save_from_sim(
     file_path: str,
     sim_model: SimulationConfig
@@ -187,76 +166,11 @@ def plot_network_save_from_sim(
     fixed_motes = sim_model["simulationElements"]["fixedMotes"]
     mobile_motes = sim_model["simulationElements"]["mobileMotes"]
 
-    plot_network_save(
-        file_path=file_path,
-        points = [tuple(mote["position"]) for mote in fixed_motes], 
-        region = tuple(sim_model["region"]), 
-        radius = sim_model["radiusOfReach"], 
-        interference_radius = sim_model["radiusOfInter"], 
-        paths = [list[str](mote["functionPath"]) for mote in mobile_motes]
-        )
-
-def dict_for_plot(
-    points: list[tuple[float, float]],
-    region: tuple[float, float, float, float],
-    radius: float,
-    interference_radius: float
-) -> dict:
-    """
-    Gera um dicionário no formato esperado para o arquivo de entrada JSON da simulação.
-
-    Parameters:
-    - points: lista de tuplas (x, y) representando posições dos motes
-    - region: tupla (x_min, y_min, x_max, y_max) definindo a região da simulação
-    - radius: raio de comunicação dos motes
-    - interference_radius: raio de interferência dos motes
-
-    Returns:
-    - Um dicionário com a estrutura especificada para o modelo de simulação
-    """
-
-    fixed_motes = []
-
-    for i, position in enumerate(points):
-        mote = {
-            "position": list(position),
-            "name": "server" if i == 0 else f"client{i}",
-            "sourceCode": "root.c" if i == 0 else "node.c"
-        }
-        fixed_motes.append(mote)
-
-    simulation_model = {
-        "simulationModel": {
-            "name": "single-experiment-sim-lab",
-            "duration": 60,
-            "radiusOfReach": radius,
-            "radiusOfInter": interference_radius,
-            "region": list(region),
-            "simulationElements": {
-                "fixedMotes": fixed_motes,
-                "mobileMotes": []
-            }
-        }
-    }
-
-    return simulation_model
-
-
-def plot_network_from_json(
-    file_path: str,
-    ) -> None:
-    with open(file_path, 'r') as file:
-        data = json.load(file)
-
-    sim_model = data["simulationModel"]
-    fixed_motes = sim_model["simulationElements"]["fixedMotes"]
-    mobile_motes = sim_model["simulationElements"]["mobileMotes"]
-
-    plot_network_show(
-        points = [tuple(mote["position"]) for mote in fixed_motes], 
-        region = tuple(sim_model["region"]), 
-        radius = sim_model["radiusOfReach"], 
-        interference_radius = sim_model["radiusOfInter"], 
-        paths = [list[str](mote["functionPath"]) for mote in mobile_motes]
-        )
+    points = [tuple(mote["position"]) for mote in fixed_motes], 
+    region = tuple(sim_model["region"]), 
+    radius = sim_model["radiusOfReach"], 
+    interference_radius = sim_model["radiusOfInter"], 
+    paths = [list[str](mote["functionPath"]) for mote in mobile_motes]
     
+    _build_plot_network(points, region, radius, interference_radius, paths)
+    plt.savefig(file_path)

@@ -4,11 +4,11 @@ from pathlib import Path
 from bson import ObjectId
 
 from strategy.base import EngineStrategy
-from strategy.build_sim_input import create_files
-from pylib.rand_pts import network_gen
+from lib.build_input_sim_cooja import create_files
+from lib.random_network_methods import network_gen
 from pylib.dto import Simulation, SimulationConfig, Generation
 from pylib.mongo_db import EnumStatus
-from pylib import visual
+from pylib import plot_network
 
 
 class GeneratorRandomStrategy(EngineStrategy):
@@ -91,7 +91,7 @@ class GeneratorRandomStrategy(EngineStrategy):
             # 3) Gera arquivos + imagem da topologia
             files_ids = create_files(config, self.mongo.fs_handler)
             image_tmp_path = tmp_dir / f"{exp_oid}-{gen_oid}-{i}.png"
-            visual.plot_network_save_from_sim(str(image_tmp_path), config)
+            plot_network.plot_network_save_from_sim(str(image_tmp_path), config)
             topology_picture_id = self.mongo.fs_handler.upload_file(
                 str(image_tmp_path),
                 f"topology-{exp_oid}-{gen_oid}-{i}"
