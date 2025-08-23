@@ -1,5 +1,5 @@
 from strategy.base import EngineStrategy
-from pylib.rand_pts import network_gen
+from lib.random_network_methods import network_gen
 from pylib.dto import Simulation, SimulationConfig, Generation
 from datetime import datetime
 import random
