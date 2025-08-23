@@ -91,7 +91,7 @@ services:
     container_name: cooja1
     restart: unless-stopped
     ports:
-      - "2241:22"
+      - "2231:22"
     networks:
       - cooja-net
 
@@ -100,7 +100,7 @@ services:
     container_name: cooja2
     restart: unless-stopped
     ports:
-      - "2242:22"
+      - "2232:22"
     networks:
       - cooja-net
 
@@ -109,7 +109,7 @@ services:
     container_name: cooja3
     restart: unless-stopped
     ports:
-      - "2243:22"
+      - "2233:22"
     networks:
       - cooja-net
 
@@ -118,7 +118,7 @@ services:
     container_name: cooja4
     restart: unless-stopped
     ports:
-      - "2244:22"
+      - "2234:22"
     networks:
       - cooja-net
 
@@ -127,7 +127,7 @@ services:
     container_name: cooja5
     restart: unless-stopped
     ports:
-      - "2245:22"
+      - "2235:22"
     networks:
       - cooja-net
 
@@ -136,7 +136,7 @@ services:
     container_name: cooja6
     restart: unless-stopped
     ports:
-      - "2246:22"
+      - "2236:22"
     networks:
       - cooja-net
 
@@ -145,7 +145,7 @@ services:
     container_name: cooja7
     restart: unless-stopped
     ports:
-      - "2247:22"
+      - "2237:22"
     networks:
       - cooja-net
 
@@ -154,7 +154,7 @@ services:
     container_name: cooja8
     restart: unless-stopped
     ports:
-      - "2248:22"
+      - "2238:22"
     networks:
       - cooja-net
 
@@ -163,7 +163,7 @@ services:
     container_name: cooja9
     restart: unless-stopped
     ports:
-      - "2249:22"
+      - "2239:22"
     networks:
       - cooja-net
 
@@ -172,7 +172,187 @@ services:
     container_name: cooja10
     restart: unless-stopped
     ports:
+      - "2240:22"
+    networks:
+      - cooja-net
+
+  cooja11:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja11
+    restart: unless-stopped
+    ports:
+      - "2241:22"
+    networks:
+      - cooja-net
+
+  cooja12:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja12
+    restart: unless-stopped
+    ports:
+      - "2242:22"
+    networks:
+      - cooja-net
+
+  cooja13:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja13
+    restart: unless-stopped
+    ports:
+      - "2243:22"
+    networks:
+      - cooja-net
+
+  cooja14:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja14
+    restart: unless-stopped
+    ports:
+      - "2244:22"
+    networks:
+      - cooja-net
+
+  cooja15:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja15
+    restart: unless-stopped
+    ports:
+      - "2245:22"
+    networks:
+      - cooja-net
+
+  cooja16:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja16
+    restart: unless-stopped
+    ports:
+      - "2246:22"
+    networks:
+      - cooja-net
+
+  cooja17:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja17
+    restart: unless-stopped
+    ports:
+      - "2247:22"
+    networks:
+      - cooja-net
+
+  cooja18:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja18
+    restart: unless-stopped
+    ports:
+      - "2248:22"
+    networks:
+      - cooja-net
+
+  cooja19:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja19
+    restart: unless-stopped
+    ports:
+      - "2249:22"
+    networks:
+      - cooja-net
+
+  cooja20:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja20
+    restart: unless-stopped
+    ports:
       - "2250:22"
+    networks:
+      - cooja-net
+
+  cooja21:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja21
+    restart: unless-stopped
+    ports:
+      - "2251:22"
+    networks:
+      - cooja-net
+
+  cooja22:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja22
+    restart: unless-stopped
+    ports:
+      - "2252:22"
+    networks:
+      - cooja-net
+
+  cooja23:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja23
+    restart: unless-stopped
+    ports:
+      - "2253:22"
+    networks:
+      - cooja-net
+
+  cooja24:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja24
+    restart: unless-stopped
+    ports:
+      - "2254:22"
+    networks:
+      - cooja-net
+
+  cooja25:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja25
+    restart: unless-stopped
+    ports:
+      - "2255:22"
+    networks:
+      - cooja-net
+
+  cooja26:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja26
+    restart: unless-stopped
+    ports:
+      - "2256:22"
+    networks:
+      - cooja-net
+
+  cooja27:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja27
+    restart: unless-stopped
+    ports:
+      - "2257:22"
+    networks:
+      - cooja-net
+
+  cooja28:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja28
+    restart: unless-stopped
+    ports:
+      - "2258:22"
+    networks:
+      - cooja-net
+
+  cooja29:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja29
+    restart: unless-stopped
+    ports:
+      - "2259:22"
+    networks:
+      - cooja-net
+
+  cooja30:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja30
+    restart: unless-stopped
+    ports:
+      - "2260:22"
     networks:
       - cooja-net
 

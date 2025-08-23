@@ -15,9 +15,10 @@ def generate_cooja_services(n):
       - cooja-net
 """.rstrip())
 
+# Generate a docker-compose code for many Cooja Containers
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("Uso: python gdcc.py <número_de_containers>")
+        print("Use: python gdcc.py <number_of_containers>")
         sys.exit(1)
     try:
         n = int(sys.argv[1])
@@ -25,5 +26,5 @@ if __name__ == "__main__":
             raise ValueError
         generate_cooja_services(n)
     except ValueError:
-        print("Erro: forneça um número inteiro positivo.")
+        print("Error: provide a positive integer.")
         sys.exit(1)
