@@ -12,7 +12,7 @@ from paramiko import SSHClient
 from scp import SCPClient
 
 # lib master-node
-from .lib import sshscp
+from lib import sshscp
 
 # --------------------------------------------------------------------
 # SysPath for common modules
