@@ -1,0 +1,189 @@
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb
+    restart: always
+    command: ["--replSet", "rs0", "--bind_ip_all", "--port", "27017"]
+    ports:
+      - 27017:27017
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: echo "try { rs.status() } catch (err) { rs.initiate({_id:'rs0',members:[{_id:0,host:'mongodb:27017'}]}) }" | mongosh --port 27017 --quiet
+      interval: 5s
+      timeout: 30s
+      start_period: 0s
+      retries: 30
+    volumes:
+      - "mongo_data:/data/db"
+      - "mongo_config:/data/configdb"
+    networks:
+      - mongo-net
+
+  restapi:
+    build:
+      context: .
+      dockerfile: Dockerfile.rest-api
+    container_name: rest_api
+    working_dir: /app
+    volumes:
+      - ./rest-api:/app/rest-api
+      - ./pylib:/app/pylib
+    environment:
+      - PYTHONPATH=/app:/app/pylib
+      - DB_NAME=simlab
+      - MONGO_URI=mongodb://mongodb:27017/?replicaSet=rs0
+      - IS_DOCKER=True
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mongodb
+    networks:
+      - mongo-net
+
+  moengine:
+    build:
+      context: .
+      dockerfile: Dockerfile.mo-engine
+    container_name: mo_engine
+    working_dir: /app
+    volumes:
+      - ./mo-engine:/app/mo-engine
+      - ./pylib:/app/pylib
+    environment:
+      - PYTHONPATH=/app:/app/pylib
+      - DB_NAME=simlab
+      - MONGO_URI=mongodb://mongodb:27017/?replicaSet=rs0
+      - TEMPLATE_XML=/app/mo-engine/simulation_template.xml
+      - IS_DOCKER=True
+    ports:
+      - "2219:22"
+    depends_on:
+      - mongodb
+    networks:
+      - mongo-net
+
+  masternode:
+    build:
+      context: .
+      dockerfile: Dockerfile.master-node
+    container_name: master_node
+    working_dir: /app
+    volumes:
+      - ./master-node:/app/master-node
+      - ./pylib:/app/pylib
+    environment:
+      - PYTHONPATH=/app:/app/pylib
+      - DB_NAME=simlab
+      - MONGO_URI=mongodb://mongodb:27017/?replicaSet=rs0
+      - IS_DOCKER=True
+      - NUMBER_OF_CONTAINERS=10
+    ports:
+      - "2220:22"
+    depends_on:
+      - mongodb
+    networks:
+      - mongo-net
+      - cooja-net
+
+  cooja1:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja1
+    restart: unless-stopped
+    ports:
+      - "2241:22"
+    networks:
+      - cooja-net
+
+  cooja2:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja2
+    restart: unless-stopped
+    ports:
+      - "2242:22"
+    networks:
+      - cooja-net
+
+  cooja3:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja3
+    restart: unless-stopped
+    ports:
+      - "2243:22"
+    networks:
+      - cooja-net
+
+  cooja4:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja4
+    restart: unless-stopped
+    ports:
+      - "2244:22"
+    networks:
+      - cooja-net
+
+  cooja5:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja5
+    restart: unless-stopped
+    ports:
+      - "2245:22"
+    networks:
+      - cooja-net
+
+  cooja6:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja6
+    restart: unless-stopped
+    ports:
+      - "2246:22"
+    networks:
+      - cooja-net
+
+  cooja7:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja7
+    restart: unless-stopped
+    ports:
+      - "2247:22"
+    networks:
+      - cooja-net
+
+  cooja8:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja8
+    restart: unless-stopped
+    ports:
+      - "2248:22"
+    networks:
+      - cooja-net
+
+  cooja9:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja9
+    restart: unless-stopped
+    ports:
+      - "2249:22"
+    networks:
+      - cooja-net
+
+  cooja10:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja10
+    restart: unless-stopped
+    ports:
+      - "2250:22"
+    networks:
+      - cooja-net
+
+volumes:
+  mongo_data:
+  mongo_config:
+
+networks:
+  mongo-net:
+    name: mongo_net
+    driver: bridge
+  cooja-net:
+    name: cooja_net
+    driver: bridge

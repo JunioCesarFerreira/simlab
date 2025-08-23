@@ -1,0 +1,16 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY ./master-node /app/master-node
+COPY ./pylib /app/pylib
+
+RUN pip install --no-cache-dir -r /app/master-node/requirements.txt
+
+ENV PYTHONPATH=/app:/app/pylib
+ENV DB_NAME=simlab
+ENV MONGO_URI=mongodb://mongodb:27017/?replicaSet=rs0
+ENV PYTHONUNBUFFERED=1
+ENV IS_DOCKER=True
+
+CMD ["python", "/app/master-node/master-node.py"]

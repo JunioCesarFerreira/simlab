@@ -1,0 +1,6 @@
+﻿rest-api/__pycache__
+rest-api/api/endpoints/__pycache__
+rest-api/api/__pycache__
+pylib/mongo/__pycache__
+pylib/__pycache__
+mo-engine/strategy/__pycache__

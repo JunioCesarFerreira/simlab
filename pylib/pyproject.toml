@@ -1,0 +1,13 @@
+# pylib/pyproject.toml
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pylib"          # escolha qualquer slug (único)
+version = "0.0.1"
+requires-python = ">=3.12"
+dependencies = ["numpy"]       # coloque o que usar
+
+[tool.setuptools]
+py-modules = ["dto", "files", "parse_json_pos", "replace_xml", "visual"]
