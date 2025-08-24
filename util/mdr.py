@@ -26,12 +26,20 @@ def monitor(interval, duration, output_file="docker_stats.csv"):
         start_time = time.time()
         while time.time() - start_time < duration:
             try:
-                result = subprocess.run(["docker", "stats", "--no-stream", "--no-trunc"],
-                                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-                lines = result.stdout.strip().split('\n')[1:]  # Skip header
-                timestamp = datetime.now().isoformat()
+                result = subprocess.run(
+                    ["docker", "stats", "--no-stream", "--no-trunc"],
+                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+                )
+                lines = result.stdout.strip().split("\n")
+                if len(lines) <= 1:
+                    time.sleep(interval)
+                    continue
+                lines = lines[1:]  # pula o cabeçalho
 
+                timestamp = datetime.now().isoformat()
                 for line in lines:
+                    if not line.strip():
+                        continue
                     stats = parse_stats(line)
                     stats["timestamp"] = timestamp
                     writer.writerow(stats)
@@ -42,10 +50,10 @@ def monitor(interval, duration, output_file="docker_stats.csv"):
                 break
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Container monitoring via docker stats.")
-    parser.add_argument("-i", type=int, default=5, help="Collection interval (seconds)")
-    parser.add_argument("-d", type=int, default=300, help="Total monitoring duration (seconds)")
-    parser.add_argument("-o", type=str, default="docker_stats.csv", help="CSV output file")
-    
+    parser = argparse.ArgumentParser(description="Monitor Docker containers via docker stats.")
+    parser.add_argument("-i", "--interval", type=int, default=5, help="Interval between samples (seconds)")
+    parser.add_argument("-d", "--duration", type=int, default=300, help="Total monitoring duration (seconds)")
+    parser.add_argument("-o", "--output", type=str, default="docker_stats.csv", help="CSV output file")
+
     args = parser.parse_args()
     monitor(interval=args.interval, duration=args.duration, output_file=args.output)
