@@ -1,7 +1,6 @@
 # api/endpoints/experiment.py
 from fastapi import APIRouter, HTTPException
 import os
-from bson import ObjectId
 
 project_path = os.path.abspath(os.path.join(os.getcwd(), ".."))
 import sys
@@ -50,11 +49,11 @@ def get_experiments_by_status(status: str) -> list[ExperimentDto]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.patch("/{experiment_id}", response_model=bool)
+@router.put("/{experiment_id}", response_model=bool)
 def update_experiment(experiment_id: str, updates: dict) -> bool:
     try:
         # updates vai como dict direto ao repo
-        return factory.experiment_repo.update(ObjectId(experiment_id), updates)
+        return factory.experiment_repo.update(experiment_id, updates)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
