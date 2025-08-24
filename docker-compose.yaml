@@ -77,7 +77,7 @@ services:
       - DB_NAME=simlab
       - MONGO_URI=mongodb://mongodb:27017/?replicaSet=rs0
       - IS_DOCKER=True
-      - NUMBER_OF_CONTAINERS=10
+      - NUMBER_OF_CONTAINERS=30
     ports:
       - "2220:22"
     depends_on:
@@ -85,6 +85,9 @@ services:
     networks:
       - mongo-net
       - cooja-net
+
+# Attention! When modifying the number of Cooja containers, 
+# remember to modify the masternode's NUMBER_OF_CONTAINERS environment variable.
 
   cooja1:
     image: juniocesarferreira/simulation-cooja:v1.1
@@ -355,6 +358,9 @@ services:
       - "2260:22"
     networks:
       - cooja-net
+
+# Attention! When modifying the number of Cooja containers, 
+# remember to modify the masternode's NUMBER_OF_CONTAINERS environment variable.
 
 volumes:
   mongo_data:
