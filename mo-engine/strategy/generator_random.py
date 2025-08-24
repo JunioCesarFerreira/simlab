@@ -1,3 +1,4 @@
+import os
 from threading import Thread
 from datetime import datetime
 from pathlib import Path
@@ -96,6 +97,7 @@ class GeneratorRandomStrategy(EngineStrategy):
                 str(image_tmp_path),
                 f"topology-{exp_oid}-{gen_oid}-{i}"
             )
+            os.remove(image_tmp_path)
 
             # 4) Insere simulação
             sim_doc: Simulation = {
