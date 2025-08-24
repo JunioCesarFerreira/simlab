@@ -3,15 +3,14 @@ import re
 import pandas as pd
 from pathlib import Path
 
-
-def convert_log_to_csv(log_path: Path, csv_output: Path) -> pd.DataFrame:
+def cooja_log_to_csv(cooja_log_input: Path, csv_output: Path) -> pd.DataFrame:
     # ------------------------- Expressões Regulares ----------------------------
     json_pattern = re.compile(r'\[Mote:1\].*?(\{.*?\})')
 
     # ---------------------- Leitura + Extração JSON ----------------------------
     rows = []
 
-    with log_path.open(encoding="utf-8") as f:
+    with cooja_log_input.open(encoding="utf-8") as f:
         for line in f:
             m = json_pattern.search(line)
             if not m:

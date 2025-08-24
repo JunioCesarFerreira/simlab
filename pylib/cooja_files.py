@@ -1,7 +1,9 @@
+import os
+from pathlib import Path
 from dto import SimulationConfig
 from cooja_builder.parse_json_pos_dat import generate_positions_from_json
-from cooja_builder.replace_xml import update_simulation_xml 
-import os
+from cooja_builder.replace_xml import update_simulation_xml
+from cooja_builder.csv_converter import cooja_log_to_csv as _cooja_log_to_csv
 
 def convert_simulation_files(
     config: SimulationConfig, 
@@ -35,3 +37,6 @@ def convert_simulation_files(
         input_file=template_file,
         output_file=outsim
     )
+    
+def convert_cooja_log_to_csv(cooja_log_input: str, csv_output: str) -> None:
+    _cooja_log_to_csv(Path(cooja_log_input), Path(csv_output))

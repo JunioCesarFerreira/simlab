@@ -4,3 +4,6 @@ rest-api/api/__pycache__
 pylib/mongo/__pycache__
 pylib/__pycache__
 mo-engine/strategy/__pycache__
+master-node/lib/__pycache__
+pylib/cooja_builder/__pycache__
+mo-engine/lib/__pycache__
