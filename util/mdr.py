@@ -24,7 +24,7 @@ def monitor(interval, duration, output_file="docker_stats.csv"):
         writer.writeheader()
 
         start_time = time.time()
-        print(f"started {start_time}")
+        print(f"started { datetime.now() }")
         while time.time() - start_time < duration:
             try:
                 result = subprocess.run(
@@ -49,7 +49,7 @@ def monitor(interval, duration, output_file="docker_stats.csv"):
             except Exception as e:
                 print(f"Error collecting metrics: {e}")
                 break
-        print(f"stoped { time.time() }")
+        print(f"stoped { datetime.now() }")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Monitor Docker containers via docker stats.")
