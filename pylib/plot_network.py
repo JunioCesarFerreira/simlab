@@ -1,7 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.patches import Circle
-import json
 from dto import SimulationConfig
 
 def _build_plot_network(
@@ -166,10 +165,10 @@ def plot_network_save_from_sim(
     fixed_motes = sim_model["simulationElements"]["fixedMotes"]
     mobile_motes = sim_model["simulationElements"]["mobileMotes"]
 
-    points = [tuple(mote["position"]) for mote in fixed_motes], 
-    region = tuple(sim_model["region"]), 
-    radius = sim_model["radiusOfReach"], 
-    interference_radius = sim_model["radiusOfInter"], 
+    points = [tuple(mote["position"]) for mote in fixed_motes]
+    region = tuple(sim_model["region"])
+    radius = sim_model["radiusOfReach"]
+    interference_radius = sim_model["radiusOfInter"]
     paths = [list[str](mote["functionPath"]) for mote in mobile_motes]
     
     _build_plot_network(points, region, radius, interference_radius, paths)
