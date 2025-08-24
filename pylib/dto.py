@@ -2,7 +2,9 @@ from typing import TypedDict, Any, Optional
 from datetime import datetime
 from bson import ObjectId
 
+#---------------------------------------------------------------------------------------------------------
 # Simulation Structure -----------------------------------------------------------------------------------
+#---------------------------------------------------------------------------------------------------------
 
 class BaseMote(TypedDict):
     name: str
@@ -32,8 +34,10 @@ class SimulationConfig(TypedDict):
     region: tuple[float, float, float, float]
     simulationElements: SimulationElements
     
-    
+
+#---------------------------------------------------------------------------------------------------------    
 # Database Structure -------------------------------------------------------------------------------------
+#---------------------------------------------------------------------------------------------------------
 
 class SourceFile(TypedDict):
     id: str          # ID do arquivo
@@ -83,6 +87,8 @@ class Experiment(TypedDict):
 # refactor note: Por simplicidade vou manter estas estruturas aqui, caso necessário em versões futuras,
 # pode ser interessante criar um subdir em mongo para schemas.
 
+#---------------------------------------------------------------------------------------------------------
+# API DTO ------------------------------------------------------------------------------------------------
 #---------------------------------------------------------------------------------------------------------
 
 class SimulationDto(TypedDict):
