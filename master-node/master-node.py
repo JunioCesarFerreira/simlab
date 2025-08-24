@@ -20,7 +20,8 @@ project_path = os.path.abspath(os.path.join(os.getcwd(), ".."))
 if project_path not in sys.path:
     sys.path.insert(0, project_path)
 
-from pylib import mongo_db  
+from pylib import mongo_db
+from pylib import cooja_files
 from dto import Simulation, Experiment, SourceRepository
 # --------------------------------------------------------------------
 
@@ -83,7 +84,6 @@ class Settings:
             ports=ports,
             sim_timeout_sec=sim_timeout_sec,
         )
-
 
 SET = Settings.from_env()
 
@@ -192,16 +192,27 @@ def run_cooja_simulation(
             log.info("[port=%s] Copying log to %s", port, log_path)
             scp.get(remote_log, log_path)
 
+        # Registra log
         log_id = mongo.fs_handler.upload_file(log_path, "sim_result.log")
         log.info("[port=%s] Log saved with ID: %s", port, log_id)
 
-        mongo.simulation_repo.mark_done(sim_oid, log_id)
+        csv_path = f"{SET.local_log_dir}/sim_{sim_oid}.csv"
+        cooja_files.convert_cooja_log_to_csv(log_path, csv_path)
+        csv_id = mongo.fs_handler.upload_file(csv_path, "sim_result.csv")
+        log.info("[port=%s] Log converted CSV and saved with ID: %s", port, csv_id)
+                
+        # Marca concluído e registra ids de log e csv
+        mongo.simulation_repo.mark_done(sim_oid, log_id, csv_id)
 
         if SET.is_docker:
             try:
                 Path(log_path).unlink(missing_ok=True)
             except Exception as ex:
-                log.warning("Failed to remove temp log %s: %s", log_path, ex)
+                log.warning("Failed to remove temp log file %s: %s", log_path, ex)
+            try:
+                Path(csv_path).unlink(missing_ok=True)
+            except Exception as ex:
+                log.warning("Failed to remove temp csv file %s: %s", csv_path, ex)
 
         # Finalização de geração
         gen_id = sim["generation_id"]

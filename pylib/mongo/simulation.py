@@ -56,7 +56,7 @@ class SimulationRepository:
                  }
             )
     
-    def mark_done(self, sim_id: ObjectId, log_id: ObjectId):
+    def mark_done(self, sim_id: ObjectId, log_id: ObjectId, csv_id: ObjectId):
         with self.connection.connect() as db:
             db["simulations"].update_one(
                 {"_id": sim_id},
@@ -64,6 +64,7 @@ class SimulationRepository:
                     "status": EnumStatus.DONE, 
                     "end_time": datetime.now(),
                     "log_cooja_id": log_id,
+                    "csv_log_id": csv_id,
                     }
                  }
             )
