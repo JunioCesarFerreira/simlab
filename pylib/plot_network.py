@@ -173,3 +173,4 @@ def plot_network_save_from_sim(
     
     _build_plot_network(points, region, radius, interference_radius, paths)
     plt.savefig(file_path)
+    plt.close(file_path)
