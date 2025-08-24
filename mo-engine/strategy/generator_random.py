@@ -116,9 +116,9 @@ class GeneratorRandomStrategy(EngineStrategy):
 
             sim_oid = self.mongo.simulation_repo.insert(sim_doc)
             simulation_ids.append(sim_oid)
-
+        
         # 5) Atualiza geração e experimento
-        self.mongo.generation_repo.update(str(gen_oid), {
+        self.mongo.generation_repo.update(gen_oid, {
             "simulations_ids": [str(_id) for _id in simulation_ids],
             "status": EnumStatus.WAITING
         })
