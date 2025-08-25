@@ -7,3 +7,4 @@ mo-engine/strategy/__pycache__
 master-node/lib/__pycache__
 pylib/cooja_builder/__pycache__
 mo-engine/lib/__pycache__
+util/docker_stats.csv

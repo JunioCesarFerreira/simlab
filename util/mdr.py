@@ -12,14 +12,16 @@ def parse_stats(output_line):
         "mem_usage": parts[3],
         "mem_limit": parts[5],
         "mem_perc": parts[6],
-        "net_io": parts[7],
-        "block_io": parts[8],
-        "pids": parts[9] if len(parts) > 9 else ""
+        "net_io_rx": parts[7],
+        "net_io_tx": parts[9],
+        "block_io_r": parts[10],
+        "block_io_w": parts[12],
+        "pids": parts[13] if len(parts) > 13 else ""
     }
 
 def monitor(interval, duration, output_file="docker_stats.csv"):
     with open(output_file, "w", newline="") as csvfile:
-        fieldnames = ["timestamp", "container", "cpu", "mem_usage", "mem_limit", "mem_perc", "net_io", "block_io", "pids"]
+        fieldnames = ["timestamp", "container", "cpu", "mem_usage", "mem_limit", "mem_perc", "net_io_rx", "net_io_tx", "block_io_r", "block_io_w", "pids"]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
