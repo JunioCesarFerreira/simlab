@@ -79,6 +79,20 @@ sequenceDiagram
 
 ---
 
+## Repository Organization
+
+### Directories and Files
+
+- `docs/`: supplementary documentation such as notes, images and diagrams.
+- `master-node/`: Python code for the Master-Node orchestrator.
+- `mo-engine/`: Python code for the evolutionary engine.
+- `pylib/`: shared Python library used across components.
+- `rest-api/`: Python REST API.
+- `util/`: utility scripts for development, deployment and monitoring.
+- `Dockerfiles`: Dockerfiles and `docker-compose` configurations to build and run the system.
+
+---
+
 ## Installation
 ### Prerequisites
 - Docker & Docker Compose
