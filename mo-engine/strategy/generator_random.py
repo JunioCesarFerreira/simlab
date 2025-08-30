@@ -40,11 +40,12 @@ class GeneratorRandomStrategy(EngineStrategy):
         self._exp_id = exp_oid
 
         params = self.experiment.get("parameters", {})
-        num = int(params.get("number", 10))
-        size = int(params.get("size", 10))
+        num_of_gen = int(params.get("number_of_generations", 10))
+        num_of_motes = int(params.get("number_of_fixed_motes", 10))
         region = tuple(params.get("region", (-100, -100, 100, 100)))
-        radius = float(params.get("radius", 50))
-        interf = float(params.get("interf", 60))
+        radius = float(params.get("radius_of_reach", 50))
+        interf = float(params.get("radius_of_interference", 60))
+        mobile_motes = params.get("mobileMotes", [])
 
         gen: Generation = {
             "index": 1,
@@ -62,9 +63,9 @@ class GeneratorRandomStrategy(EngineStrategy):
         tmp_dir = Path("./tmp")
         tmp_dir.mkdir(parents=True, exist_ok=True)
 
-        for i in range(num):
+        for i in range(num_of_gen):
             # 1) Gera topologia
-            points = network_gen(amount=size, region=region, radius=radius)
+            points = network_gen(amount=num_of_motes, region=region, radius=radius)
             fixed = [
                 {
                     "name": f"m{j}",
@@ -85,7 +86,7 @@ class GeneratorRandomStrategy(EngineStrategy):
                 "region": region,
                 "simulationElements": {
                     "fixedMotes": fixed,
-                    "mobileMotes": []
+                    "mobileMotes": mobile_motes
                 }
             }
 
