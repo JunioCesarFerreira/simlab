@@ -1,0 +1,145 @@
+{
+    "id": null,
+    "name": "Teste Geradores de Redes",
+    "status": "Waiting",
+    "created_time": "2025-08-22T00:00:00Z",
+    "start_time": null,
+    "end_time": null,
+    "parameters": {
+        "type": "simple",
+        "number_of_generations": 1,
+        "number_of_fixed_motes": 13,
+        "region": [
+            -150,
+            -150,
+            150,
+            150
+        ],
+        "radius_of_reach": 50,
+        "radius_of_interference": 60,
+        "mobileMotes": [
+            {
+                "functionPath": [
+                    [
+                        "70",
+                        "44 + 31 * t"
+                    ],
+                    [
+                        "70 - 140 * t",
+                        "75"
+                    ],
+                    [
+                        "-70",
+                        "75 - 31 * t"
+                    ],
+                    [
+                        "-70 + 140 * t",
+                        "44"
+                    ]
+                ],
+                "isClosed": true,
+                "isRoundTrip": false,
+                "speed": 5,
+                "timeStep": 1,
+                "name": "node13",
+                "sourceCode": "node.c"
+            },
+            {
+                "functionPath": [
+                    [
+                        "117 + 24 * np.cos(2 * np.pi * t)",
+                        "-28 + 52 * np.sin(2 * np.pi * t)"
+                    ]
+                ],
+                "isClosed": true,
+                "isRoundTrip": false,
+                "speed": 5,
+                "timeStep": 1,
+                "name": "node14",
+                "sourceCode": "node.c"
+            },
+            {
+                "functionPath": [
+                    [
+                        "-114*(1-t)-64*t",
+                        "61*(1-t)+20*t"
+                    ],
+                    [
+                        "-64",
+                        "20-82*t"
+                    ],
+                    [
+                        "-64+136*t",
+                        "-62"
+                    ]
+                ],
+                "isClosed": false,
+                "isRoundTrip": true,
+                "speed": 5,
+                "timeStep": 1,
+                "name": "node15",
+                "sourceCode": "node.c"
+            },
+            {
+                "functionPath": [
+                    [
+                        "-134+50*t",
+                        "16"
+                    ],
+                    [
+                        "-84",
+                        "16-98*t"
+                    ],
+                    [
+                        "-84-50*t",
+                        "-82"
+                    ],
+                    [
+                        "-134",
+                        "-82+98*t"
+                    ]
+                ],
+                "isClosed": true,
+                "isRoundTrip": false,
+                "speed": 5,
+                "timeStep": 1,
+                "name": "node16",
+                "sourceCode": "node.c"
+            },
+            {
+                "functionPath": [
+                    [
+                        "114*(1-t)+56*t",
+                        "80*(1-t)-33*t"
+                    ],
+                    [
+                        "56 - 77*t",
+                        "-33"
+                    ]
+                ],
+                "isClosed": false,
+                "isRoundTrip": true,
+                "speed": 5,
+                "timeStep": 1,
+                "name": "node17",
+                "sourceCode": "node.c"
+            },
+            {
+                "functionPath": [
+                    [
+                        "-54+108*t",
+                        "-81"
+                    ]
+                ],
+                "isClosed": false,
+                "isRoundTrip": true,
+                "speed": 5,
+                "timeStep": 1,
+                "name": "node18",
+                "sourceCode": "node.c"
+            }
+        ]
+    },
+    "generations": [],
+    "source_repository_id": "68b3162f4f3c7b0458794b6f"
+}

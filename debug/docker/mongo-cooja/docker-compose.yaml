@@ -1,0 +1,54 @@
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb
+    restart: always
+    command: ["--replSet", "rs0", "--bind_ip_all", "--port", "27017"]
+    ports:
+      - 27017:27017
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: echo "try { rs.status() } catch (err) { rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]}) }" | mongosh --port 27017 --quiet
+      interval: 5s
+      timeout: 30s
+      start_period: 0s
+      retries: 30
+    volumes:
+      - "mongo_data:/data/db"
+      - "mongo_config:/data/configdb"
+
+  cooja1:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja1
+    restart: unless-stopped
+    ports:
+      - "2231:22"
+    networks:
+      - cooja-net
+
+  cooja2:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja2
+    restart: unless-stopped
+    ports:
+      - "2232:22"
+    networks:
+      - cooja-net
+
+  cooja3:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja3
+    restart: unless-stopped
+    ports:
+      - "2233:22"
+    networks:
+      - cooja-net
+
+networks:
+  cooja-net:
+    driver: bridge
+    
+volumes:
+  mongo_data:
+  mongo_config:
