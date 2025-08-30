@@ -3,6 +3,7 @@ from fastapi.responses import FileResponse
 from bson import ObjectId, errors as bson_errors
 from gridfs.errors import NoFile
 import os, sys, tempfile
+import mimetypes
 
 project_path = os.path.abspath(os.path.join(os.getcwd(), ".."))
 if project_path not in sys.path:
@@ -45,9 +46,22 @@ def download_file(file_id: str, extension: str, background_tasks: BackgroundTask
     # remove o temp após enviar a resposta
     background_tasks.add_task(os.remove, tmp_path)
 
+    # garante minúsculas
+    ext = extension.lower()
+
+    # tenta adivinhar o tipo MIME
+    mime_type, _ = mimetypes.guess_type(f"file.{ext}")
+
+    # fallback
+    if mime_type is None:
+        if ext in {"txt", "log", "csv", "xml", "csc", "dat"}:
+            mime_type = "text/plain; charset=utf-8"
+        else:
+            mime_type = "application/octet-stream"
+
     return FileResponse(
         tmp_path,
-        filename=f"{file_id}.{extension}",
-        media_type="text/plain; charset=utf-8",
+        filename=f"{file_id}.{ext}",
+        media_type=mime_type,
         background=background_tasks,
     )
