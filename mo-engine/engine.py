@@ -21,7 +21,7 @@ mongo = mongo_db.create_mongo_repository_factory(MONGO_URI, DB_NAME)
 
 def select_strategy(exp_doc: dict):
     print("[mo-engine] select strategy")
-    exp_type = exp_doc.get("parameters", {}).get("type", "simple")
+    exp_type = exp_doc.get("parameters", {}).get("strategy", "simple")
     print(f"[mo-engine] selected: {exp_type}")
     if exp_type == "simple":
         return GeneratorRandomStrategy(exp_doc, mongo)
