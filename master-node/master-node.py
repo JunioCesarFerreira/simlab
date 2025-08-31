@@ -205,7 +205,7 @@ def run_cooja_simulation(
                 
         # Calculate objectives and metrics
         df = pd.read_csv(csv_path)
-        exp_id = sim["experiemnt_id"]
+        exp_id = sim["experiment_id"]
         cfg = mongo.experiment_repo.get_objectives_and_metrics(str(exp_id))
     
         objectives, metrics = sim_transform.evaluate_config(df, cfg)
