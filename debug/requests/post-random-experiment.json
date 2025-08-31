@@ -155,7 +155,7 @@
             },
             {
                 "name": "total_energy_mJ",
-                "kind": "sum_cumulative_increments",
+                "kind": "sum_all",
                 "column": "total_mj",
                 "goal": "min"
             },
@@ -192,7 +192,7 @@
             },
             {
                 "name": "energy_cpu_mJ_total",
-                "kind": "sum_cumulative_increments",
+                "kind": "sum_all",
                 "column": "cpu_mj"
             },
             {
