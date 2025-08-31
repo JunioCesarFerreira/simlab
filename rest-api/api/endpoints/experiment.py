@@ -1,6 +1,7 @@
 # api/endpoints/experiment.py
 from fastapi import APIRouter, HTTPException
 import os
+from bson import errors
 
 project_path = os.path.abspath(os.path.join(os.getcwd(), ".."))
 import sys
@@ -59,7 +60,12 @@ def update_experiment(experiment_id: str, updates: dict) -> bool:
 @router.delete("/{experiment_id}", response_model=bool)
 def delete_experiment(experiment_id: str) -> bool:
     try:
-        return factory.experiment_repo.delete_by_id(experiment_id)
+        res = factory.experiment_repo.delete_by_id(experiment_id)
+        if isinstance(res, dict):
+            return res.get("deleted_experiments", 0) == 1
+        return bool(res)
+    except errors.InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid experiment_id")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

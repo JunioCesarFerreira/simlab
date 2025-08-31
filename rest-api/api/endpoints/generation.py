@@ -1,6 +1,6 @@
 # api/endpoints/generation.py
 from fastapi import APIRouter, HTTPException
-from bson import ObjectId
+from bson import ObjectId, errors
 import os, sys
 
 project_path = os.path.abspath(os.path.join(os.getcwd(), ".."))
@@ -50,7 +50,12 @@ def update_generation(gen_id: str, updates: dict) -> bool:
 @router.delete("/{gen_id}", response_model=bool)
 def delete_generation(gen_id: str) -> bool:
     try:
-        return factory.generation_repo.delete_by_id(ObjectId(gen_id))
+        res = factory.generation_repo.delete_by_id(ObjectId(gen_id))
+        if isinstance(res, dict):
+            return res.get("deleted_experiments", 0) == 1
+        return bool(res)
+    except errors.InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid experiment_id")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
