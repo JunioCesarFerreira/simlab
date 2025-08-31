@@ -8,3 +8,6 @@ master-node/lib/__pycache__
 pylib/cooja_builder/__pycache__
 mo-engine/lib/__pycache__
 util/docker_stats.csv
+mo-engine/strategy/util/nsga/__pycache__
+mo-engine/strategy/util/genetic_operators/crossover/__pycache__
+mo-engine/strategy/util/genetic_operators/mutation/__pycache__
