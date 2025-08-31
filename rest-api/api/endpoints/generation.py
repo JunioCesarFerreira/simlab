@@ -47,6 +47,12 @@ def update_generation(gen_id: str, updates: dict) -> bool:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.delete("/{gen_id}", response_model=bool)
+def delete_generation(gen_id: str) -> bool:
+    try:
+        return factory.generation_repo.delete_by_id(ObjectId(gen_id))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/by-status/{status}", response_model=list[GenerationDto])
 def get_generations_by_status(status: str) -> list[GenerationDto]:

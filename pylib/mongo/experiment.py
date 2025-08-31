@@ -71,6 +71,60 @@ class ExperimentRepository:
 
         return doc.get("transform_config") or {}
     
+    def delete_by_id(self, experiment_id: str) -> dict[str, int]:
+        """
+        Delete an experiment by _id and cascade-delete all its generations and simulations.
+        Returns counters: {"deleted_experiments": 0|1, "deleted_generations": N, "deleted_simulations": M}.
+        """
+        try:
+            exp_oid = ObjectId(experiment_id)
+        except errors.InvalidId:
+            print("ID inválido")
+            return {"deleted_experiments": 0, "deleted_generations": 0, "deleted_simulations": 0}
+
+        def _coerce_oid(x):
+            if isinstance(x, ObjectId):
+                return x
+            try:
+                return ObjectId(str(x))
+            except Exception:
+                return None
+
+        with self.connection.connect() as db:
+            # 1) Collect generations linked to the experiment
+            gen_docs = list(db["generations"].find({"experiment_id": exp_oid}, {"_id": 1}))
+            gen_ids = [doc["_id"] for doc in gen_docs]
+
+            exp_doc = db["experiments"].find_one({"_id": exp_oid}, {"generations": 1})
+            if exp_doc and isinstance(exp_doc.get("generations"), list):
+                for g in exp_doc["generations"]:
+                    go = _coerce_oid(g)
+                    if go and go not in gen_ids:
+                        gen_ids.append(go)
+
+            # 2) delete simulations
+            sim_filter = {"experiment_id": exp_oid}
+            if gen_ids:
+                sim_filter = {"$or": [{"generation_id": {"$in": gen_ids}}, {"experiment_id": exp_oid}]}
+
+            sim_del_res = db["simulations"].delete_many(sim_filter)
+            sims_deleted = int(sim_del_res.deleted_count)
+
+            # 3) delete generations
+            gens_deleted = 0
+            if gen_ids:
+                gen_del_res = db["generations"].delete_many({"_id": {"$in": gen_ids}})
+                gens_deleted = int(gen_del_res.deleted_count)
+
+            # 4) delete experiment
+            exp_del_res = db["experiments"].delete_one({"_id": exp_oid})
+            exps_deleted = int(exp_del_res.deleted_count)
+
+            return {
+                "deleted_experiments": exps_deleted,
+                "deleted_generations": gens_deleted,
+                "deleted_simulations": sims_deleted,
+            }
     
     def watch_experiments(self, on_change: Callable[[dict], None]):
         print("[ExperimentRepository] Waiting new experiments...")

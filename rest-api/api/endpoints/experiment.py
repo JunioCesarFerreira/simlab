@@ -52,11 +52,16 @@ def get_experiments_by_status(status: str) -> list[ExperimentDto]:
 @router.put("/{experiment_id}", response_model=bool)
 def update_experiment(experiment_id: str, updates: dict) -> bool:
     try:
-        # updates vai como dict direto ao repo
         return factory.experiment_repo.update(experiment_id, updates)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.delete("/{experiment_id}", response_model=bool)
+def delete_experiment(experiment_id: str) -> bool:
+    try:
+        return factory.experiment_repo.delete_by_id(experiment_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.patch("/{experiment_id}/status", response_model=bool)
 def update_experiment_status(experiment_id: str, new_status: str) -> bool:

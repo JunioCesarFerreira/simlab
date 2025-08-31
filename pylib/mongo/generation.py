@@ -125,3 +125,51 @@ class GenerationRepository:
                 "status": { "$ne": "Done" }
             })
             return count_not_done == 0
+        
+    def delete_by_id(self, generation_id: str) -> dict[str, int]:
+        """
+        Delete a generation by _id and cascade-delete all its simulations.
+        Returns a dict with counters: {"deleted_generations": 0|1, "deleted_simulations": N}.
+        """
+        try:
+            gen_oid = ObjectId(generation_id)
+        except errors.InvalidId:
+            print("ID inválido")
+            return {"deleted_generations": 0, "deleted_simulations": 0}
+
+        def _coerce_oid(x):
+            if isinstance(x, ObjectId):
+                return x
+            try:
+                return ObjectId(str(x))
+            except Exception:
+                return None
+
+        with self.connection.connect() as db:
+            # 1) Collect simulation ids from the generation doc (if present)
+            gen_doc = db["generations"].find_one({"_id": gen_oid}, {"simulations_ids": 1})
+            sim_ids_from_gen = []
+            if gen_doc and isinstance(gen_doc.get("simulations_ids"), list):
+                for sid in gen_doc["simulations_ids"]:
+                    oid = _coerce_oid(sid)
+                    if oid is not None:
+                        sim_ids_from_gen.append(oid)
+
+            # 2) Also collect simulations that reference this generation_id (robustness)
+            sims_cursor = db["simulations"].find({"generation_id": gen_oid}, {"_id": 1})
+            sim_ids_by_field = [doc["_id"] for doc in sims_cursor]
+
+            # Union of both sources
+            all_sim_ids = list({*sim_ids_from_gen, *sim_ids_by_field})
+
+            # 3) Delete simulations
+            sims_deleted = 0
+            if all_sim_ids:
+                del_res = db["simulations"].delete_many({"_id": {"$in": all_sim_ids}})
+                sims_deleted = del_res.deleted_count
+
+            # 4) Delete generation
+            gen_res = db["generations"].delete_one({"_id": gen_oid})
+            gens_deleted = gen_res.deleted_count
+
+            return {"deleted_generations": int(gens_deleted), "deleted_simulations": int(sims_deleted)}

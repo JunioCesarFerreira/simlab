@@ -87,7 +87,19 @@ class SimulationRepository:
                     }
                  }
             )
-        
+    
+    def delete_by_id(self, simulation_id: str) -> bool:
+        try:
+            oid = ObjectId(simulation_id)
+        except errors.InvalidId:
+            print("ID inválido")
+            return False
+
+        with self.connection.connect() as db:
+            result = db["simulations"].delete_one({"_id": oid})
+            return result.deleted_count > 0
+
+    
     def watch_simulations(self, on_change: Callable[[dict], None]):
         print("[SimulationRepository] Waiting changes...")
         pipeline = [

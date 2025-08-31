@@ -49,6 +49,12 @@ def update_simulation(sim_id: str, updates: dict) -> bool:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.delete("/{sim_id}", response_model=bool)
+def delete_simulation(sim_id: str) -> bool:
+    try:
+        return factory.simulation_repo.delete_by_id(ObjectId(sim_id))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/by-status/{status}", response_model=list[SimulationDto])
 def get_simulations_by_status(status: str) -> list[SimulationDto]:
@@ -62,7 +68,7 @@ def get_simulations_by_status(status: str) -> list[SimulationDto]:
 @router.get("/{sim_id}/file/{field_name}")
 def download_simulation_file(sim_id: str, field_name: str):
     try:
-        # Busca sim e id do arquivo
+        # search sim and file id
         sim = factory.simulation_repo.get_by_id(sim_id)
         if not sim:
             raise HTTPException(status_code=404, detail="Simulation not found")
