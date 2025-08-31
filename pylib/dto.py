@@ -1,4 +1,4 @@
-from typing import TypedDict, Any, Optional
+from typing import TypedDict, Any, Optional, NotRequired, Required
 from datetime import datetime
 from bson import ObjectId
 
@@ -63,6 +63,8 @@ class Simulation(TypedDict):
     runtime_log_id: ObjectId
     csv_log_id: ObjectId
     topology_picture_id: ObjectId
+    objectives: dict[str,float]
+    metrics: dict[str,float]
     
 class Generation(TypedDict):
     id: str
@@ -72,6 +74,28 @@ class Generation(TypedDict):
     start_time: datetime
     end_time: datetime
     simulations_ids: list[ObjectId]
+
+class ObjectiveItem(TypedDict):
+    name: str
+    kind: str
+    column: str
+    goal: str
+    # Parâmetros opcionais (validados conforme o kind)
+    q: Optional[float] = None         # requerido se kind == QUANTILE (0<q<=1)
+    scale: Optional[float] = None     # requerido se kind == INVERSE_MEDIAN (scale>0)
+
+class MetricItem(TypedDict):
+    name: str
+    kind: str
+    column: str
+    # Parâmetros opcionais (validados conforme o kind)
+    q: Optional[float] = None         # requerido se kind == QUANTILE (0<q<=1)
+
+class TransformConfig(TypedDict):
+    node_col: str
+    time_col: str
+    objectives: list[ObjectiveItem]
+    metrics: list[MetricItem]
     
 class Experiment(TypedDict):
     id: str
@@ -83,6 +107,7 @@ class Experiment(TypedDict):
     parameters: dict[str, Any]
     generations: list[ObjectId]
     source_repository_id: str
+    transform_config: TransformConfig
 
 # refactor note: Por simplicidade vou manter estas estruturas aqui, caso necessário em versões futuras,
 # pode ser interessante criar um subdir em mongo para schemas.
@@ -105,6 +130,8 @@ class SimulationDto(TypedDict):
     runtime_log_id: str
     csv_log_id: str
     topology_picture_id: str
+    objectives: dict[str,float]
+    metrics: dict[str,float]
     
 class GenerationDto(TypedDict):
     id: str
@@ -114,7 +141,29 @@ class GenerationDto(TypedDict):
     start_time: datetime
     end_time: datetime
     simulations_ids: list[str]
-    
+
+class ObjectiveItemDto(TypedDict):
+    name: str
+    kind: str
+    column: str
+    goal: str
+    # Parâmetros opcionais (validados conforme o kind)
+    q: NotRequired[float] = None         # requerido se kind == QUANTILE (0<q<=1)
+    scale: NotRequired[float] = None     # requerido se kind == INVERSE_MEDIAN (scale>0)
+
+class MetricItemDto(TypedDict):
+    name: str
+    kind: str
+    column: str
+    # Parâmetros opcionais (validados conforme o kind)
+    q: NotRequired[float] = None         # requerido se kind == QUANTILE (0<q<=1)
+
+class TransformConfigDto(TypedDict):
+    node_col: str
+    time_col: str
+    objectives: list[ObjectiveItemDto]
+    metrics: list[MetricItemDto]
+        
 class ExperimentDto(TypedDict):
     id: Optional[str] = None
     name: str
@@ -125,6 +174,7 @@ class ExperimentDto(TypedDict):
     parameters: dict[str, Any]
     generations: list[str]
     source_repository_id: str
+    transform_config: TransformConfigDto
     
 #---------------------------------------------------------------------------------------------------------
 # Converters Mongo ↔ DTO
@@ -194,6 +244,8 @@ def simulation_from_mongo(doc: dict) -> SimulationDto:
         "runtime_log_id": _oid_to_str(d.get("runtime_log_id")),
         "csv_log_id": _oid_to_str(d.get("csv_log_id")),
         "topology_picture_id": _oid_to_str(d.get("topology_picture_id")),
+        "objectives": d.get("objectives", {}),
+        "metrics": d.get("metrics", {}),
     }
 
 def simulation_to_mongo(dto: SimulationDto) -> Simulation:
@@ -217,6 +269,8 @@ def simulation_to_mongo(dto: SimulationDto) -> Simulation:
     sim["start_time"] = _ensure_datetime(d.get("start_time"))
     sim["end_time"] = _ensure_datetime(d.get("end_time"))
     sim["parameters"] = d.get("parameters", {})
+    sim["objectives"] = d.get("objectives", {})
+    sim["metrics"] = d.get("metrics", {})
 
     # IDs de arquivos
     for k in ("pos_file_id", "csc_file_id", "log_cooja_id", "runtime_log_id", "csv_log_id", "topology_picture_id"):
@@ -292,6 +346,7 @@ def experiment_from_mongo(doc: dict) -> ExperimentDto:
         "parameters": d.get("parameters", {}),
         "generations": _list_oid_to_str(d.get("generations", [])),
         "source_repository_id": _oid_to_str(d.get("source_repository_id") or d.get("source_repository_id".replace("_id","")) or d.get("source_repository_id_str")),
+        "transform_config": d.get("transform_config", {}),
     }
 
 def experiment_to_mongo(dto: ExperimentDto) -> Experiment:
@@ -321,6 +376,9 @@ def experiment_to_mongo(dto: ExperimentDto) -> Experiment:
 
     exp["source_repository_id"] = d.get("source_repository_id", "")
 
+    print(f"test:{d.get("transform_config", {}) }")
+    exp["transform_config"] = d.get("transform_config", {}) or {}
+    
     return exp 
 
 # --- SourceRepository (opcional) -----------------------------------
