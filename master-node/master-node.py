@@ -22,7 +22,7 @@ if project_path not in sys.path:
 
 from pylib import mongo_db
 from pylib import cooja_files
-from pylib import sim_transform
+from pylib import statistics
 from dto import Simulation, Experiment, SourceRepository
 # --------------------------------------------------------------------
 
@@ -208,7 +208,7 @@ def run_cooja_simulation(
         exp_id = sim["experiment_id"]
         cfg = mongo.experiment_repo.get_objectives_and_metrics(str(exp_id))
     
-        objectives, metrics = sim_transform.evaluate_config(df, cfg)
+        objectives, metrics = statistics.evaluate_config(df, cfg)
                 
         # Marca concluído e registra ids de log e csv
         mongo.simulation_repo.mark_done(sim_oid, log_id, csv_id, objectives, metrics)

@@ -184,6 +184,53 @@ def js_node_mean(df: pd.DataFrame, value_col: str, node_col="node") -> float:
     
     return james_stein(node_means, var_of_mean)
 
+def sum_cumulative_increments(
+    df: pd.DataFrame,
+    value_col: str,
+    node_col: str = "node",
+    time_col: str = "root_time_now",
+    wrap: float | None = None,
+    max_jump: float | None = None
+) -> float:
+    """
+    Sums positive increments of the cumulative counter per node over time.
+    Robust to resets/overflows. Useful for total energy, total bytes, etc.
+    """
+    if value_col not in df.columns:
+        return float("nan")
+
+    # sort and guarantees numeric
+    d = df[[node_col, time_col, value_col]].copy()
+    d[time_col] = pd.to_numeric(d[time_col], errors="coerce")
+    d[value_col] = pd.to_numeric(d[value_col], errors="coerce")
+    d = d.dropna(subset=[time_col, value_col]).sort_values([node_col, time_col])
+
+    def _accumulate(g: pd.DataFrame) -> float:
+        v = g[value_col].astype(float).to_numpy()
+        if v.size <= 1:
+            return 0.0
+        dv = np.diff(v)
+
+        # handle wrap/overflow: if wrap is known, adjust negatives by adding wrap
+        if wrap is not None:
+            dv = np.where(dv < 0, dv + wrap, dv)
+
+        # keep only positive increments
+        dv = np.where(dv > 0, dv, 0.0)
+
+        # remove absurd jumps (optional)
+        if max_jump is not None and max_jump > 0:
+            dv = np.where(dv <= max_jump, dv, 0.0)
+
+        return float(dv.sum())
+
+    total = d.groupby(node_col, sort=False, as_index=False).apply(_accumulate)
+    # groupby.apply above returns Series/obj; ensure float:
+    if hasattr(total, "values"):
+        return float(np.sum(total.values, dtype=float))
+    return float(total)
+
+
 def evaluate_config(df: pd.DataFrame, cfg: dict[str, list[dict]]) -> tuple[dict[str, float], dict[str, float]]:
     """
     Evaluates a DataFrame against a configuration of objectives and metrics.
@@ -223,6 +270,10 @@ def evaluate_config(df: pd.DataFrame, cfg: dict[str, list[dict]]) -> tuple[dict[
             obj[name] = sum_last_minus_first(df, col, 
                                            cfg.get("node_col", "node"), 
                                            cfg.get("time_col", "root_time_now"))
+        elif kind == "sum_cumulative_increments":
+            obj[name] = sum_cumulative_increments(df, col, 
+                                            cfg.get("node_col","node"), 
+                                            cfg.get("time_col","root_time_now"))
         elif kind == "inverse_median":
             obj[name] = inverse_of(median(df[col]), item.get("scale", 1.0))
         elif kind == "js_node_mean":
@@ -244,6 +295,10 @@ def evaluate_config(df: pd.DataFrame, cfg: dict[str, list[dict]]) -> tuple[dict[
             met[name] = mean(df[col])
         elif kind == "median":
             met[name] = median(df[col])
+        elif kind == "sum_cumulative_increments":
+            obj[name] = sum_cumulative_increments(df, col, 
+                                            cfg.get("node_col","node"), 
+                                            cfg.get("time_col","root_time_now"))
         elif kind == "sum_last_minus_first":
             met[name] = sum_last_minus_first(df, col, 
                                            cfg.get("node_col", "node"), 

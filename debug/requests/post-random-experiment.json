@@ -6,7 +6,7 @@
     "start_time": null,
     "end_time": null,
     "generations": [],
-    "source_repository_id": "68b34e406ecb63bff7524664",
+    "source_repository_id": "68b3247fd5a8fd2bc7722703",
     "parameters": {
         "strategy": "simple",
         "number_of_generations": 1,
@@ -155,7 +155,7 @@
             },
             {
                 "name": "total_energy_mJ",
-                "kind": "sum_last_minus_first",
+                "kind": "sum_cumulative_increments",
                 "column": "total_mj",
                 "goal": "min"
             },
@@ -192,7 +192,7 @@
             },
             {
                 "name": "energy_cpu_mJ_total",
-                "kind": "sum_last_minus_first",
+                "kind": "sum_cumulative_increments",
                 "column": "cpu_mj"
             },
             {
