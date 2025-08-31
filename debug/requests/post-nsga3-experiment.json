@@ -6,7 +6,8 @@
     "start_time": null,
     "end_time": null,
     "parameters": {
-        "type": "nsga3",
+        "strategy": "nsga3",
+        "duration": 180,
         "number_of_generations": 5,
         "population_size": 30,
         "number_of_fixed_motes": 13,
@@ -142,5 +143,5 @@
         ]
     },
     "generations": [],
-    "source_repository_id": "68b3162f4f3c7b0458794b6f"
+    "source_repository_id": "68b34e406ecb63bff7524664"
 }

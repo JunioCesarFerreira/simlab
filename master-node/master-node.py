@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Thread
-
+import pandas as pd, json
 from bson import ObjectId
 from paramiko import SSHClient
 from scp import SCPClient
@@ -22,6 +22,7 @@ if project_path not in sys.path:
 
 from pylib import mongo_db
 from pylib import cooja_files
+from pylib import sim_transform
 from dto import Simulation, Experiment, SourceRepository
 # --------------------------------------------------------------------
 
@@ -196,13 +197,21 @@ def run_cooja_simulation(
         log_id = mongo.fs_handler.upload_file(log_path, "sim_result.log")
         log.info("[port=%s] Log saved with ID: %s", port, log_id)
 
+        # Convert and save CSV file
         csv_path = f"{SET.local_log_dir}/sim_{sim_oid}.csv"
         cooja_files.convert_cooja_log_to_csv(log_path, csv_path)
         csv_id = mongo.fs_handler.upload_file(csv_path, "sim_result.csv")
         log.info("[port=%s] Log converted CSV and saved with ID: %s", port, csv_id)
                 
+        # Calculate objectives and metrics
+        df = pd.read_csv(csv_path)
+        exp_id = sim["experiemnt_id"]
+        cfg = mongo.experiment_repo.get_objectives_and_metrics(str(exp_id))
+    
+        objectives, metrics = sim_transform.evaluate_config(df, cfg)
+                
         # Marca concluído e registra ids de log e csv
-        mongo.simulation_repo.mark_done(sim_oid, log_id, csv_id)
+        mongo.simulation_repo.mark_done(sim_oid, log_id, csv_id, objectives, metrics)
 
         if SET.is_docker:
             try:

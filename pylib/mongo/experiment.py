@@ -3,7 +3,7 @@ from typing import Optional, Callable
 from bson import ObjectId, errors
 
 from mongo.connection import MongoDBConnection, EnumStatus
-from dto import Experiment
+from dto import Experiment, TransformConfig
 
 class ExperimentRepository:
     def __init__(self, connection: MongoDBConnection):
@@ -49,7 +49,29 @@ class ExperimentRepository:
         with self.connection.connect() as db:
             result = db["experiments"].find_one({"_id": oid})
             return result
-            
+        
+    def get_objectives_and_metrics(self, experiment_id: str) -> TransformConfig:
+        try:
+            oid = ObjectId(experiment_id)
+        except errors.InvalidId:
+            raise ValueError(f"Invalid experiment_id: {experiment_id!r}")
+
+        with self.connection.connect() as db:
+            doc = db["experiments"].find_one(
+                {"_id": oid},
+                {
+                    "_id": 0,
+                    "transform_config.objectives": 1,
+                    "transform_config.metrics": 1,
+                }
+            )
+
+        if not doc:
+            return {}
+
+        return doc.get("transform_config") or {}
+    
+    
     def watch_experiments(self, on_change: Callable[[dict], None]):
         print("[ExperimentRepository] Waiting new experiments...")
         pipeline = [
