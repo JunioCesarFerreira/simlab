@@ -40,7 +40,7 @@ class NSGA3LoopStrategy(EngineStrategy):
 
         # --- parâmetros do experimento ---
         params = experiment.get("parameters", {}) or {}
-        self.population_size: int = int(params.get("population_size", params.get("number_of_generations", 10)))
+        self.population_size: int = int(params.get("population_size", 20))
         self.max_generations: int = int(params.get("number_of_generations", 5))
         self.num_of_motes: int = int(params.get("number_of_fixed_motes", 10))
         self.region: tuple[float, float, float, float] = tuple(params.get("region", (-100.0, -100.0, 100.0, 100.0)))  # (x1,y1,x2,y2)
