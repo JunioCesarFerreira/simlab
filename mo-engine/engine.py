@@ -8,7 +8,7 @@ if project_path not in sys.path:
 from pylib import mongo_db
 from pylib.mongo_db import EnumStatus
 from strategy.generator_random import GeneratorRandomStrategy
-from strategy.nsga3 import NSGALoopStrategy  # futuro
+from strategy.nsga3 import NSGA3LoopStrategy  # futuro
 
 SimStatus = mongo_db.EnumStatus
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/?replicaSet=rs0")
@@ -26,7 +26,7 @@ def select_strategy(exp_doc: dict):
     if exp_type == "simple":
         return GeneratorRandomStrategy(exp_doc, mongo)
     elif exp_type == "nsga3":
-        return NSGALoopStrategy(exp_doc, mongo)
+        return NSGA3LoopStrategy(exp_doc, mongo)
     else:
         raise ValueError(f"[mo-engine] Experiment type unknown: {exp_type}")
 

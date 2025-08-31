@@ -6,14 +6,14 @@ import random
 from bson import ObjectId
 
 
-class NSGALoopStrategy(EngineStrategy):
+class NSGA3LoopStrategy(EngineStrategy):
     def __init__(self, experiment, mongo):
         super().__init__(experiment, mongo)
         self.results_buffer = {}
         self.generation = 0
         self.sim_id_to_solution = {}
         self.current_population = []
-        self.max_generations = int(experiment["parameters"].get("generations", 3))
+        self.max_generations = int(experiment["parameters"].get("number_of_generations", 3))
         self.population_size = int(experiment["parameters"].get("population_size", 10))
         self.region = tuple(experiment["parameters"].get("region", (0, 0, 100, 100)))
         self.radius = float(experiment["parameters"].get("radius", 25.0))
