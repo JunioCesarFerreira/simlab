@@ -1,5 +1,6 @@
 import os
 import random
+import threading
 from threading import Thread
 from datetime import datetime
 from pathlib import Path
@@ -15,7 +16,7 @@ from lib.build_input_sim_cooja import create_files
 
 # NSGA utils
 from .util.nsga.fast_nondominated_sort import fast_nondominated_sort
-from .util.nsga.niching_selection import generate_reference_points, niching_selection
+from .util.nsga.niching_selection import generate_reference_points, niching_selection, associate_to_niches
 # Variation operators (real-coded)
 from .util.genetic_operators.crossover.simulated_binary_crossover import make_sbx_crossover
 from .util.genetic_operators.mutation.polynomial_mutation import make_polynomial_mutation
@@ -23,14 +24,14 @@ from .util.genetic_operators.mutation.polynomial_mutation import make_polynomial
 
 class NSGA3LoopStrategy(EngineStrategy):
     """
-    Estratégia de loop NSGA-III integrada ao SimLab.
+    NSGA-III loop strategy integrated with SimLab.
 
-    - Gera uma população inicial (posições dos motes fixos em 2D).
-    - Enfileira simulações no MongoDB (Change Streams disparam execução no master-node).
-    - Ao receber os resultados (status DONE), calcula os objetivos,
-      executa seleção NSGA-III com niching por pontos de referência,
-      cria a próxima geração (offspring via SBX + Polynomial Mutation),
-      e repete até atingir `number_of_generations`.
+    - Generates an initial population (fixed 2D mote positions).
+    - Queues simulations in MongoDB (Change Streams trigger execution on the master node).
+    - Upon receiving the results (DONE status), calculates the objectives, 
+        performs NSGA-III selection with reference point niching,
+        creates the next generation (offspring via SBX + Polynomial Mutation),
+        and repeats until `number_of_generations` is reached.
     """
 
     def __init__(self, experiment: dict, mongo):
@@ -38,7 +39,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._watch_thread: Thread | None = None
         self._stop_flag: bool = False
 
-        # --- parâmetros do experimento ---
+        # --- experiment parameters ---
         params = experiment.get("parameters", {}) or {}
         self.population_size: int = int(params.get("population_size", 20))
         self.max_generations: int = int(params.get("number_of_generations", 5))
@@ -49,26 +50,28 @@ class NSGA3LoopStrategy(EngineStrategy):
         self.mobile_motes = params.get("mobileMotes", [])
         self.duration: int = int(params.get("duration", 120))
 
-        # objetivos: chaves a extrair do documento de simulação concluída
-        # Se não informado explicitamente, tentaremos algumas chaves comuns na análise (ajuste conforme seu pipeline)
-        self.objective_keys: list[str] = list(params.get("objective_keys", [])) or [
-            # Ajuste para seu pipeline de métricas:
-            # Ex.: "avg_latency_ms", "energy_mJ", "packet_loss"
-        ]
-
-        # --- estado do loop ---
+        # --- loop state ---
         self._exp_id: ObjectId | None = None
         self._gen_index: int = 0
         self._gen_id: ObjectId | None = None
 
-        # população corrente como lista de indivíduos (cada indivíduo é um vetor [x0,y0,x1,y1,...])
+        # current population as a list of individuals (each individual is a vector [x0,y0,x1,y1,...])
         self.current_population: list[list[float]] = []
-        # mapeia simulation_id(str) -> índice do indivíduo na população
+        # maps simulation_id(str) -> index of the individual in the population
         self.sim_id_to_index: dict[str, int] = {}
-        # resultados coletados da geração atual: idx -> lista[float] objetivos (minimização)
+        # results collected from current generation: idx -> list[float] objectives (minimization)
         self.objectives_buffer: dict[int, list[float]] = {}
+        
+        # prepare objective keys
+        cfg = experiment.get("transform_config", {}) or {}
+        obj = cfg.get("objectives", []) or []
+        self.objective_keys = [o["name"] for o in obj if "name" in o]
+        
+        self._awaiting_offspring: bool = False  # False => esperando P; True => esperando Q
+        self._parents_population: list[list[float]] = []   # guarda P_t (genomas)
+        self._parents_objectives: list[list[float]] = []   # guarda F(P_t)
 
-        # operadores
+        # genetic operators
         bounds = self._gene_bounds()
         self._sbx = make_sbx_crossover(eta=20.0, bounds=bounds)
         self._poly = make_polynomial_mutation(eta=25.0, bounds=bounds, per_gene_prob=1.0 / (2 * self.num_of_motes))
@@ -76,48 +79,56 @@ class NSGA3LoopStrategy(EngineStrategy):
     # ------------------------------
     # API do EngineStrategy
     # ------------------------------
+    # START implementation
     def start(self):
         """
-        Inicializa a população e cria Geração 1 com `population_size` simulações.
+        Initializes the population and creates Generation 1 with `population_size` simulations.
         """
         self._exp_id = ObjectId(self.experiment["_id"]) if isinstance(self.experiment.get("_id"), (str, bytes)) else self.experiment.get("_id")
         if not isinstance(self._exp_id, ObjectId):
             self._exp_id = ObjectId(str(self.experiment.get("_id")))
-        self._gen_index = 1
+        self._gen_index = 0
 
-        # População inicial
+        # Initial Population
         self.current_population = [self._random_individual() for _ in range(self.population_size)]
 
-        # Enfileira simulações para a geração 1
+        # Enqueue Simulations to first Generation
         self._spawn_generation(self.current_population, self._gen_index)
 
         # Inicia watcher para receber os resultados desta geração
         self._start_watcher()
 
+    # ON_SIMULTATION_RESULT implementation
     def on_simulation_result(self, result_doc: dict):
-        """
-        Recebe um documento de simulação (status DONE) do Change Stream.
+        """ 
+        On event Simulation Result Done
+        Args: result_doc (dict): Simulation dictionary
         """
         if self._stop_flag or self._gen_id is None:
             return
 
-        # Garante que este resultado é da geração atual
-        if str(result_doc.get("generation_id")) != str(self._gen_id):
+        print("EVENT SIMULATION RESULT DONE")
+        sim = result_doc.get("fullDocument")
+
+        # Ensures that this result is from the current generation
+        if str(sim.get("generation_id")) != str(self._gen_id):
             return
 
-        sim_id = str(result_doc.get("_id"))
+        sim_id = str(sim.get("_id"))
+        print(f"sim_id={sim_id}")
         idx = self.sim_id_to_index.get(sim_id)
         if idx is None:
             return
 
-        obj = self._extract_objectives(result_doc)
+        obj = self._extract_objectives(sim)
         if obj is None:
-            # Não há objetivos — ignore ou considere erro
+            print(f"objectives not found in {sim_id}")
             return
 
         self.objectives_buffer[idx] = obj
 
-        # Checa conclusão da geração
+        # check generation is complete
+        print(f"{len(self.objectives_buffer)} >= {len(self.current_population)}")
         if len(self.objectives_buffer) >= len(self.current_population):
             self._on_generation_completed()
 
@@ -140,9 +151,9 @@ class NSGA3LoopStrategy(EngineStrategy):
                 try:
                     self.on_simulation_result(result_doc)
                 except Exception as e:
-                    print(f"[NSGA-III] Erro no callback do watcher: {e}")
+                    print(f"[NSGA-III] Watcher Callback Error: {e}")
 
-            print("[NSGA-III] Iniciando watcher de simulações (DONE).")
+            print("[NSGA-III] Starting Simulations watcher (DONE).")
             self.mongo.simulation_repo.watch_simulations(_callback)
 
         self._watch_thread = Thread(target=_run, daemon=True)
@@ -216,58 +227,102 @@ class NSGA3LoopStrategy(EngineStrategy):
                 "csv_log_id": ""
             }
             sim_oid = self.mongo.simulation_repo.insert(sim_doc)
+            print(f"sim_oid={sim_oid}")
             simulation_ids.append(sim_oid)
             self.sim_id_to_index[str(sim_oid)] = i
 
-        # Atualiza geração/experimento
+        # update generation
         self.mongo.generation_repo.update(gen_oid, {
             "simulations_ids": [str(_id) for _id in simulation_ids],
             "status": EnumStatus.WAITING
         })
         self.mongo.generation_repo.mark_waiting(gen_oid)
 
-        self.mongo.experiment_repo.update(str(exp_oid), {
-            "status": EnumStatus.RUNNING,
-            "start_time": datetime.now() if self._gen_index == 1 else None,
-            "generations_ids": [str(gen_oid)] if self._gen_index == 1 else None
-        })
+        if self._gen_index == 1:
+            self.mongo.experiment_repo.update(str(exp_oid), {
+                "status": EnumStatus.RUNNING,
+                "start_time": datetime.now(),
+                "generations_ids": [str(gen_oid)]
+            })
 
-        print(f"[NSGA-III] Geração {gen_index} enfileirada com {len(population)} simulações.")
+        print(f"[NSGA-III] Generation {gen_index} enqueued with {len(population)} Simulations.")
 
     # ------------------------------
     # Conclusão de geração e evolução
     # ------------------------------
     def _on_generation_completed(self):
         """
-        Ao concluir todas as simulações da geração corrente, decide próxima população
-        via NSGA-III (niching) e cria a próxima geração, ou finaliza o experimento.
+        Two-phase (μ+λ) loop:
+        Phase P: parents (P_t) finished -> produce offspring Q_t and enqueue -> return.
+        Phase Q: offspring (Q_t) finished -> environmental selection on R_t = P_t ∪ Q_t -> spawn P_{t+1}.
         """
         assert self._gen_id is not None
-        print(f"[NSGA-III] Geração {self._gen_index} concluída. Selecionando próxima população...")
+        print(f"[NSGA-III] Generation {self._gen_index} completed.")
 
-        # Marca geração DONE
+        # close current generation
         self.mongo.generation_repo.update(str(self._gen_id), {
             "status": EnumStatus.DONE,
             "end_time": datetime.now()
         })
 
-        # Constrói matriz de objetivos alinhada à população
-        # Assumimos minimização em todos os objetivos
-        indices = list(range(len(self.current_population)))
-        objectives: list[list[float]] = [self.objectives_buffer[i] for i in indices]
+        # build objective matrix for the just-finished batch (aligned with self.current_population)
+        try:
+            indices = list(range(len(self.current_population)))
+            objectives = [self.objectives_buffer[i] for i in indices]
+        except Exception:
+            print("[NSGA-III] Missing objectives for some individuals; aborting.")
+            self._finalize()
+            return
 
         import numpy as np
         F = np.array(objectives, dtype=float)
+        if F.ndim != 2 or F.shape[0] == 0:
+            print("[NSGA-III] Invalid objective matrix; aborting.")
+            self._finalize()
+            return
         M = F.shape[1]
 
-        # 1) Ordenação por frentes
-        fronts = fast_nondominated_sort(objectives)
+        # ---------------- PHASE P: parents done -> generate offspring and enqueue ----------------
+        if not self._awaiting_offspring:
+            # store P_t (genomes and objectives)
+            self._parents_population = [ind[:] for ind in self.current_population]
+            self._parents_objectives = [row[:] for row in objectives]
 
-        # 2) Monta população escolhida (elitismo)
-        selected_idx: list[int] = []
-        niche_count: dict[int, int] = {}
+            # produce Q_t from P_t (variation on parents)
+            parents = self._parents_population
+            offspring = self._produce_offspring(parents, self.population_size)
 
-        # Gera pontos de referência (escolhe p mínimo tal que |H| >= pop_size)
+            # enqueue Q_t as next "generation" to be evaluated
+            # (note: gen_index here is just a sequence counter of batches evaluated)
+            self._gen_index += 1
+            self._spawn_generation(offspring, self._gen_index)
+
+            # prepare for Phase Q
+            self._awaiting_offspring = True
+            
+            self.current_population = offspring
+            print("[NSGA-III] Offspring enqueued; waiting for Q_t results to perform environmental selection.")
+            return
+
+        # ---------------- PHASE Q: offspring done -> environmental selection on union ----------------
+        # union R_t = P_t ∪ Q_t
+        P_genomes = self._parents_population
+        P_F = np.array(self._parents_objectives, dtype=float)
+        Q_genomes = self.current_population
+        Q_F = F
+
+        # concatenate
+        R_genomes = P_genomes + Q_genomes
+        R_F_list = [list(row) for row in P_F.tolist()] + [list(row) for row in Q_F.tolist()]
+
+        # fast non-dominated sort on union
+        fronts = fast_nondominated_sort(R_F_list)
+        if not fronts:
+            print("[NSGA-III] No fronts on union; aborting.")
+            self._finalize()
+            return
+
+        # reference points H (smallest p with |H| >= pop_size)
         p = 1
         while True:
             H = generate_reference_points(M, p)
@@ -275,40 +330,44 @@ class NSGA3LoopStrategy(EngineStrategy):
                 break
             p += 1
 
+        selected_idx: list[int] = []
+        niche_count: dict[int, int] = {}
+        R_F = np.array(R_F_list, dtype=float)
+
         for front in fronts:
             if len(selected_idx) + len(front) < self.population_size:
                 selected_idx.extend(front)
-                # atualiza contagem de nichos para os selecionados deste front
-                # (associação apenas para estatística; a regra canônica considera associação na fronteira parcial)
-                # aqui associamos todos para manter equilíbrio nas próximas iterações
-                # Obs: operação barata para tamanhos moderados
-                assoc_idx, _ = self._associate_indices(F, H, front)
+                assoc_idx, _ = self._associate_indices(R_F, H, front)
                 for nid in assoc_idx:
                     niche_count[nid] = niche_count.get(nid, 0) + 1
             else:
                 remaining = self.population_size - len(selected_idx)
                 if remaining > 0:
-                    # Aplicar niching selection nesta última fronteira parcial
-                    partial_selected = niching_selection(front, F, remaining, H, dict(niche_count))
-                    selected_idx.extend(partial_selected)
+                    partial = niching_selection(front, R_F, H, remaining)
+                    selected_idx.extend(partial)
                 break
 
-        # 3) Gera offspring por variação (SBX + Polynomial Mutation)
-        parents = [self.current_population[i] for i in selected_idx]
-        offspring = self._produce_offspring(parents, self.population_size)
+        # build P_{t+1} genomes from the union
+        next_population = [R_genomes[i] for i in selected_idx[:self.population_size]]
 
-        # Próxima geração
+        # stop condition?
         if self._gen_index >= self.max_generations:
-            # Finaliza experimento
+            # we already evaluated Q_t; selection done; finalize experiment
             self._finalize()
             return
 
+        # enqueue next P_{t+1}
         self._gen_index += 1
-        self._spawn_generation(offspring, self._gen_index)
-        # watcher já está ativo; limpar buffers para nova geração
-        self.objectives_buffer.clear()
-        self.sim_id_to_index.clear()
-        self.current_population = offspring
+        self._spawn_generation(next_population, self._gen_index)
+
+        # reset state for next iteration
+        self._awaiting_offspring = False
+        
+        self.current_population = next_population
+        self._parents_population = []
+        self._parents_objectives = []
+        print(f"[NSGA-III] Spawned next population (size={len(next_population)}).")
+
 
     # ------------------------------
     # Helpers de variação e extração
@@ -399,9 +458,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         Associa `indices` (índices absolutos na população) a niches de H.
         Retorna (niche_ids, distances) alinhados à ordem de `indices`.
         """
-        import numpy as np
         sub = F[indices, :]
-        from .util.nsga.niching_selection import associate_to_niches
         niche_idx, niche_dist = associate_to_niches(sub, H)
         return list(map(int, niche_idx)), list(map(float, niche_dist))
 
@@ -412,7 +469,9 @@ class NSGA3LoopStrategy(EngineStrategy):
             "status": EnumStatus.DONE,
             "end_time": datetime.now()
         })
-        # encerra watcher
+        # finish watcher
         self._stop_flag = True
-        if self._watch_thread and self._watch_thread.is_alive():
-            self._watch_thread.join(timeout=1.0)
+        t = self._watch_thread
+        if t and t.is_alive():
+            if threading.current_thread() is not t:
+                t.join(timeout=1.0)

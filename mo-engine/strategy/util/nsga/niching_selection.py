@@ -173,3 +173,67 @@ def niching_selection(
             # (Optionally, increment the niche of its association if you keep it.)
 
     return selected[:N]
+
+def associate_to_niches(F_sub: NDArray, H: NDArray) -> tuple[NDArray, NDArray]:
+    """
+    Associa cada solução (linhas de F_sub) a um ponto de referência em H.
+    Retorna:
+      - niche_idx: array de inteiros com o índice do ponto de referência escolhido para cada solução
+      - niche_dist: array de floats com a distância perpendicular até o respectivo ponto de referência
+
+    Parâmetros
+    ----------
+    F_sub : (k, M) ndarray
+        Submatriz de objetivos (minimização), k soluções x M objetivos.
+    H : (R, M) ndarray
+        Pontos de referência (direções no simplex), R vetores x M objetivos.
+
+    Estratégia
+    ----------
+    1) Normaliza F_sub por ponto ideal (min por objetivo) e range (max-min).
+    2) Normaliza cada vetor de H para norma-2 = 1.
+    3) Para cada solução f:
+         - d_perp(h) = ||f - (f·h) h||_2    (distância perpendicular ao ray de h)
+         - escolhe h com menor d_perp.
+    """
+    F_sub = np.asarray(F_sub, dtype=np.float64)
+    H = np.asarray(H, dtype=np.float64)
+
+    if F_sub.ndim != 2 or H.ndim != 2:
+        raise ValueError("F_sub and H must be 2D arrays")
+    if F_sub.shape[1] != H.shape[1]:
+        raise ValueError(f"Dimension mismatch: F_sub has M={F_sub.shape[1]} but H has M={H.shape[1]}")
+
+    k, M = F_sub.shape
+    R = H.shape[0]
+    if k == 0 or R == 0:
+        return np.empty((0,), dtype=int), np.empty((0,), dtype=float)
+
+    # 1) Ideal point & ranges (evita divisão por zero)
+    z = np.min(F_sub, axis=0)                 # ideal
+    ranges = np.max(F_sub, axis=0) - z
+    ranges[ranges <= 0.0] = 1e-12
+
+    # Normalização para [0, +) no espaço dos custos
+    N = (F_sub - z) / ranges  # (k, M)
+
+    # 2) Normaliza H (direções unitárias)
+    H_norms = np.linalg.norm(H, axis=1, keepdims=True)
+    H_norms[H_norms <= 0.0] = 1e-12
+    H_unit = H / H_norms  # (R, M)
+
+    # 3) Distância perpendicular de cada solução a cada direção
+    # Projeção escalar: (k, R) = (k, M) @ (M, R)
+    dot = N @ H_unit.T
+    # componente projetada: (k, R, M) = dot[...,None] * H_unit[None,...]
+    proj = dot[..., None] * H_unit[None, :, :]  # (k, R, M)
+    # vetor perpendicular: (k, R, M)
+    diff = N[:, None, :] - proj                 # (k, R, M)
+    # norma-2 por par (solução, ref)
+    d_perp = np.linalg.norm(diff, axis=2)       # (k, R)
+
+    # índice do nicho mais próximo e a distância correspondente
+    niche_idx = np.argmin(d_perp, axis=1)       # (k,)
+    niche_dist = d_perp[np.arange(k), niche_idx] # (k,)
+
+    return niche_idx.astype(int), niche_dist.astype(float)
