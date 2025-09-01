@@ -78,7 +78,7 @@ if __name__ == "__main__":
         run_pending_experiment(pending.pop())
 
     Thread(
-        target=exp_repo.watch_experiments, 
+        target=exp_repo.watch_status_waiting, 
         args=(on_experiment_event,),
         daemon=True).start()
 

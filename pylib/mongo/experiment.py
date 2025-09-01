@@ -126,7 +126,7 @@ class ExperimentRepository:
                 "deleted_simulations": sims_deleted,
             }
     
-    def watch_experiments(self, on_change: Callable[[dict], None]):
+    def watch_status_waiting(self, on_change: Callable[[dict], None]):
         print("[ExperimentRepository] Waiting new experiments...")
         pipeline = [
             {
