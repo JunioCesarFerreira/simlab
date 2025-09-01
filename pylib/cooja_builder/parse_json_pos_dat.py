@@ -6,7 +6,8 @@ def evaluate_function(expression: str, t_values: np.ndarray) -> np.ndarray:
 
 def generate_positions_from_json(
     simElements: SimulationElements, 
-    output_filename: str = "positions.dat"
+    output_filename: str = "positions.dat",
+    debug = False
     ) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
 
     fixed_positions = [(mote["position"][0], mote["position"][1]) for mote in simElements["fixedMotes"]]
@@ -31,7 +32,8 @@ def generate_positions_from_json(
             time_step = mote["timeStep"]
             is_round_trip = mote.get("isRoundTrip", False)
             
-            print("path_segments", path_segments)
+            if debug:
+                print("path_segments", path_segments)
 
             # Avaliação dos segmentos
             x_all, y_all, segment_distances = [], [], []
