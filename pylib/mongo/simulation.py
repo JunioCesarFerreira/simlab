@@ -100,7 +100,7 @@ class SimulationRepository:
             return result.deleted_count > 0
 
     
-    def watch_simulations(self, on_change: Callable[[dict], None]):
+    def watch_status_done(self, on_change: Callable[[dict], None]):
         print("[SimulationRepository] Waiting changes...")
         pipeline = [
             {

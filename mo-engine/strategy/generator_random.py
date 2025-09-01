@@ -14,10 +14,10 @@ from pylib import plot_network
 
 class GeneratorRandomStrategy(EngineStrategy):
     """
-    Gera topologias aleatórias, cria simulações e monitora via Change Stream
-    (usando SimulationRepository.watch_simulations). Quando todas as simulações
-    da geração estiverem finalizadas (DONE ou ERROR), marca geração e experimento
-    como DONE.
+    Generates random topologies, creates simulations, and monitors them via the Change Stream
+    (using SimulationRepository.watch_simulations). When all simulations
+    in the generation are complete (DONE or ERROR), mark the generation and experiment
+    as DONE.
     """
 
     def __init__(self, experiment, mongo):
@@ -33,7 +33,7 @@ class GeneratorRandomStrategy(EngineStrategy):
         self._gen_id: ObjectId | None = None
 
     # ---------------------------------
-    # Criação da geração e das simulações
+    # Starts a random generations of simulations
     # ---------------------------------
     def start(self):
         exp_oid: ObjectId = self.experiment["_id"]
@@ -64,7 +64,7 @@ class GeneratorRandomStrategy(EngineStrategy):
         tmp_dir.mkdir(parents=True, exist_ok=True)
 
         for i in range(num_of_gen):
-            # 1) Gera topologia
+            # 1. Generates topology
             points = network_gen(amount=num_of_motes, region=region, radius=radius)
             fixed = [
                 {
@@ -77,7 +77,7 @@ class GeneratorRandomStrategy(EngineStrategy):
                 for j, (x, y) in enumerate(points)
             ]
 
-            # 2) Monta config da simulação
+            # 2. Assembly simulation config
             config: SimulationConfig = {
                 "name": f"auto-{i}",
                 "duration": 120,
@@ -90,7 +90,7 @@ class GeneratorRandomStrategy(EngineStrategy):
                 }
             }
 
-            # 3) Gera arquivos + imagem da topologia
+            # 3. Create and registry files
             files_ids = create_files(config, self.mongo.fs_handler)
             image_tmp_path = tmp_dir / f"{exp_oid}-{gen_oid}-{i}.png"
             plot_network.plot_network_save_from_sim(str(image_tmp_path), config)
@@ -100,9 +100,9 @@ class GeneratorRandomStrategy(EngineStrategy):
             )
             os.remove(image_tmp_path)
 
-            # 4) Insere simulação
+            # 4. Insert Simulation
             sim_doc: Simulation = {
-                "id": i,  # índice sequencial local
+                "id": i, # sequential index
                 "experiment_id": exp_oid,
                 "generation_id": gen_oid,
                 "status": EnumStatus.WAITING,
@@ -118,9 +118,10 @@ class GeneratorRandomStrategy(EngineStrategy):
             }
 
             sim_oid = self.mongo.simulation_repo.insert(sim_doc)
+            print(f"sim_oid={sim_oid}")
             simulation_ids.append(sim_oid)
         
-        # 5) Atualiza geração e experimento
+        # 5. Update generation and experiment
         self.mongo.generation_repo.update(gen_oid, {
             "simulations_ids": [str(_id) for _id in simulation_ids],
             "status": EnumStatus.WAITING
@@ -133,67 +134,51 @@ class GeneratorRandomStrategy(EngineStrategy):
             "generations_ids": [str(gen_oid)]
         })
 
-        # 6) Estado interno para monitoramento
+        # 6. Internal state for monitoring
         self.number_of_simulations = len(simulation_ids)
         self.counter = 0
         self.pending = set(simulation_ids)
 
-        # 7) Inicia watcher (escuta DONE) e filtra por geração no callback
-        self._start_watcher()
-
-    # ---------------------------------
-    # Watcher: usa SimulationRepository.watch_simulations
-    # ---------------------------------
-    def _start_watcher(self):
-        # encerra watcher anterior, se houver
-        self._stop_flag = False
+        # 7. Starts watcher (listens for DONE) and filters by generation in callback
+        self._stop_flag = False # closes previous watcher, if any
         if self._watch_thread and self._watch_thread.is_alive():
             self._stop_flag = True
             self._watch_thread.join(timeout=1.0)
             self._stop_flag = False
 
         def _run():
-            # Este método do repo já abre o Change Stream com pipeline fixo (status == DONE)
-            # Chamará self._on_sim_change(change) para cada alteração.
-            self.mongo.simulation_repo.watch_simulations(self._on_sim_change)
+            self.mongo.simulation_repo.watch_status_done(self.event_simulation_done)
 
         self._watch_thread = Thread(target=_run, name="simulations-watcher", daemon=True)
         self._watch_thread.start()
-
-    def _on_sim_change(self, change: dict):
-        """Callback para cada evento do Change Stream (status == DONE)."""
+            
+    # ---------------------------------
+    # Event: Simulations DONE
+    # ---------------------------------
+    def event_simulation_done(self, sim_doc: dict):
+        """Callback for each Change Stream event (status == DONE)."""
         if self._stop_flag:
             return
 
-        full = change.get("fullDocument") or {}
+        full = sim_doc.get("fullDocument") or {}
         gen_id = full.get("generation_id")
         sim_oid = full.get("_id")
         status = full.get("status")
 
-        # filtra para a geração atual
         if self._gen_id is None or gen_id != self._gen_id:
             return
 
-        # telemetria opcional
         print(f"[Watcher] sim {sim_oid} -> {status}")
 
-        # atualiza contadores locais
+        # 1. update local counters
         if isinstance(sim_oid, ObjectId) and sim_oid in self.pending:
             self.pending.remove(sim_oid)
             self.counter += 1
 
-        # tenta finalizar se tudo terminou (DONE/ERROR)
-        self._try_finalize()
-
-    # ---------------------------------
-    # Reconciliação e finalização
-    # ---------------------------------
-    def _try_finalize(self):
-        """Verifica no banco se restam simulações não-finalizadas desta geração."""
         if self._gen_id is None or self._exp_id is None:
             return
 
-        # qualquer status que não seja DONE/ERROR conta como pendente
+        # 2. any status other than DONE/ERROR counts as pending
         with self.mongo.simulation_repo.connection.connect() as db:
             remaining = db["simulations"].count_documents({
                 "generation_id": self._gen_id,
@@ -201,26 +186,22 @@ class GeneratorRandomStrategy(EngineStrategy):
             })
 
         if remaining == 0:
-            # marca geração como DONE
+            # 3. change generation status DONE
             self.mongo.generation_repo.update(str(self._gen_id), {
                 "status": EnumStatus.DONE,
                 "end_time": datetime.now()
             })
-            # marca experimento como DONE
+            # 4. change experiment status DONE
             self.mongo.experiment_repo.update(str(self._exp_id), {
                 "status": EnumStatus.DONE,
                 "end_time": datetime.now()
             })
-            # sinaliza parada do watcher
+            # 5. signals watcher stop
             self._stop_flag = True
-            print("[Watcher] geração/experimento finalizados (DONE).")
-
-    def on_simulation_result(self, result_doc: dict):
-        # não fará callback
-        pass
+            print("[Watcher] generation/experiment completed (DONE).")
 
     # ---------------------------------
-    # Encerramento explícito
+    # End watch thread
     # ---------------------------------
     def stop(self):
         self._stop_flag = True

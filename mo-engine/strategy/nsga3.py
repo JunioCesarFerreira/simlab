@@ -99,7 +99,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._start_watcher()
 
     # ON_SIMULTATION_RESULT implementation
-    def on_simulation_result(self, result_doc: dict):
+    def event_simulation_done(self, result_doc: dict):
         """ 
         On event Simulation Result Done
         Args: result_doc (dict): Simulation dictionary
@@ -149,12 +149,12 @@ class NSGA3LoopStrategy(EngineStrategy):
                 if self._stop_flag:
                     return
                 try:
-                    self.on_simulation_result(result_doc)
+                    self.event_simulation_done(result_doc)
                 except Exception as e:
                     print(f"[NSGA-III] Watcher Callback Error: {e}")
 
             print("[NSGA-III] Starting Simulations watcher (DONE).")
-            self.mongo.simulation_repo.watch_simulations(_callback)
+            self.mongo.simulation_repo.watch_status_done(_callback)
 
         self._watch_thread = Thread(target=_run, daemon=True)
         self._watch_thread.start()

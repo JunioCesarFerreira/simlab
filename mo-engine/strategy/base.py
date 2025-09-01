@@ -9,10 +9,21 @@ class EngineStrategy(ABC):
 
     @abstractmethod
     def start(self):
-        """Inicializa a estratégia de execução"""
+        """
+        Initializes the execution strategy.
+        This involves one or more watching threads.
+        """
         pass
 
     @abstractmethod
-    def on_simulation_result(self, result_doc: dict):
-        """Recebe um resultado de simulação e decide o próximo passo"""
+    def event_simulation_done(self, sim_doc: dict):
+        """
+        Receive a simulation result and decide the next step
+        Should be used to handle the simulation completion event
+        """
+        pass
+    
+    @abstractmethod
+    def stop(self):
+        """Ends threads"""
         pass
