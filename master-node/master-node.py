@@ -14,7 +14,6 @@ from scp import SCPClient
 # lib master-node
 from lib import sshscp
 
-# --------------------------------------------------------------------
 # SysPath for common modules
 project_path = os.path.abspath(os.path.join(os.getcwd(), ".."))
 if project_path not in sys.path:
@@ -24,8 +23,6 @@ from pylib import mongo_db
 from pylib import cooja_files
 from pylib import statistics
 from dto import Simulation, Experiment, SourceRepository
-# --------------------------------------------------------------------
-
 
 # --------------------------- Logging --------------------------------
 logging.basicConfig(
@@ -34,7 +31,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("master-node")
 # --------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class Settings:
@@ -161,39 +157,38 @@ def run_cooja_simulation(
         log.info("[port=%s host=%s] Starting simulation %s", port, hostname, sim_oid)
         mongo.simulation_repo.mark_running(sim_oid)
 
-        # Comando Cooja (sem '../' porque remote_dir é absoluto)
+        # Cooja command
         command = (
             f"cd {SET.remote_dir} && "
             f"/opt/java/openjdk/bin/java --enable-preview -Xms4g -Xmx4g "
             f"-jar build/libs/cooja.jar --no-gui simulation.csc"
         )
 
-        # Execução remota
+        # Remote execution
         stdin, stdout, stderr = ssh.exec_command(command, get_pty=True, timeout=SET.sim_timeout_sec or None)
 
-        # Leitura não-bloqueante simples (polling)
+        # Simple non-blocking read (polling)
         chan = stdout.channel
         chan.settimeout(5.0)
         while not chan.exit_status_ready():
             if chan.recv_ready():
                 out = chan.recv(4096).decode("utf-8", errors="ignore")
                 if out:
-                    print(f"[ssh][{hostname if SET.is_docker else port}][stdout] {out}", end="")
+                    log.info(f"[ssh][{hostname if SET.is_docker else port}][stdout] {out}", end="")
             if chan.recv_stderr_ready():
                 err = chan.recv_stderr(4096).decode("utf-8", errors="ignore")
                 if err:
-                    print(f"[ssh][{hostname if SET.is_docker else port}][stderr] {err}", end="")
+                    log.info(f"[ssh][{hostname if SET.is_docker else port}][stderr] {err}", end="")
             time.sleep(0.1)
 
-        # Coleta de log principal
+        # get cooja log
         log_path = f"{SET.local_log_dir}/sim_{sim_oid}.log"
         with SCPClient(ssh.get_transport()) as scp:
-            # ajuste o nome do arquivo se necessário
             remote_log = f"{SET.remote_dir}/COOJA.testlog"
             log.info("[port=%s] Copying log to %s", port, log_path)
             scp.get(remote_log, log_path)
 
-        # Registra log
+        # save full log
         log_id = mongo.fs_handler.upload_file(log_path, "sim_result.log")
         log.info("[port=%s] Log saved with ID: %s", port, log_id)
 
@@ -210,7 +205,7 @@ def run_cooja_simulation(
     
         objectives, metrics = statistics.evaluate_config(df, cfg)
                 
-        # Marca concluído e registra ids de log e csv
+        # Mark completed and record log and csv ids
         mongo.simulation_repo.mark_done(sim_oid, log_id, csv_id, objectives, metrics)
 
         if SET.is_docker:
@@ -223,7 +218,7 @@ def run_cooja_simulation(
             except Exception as ex:
                 log.warning("Failed to remove temp csv file %s: %s", csv_path, ex)
 
-        # Finalização de geração
+        # Generation completion
         gen_id = sim["generation_id"]
         if mongo.generation_repo.all_simulations_done(gen_id):
             mongo.generation_repo.mark_done(gen_id)
@@ -238,9 +233,10 @@ def run_cooja_simulation(
         ssh.close()
 
 
+
 def simulation_worker(sim_queue: queue.Queue, port: int, hostname: str) -> None:
     """
-    Worker que consome a fila e executa simulações em um host/porta.
+    Worker that consumes the queue and runs simulations on a host/port.
     """
     mongo = mongo_db.create_mongo_repository_factory(SET.mongo_uri, SET.db_name)
     while True:
@@ -258,7 +254,7 @@ def simulation_worker(sim_queue: queue.Queue, port: int, hostname: str) -> None:
                 mongo.simulation_repo.mark_error(ObjectId(sim["_id"]))
                 continue
 
-            # Envio de arquivos
+            # Send files
             log.debug("[port=%s] Creating SSH client %s@%s:%s", port, "root", hostname, port)
             ssh = sshscp.create_ssh_client(hostname, port, "root", "root")
             try:
@@ -266,10 +262,10 @@ def simulation_worker(sim_queue: queue.Queue, port: int, hostname: str) -> None:
             finally:
                 ssh.close()
 
-            # Execução
+            # run
             run_cooja_simulation(sim, port, hostname, mongo)
 
-            # Limpeza local
+            # clean
             if SET.is_docker:
                 for f in local_files:
                     try:
@@ -285,13 +281,12 @@ def simulation_worker(sim_queue: queue.Queue, port: int, hostname: str) -> None:
             except Exception:
                 log.exception("Failed to mark error on simulation after general exception")
         finally:
-            # Sempre dar baixa na tarefa
             sim_queue.task_done()
 
 
 def start_workers(num_workers: int) -> queue.Queue:
     """
-    Inicializa threads worker de acordo com a capacidade.
+    Initializes worker threads according to capacity.
     """
     _assert_capacity(num_workers)
 
@@ -309,7 +304,7 @@ def start_workers(num_workers: int) -> queue.Queue:
 
 def load_initial_waiting_jobs(mongo: mongo_db.MongoRepository, sim_queue: queue.Queue) -> None:
     """
-    Enfileira simulações pendentes no arranque.
+    Enqueue pending simulations on load.
     """
     log.info("Searching for pending simulations...")
     pending = mongo.simulation_repo.find_pending()
@@ -329,7 +324,6 @@ def main() -> None:
     sim_queue = start_workers(number_of_containers)
     load_initial_waiting_jobs(mongo, sim_queue)
 
-    # watch em thread separada
     Thread(
         target=mongo.generation_repo.watch_status_waiting_enqueue,
         args=(sim_queue,),
@@ -340,8 +334,7 @@ def main() -> None:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        log.info("Encerrando...")
-
+        log.info("closing...")
 
 if __name__ == "__main__":
     main()
