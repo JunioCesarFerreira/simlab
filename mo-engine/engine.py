@@ -7,8 +7,9 @@ if project_path not in sys.path:
 
 from pylib import mongo_db
 from pylib.mongo_db import EnumStatus
+from strategy.base import EngineStrategy 
 from strategy.generator_random import GeneratorRandomStrategy
-from strategy.nsga3 import NSGA3LoopStrategy  # futuro
+from strategy.nsga3 import NSGA3LoopStrategy  
 
 SimStatus = mongo_db.EnumStatus
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/?replicaSet=rs0")
@@ -19,7 +20,7 @@ DB_NAME = os.getenv("DB_NAME", "simlab")
 
 mongo = mongo_db.create_mongo_repository_factory(MONGO_URI, DB_NAME)
 
-def select_strategy(exp_doc: dict):
+def select_strategy(exp_doc: dict) -> EngineStrategy:
     print("[mo-engine] select strategy")
     exp_type = exp_doc.get("parameters", {}).get("strategy", "simple")
     print(f"[mo-engine] selected: {exp_type}")

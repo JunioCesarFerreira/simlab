@@ -89,7 +89,7 @@ class GenerationRepository:
                     })    
         return on_generation_event
 
-    def watch_generations(self, sim_queue: queue.Queue) -> None:
+    def watch_status_waiting_enqueue(self, sim_queue: queue.Queue) -> None:
         print("[GenerationRepository] Waiting new generations...")
         pipeline = [
             {

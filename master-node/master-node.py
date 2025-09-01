@@ -331,7 +331,7 @@ def main() -> None:
 
     # watch em thread separada
     Thread(
-        target=mongo.generation_repo.watch_generations,
+        target=mongo.generation_repo.watch_status_waiting_enqueue,
         args=(sim_queue,),
         daemon=True,
     ).start()
