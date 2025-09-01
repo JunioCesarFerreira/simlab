@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+from matplotlib.pyplot import Figure
 import numpy as np
 from matplotlib.patches import Circle
 from dto import SimulationConfig
@@ -9,7 +10,7 @@ def _build_plot_network(
     radius: float,
     interference_radius: float,
     paths: list[list[str]] = None
-    ) -> None:
+    ) -> Figure:
     """
     Plota uma rede de nós com dois discos concêntricos para cada nó:
     - Disco de comunicação (menor, verde)           - raio = ``radius``
@@ -156,6 +157,7 @@ def _build_plot_network(
                 ys_total.extend(y_vals)
 
             ax.plot(xs_total, ys_total, linestyle='--', color='blue', alpha=0.6)
+    return fig
   
 def plot_network_save_from_sim(
     file_path: str,
@@ -171,6 +173,6 @@ def plot_network_save_from_sim(
     interference_radius = sim_model["radiusOfInter"]
     paths = [list[str](mote["functionPath"]) for mote in mobile_motes]
     
-    _build_plot_network(points, region, radius, interference_radius, paths)
+    fig = _build_plot_network(points, region, radius, interference_radius, paths)
     plt.savefig(file_path)
-    plt.close(file_path)
+    plt.close(fig)
