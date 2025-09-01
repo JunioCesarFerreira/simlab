@@ -1,4 +1,4 @@
-import os, sys, time
+import os, sys, time, logging
 from threading import Thread
 
 project_path = os.path.abspath(os.path.join(os.getcwd(), ".."))
@@ -11,19 +11,25 @@ from strategy.base import EngineStrategy
 from strategy.generator_random import GeneratorRandomStrategy
 from strategy.nsga3 import NSGA3LoopStrategy  
 
+# --------------------------- Logging --------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] [mo-engine] %(message)s",
+)
+log = logging.getLogger("mo-engine")
+# --------------------------------------------------------------------
+
 SimStatus = mongo_db.EnumStatus
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/?replicaSet=rs0")
-
 IS_DOCKER = os.getenv("IS_DOCKER", False)
-
 DB_NAME = os.getenv("DB_NAME", "simlab")
 
 mongo = mongo_db.create_mongo_repository_factory(MONGO_URI, DB_NAME)
 
 def select_strategy(exp_doc: dict) -> EngineStrategy:
-    print("[mo-engine] select strategy")
+    log.info("select strategy")
     exp_type = exp_doc.get("parameters", {}).get("strategy", "simple")
-    print(f"[mo-engine] selected: {exp_type}")
+    log.info(f"selected: {exp_type}")
     if exp_type == "simple":
         return GeneratorRandomStrategy(exp_doc, mongo)
     elif exp_type == "nsga3":
@@ -34,21 +40,21 @@ def select_strategy(exp_doc: dict) -> EngineStrategy:
 
 def process_experiment(exp_doc: dict):
     exp_id = str(exp_doc["_id"])
-    print(f"[mo-engine] Processing experiment id: {exp_id}")
+    log.info(f"Processing experiment id: {exp_id}")
     try:
         strategy = select_strategy(exp_doc)
         strategy.start()
     except Exception as e:
-        print(f"[Erro] Failed to start strategy for experiment {exp_id}: {e}")
+        log.error(f"Failed to start strategy for experiment {exp_id}: {e}")
 
 
 def on_experiment_event(change: dict):
-    print("[mo-engine] on experiment event...")
-    print(f"[mo-engine] change: {change}")
+    log.info("on experiment event...")
+    log.info(f"change: {change}")
 
     exp_doc = change.get("fullDocument")
     if not exp_doc:
-        print("[mo-engine] Document missing from the event.")
+        log.warning("Document missing from the event.")
         return
     exp_id = str(exp_doc["_id"])
         
@@ -57,18 +63,17 @@ def on_experiment_event(change: dict):
 
 
 def run_pending_experiment(change: dict):
-    print("[mo-engine] run pending experiment...")
-    print(f"[mo-engine] change: {change}")
+    log.info("run pending experiment...")
+    log.info(f"change: {change}")
 
     exp_id = str(change["_id"])
     
     if mongo.experiment_repo.update_starting(exp_id):
         process_experiment(change)
        
-
-if __name__ == "__main__":
-    print("[mo-engine] Service started.", flush=True)
-    print(f"[mo-engine] env:\n\tMONGO_URI: {MONGO_URI}\n\tDB_NAME: {DB_NAME}")
+def main() -> None:
+    log.info("service started.")
+    log.info(f"env:\n\tMONGO_URI: {MONGO_URI}\n\tDB_NAME: {DB_NAME}")
     exp_repo = mongo.experiment_repo
     exp_repo.connection.waiting_ping()
 
@@ -84,3 +89,6 @@ if __name__ == "__main__":
 
     while True:
         time.sleep(10)
+
+if __name__ == "__main__":
+    main()
