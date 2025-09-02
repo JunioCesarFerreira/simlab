@@ -25,5 +25,5 @@ class EngineStrategy(ABC):
     
     @abstractmethod
     def stop(self):
-        """Ends threads"""
+        """Closes threads"""
         pass
