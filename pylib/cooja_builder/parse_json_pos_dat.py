@@ -1,3 +1,4 @@
+import logging
 import numpy as np
 from dto import SimulationElements
 
@@ -33,7 +34,8 @@ def generate_positions_from_json(
             is_round_trip = mote.get("isRoundTrip", False)
             
             if debug:
-                print("path_segments", path_segments)
+                log = logging.getLogger(__name__)
+                log.debug("path_segments", path_segments)
 
             # Avaliação dos segmentos
             x_all, y_all, segment_distances = [], [], []

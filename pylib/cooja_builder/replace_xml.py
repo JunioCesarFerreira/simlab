@@ -1,5 +1,8 @@
+import logging
 import xml.etree.ElementTree as ET
 import xml.dom.minidom as minidom
+
+logger = logging.getLogger(__name__)
 
 def update_simulation_xml(
     fixed_positions: list[tuple[float, float]],
@@ -100,4 +103,4 @@ def update_simulation_xml(
         final_content = "\n".join(lines_without_blanks)
         f.write(final_content)
     
-    print(f"File {output_file} generated successfully!")
+    logger.info(f"File {output_file} generated successfully!")

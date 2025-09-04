@@ -1,5 +1,8 @@
+import logging
 import paramiko
 from scp import SCPClient
+
+log = logging.getLogger(__name__)
 
 def create_ssh_client(hostname, port, username, password):
     client = paramiko.SSHClient()
@@ -10,11 +13,11 @@ def create_ssh_client(hostname, port, username, password):
 
 def send_files_scp(client, local_path, remote_path, source_files, target_files):
     if len(source_files) != len(target_files):
-        print("The number of source files is not equal number of targets.")
+        log.info("The number of source files is not equal number of targets.")
         return
     with SCPClient(client.get_transport()) as scp:
         for src, dest in zip(source_files, target_files):
             local_file_path = local_path + "/" + src
             remote_file_path = remote_path + "/" + dest
-            print(f"Sending {local_file_path} to {remote_file_path}")
+            log.info(f"Sending {local_file_path} to {remote_file_path}")
             scp.put(local_file_path, remote_file_path)  

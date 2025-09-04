@@ -1,9 +1,12 @@
+import logging
 from datetime import datetime
 from typing import Optional, Callable
 from bson import ObjectId, errors
 
 from mongo.connection import MongoDBConnection, EnumStatus
 from dto import Experiment, TransformConfig
+
+log = logging.getLogger(__name__)
 
 class ExperimentRepository:
     def __init__(self, connection: MongoDBConnection):
@@ -45,7 +48,7 @@ class ExperimentRepository:
         try:
             oid = ObjectId(experiment_id)
         except errors.InvalidId:
-            print("ID inválido")
+            log.error("Invalid ID")
         with self.connection.connect() as db:
             result = db["experiments"].find_one({"_id": oid})
             return result
@@ -79,7 +82,7 @@ class ExperimentRepository:
         try:
             exp_oid = ObjectId(experiment_id)
         except errors.InvalidId:
-            print("ID inválido")
+            log.error("Invalid ID")
             return {"deleted_experiments": 0, "deleted_generations": 0, "deleted_simulations": 0}
 
         def _coerce_oid(x):
@@ -127,7 +130,7 @@ class ExperimentRepository:
             }
     
     def watch_status_waiting(self, on_change: Callable[[dict], None]):
-        print("[ExperimentRepository] Waiting new experiments...")
+        log.info("[ExperimentRepository] Waiting new experiments...")
         pipeline = [
             {
                 "$match": {

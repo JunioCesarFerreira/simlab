@@ -1,4 +1,5 @@
 import os
+import logging
 from threading import Thread
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +12,7 @@ from pylib.dto import Simulation, SimulationConfig, Generation
 from pylib.mongo_db import EnumStatus
 from pylib import plot_network
 
+log = logging.getLogger(__name__)
 
 class GeneratorRandomStrategy(EngineStrategy):
     """
@@ -118,7 +120,7 @@ class GeneratorRandomStrategy(EngineStrategy):
             }
 
             sim_oid = self.mongo.simulation_repo.insert(sim_doc)
-            print(f"sim_oid={sim_oid}")
+            log.info(f"sim_oid={sim_oid}")
             simulation_ids.append(sim_oid)
         
         # 5. Update generation and experiment
@@ -168,7 +170,7 @@ class GeneratorRandomStrategy(EngineStrategy):
         if self._gen_id is None or gen_id != self._gen_id:
             return
 
-        print(f"[Watcher] sim {sim_oid} -> {status}")
+        log.info(f"[Watcher] sim {sim_oid} -> {status}")
 
         # 1. update local counters
         if isinstance(sim_oid, ObjectId) and sim_oid in self.pending:
@@ -198,7 +200,7 @@ class GeneratorRandomStrategy(EngineStrategy):
             })
             # 5. signals watcher stop
             self._stop_flag = True
-            print("[Watcher] generation/experiment completed (DONE).")
+            log.info("[Watcher] generation/experiment completed (DONE).")
 
     # ---------------------------------
     # End watch thread

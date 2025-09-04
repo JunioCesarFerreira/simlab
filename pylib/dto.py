@@ -373,10 +373,7 @@ def experiment_to_mongo(dto: ExperimentDto) -> Experiment:
     exp["end_time"] = _ensure_datetime(d.get("end_time"))
     exp["parameters"] = d.get("parameters", {})
     exp["generations"] = _list_str_to_oid(d.get("generations", []))
-
     exp["source_repository_id"] = d.get("source_repository_id", "")
-
-    print(f"test:{d.get("transform_config", {}) }")
     exp["transform_config"] = d.get("transform_config", {}) or {}
     
     return exp 

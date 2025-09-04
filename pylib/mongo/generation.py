@@ -1,9 +1,12 @@
+import logging
 import queue
 from datetime import datetime
 from bson import ObjectId, errors
 
 from dto import Simulation, Generation
 from mongo.connection import MongoDBConnection, EnumStatus
+
+log = logging.getLogger(__name__)
 
 class GenerationRepository:
     def __init__(self, connection: MongoDBConnection):
@@ -23,7 +26,7 @@ class GenerationRepository:
         try:
             oid = ObjectId(generation_id)
         except errors.InvalidId:
-            print("ID inválido")
+            log.error("Invalid ID")
         with self.connection.connect() as db:
             result = db["generations"].find_one({"_id": oid})
             return result
@@ -67,19 +70,19 @@ class GenerationRepository:
             
     def _make_generation_event_handler(self, sim_queue: queue.Queue) -> callable:
         def on_generation_event(change: dict):
-            print("[GenerationRepository] on generation event...")
-            print(f"[GenerationRepository] change: {change}")
+            log.info("[GenerationRepository] on generation event...")
+            log.info(f"[GenerationRepository] change: {change}")
 
             gen_doc = change.get("fullDocument")
             if not gen_doc:
-                print("[GenerationRepository] Document missing from the event.")
+                log.warning("[GenerationRepository] Document missing from the event.")
                 return
             gen_id = ObjectId(gen_doc["_id"])
             
             list_sim = self._find_pending_by_generation(gen_id)
-            print(f"[GenerationRepository] len(list_sim)={len(list_sim)}")
+            log.info(f"[GenerationRepository] len(list_sim)={len(list_sim)}")
             for sim in list_sim:
-                print(f"[GenerationRepository] enqueue sim_id: {sim["_id"]}")
+                log.info(f"[GenerationRepository] enqueue sim_id: {sim["_id"]}")
                 sim_queue.put(sim)
             
             if len(list_sim) > 0:
@@ -90,7 +93,7 @@ class GenerationRepository:
         return on_generation_event
 
     def watch_status_waiting_enqueue(self, sim_queue: queue.Queue) -> None:
-        print("[GenerationRepository] Waiting new generations...")
+        log.info("[GenerationRepository] Waiting new generations...")
         pipeline = [
             {
                 "$match": {
@@ -111,12 +114,12 @@ class GenerationRepository:
         with self.connection.connect() as db:
             generation = db["generations"].find_one({ "_id": generation_id })
             if not generation:
-                print(f"[GenerationRepository] Generation {generation_id} not found.")
+                log.warning(f"[GenerationRepository] Generation {generation_id} not found.")
                 return False
 
             sim_ids = generation.get("simulations_ids", [])
             if not sim_ids:
-                print(f"[GenerationRepository] Generation {generation_id} does not have simulations.")
+                log.warning(f"[GenerationRepository] Generation {generation_id} does not have simulations.")
                 return True 
             
             # Conta quantas simulações ainda NÃO estão com status Done
@@ -134,7 +137,7 @@ class GenerationRepository:
         try:
             gen_oid = ObjectId(generation_id)
         except errors.InvalidId:
-            print("ID inválido")
+            log.error("Invalid ID")
             return {"deleted_generations": 0, "deleted_simulations": 0}
 
         def _coerce_oid(x):

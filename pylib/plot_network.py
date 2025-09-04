@@ -1,8 +1,11 @@
+import logging
 import matplotlib.pyplot as plt
 from matplotlib.pyplot import Figure
 import numpy as np
 from matplotlib.patches import Circle
 from dto import SimulationConfig
+
+log = logging.getLogger(__name__)
 
 def _build_plot_network(
     points: list[tuple[float, float]],
@@ -118,7 +121,7 @@ def _build_plot_network(
     if paths:
         for path_idx, path in enumerate(paths):
             if not isinstance(path, list) or any(len(part) != 2 for part in path):
-                print(f"Atenção: Caminho ignorado por estrutura inválida: {path}")
+                log.warning(f"Warning: Path ignored due to invalid structure: {path}")
                 continue
 
             num_parts = len(path)
@@ -150,7 +153,7 @@ def _build_plot_network(
                         y_vals = np.array(y_eval, dtype=float)
                         
                 except Exception as e:
-                    print(f"Erro ao avaliar parte {part_idx} do caminho {path_idx}: {e}")
+                    log.error(f"Erro ao avaliar parte {part_idx} do caminho {path_idx}: {e}")
                     continue
 
                 xs_total.extend(x_vals)

@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 class MongoDBConnection:
     def __init__(self, uri: str, db_name: str):
-        print(f"[MongoDBConnection] uri:{uri} db_name:{db_name}")
+        logger.info(f"[MongoDBConnection] uri:{uri} db_name:{db_name}")
         self.uri = uri
         self.db_name = db_name
 
@@ -39,7 +39,7 @@ class MongoDBConnection:
                     client.admin.command("ping")
                 break
             except pymongo.errors.ConnectionFailure:
-                print("[WorkGenerator] Aguardando conexão com MongoDB...")
+                logger.error("[WorkGenerator] Aguardando conexão com MongoDB...")
                 time.sleep(3)
     
     def watch_collection(self,
@@ -64,4 +64,4 @@ class MongoDBConnection:
                     for change in stream:
                         on_change(change)
             except PyMongoError as e:
-                print(f"[watch_collection] Erro ao observar coleção '{collection_name}': {e}")
+                logger.error(f"[watch_collection] Erro ao observar coleção '{collection_name}': {e}")

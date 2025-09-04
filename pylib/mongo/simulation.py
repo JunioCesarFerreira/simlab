@@ -1,9 +1,12 @@
+import logging
 from datetime import datetime
 from bson import ObjectId, errors
 from typing import Callable
 
 from dto import Simulation
 from mongo.connection import MongoDBConnection, EnumStatus
+
+log = logging.getLogger(__name__)
 
 class SimulationRepository:
     def __init__(self, connection: MongoDBConnection):
@@ -17,7 +20,7 @@ class SimulationRepository:
         try:
             oid = ObjectId(simulation_id)
         except errors.InvalidId:
-            print("ID inválido")
+            log.error("Invalid ID")
         with self.connection.connect() as db:
             result = db["simulations"].find_one({"_id": oid})
             return result
@@ -92,7 +95,7 @@ class SimulationRepository:
         try:
             oid = ObjectId(simulation_id)
         except errors.InvalidId:
-            print("ID inválido")
+            log.error("Invalid ID")
             return False
 
         with self.connection.connect() as db:
@@ -101,7 +104,7 @@ class SimulationRepository:
 
     
     def watch_status_done(self, on_change: Callable[[dict], None]):
-        print("[SimulationRepository] Waiting changes...")
+        log.info("[SimulationRepository] Waiting changes...")
         pipeline = [
             {
                 "$match": {
