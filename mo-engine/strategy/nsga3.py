@@ -1,5 +1,6 @@
 import os
 import random
+import logging
 import threading
 from threading import Thread
 from datetime import datetime
@@ -21,6 +22,7 @@ from .util.nsga.niching_selection import generate_reference_points, niching_sele
 from .util.genetic_operators.crossover.simulated_binary_crossover import make_sbx_crossover
 from .util.genetic_operators.mutation.polynomial_mutation import make_polynomial_mutation
 
+logger = logging.getLogger(__name__)
 
 class NSGA3LoopStrategy(EngineStrategy):
     """
@@ -93,12 +95,12 @@ class NSGA3LoopStrategy(EngineStrategy):
         self.current_population = [self._random_individual() for _ in range(self.population_size)]
 
         # Enqueue Simulations to first Generation
-        self._spawn_generation(self.current_population, self._gen_index)
+        self._generation_enqueue(self.current_population, self._gen_index)
 
-        # Inicia watcher para receber os resultados desta geração
+        # Starts watcher for receive results from this generation
         self._start_watcher()
 
-    # ON_SIMULTATION_RESULT implementation
+    # EVENT_SIMULATION_DONE implementation
     def event_simulation_done(self, result_doc: dict):
         """ 
         On event Simulation Result Done
@@ -107,7 +109,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         if self._stop_flag or self._gen_id is None:
             return
 
-        print("EVENT SIMULATION RESULT DONE")
+        logger.info("EVENT SIMULATION RESULT DONE")
         sim = result_doc.get("fullDocument")
 
         # Ensures that this result is from the current generation
@@ -115,22 +117,28 @@ class NSGA3LoopStrategy(EngineStrategy):
             return
 
         sim_id = str(sim.get("_id"))
-        print(f"sim_id={sim_id}")
+        logger.info(f"sim_id={sim_id}")
         idx = self.sim_id_to_index.get(sim_id)
         if idx is None:
             return
 
         obj = self._extract_objectives(sim)
         if obj is None:
-            print(f"objectives not found in {sim_id}")
+            logger.info(f"objectives not found in {sim_id}")
             return
 
         self.objectives_buffer[idx] = obj
 
         # check generation is complete
-        print(f"{len(self.objectives_buffer)} >= {len(self.current_population)}")
+        logger.info(f"{len(self.objectives_buffer)} >= {len(self.current_population)}")
         if len(self.objectives_buffer) >= len(self.current_population):
             self._on_generation_completed()
+
+    # STOP implementation
+    def stop(self):
+        self._stop_flag = True
+        if self._watch_thread and self._watch_thread.is_alive():
+            self._watch_thread.join(timeout=1.0)
 
     # ------------------------------
     # Watcher (Change Stream)
@@ -151,9 +159,9 @@ class NSGA3LoopStrategy(EngineStrategy):
                 try:
                     self.event_simulation_done(result_doc)
                 except Exception as e:
-                    print(f"[NSGA-III] Watcher Callback Error: {e}")
+                    logger.info(f"[NSGA-III] Watcher Callback Error: {e}")
 
-            print("[NSGA-III] Starting Simulations watcher (DONE).")
+            logger.info("[NSGA-III] Starting Simulations watcher (DONE).")
             self.mongo.simulation_repo.watch_status_done(_callback)
 
         self._watch_thread = Thread(target=_run, daemon=True)
@@ -162,7 +170,7 @@ class NSGA3LoopStrategy(EngineStrategy):
     # ------------------------------
     # Geração / Enfileiramento
     # ------------------------------
-    def _spawn_generation(self, population: list[list[float]], gen_index: int):
+    def _generation_enqueue(self, population: list[list[float]], gen_index: int):
         """
         Cria a `Generation` e insere `population_size` simulações no MongoDB.
         """
@@ -227,7 +235,7 @@ class NSGA3LoopStrategy(EngineStrategy):
                 "csv_log_id": ""
             }
             sim_oid = self.mongo.simulation_repo.insert(sim_doc)
-            print(f"sim_oid={sim_oid}")
+            logger.info(f"sim_oid={sim_oid}")
             simulation_ids.append(sim_oid)
             self.sim_id_to_index[str(sim_oid)] = i
 
@@ -245,7 +253,7 @@ class NSGA3LoopStrategy(EngineStrategy):
                 "generations_ids": [str(gen_oid)]
             })
 
-        print(f"[NSGA-III] Generation {gen_index} enqueued with {len(population)} Simulations.")
+        logger.info(f"[NSGA-III] Generation {gen_index} enqueued with {len(population)} Simulations.")
 
     # ------------------------------
     # Conclusão de geração e evolução
@@ -257,7 +265,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         Phase Q: offspring (Q_t) finished -> environmental selection on R_t = P_t ∪ Q_t -> spawn P_{t+1}.
         """
         assert self._gen_id is not None
-        print(f"[NSGA-III] Generation {self._gen_index} completed.")
+        logger.info(f"[NSGA-III] Generation {self._gen_index} completed.")
 
         # close current generation
         self.mongo.generation_repo.update(str(self._gen_id), {
@@ -270,15 +278,15 @@ class NSGA3LoopStrategy(EngineStrategy):
             indices = list(range(len(self.current_population)))
             objectives = [self.objectives_buffer[i] for i in indices]
         except Exception:
-            print("[NSGA-III] Missing objectives for some individuals; aborting.")
-            self._finalize()
+            logger.error("[NSGA-III] Missing objectives for some individuals; aborting.")
+            self._finalize_experiment()
             return
 
         import numpy as np
         F = np.array(objectives, dtype=float)
         if F.ndim != 2 or F.shape[0] == 0:
-            print("[NSGA-III] Invalid objective matrix; aborting.")
-            self._finalize()
+            logger.error("[NSGA-III] Invalid objective matrix; aborting.")
+            self._finalize_experiment()
             return
         M = F.shape[1]
 
@@ -295,13 +303,13 @@ class NSGA3LoopStrategy(EngineStrategy):
             # enqueue Q_t as next "generation" to be evaluated
             # (note: gen_index here is just a sequence counter of batches evaluated)
             self._gen_index += 1
-            self._spawn_generation(offspring, self._gen_index)
+            self._generation_enqueue(offspring, self._gen_index)
 
             # prepare for Phase Q
             self._awaiting_offspring = True
             
             self.current_population = offspring
-            print("[NSGA-III] Offspring enqueued; waiting for Q_t results to perform environmental selection.")
+            logger.info("[NSGA-III] Offspring enqueued; waiting for Q_t results to perform environmental selection.")
             return
 
         # ---------------- PHASE Q: offspring done -> environmental selection on union ----------------
@@ -318,8 +326,8 @@ class NSGA3LoopStrategy(EngineStrategy):
         # fast non-dominated sort on union
         fronts = fast_nondominated_sort(R_F_list)
         if not fronts:
-            print("[NSGA-III] No fronts on union; aborting.")
-            self._finalize()
+            logger.info("[NSGA-III] No fronts on union; aborting.")
+            self._finalize_experiment()
             return
 
         # reference points H (smallest p with |H| >= pop_size)
@@ -337,7 +345,8 @@ class NSGA3LoopStrategy(EngineStrategy):
         for front in fronts:
             if len(selected_idx) + len(front) < self.population_size:
                 selected_idx.extend(front)
-                assoc_idx, _ = self._associate_indices(R_F, H, front)
+                sub = R_F[front, :]
+                assoc_idx, _ = associate_to_niches(sub, H)
                 for nid in assoc_idx:
                     niche_count[nid] = niche_count.get(nid, 0) + 1
             else:
@@ -353,12 +362,12 @@ class NSGA3LoopStrategy(EngineStrategy):
         # stop condition?
         if self._gen_index >= self.max_generations:
             # we already evaluated Q_t; selection done; finalize experiment
-            self._finalize()
+            self._finalize_experiment()
             return
 
         # enqueue next P_{t+1}
         self._gen_index += 1
-        self._spawn_generation(next_population, self._gen_index)
+        self._generation_enqueue(next_population, self._gen_index)
 
         # reset state for next iteration
         self._awaiting_offspring = False
@@ -366,7 +375,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         self.current_population = next_population
         self._parents_population = []
         self._parents_objectives = []
-        print(f"[NSGA-III] Spawned next population (size={len(next_population)}).")
+        logger.info(f"[NSGA-III] Spawned next population (size={len(next_population)}).")
 
 
     # ------------------------------
@@ -450,28 +459,15 @@ class NSGA3LoopStrategy(EngineStrategy):
             except Exception:
                 pass
 
-        print("[NSGA-III] Warning: objectives not found. Set 'objective_keys' via TransformConfig.")
+        logger.info("[NSGA-III] Warning: objectives not found. Set 'objective_keys' via TransformConfig.")
         return None
 
-    def _associate_indices(self, F, H, indices: list[int]) -> tuple[list[int], list[float]]:
-        """
-        Associa `indices` (índices absolutos na população) a niches de H.
-        Retorna (niche_ids, distances) alinhados à ordem de `indices`.
-        """
-        sub = F[indices, :]
-        niche_idx, niche_dist = associate_to_niches(sub, H)
-        return list(map(int, niche_idx)), list(map(float, niche_dist))
-
-    def _finalize(self):
+    def _finalize_experiment(self):
         assert self._exp_id is not None
-        print(f"[NSGA-III] Experimento {self._exp_id} finalizado.")
+        logger.info(f"[NSGA-III] Experiment {self._exp_id} completed.")
         self.mongo.experiment_repo.update(str(self._exp_id), {
             "status": EnumStatus.DONE,
             "end_time": datetime.now()
         })
         # finish watcher
-        self._stop_flag = True
-        t = self._watch_thread
-        if t and t.is_alive():
-            if threading.current_thread() is not t:
-                t.join(timeout=1.0)
+        self.stop()
