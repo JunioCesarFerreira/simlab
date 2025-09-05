@@ -232,8 +232,6 @@ def run_cooja_simulation(
     finally:
         ssh.close()
 
-
-
 def simulation_worker(sim_queue: queue.Queue, port: int, hostname: str) -> None:
     """
     Worker that consumes the queue and runs simulations on a host/port.
@@ -244,6 +242,13 @@ def simulation_worker(sim_queue: queue.Queue, port: int, hostname: str) -> None:
         try:
             if sim is None:
                 return
+            
+        #---------------------------------------------------------
+            # Temp Test
+            from lib.random_test import run_fake_simulation
+            run_fake_simulation(sim, mongo)
+            continue
+        #---------------------------------------------------------
 
             sim_id_str = str(sim.get("_id"))
             log.info("[port=%s host=%s] Preparing simulation %s", port, hostname, sim_id_str)
