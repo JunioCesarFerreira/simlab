@@ -134,3 +134,52 @@ def run_benchmark_simulation(sim: Simulation, mongo: mongo_db.MongoRepository) -
     gen_id = sim["generation_id"]
     if mongo.generation_repo.all_simulations_done(gen_id):
         mongo.generation_repo.mark_done(gen_id)
+
+
+def run_fake_simulation(sim: Simulation, mongo: mongo_db.MongoRepository) -> None:
+    sim_oid = ObjectId(sim["_id"]) if not isinstance(sim["_id"], ObjectId) else sim["_id"]
+
+    log.info("Starting fake simulation %s", sim_oid)
+    mongo.simulation_repo.mark_running(sim_oid)
+
+    exp_id = sim["experiment_id"]
+    cfg = mongo.experiment_repo.get_objectives_and_metrics(str(exp_id))
+
+    objectives, metrics = {}, {}
+    for item in cfg.get("objectives", []):
+        name = item["name"]
+        objectives[name] = round(random.uniform(0, 100), 2)
+
+    for item in cfg.get("metrics", []):
+        name = item["name"]
+        metrics[name] = round(random.uniform(0, 100), 2)
+            
+    mongo.simulation_repo.mark_done(sim_oid, sim_oid, sim_oid, objectives, metrics)
+
+    gen_id = sim["generation_id"]
+    if mongo.generation_repo.all_simulations_done(gen_id):
+        mongo.generation_repo.mark_done(gen_id)
+
+
+def _f1(x): return x**2
+def _f2(x): return (x - 2.0)**2
+
+def _x0_from_sim(sim, region):
+    fixed = sim["parameters"]["simulationElements"]["fixedMotes"]
+    x_raw = float(fixed[0]["position"][0])
+    return x_raw
+
+def run_custom_quadratic(sim, mongo):
+    sim_id = sim["_id"]
+    mongo.simulation_repo.mark_running(sim_id)
+
+    exp = mongo.experiment_repo.get_by_id(sim["experiment_id"])
+    region = tuple((exp.get("parameters") or {}).get("region", (-100,-100,100,100)))
+    names = [o["name"] for o in (mongo.experiment_repo
+                                 .get_objectives_and_metrics(str(exp["_id"]))["objectives"])]
+
+    x = _x0_from_sim(sim, region)
+    vals = [_f1(x), _f2(x)]
+    objectives = {names[i]: float(vals[i]) for i in range(min(2, len(names)))}
+
+    mongo.simulation_repo.mark_done(sim_id, sim_id, sim_id, objectives, {})

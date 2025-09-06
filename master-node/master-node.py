@@ -245,8 +245,8 @@ def simulation_worker(sim_queue: queue.Queue, port: int, hostname: str) -> None:
             
         #---------------------------------------------------------
             # Temp Test
-            from lib.random_test import run_fake_simulation
-            run_fake_simulation(sim, mongo)
+            from lib.temp_tests import run_custom_quadratic
+            run_custom_quadratic(sim, mongo)
             continue
         #---------------------------------------------------------
 
