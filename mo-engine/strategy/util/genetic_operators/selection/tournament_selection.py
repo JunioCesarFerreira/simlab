@@ -23,7 +23,7 @@ def tournament_selection(
 def tournament_selection_nsga(
     population: list[list[float]], 
     individual_ranks: dict[int, int]
-    ) -> list[list[float]]:
+    ) -> list[float]:
         i1, i2 = random.sample(range(len(population)), 2)
         rank1: int = individual_ranks[i1]
         rank2: int = individual_ranks[i2]
