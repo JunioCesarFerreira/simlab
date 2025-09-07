@@ -74,6 +74,14 @@ class ExperimentRepository:
 
         return doc.get("transform_config") or {}
     
+    def add_generation(self, exp_id: ObjectId, gen_id: ObjectId) -> bool:
+        with self.connection.connect() as db:
+            result = db["experiments"].update_one(
+                {"_id": exp_id},
+                {"$push": {"generations": gen_id}}
+            )
+            return result.modified_count > 0
+        
     def delete_by_id(self, experiment_id: str) -> dict[str, int]:
         """
         Delete an experiment by _id and cascade-delete all its generations and simulations.

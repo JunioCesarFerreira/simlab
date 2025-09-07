@@ -13,3 +13,5 @@ simlab-ui/.vscode
 mo-engine/strategy/util/nsga/__pycache__
 mo-engine/strategy/util/genetic_operators/crossover/__pycache__
 mo-engine/strategy/util/genetic_operators/mutation/__pycache__
+mo-engine/strategy/util/genetic_operators/selection/__pycache__
+mo-engine/strategy/util/__pycache__

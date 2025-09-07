@@ -1,7 +1,6 @@
 import os
 import random
 import logging
-import threading
 from threading import Thread
 from datetime import datetime
 from pathlib import Path
@@ -16,11 +15,12 @@ from lib.random_network_methods import network_gen
 from lib.build_input_sim_cooja import create_files
 
 # NSGA utils
-from .util.nsga.fast_nondominated_sort import fast_nondominated_sort
-from .util.nsga.niching_selection import generate_reference_points, niching_selection, associate_to_niches
+from .util.nsga import fast_nondominated_sort
+from .util.nsga import generate_reference_points, niching_selection
 # Variation operators (real-coded)
-from .util.genetic_operators.crossover.simulated_binary_crossover import make_sbx_crossover
-from .util.genetic_operators.mutation.polynomial_mutation import make_polynomial_mutation
+from .util.genetic_operators.crossover import make_sbx_crossover
+from .util.genetic_operators.mutation import make_polynomial_mutation
+from .util.genetic_operators.selection import tournament_selection_nsga
 
 logger = logging.getLogger(__name__)
 
@@ -72,9 +72,15 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._awaiting_offspring: bool = False  # False => esperando P; True => esperando Q
         self._parents_population: list[list[float]] = []   # guarda P_t (genomas)
         self._parents_objectives: list[list[float]] = []   # guarda F(P_t)
-
+        
+        # nsga3 niching
+        self.divisions: int = int(params.get("divisions", 10))  # mesmo default        
+        self.ref_points = generate_reference_points(len(self.objective_keys), self.divisions)
+        
         # genetic operators
         bounds = self._gene_bounds()
+        self.prob_cx = 1.0
+        self.prob_mt = 1.0
         self._sbx = make_sbx_crossover(eta=20.0, bounds=bounds)
         self._poly = make_polynomial_mutation(eta=25.0, bounds=bounds, per_gene_prob=1.0 / (2 * self.num_of_motes))
 
@@ -170,7 +176,7 @@ class NSGA3LoopStrategy(EngineStrategy):
     # ------------------------------
     # Geração / Enfileiramento
     # ------------------------------
-    def _generation_enqueue(self, population: list[list[float]], gen_index: int):
+    def _generation_enqueue(self, population: list[list[float]], gen_index: int)->ObjectId:
         """
         Cria a `Generation` e insere `population_size` simulações no MongoDB.
         """
@@ -254,6 +260,8 @@ class NSGA3LoopStrategy(EngineStrategy):
             })
 
         logger.info(f"[NSGA-III] Generation {gen_index} enqueued with {len(population)} Simulations.")
+        
+        self.mongo.experiment_repo.add_generation(exp_oid, gen_oid)
 
     # ------------------------------
     # Conclusão de geração e evolução
@@ -296,9 +304,8 @@ class NSGA3LoopStrategy(EngineStrategy):
             self._parents_population = [ind[:] for ind in self.current_population]
             self._parents_objectives = [row[:] for row in objectives]
 
-            # produce Q_t from P_t (variation on parents)
-            parents = self._parents_population
-            offspring = self._produce_offspring(parents, self.population_size)
+            # produce Q_t from P_t (variation on parents)            
+            offspring = self._run_genetic_algorithm(objectives)
 
             # enqueue Q_t as next "generation" to be evaluated
             # (note: gen_index here is just a sequence counter of batches evaluated)
@@ -322,7 +329,8 @@ class NSGA3LoopStrategy(EngineStrategy):
         # concatenate
         R_genomes = P_genomes + Q_genomes
         R_F_list = [list(row) for row in P_F.tolist()] + [list(row) for row in Q_F.tolist()]
-
+        R_F = np.array(R_F_list, dtype=float)
+            
         # fast non-dominated sort on union
         fronts = fast_nondominated_sort(R_F_list)
         if not fronts:
@@ -330,39 +338,34 @@ class NSGA3LoopStrategy(EngineStrategy):
             self._finalize_experiment()
             return
 
-        # reference points H (smallest p with |H| >= pop_size)
-        p = 1
-        while True:
-            H = generate_reference_points(M, p)
-            if len(H) >= self.population_size or p > 10:
-                break
-            p += 1
-
+        # environmental selection
         selected_idx: list[int] = []
-        niche_count: dict[int, int] = {}
-        R_F = np.array(R_F_list, dtype=float)
-
         for front in fronts:
-            if len(selected_idx) + len(front) < self.population_size:
+            if len(selected_idx) + len(front) <= self.population_size:
                 selected_idx.extend(front)
-                sub = R_F[front, :]
-                assoc_idx, _ = associate_to_niches(sub, H)
-                for nid in assoc_idx:
-                    niche_count[nid] = niche_count.get(nid, 0) + 1
             else:
                 remaining = self.population_size - len(selected_idx)
                 if remaining > 0:
-                    partial = niching_selection(front, R_F, H, remaining)
+                    partial = niching_selection(front, R_F_list, self.ref_points, remaining)
                     selected_idx.extend(partial)
                 break
 
-        # build P_{t+1} genomes from the union
         next_population = [R_genomes[i] for i in selected_idx[:self.population_size]]
 
         # stop condition?
         if self._gen_index >= self.max_generations:
-            # we already evaluated Q_t; selection done; finalize experiment
-            self._finalize_experiment()
+            final_objs = []
+            try:
+                # objetivos de R_t selecionados
+                final_objs = [R_F_list[i] for i in selected_idx[:self.population_size]]
+                fronts_final = fast_nondominated_sort(final_objs)
+                pareto_front = [tuple(final_objs[i]) for i in fronts_final[0]] if fronts_final else []
+                pareto_front.sort()
+            except Exception as e:
+                logger.info(f"[NSGA-III] Could not compute final Pareto: {e}")
+                pareto_front = []
+
+            self._finalize_experiment(pareto_front)
             return
 
         # enqueue next P_{t+1}
@@ -381,27 +384,39 @@ class NSGA3LoopStrategy(EngineStrategy):
     # ------------------------------
     # Helpers de variação e extração
     # ------------------------------
-    def _produce_offspring(self, parents: list[list[float]], n_children: int) -> list[list[float]]:
+    def _run_genetic_algorithm(self, objectives) -> list[list[float]]:
         rng = random.Random()
-        children: list[list[float]] = []
+        parents = self._parents_population
+        n_children = self.population_size
+        children: list[list[float]] = []        
+        fronts: list[list[int]] = fast_nondominated_sort(objectives)
+        individual_ranks: dict[int, int] = self._compute_individual_ranks(fronts)
         while len(children) < n_children:
-            i, j = rng.randrange(len(parents)), rng.randrange(len(parents))
-            mom, dad = parents[i], parents[j]
-            # Crossover (90%) + Mutation
-            if rng.random() < 0.9:
-                c1, c2 = self._sbx(mom, dad, rng)
+            # Selection
+            parent1: list[list[float]] = tournament_selection_nsga(parents, individual_ranks)
+            parent2: list[list[float]] = tournament_selection_nsga(parents, individual_ranks)
+            # Crossover 
+            if rng.random() < self.prob_cx:
+                c1, c2 = self._sbx(parent1, parent2, rng)
             else:
-                c1, c2 = list(mom), list(dad)
+                c1, c2 = list(parent1), list(parent2)
             # Mutation
-            if rng.random() < 0.2:
+            if rng.random() < self.prob_mt:
                 c1 = self._poly(c1, rng)
-            if rng.random() < 0.2:
+            if rng.random() < self.prob_mt:
                 c2 = self._poly(c2, rng)
             children.append(c1)
             if len(children) < n_children:
                 children.append(c2)
         return children[:n_children]
 
+    def _compute_individual_ranks(self, fronts: list[list[int]]) -> dict[int, int]:
+        individual_ranks: dict[int, int] = {}
+        for rank, front in enumerate(fronts):
+            for idx in front:
+                individual_ranks[idx] = rank
+        return individual_ranks
+    
     def _random_individual(self) -> list[float]:
         pts = network_gen(amount=self.num_of_motes, region=self.region, radius=self.radius)
         # Flatten [ (x,y), ... ] -> [x0,y0,x1,y1,...]
@@ -462,12 +477,13 @@ class NSGA3LoopStrategy(EngineStrategy):
         logger.info("[NSGA-III] Warning: objectives not found. Set 'objective_keys' via TransformConfig.")
         return None
 
-    def _finalize_experiment(self):
+    def _finalize_experiment(self, pareto_front):
         assert self._exp_id is not None
         logger.info(f"[NSGA-III] Experiment {self._exp_id} completed.")
         self.mongo.experiment_repo.update(str(self._exp_id), {
             "status": EnumStatus.DONE,
-            "end_time": datetime.now()
+            "end_time": datetime.now(),
+            "pareto_front": pareto_front
         })
         # finish watcher
         self.stop()

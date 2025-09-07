@@ -108,6 +108,7 @@ class Experiment(TypedDict):
     generations: list[ObjectId]
     source_repository_id: str
     transform_config: TransformConfig
+    pareto_front: Optional[Any] = None
 
 # refactor note: Por simplicidade vou manter estas estruturas aqui, caso necessário em versões futuras,
 # pode ser interessante criar um subdir em mongo para schemas.
@@ -175,6 +176,7 @@ class ExperimentDto(TypedDict):
     generations: list[str]
     source_repository_id: str
     transform_config: TransformConfigDto
+    pareto_front: Optional[Any] = None
     
 #---------------------------------------------------------------------------------------------------------
 # Converters Mongo ↔ DTO
@@ -347,6 +349,7 @@ def experiment_from_mongo(doc: dict) -> ExperimentDto:
         "generations": _list_oid_to_str(d.get("generations", [])),
         "source_repository_id": _oid_to_str(d.get("source_repository_id") or d.get("source_repository_id".replace("_id","")) or d.get("source_repository_id_str")),
         "transform_config": d.get("transform_config", {}),
+        "pareto_front": d.get("pareto_front", {}),
     }
 
 def experiment_to_mongo(dto: ExperimentDto) -> Experiment:
@@ -375,6 +378,7 @@ def experiment_to_mongo(dto: ExperimentDto) -> Experiment:
     exp["generations"] = _list_str_to_oid(d.get("generations", []))
     exp["source_repository_id"] = d.get("source_repository_id", "")
     exp["transform_config"] = d.get("transform_config", {}) or {}
+    exp["pareto_front"] = d.get("pareto_front", {}) or {}
     
     return exp 
 
