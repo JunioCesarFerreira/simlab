@@ -65,6 +65,8 @@ class NSGA3LoopStrategy(EngineStrategy):
         self.sim_id_to_index: dict[str, int] = {}
         # results collected from current generation: idx -> list[float] objectives (minimization)
         self.objectives_buffer: dict[int, list[float]] = {}
+        # dictionary for reuse evaluations values
+        self._obj_by_sim_id: dict[str, list[float]] = {}
         
         # prepare objective keys
         cfg = experiment.get("transform_config", {}) or {}
@@ -144,6 +146,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             return
 
         self.objectives_buffer[idx] = obj
+        self._obj_by_sim_id[sim_id] = obj
 
         # check generation is complete
         logger.info(f"{len(self.objectives_buffer)} >= {len(self.current_population)}")
@@ -300,43 +303,18 @@ class NSGA3LoopStrategy(EngineStrategy):
             logger.error("[NSGA-III] Missing objectives for some individuals; aborting.")
             self._finalize_experiment()
             return
-
-        F = np.array(objectives, dtype=float)
-        if F.ndim != 2 or F.shape[0] == 0:
-            logger.error("[NSGA-III] Invalid objective matrix; aborting.")
-            self._finalize_experiment()
-            return
-        M = F.shape[1]
-
-        # ---------------- PHASE P: parents done -> generate offspring and enqueue ----------------
-        if not self._awaiting_offspring:
-            logger.info("PHASE P")
-            # store P_t (genomes and objectives)
-            self._parents_population = [ind[:] for ind in self.current_population]
-            self._parents_objectives = [row[:] for row in objectives]
-
-            # produce Q_t from P_t (variation on parents)            
-            offspring = self._run_genetic_algorithm(objectives)
-
-            # enqueue Q_t as next "generation" to be evaluated
-            # (note: gen_index here is just a sequence counter of batches evaluated)
-            self._gen_index += 1
-            self._generation_enqueue(offspring, self._gen_index)
-
-            # prepare for Phase Q
-            self._awaiting_offspring = True
-            
-            self.current_population = offspring
-            logger.info("[NSGA-III] Offspring enqueued; waiting for Q_t results to perform environmental selection.")
-            return
-
-        logger.info("PHASE Q")
+        
         # ---------------- PHASE Q: offspring done -> environmental selection on union ----------------
+        
         # union R_t = P_t ∪ Q_t
         P_genomes = self._parents_population
         P_F = np.array(self._parents_objectives, dtype=float)
         Q_genomes = self.current_population
-        Q_F = F
+        Q_F = np.array(objectives, dtype=float)
+        if Q_F.ndim != 2 or Q_F.shape[0] == 0:
+            logger.error("[NSGA-III] Invalid objective matrix; aborting.")
+            self._finalize_experiment()
+            return
 
         # concatenate
         R_genomes = P_genomes + Q_genomes
@@ -362,6 +340,7 @@ class NSGA3LoopStrategy(EngineStrategy):
                 break
 
         next_population = [R_genomes[i] for i in selected_idx[:self.population_size]]
+        next_objectives = [R_F_list[i] for i in selected_idx[:self.population_size]]
 
         # stop condition?
         if self._gen_index >= self.max_generations:
@@ -379,17 +358,27 @@ class NSGA3LoopStrategy(EngineStrategy):
             self._finalize_experiment(pareto_front)
             return
 
-        # enqueue next P_{t+1}
-        self._gen_index += 1
-        self._generation_enqueue(next_population, self._gen_index)
-
-        # reset state for next iteration
-        self._awaiting_offspring = False
+        self._parents_population = [ind[:] for ind in next_population]
+        self._parents_objectives = [list(row) for row in next_objectives]
         
-        self.current_population = next_population
-        self._parents_population = []
-        self._parents_objectives = []
-        logger.info(f"[NSGA-III] Spawned next population (size={len(next_population)}).")
+        # ---------------- PHASE P: parents done -> generate offspring and enqueue ----------------
+
+        # produce Q_t from P_t (variation on parents)            
+        offspring = self._run_genetic_algorithm(objectives)
+
+        # enqueue Q_t as next "generation" to be evaluated
+        # (note: gen_index here is just a sequence counter of batches evaluated)
+        self._gen_index += 1
+        self._generation_enqueue(offspring, self._gen_index)
+        
+        self.current_population = offspring
+        
+        logger.info("[NSGA-III] Offspring enqueued; waiting for Q_t results to perform environmental selection.")
+
+        return
+
+    
+
 
     def _run_genetic_algorithm(self, objectives: list[list[float]]) -> list[list[float]]:
         rng = random.Random()
