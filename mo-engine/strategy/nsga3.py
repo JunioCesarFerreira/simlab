@@ -304,8 +304,21 @@ class NSGA3LoopStrategy(EngineStrategy):
             self._finalize_experiment()
             return
         
-        # ---------------- PHASE Q: offspring done -> environmental selection on union ----------------
+        # First PHASE P
+        if not self._parents_objectives:
+            # Armazena P_t (genomas + objetivos) = população recém avaliada
+            self._parents_population  = [ind[:] for ind in self.current_population]
+            self._parents_objectives  = [row[:] for row in objectives]
+
+            # Gera Q_t ranqueando P_t e enfileira para avaliação
+            offspring = self._run_genetic_algorithm(self._parents_objectives)
+            self._gen_index += 1
+            self._generation_enqueue(offspring, self._gen_index)
+            self.current_population = offspring
+            logger.info("[NSGA-III] Enqueued Q_t; waiting results.")
+            return
         
+        # ---------------- PHASE Q: offspring done -> environmental selection on union ----------------
         # union R_t = P_t ∪ Q_t
         P_genomes = self._parents_population
         P_F = np.array(self._parents_objectives, dtype=float)
@@ -362,9 +375,8 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._parents_objectives = [list(row) for row in next_objectives]
         
         # ---------------- PHASE P: parents done -> generate offspring and enqueue ----------------
-
         # produce Q_t from P_t (variation on parents)            
-        offspring = self._run_genetic_algorithm(objectives)
+        offspring = self._run_genetic_algorithm(self._parents_objectives)
 
         # enqueue Q_t as next "generation" to be evaluated
         # (note: gen_index here is just a sequence counter of batches evaluated)
@@ -378,8 +390,6 @@ class NSGA3LoopStrategy(EngineStrategy):
         return
 
     
-
-
     def _run_genetic_algorithm(self, objectives: list[list[float]]) -> list[list[float]]:
         rng = random.Random()
         parents = self._parents_population
