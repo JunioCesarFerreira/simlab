@@ -203,5 +203,6 @@
                 "column": "volume_B"
             }
         ]
-    }
+    },
+    "pareto_front": null
 }

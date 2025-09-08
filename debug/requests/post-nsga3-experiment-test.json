@@ -6,7 +6,7 @@
     "start_time": null,
     "end_time": null,    
     "generations": [],
-    "source_repository_id": "68b5de3d8a4dfe33dc93ff7b",
+    "source_repository_id": "68be4472f155e5037a832f74",
     "parameters": {
         "strategy": "nsga3",
         "duration": 180,
@@ -41,5 +41,6 @@
             }
         ],
         "metrics": []
-    }
+    },
+    "pareto_front": null
 }
