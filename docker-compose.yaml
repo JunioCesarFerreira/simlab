@@ -29,6 +29,7 @@ services:
     environment:
       - PYTHONPATH=/app:/app/pylib
       - DB_NAME=simlab
+      - SIMLAB_API_KEY=simlab-api-key42
       - MONGO_URI=mongodb://mongodb:27017/?replicaSet=rs0
       - IS_DOCKER=True
     ports:
