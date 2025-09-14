@@ -26,9 +26,6 @@ services:
       dockerfile: Dockerfile.rest-api
     container_name: rest_api
     working_dir: /app
-    volumes:
-      - ./rest-api:/app/rest-api
-      - ./pylib:/app/pylib
     environment:
       - PYTHONPATH=/app:/app/pylib
       - DB_NAME=simlab
@@ -47,9 +44,6 @@ services:
       dockerfile: Dockerfile.mo-engine
     container_name: mo_engine
     working_dir: /app
-    volumes:
-      - ./mo-engine:/app/mo-engine
-      - ./pylib:/app/pylib
     environment:
       - PYTHONPATH=/app:/app/pylib
       - DB_NAME=simlab
@@ -69,9 +63,6 @@ services:
       dockerfile: Dockerfile.master-node
     container_name: master_node
     working_dir: /app
-    volumes:
-      - ./master-node:/app/master-node
-      - ./pylib:/app/pylib
     environment:
       - PYTHONPATH=/app:/app/pylib
       - DB_NAME=simlab
