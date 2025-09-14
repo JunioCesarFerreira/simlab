@@ -85,7 +85,7 @@ def _eval_benchmark(genome_xy: list[float], region: tuple[float,float,float,floa
         vals = [v + random.gauss(0.0, noise_std) for v in vals]
     return vals
 
-def run_benchmark_simulation(sim: Simulation, mongo: mongo_db.MongoRepository) -> None:
+def run_synthetic_simulation(sim: Simulation, mongo: mongo_db.MongoRepository) -> None:
     """
     Emula execução usando um benchmark clássico (DTLZ2 ou ZDT1) e grava os
     objetivos conforme o transform_config do experimento.

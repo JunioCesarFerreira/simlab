@@ -78,6 +78,8 @@ services:
       - MONGO_URI=mongodb://mongodb:27017/?replicaSet=rs0
       - IS_DOCKER=True
       - NUMBER_OF_CONTAINERS=3
+      - ENABLE_DATA_SYNTHETIC=True
+      - BENCH=DTLZ2
     ports:
       - "2220:22"
     depends_on:

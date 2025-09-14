@@ -243,12 +243,11 @@ def simulation_worker(sim_queue: queue.Queue, port: int, hostname: str) -> None:
             if sim is None:
                 return
             
-        #---------------------------------------------------------
-            # Temp Test
-            from lib.synthetic_data import run_benchmark_simulation
-            run_benchmark_simulation(sim, mongo)
-            continue
-        #---------------------------------------------------------
+            mode = bool(os.getenv("ENABLE_DATA_SYNTHETIC", "False"))
+            if mode: # Synthetic data for validation of MO-Engine
+                from lib.synthetic_data import run_synthetic_simulation
+                run_synthetic_simulation(sim, mongo)
+                continue
 
             sim_id_str = str(sim.get("_id"))
             log.info("[port=%s host=%s] Preparing simulation %s", port, hostname, sim_id_str)
