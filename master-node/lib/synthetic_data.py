@@ -8,8 +8,6 @@ from dto import Simulation
 
 log = logging.getLogger(__name__)
 
-# ========= Helpers de benchmark =========
-
 def _extract_genome_from_sim(sim: dict) -> list[float]:
     """Reconstrói o vetor [x0,y0,x1,y1,...] a partir de fixedMotes."""
     fixed = (((sim or {}).get("parameters") or {})
@@ -77,14 +75,15 @@ def _eval_benchmark(genome_xy: list[float], region: tuple[float,float,float,floa
     x01 = _scale_to_unit(genome_xy, region)
     if bench.upper() == "ZDT1":
         vals = _zdt1(x01)
+    elif bench.upper() == "SCH1": # Schaffer, 1984
+        x = genome_xy[0] 
+        vals = [x**2, (x - 2.0)**2]
     else:  # DTLZ2 default
         M = max(2, int(M))
         vals = _dtlz2(x01, M)
     if noise_std > 0.0:
         vals = [v + random.gauss(0.0, noise_std) for v in vals]
     return vals
-
-# ========= Substitui o run_fake_simulation =========
 
 def run_benchmark_simulation(sim: Simulation, mongo: mongo_db.MongoRepository) -> None:
     """
@@ -104,8 +103,8 @@ def run_benchmark_simulation(sim: Simulation, mongo: mongo_db.MongoRepository) -
     # parâmetros necessários para reescalar
     params = (mongo.experiment_repo.get_by_id(exp_id) or {}).get("parameters", {}) or {}
     region = tuple(params.get("region", (-100.0, -100.0, 100.0, 100.0)))
-    M = int(os.getenv("BENCH_M", str(max(2, len(objective_names) or 3))))
-    bench = os.getenv("BENCH", "DTLZ2").upper()  # "DTLZ2" | "ZDT1"
+    M = len(cfg.get("objectives", []))
+    bench = os.getenv("BENCH", "DTLZ2").upper()  # "DTLZ2" | "ZDT1" | "SCH1"
     noise_std = float(os.getenv("NOISE_STD", "0.0"))
 
     # extrai genoma e avalia
@@ -125,61 +124,11 @@ def run_benchmark_simulation(sim: Simulation, mongo: mongo_db.MongoRepository) -
 
     # monta dict na ordem correta
     objectives = {name: float(vals[i]) for i, name in enumerate(objective_names)}
-    metrics = {}  # opcional: deixar vazio
 
     # marca como DONE (sem CSV/logs reais)
-    mongo.simulation_repo.mark_done(sim_oid, sim_oid, sim_oid, objectives, metrics)
+    mongo.simulation_repo.mark_done(sim_oid, sim_oid, sim_oid, objectives, {})
 
     # checa conclusão da geração
     gen_id = sim["generation_id"]
     if mongo.generation_repo.all_simulations_done(gen_id):
         mongo.generation_repo.mark_done(gen_id)
-
-
-def run_fake_simulation(sim: Simulation, mongo: mongo_db.MongoRepository) -> None:
-    sim_oid = ObjectId(sim["_id"]) if not isinstance(sim["_id"], ObjectId) else sim["_id"]
-
-    log.info("Starting fake simulation %s", sim_oid)
-    mongo.simulation_repo.mark_running(sim_oid)
-
-    exp_id = sim["experiment_id"]
-    cfg = mongo.experiment_repo.get_objectives_and_metrics(str(exp_id))
-
-    objectives, metrics = {}, {}
-    for item in cfg.get("objectives", []):
-        name = item["name"]
-        objectives[name] = round(random.uniform(0, 100), 2)
-
-    for item in cfg.get("metrics", []):
-        name = item["name"]
-        metrics[name] = round(random.uniform(0, 100), 2)
-            
-    mongo.simulation_repo.mark_done(sim_oid, sim_oid, sim_oid, objectives, metrics)
-
-    gen_id = sim["generation_id"]
-    if mongo.generation_repo.all_simulations_done(gen_id):
-        mongo.generation_repo.mark_done(gen_id)
-
-
-def _f1(x): return x**2
-def _f2(x): return (x - 2.0)**2
-
-def _x0_from_sim(sim, region):
-    fixed = sim["parameters"]["simulationElements"]["fixedMotes"]
-    x_raw = float(fixed[0]["position"][0])
-    return x_raw
-
-def run_custom_quadratic(sim, mongo):
-    sim_id = sim["_id"]
-    mongo.simulation_repo.mark_running(sim_id)
-
-    exp = mongo.experiment_repo.get_by_id(sim["experiment_id"])
-    region = tuple((exp.get("parameters") or {}).get("region", (-100,-100,100,100)))
-    names = [o["name"] for o in (mongo.experiment_repo
-                                 .get_objectives_and_metrics(str(exp["_id"]))["objectives"])]
-
-    x = _x0_from_sim(sim, region)
-    vals = [_f1(x), _f2(x)]
-    objectives = {names[i]: float(vals[i]) for i in range(min(2, len(names)))}
-
-    mongo.simulation_repo.mark_done(sim_id, sim_id, sim_id, objectives, {})

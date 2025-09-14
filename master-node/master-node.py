@@ -3,10 +3,10 @@ import sys
 import time
 import queue
 import logging
+import pandas as pd
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Thread
-import pandas as pd, json
 from bson import ObjectId
 from paramiko import SSHClient
 from scp import SCPClient
@@ -245,8 +245,8 @@ def simulation_worker(sim_queue: queue.Queue, port: int, hostname: str) -> None:
             
         #---------------------------------------------------------
             # Temp Test
-            from lib.temp_tests import run_custom_quadratic
-            run_custom_quadratic(sim, mongo)
+            from lib.synthetic_data import run_benchmark_simulation
+            run_benchmark_simulation(sim, mongo)
             continue
         #---------------------------------------------------------
 
