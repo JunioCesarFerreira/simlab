@@ -261,12 +261,10 @@ O progresso das simulações pode ser acompanhado por diversos meios:
 
 Após a conclusão das simulações, utilize novamente o **Swagger UI** para:
 
-* Baixar saídas e logs via `/files/{id}` ou `/simulations/{id}/download`.
+* Baixar saídas e logs via `/simulations/{id}/file/{field_name}` ou `/files/{file_id}/as/{extension}`.
 * Analisar os resultados em ferramentas externas (por exemplo, notebooks Python, análise estatística, visualização de métricas).
 
 Todos os arquivos e metadados permanecem armazenados no MongoDB/GridFS, garantindo rastreabilidade e reprodutibilidade.
-
----
 
 ### Recursos Adicionais
 
@@ -399,7 +397,7 @@ Caso encontre um bug ou inconsistência:
 
 ---
 
-### Citação e Referência
+## Citação e Referência
 
 > Se utilizar o SimLab em trabalhos acadêmicos, cite a publicação correspondente assim que estiver disponível.
 > Enquanto isso, utilize a seguinte referência:

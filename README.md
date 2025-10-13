@@ -43,10 +43,14 @@ The system is composed of five main components:
    - Generates logs and measurement data (latency, energy, RSSI, hops, packet loss, etc.).
    - Returns results to the master-node for persistence in MongoDB/GridFS.
 
+---
+
 ## Features
 - **Distributed Processing:** Parallel execution of multiple simulations.
 - **Seamless Data Flow:** Integration with MongoDB for real-time result processing.
 - **Automation:** End-to-end automated execution from algorithm evolution to result collection.
+
+---
 
 ### System Topology
 
@@ -187,6 +191,7 @@ to debug the issue (missing dependency, port conflict, environment variable erro
 
 Once all containers are running, your SimLab environment should be operational and ready to accept simulation experiment requests via the REST API.
 
+---
 
 ## Usage
 
@@ -246,7 +251,7 @@ You can monitor the progress of simulations using one or more of the following m
 
 When simulations complete, use the **Swagger UI** again to:
 
-* Download simulation outputs and logs via the `/files/{id}` or `/simulations/{id}/download` endpoints.
+* Download simulation outputs and logs via the `/simulations/{id}/file/{field_name}` or `/files/{file_id}/as/{extension}` endpoints.
 * Analyze results with external tools or scripts (e.g., Python notebooks, statistical analysis, or plotting utilities).
 
 All raw outputs, logs, and metadata are stored in MongoDB/GridFS for reproducibility and traceability.
@@ -260,6 +265,8 @@ All raw outputs, logs, and metadata are stored in MongoDB/GridFS for reproducibi
 * **Changelog**
   Recent updates and feature additions are documented in the [`CHANGELOG.md`](./CHANGELOG.md) file.
 
+---
+
 ## Future Enhancements
 
 - Complete documentation of setup and deployment workflows
@@ -269,8 +276,12 @@ All raw outputs, logs, and metadata are stored in MongoDB/GridFS for reproducibi
 - Development of a graphical user interface (GUI) in Vue.js to simplify experiment configuration, execution monitoring, and result visualization  
 - English and Portuguese documentation parity  
 
+---
+
 ## License
 This project is licensed under the [MIT License](./LICENSE).
+
+---
 
 ## Contributing
 
@@ -368,7 +379,9 @@ If you find a bug or inconsistency:
    * Relevant logs or stack traces
    * Environment details (OS, Docker version, etc.)
 
-### Citing or referencing SimLab
+---
+
+## Citing or referencing SimLab
 >
 >If you use SimLab in academic work, please cite the corresponding publication once available.
 >Until then, you may reference the project as:
