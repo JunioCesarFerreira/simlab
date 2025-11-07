@@ -76,12 +76,12 @@ sequenceDiagram
     
     MongoDb-->>+mo-engine: ChangeStream<br/>Novo Experimento
     
-    opt Otimização iterativa
+    loop Otimização iterativa
         mo-engine->>mo-engine: Gera Simulações de Entrada
         mo-engine->>-MongoDb: Cria<br/>Geração
         
         MongoDb-->>+master-node: ChangeStream: Nova Geração
-        par Para cada container de simulação disponível
+        loop Para cada container de simulação disponível
             master-node->>+CoojaWorker[1...N]: Inicia e<br/>monitora Simulação
             CoojaWorker[1...N]-->>-master-node: Finaliza Simulação              
             master-node-->>-MongoDb: Registra resultados e logs<br/>Atualiza status da simulação DONE/ERROR<br/>Se geração finalizada, altera status para DONE

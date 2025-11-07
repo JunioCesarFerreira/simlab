@@ -67,12 +67,12 @@ sequenceDiagram
     
     MongoDb-->>+mo-engine: ChangeStream<br/>New Experiment
     
-    opt Iterative optimization
+    loop Iterative optimization
         mo-engine->>mo-engine: Generate input Simulations
         mo-engine->>-MongoDb: Create<br/>Generation
         
         MongoDb-->>+master-node: ChangeStream: New Generation
-        par For each available worker container
+        loop For each available worker container
             master-node->>+CoojaWorker[1...N]: Starts and<br/>monitors Simulation
             CoojaWorker[1...N]-->>-master-node: End Simulation              
             master-node-->>-MongoDb: Write Simulation results logs<br/>Change Simulation status DONE/ERROR<br/>If Generation finished change status DONE
