@@ -1,6 +1,6 @@
 import logging
 import numpy as np
-from dto import SimulationElements
+from pylib.dto.simulation import SimulationElements
 
 def evaluate_function(expression: str, t_values: np.ndarray) -> np.ndarray:
     return np.array([eval(expression, {"t": t, "np": np}) for t in t_values])

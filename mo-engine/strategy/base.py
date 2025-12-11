@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from pylib.dto import Experiment
+from pylib.dto.experiment import Experiment
 from pylib.mongo_db import MongoRepository
 
 class EngineStrategy(ABC):

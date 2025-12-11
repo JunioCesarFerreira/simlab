@@ -3,7 +3,7 @@ import queue
 from datetime import datetime
 from bson import ObjectId, errors
 
-from dto import Simulation, Generation
+from pylib.dto.experiment import Simulation, Generation
 from mongo.connection import MongoDBConnection, EnumStatus
 
 log = logging.getLogger(__name__)

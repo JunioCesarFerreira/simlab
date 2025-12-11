@@ -8,7 +8,7 @@ from bson import ObjectId
 from strategy.base import EngineStrategy
 from lib.build_input_sim_cooja import create_files
 from lib.random_network_methods import network_gen
-from pylib.dto import Simulation, SimulationConfig, Generation
+from pylib.dto.experiment import Simulation, Generation, SimulationConfig
 from pylib.mongo_db import EnumStatus
 from pylib import plot_network
 

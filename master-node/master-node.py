@@ -22,7 +22,7 @@ if project_path not in sys.path:
 from pylib import mongo_db
 from pylib import cooja_files
 from pylib import statistics
-from dto import Simulation, Experiment, SourceRepository
+from pylib.dto.experiment import Simulation, Experiment, SourceRepository
 
 # --------------------------- Logging --------------------------------
 logging.basicConfig(

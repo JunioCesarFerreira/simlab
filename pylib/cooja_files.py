@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from dto import SimulationConfig
+from pylib.dto.simulation import SimulationConfig
 from pylib.cooja_builder.parse_json_pos_dat import generate_positions_from_json
 from pylib.cooja_builder.replace_xml import update_simulation_xml
 from pylib.cooja_builder.csv_converter import cooja_log_to_csv as _cooja_log_to_csv

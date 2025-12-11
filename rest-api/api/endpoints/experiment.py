@@ -8,7 +8,7 @@ import sys
 if project_path not in sys.path:
     sys.path.insert(0, project_path)
 
-from dto import ExperimentDto, experiment_to_mongo, experiment_from_mongo
+from pylib.dto.experiment import ExperimentDto, experiment_to_mongo, experiment_from_mongo
 from pylib import mongo_db
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/?replicaSet=rs0")

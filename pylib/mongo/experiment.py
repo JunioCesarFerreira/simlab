@@ -3,8 +3,8 @@ from datetime import datetime
 from typing import Optional, Callable
 from bson import ObjectId, errors
 
+from pylib.dto.experiment import Experiment, TransformConfig
 from mongo.connection import MongoDBConnection, EnumStatus
-from dto import Experiment, TransformConfig
 
 log = logging.getLogger(__name__)
 
