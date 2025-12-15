@@ -9,13 +9,13 @@ Position = tuple[float, float]
 
 class MobileNode(TypedDict):
     # Trajetória parametrizada de forma simbólica
-    pathSegments: list[tuple[str, str]]
+    path_segments: list[tuple[str, str]]
 
-    isClosed: bool       # laço fechado (True) ou não
-    isRoundTrip: bool    # faz ida-e-volta entre extremos
+    is_closed: bool       # laço fechado (True) ou não
+    is_round_trip: bool   # faz ida-e-volta entre extremos
 
-    speed: float         # velocidade média ao longo da trajetória
-    timeStep: float      # Δt da discretização temporal
+    speed: float          # velocidade média ao longo da trajetória
+    time_step: float      # Δt da discretização temporal
 
 
 class SojournLocation(TypedDict):
@@ -31,8 +31,9 @@ class SojournLocation(TypedDict):
 class HomogeneousProblem(TypedDict):
     name: str
 
-    radiusOfReach: float            # R_com
-    radiusOfInter: float            # R_inter
+    radius_of_reach: float            # R_com
+    radius_of_inter: float            # R_inter
+    region: list[float]               # Ω ⊂ R²
 
 # --- P1: cobertura de comunicação com motes móveis -----
 class ProblemP1(HomogeneousProblem):
@@ -42,8 +43,8 @@ class ProblemP1(HomogeneousProblem):
     haja caminho até o sink para todos os instantes t.
     """
     sink: Position                  # σ
-    mobileNodes: list[MobileNode]   # Γ
-    numberOfRelays: int             # n
+    mobile_nodes: list[MobileNode]  # Γ
+    number_of_relays: int           # n
     
 # --- P2: cobertura de comunicação com motes móveis -----
 class ProblemP2(HomogeneousProblem):
@@ -53,7 +54,7 @@ class ProblemP2(HomogeneousProblem):
     haja caminho até o sink para todos os instantes t.
     """
     sink: Position                  # σ
-    mobileNodes: list[MobileNode]   # Γ
+    mobile_nodes: list[MobileNode]  # Γ
     candidates: list[Position]      # Q
 
 
@@ -65,7 +66,7 @@ class ProblemP3(HomogeneousProblem):
     sink: Position                  # σ
     targets: list[Position]         # Ξ 
     candidates: list[Position]      # Q
-    radiusOfCover: float            # R_cov
+    radius_of_cover: float          # R_cov
     k_required: int                 # k
 
 # --- P4: mobilidade do sink para coleta ----------------
@@ -74,12 +75,12 @@ class ProblemP4(HomogeneousProblem):
     P4: sink móvel, motes fixos com geração contínua, energia e buffer,
     sojourn locations e grafo de mobilidade.
     """
-    nodes: list[Position]           # N
-    sinkBase: Position              # B
-    initialEnergy: float            # E_i^0
-    bufferCapacity: float           # W_i
-    dataRate: float                 # δ_i
-    sojourns: list[SojournLocation] # Posições possíveis de parada (L) e grafo (L, A) via adjacency
+    nodes: list[Position]            # N
+    sink_base: Position              # B
+    initial_energy: float            # E_i^0
+    buffer_capacity: float           # W_i
+    data_rate: float                 # δ_i
+    sojourns: list[SojournLocation]  # Posições possíveis de parada (L) e grafo (L, A) via adjacency
     
-    speed: float         # velocidade média ao longo da trajetória
-    timeStep: float      # Δt da discretização temporal
+    speed: float          # velocidade média ao longo da trajetória
+    time_step: float      # Δt da discretização temporal
