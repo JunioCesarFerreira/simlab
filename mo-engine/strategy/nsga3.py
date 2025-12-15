@@ -6,7 +6,8 @@ from threading import Thread
 from datetime import datetime
 from pathlib import Path
 from bson import ObjectId
-from typing import Optional
+from dataclasses import dataclass
+from typing import Optional, Any, Mapping
 import numpy as np
 
 from strategy.base import EngineStrategy
@@ -24,8 +25,26 @@ from .util.nsga import generate_reference_points, niching_selection
 from .util.genetic_operators.crossover import make_sbx_crossover
 from .util.genetic_operators.mutation import make_polynomial_mutation
 from .util.genetic_operators.selection import tournament_selection_nsga
+from .problem.problem_adapter import ProblemAdapter, Chromosome
+from .problem.resolve import build_adapter
+
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class NSGA3Parameters:
+    """
+    Container for NSGA-III settings.
+
+    Note:
+    - reference_points can be precomputed and stored in the experiment document,
+      or derived from (M, p) at runtime.
+    """
+    pop_size: int
+    max_generations: int
+    reference_points: list[list[float]]
+
 
 class NSGA3LoopStrategy(EngineStrategy):
     """
@@ -47,20 +66,19 @@ class NSGA3LoopStrategy(EngineStrategy):
         params = experiment.get("parameters", {}) or {}
         self.population_size: int = int(params.get("population_size", 20))
         self.max_generations: int = int(params.get("number_of_generations", 5))
-        self.num_of_motes: int = int(params.get("number_of_fixed_motes", 10))
-        self.region: tuple[float, float, float, float] = tuple(params.get("region", (-100.0, -100.0, 100.0, 100.0)))  # (x1,y1,x2,y2)
-        self.radius: float = float(params.get("radius_of_reach", params.get("radiusOfReach", 50.0)))
-        self.interf: float = float(params.get("radius_of_interference", params.get("radiusOfInter", 60.0)))
-        self.mobile_motes = params.get("mobileMotes", [])
-        self.duration: int = int(params.get("duration", 120))
-
+        self.sim_duration: int = int(params.get("duration", 120))
+        
+        problem = params.get("problem", {}) or {}
+        
+        self.problem_adapter = problem if problem is not None else build_adapter(problem)
+        
         # --- loop state ---
         self._exp_id: ObjectId | None = None
         self._gen_index: int = 0
         self._gen_id: ObjectId | None = None
 
         # current population as a list of individuals (each individual is a vector [x0,y0,x1,y1,...])
-        self.current_population: list[list[float]] = []
+        self.current_population: list[Chromosome] = []
         # maps simulation_id(str) -> index of the individual in the population
         self.sim_id_to_index: dict[str, int] = {}
         # results collected from current generation: idx -> list[float] objectives (minimization)
@@ -110,7 +128,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._gen_index = 0
 
         # Initial Population
-        self.current_population = [self._random_individual() for _ in range(self.population_size)]
+        self.current_population = [self.problem_adapter.sample_initial_population(self.population_size)]
 
         # Enqueue Simulations to first Generation
         self._generation_enqueue(self.current_population, self._gen_index)
@@ -173,7 +191,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             self._stop_flag = False
 
         def _run():
-            # Este método do repo já abre o Change Stream com pipeline fixo (status == DONE)
+            # This method already opens the Change Stream with a fixed pipeline. (status == DONE)
             def _callback(result_doc: dict):
                 if self._stop_flag:
                     return
@@ -191,7 +209,7 @@ class NSGA3LoopStrategy(EngineStrategy):
     # ------------------------------
     # Geração / Enfileiramento
     # ------------------------------
-    def _generation_enqueue(self, population: list[list[float]], gen_index: int)->ObjectId:
+    def _generation_enqueue(self, population: list[Chromosome], gen_index: int)->ObjectId:
         """
         Cria a `Generation` e insere `population_size` simulações no MongoDB.
         """
@@ -221,13 +239,10 @@ class NSGA3LoopStrategy(EngineStrategy):
             config: SimulationConfig = {
                 "name": f"nsga3-g{gen_index}-{i}",
                 "duration": self.duration,
-                "radiusOfReach": self.radius,
-                "radiusOfInter": self.interf,
-                "region": self.region,
-                "simulationElements": {
-                    "fixedMotes": fixed,
-                    "mobileMotes": self.mobile_motes
-                }
+                "radiusOfReach": self.problem_adapter.radious_of_reach,
+                "radiusOfInter": self.problem_adapter.radious_of_inter,
+                "region": self.problem_adapter.bounds,
+                "simulationElements": self.problem_adapter.encode_simulation_input(genome)
             }
 
             files_ids = create_files(config, self.mongo.fs_handler)
