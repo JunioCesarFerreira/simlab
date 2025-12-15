@@ -1,29 +1,16 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from .chromosomes import (
+    ChromosomeP1,
+    ChromosomeP2,
+    ChromosomeP3,
+    ChromosomeP4
+)
 from typing import Any, Mapping, Sequence
+from pylib.dto.simulation import SimulationElements
 
 # Type aliases for clarity
-Chromosome = Any  # Can be np.ndarray, tuple, dict, custom class, etc.
+Chromosome = ChromosomeP1 | ChromosomeP2 | ChromosomeP3 | ChromosomeP4
 Objectives = list[float]
-ConstraintViolation = float | list[float] | None
-Meta = dict[str, Any]
-
-
-@dataclass
-class Individual:
-    """
-    Generic representation of a candidate solution.
-
-    The NSGA3 core and loop strategy only need:
-    - a chromosome (opaque representation)
-    - objective values
-    - constraint violation (if any)
-    - optional metadata (e.g., Simulation/Generation ids in MongoDB)
-    """
-    chromosome: Chromosome
-    objectives: Objectives | None = None
-    constraint_violation: ConstraintViolation = None
-    meta: Meta = field(default_factory=dict)
 
 
 class ProblemAdapter(ABC):
@@ -38,41 +25,35 @@ class ProblemAdapter(ABC):
     - encoding/decoding Simulation documents for the SimLab workflow
     """
 
-    def __init__(self, experiment: Mapping[str, Any]) -> None:
+    def __init__(self, problem: Mapping[str, Any]) -> None:
         """
         Parameters
         ----------
-        experiment:
-            Full experiment document (or DTO) as loaded from MongoDB.
+        problem:
+            Full problem document (or DTO) as loaded from MongoDB.
             It should include:
             - problem_type / problem_parameters
             - strategy / nsga3_parameters
             - any additional fields needed by the adapter
         """
-        self.experiment = experiment
+        self.problem = problem
 
     # ------------------------------------------------------------------
     # Structural information about the problem
-    # ------------------------------------------------------------------
+    # ------------------------------------------------------------------  
     @property
     @abstractmethod
-    def n_objectives(self) -> int:
-        """Number of objective functions."""
+    def radious_of_reach(self) -> float:
+        raise NotImplementedError
+    
+    @property
+    @abstractmethod
+    def radious_of_inter(self) -> float:
         raise NotImplementedError
 
     @property
-    def n_constraints(self) -> int:
-        """
-        Number of constraints.
-
-        Default is 0. Override if the problem has explicit constraints
-        and you want to track constraint violations.
-        """
-        return 0
-
-    def bounds(
-        self,
-    ) -> tuple[Sequence[float], Sequence[float]] | None:
+    @abstractmethod
+    def bounds(self) -> tuple[float, float, float, float]:
         """
         Optional: lower and upper bounds for real/integer vector problems.
 
@@ -82,22 +63,15 @@ class ProblemAdapter(ABC):
             If the problem has a box-constrained representation, return
             the bounds here. Otherwise return None.
         """
-        return None
+        return NotImplementedError
 
     # ------------------------------------------------------------------
     # Initial population
     # ------------------------------------------------------------------
     @abstractmethod
-    def sample_initial_population(self, size: int) -> list[Individual]:
+    def sample_initial_population(self, size: int) -> list[Chromosome]:
         """
         Generate an initial population of valid individuals.
-
-        This method is responsible for sampling admissible chromosomes
-        (e.g., random vectors, grammar-based paths, mixed encodings)
-        and wrapping them into Individual instances.
-
-        The objectives and constraint_violation are usually left as None
-        and will be filled later by evaluation/simulation.
         """
         raise NotImplementedError
 
@@ -139,7 +113,7 @@ class ProblemAdapter(ABC):
         By default this reads from nsga3_parameters.pc if available,
         otherwise falls back to 0.9.
         """
-        return self.experiment.get("nsga3_parameters", {}).get("pc", 0.9)
+        return self.problem.get("nsga3_parameters", {}).get("pc", 0.9)
 
     def mutation_probability(self) -> float:
         """
@@ -148,41 +122,12 @@ class ProblemAdapter(ABC):
         By default this reads from nsga3_parameters.pm if available,
         otherwise falls back to 0.1.
         """
-        return self.experiment.get("nsga3_parameters", {}).get("pm", 0.1)
-
-    # ------------------------------------------------------------------
-    # Evaluation
-    # ------------------------------------------------------------------
-    def evaluate_sync(
-        self,
-        chromosome: Chromosome,
-    ) -> tuple[Objectives, ConstraintViolation]:
-        """
-        Purely analytical evaluation (no external simulation).
-
-        This is intended for synthetic problems such as DTLZ, ZDT, SCH,
-        etc., where the objective functions can be computed directly
-        from the chromosome.
-
-        For problems that depend on external simulations (e.g., Cooja),
-        you usually do not implement this and rely instead on:
-        - encode_simulation_input
-        - decode_simulation_output
-
-        Raises
-        ------
-        NotImplementedError
-            If the problem must be evaluated via simulation.
-        """
-        raise NotImplementedError(
-            "evaluate_sync is not implemented for this problem; "
-            "use encode_simulation_input/decode_simulation_output instead."
-        )
+        return self.problem.get("nsga3_parameters", {}).get("pm", 0.1)
 
     # ------------------------------------------------------------------
     # Integration with SimLab / MongoDB / Cooja
     # ------------------------------------------------------------------
-    def encode_simulation_input(self, ind: Individual) -> dict[str, Any]:
+    def encode_simulation_input(self, ind: Chromosome) -> SimulationElements:
         """
         Map an individual to the input payload for a Simulation document.
 
@@ -205,7 +150,7 @@ class ProblemAdapter(ABC):
     def decode_simulation_output(
         self,
         sim_doc: Mapping[str, Any],
-        ind: Individual,
+        ind: Chromosome,
     ) -> None:
         """
         Update the given Individual with objectives and constraint violation
@@ -232,7 +177,7 @@ class ProblemAdapter(ABC):
     def should_stop(
         self,
         generation_index: int,
-        population: Sequence[Individual],
+        population: Sequence[Chromosome],
     ) -> bool:
         """
         Optional problem-specific stopping criterion.
@@ -244,7 +189,7 @@ class ProblemAdapter(ABC):
         present in the experiment document.
         """
         max_gen = (
-            self.experiment
+            self.problem
             .get("nsga3_parameters", {})
             .get("max_generations", 50)
         )
