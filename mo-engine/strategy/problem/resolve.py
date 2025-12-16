@@ -1,7 +1,19 @@
 from typing import Any, Mapping
+from typing import Type
 
-from .registry import PROBLEM_REGISTRY
-from .problem_adapter import ProblemAdapter
+from .adapter import ProblemAdapter
+from .p1_continuous_mobility import Problem1ContinuousMobilityAdapter
+from .p2_discrete_mobility import Problem2DiscreteMobilityAdapter
+from .p3_target_coverage import Problem3TargetCoverageAdapter
+from .p4_mobile_sink_collection import Problem4MobileSinkCollectionAdapter
+
+# Problem key -> adapter class
+PROBLEM_REGISTRY: dict[str, Type[ProblemAdapter]] = {
+    "problem1": Problem1ContinuousMobilityAdapter,
+    "problem2": Problem2DiscreteMobilityAdapter,
+    "problem3": Problem3TargetCoverageAdapter,
+    "problem4": Problem4MobileSinkCollectionAdapter,
+}
 
 
 def resolve_problem_key(problem: Mapping[str, Any]) -> str:
@@ -30,7 +42,7 @@ def resolve_problem_key(problem: Mapping[str, Any]) -> str:
     )
 
 
-def build_adapter(problem: Mapping[str, Any]) -> ProblemAdapter:
+def build_adapter(problem: Mapping[str, Any], ga_parameter: Mapping[str, float]) -> ProblemAdapter:
     """
     Instantiate the correct ProblemAdapter based on the resolved problem key.
     """
@@ -41,4 +53,9 @@ def build_adapter(problem: Mapping[str, Any]) -> ProblemAdapter:
         known = ", ".join(sorted(PROBLEM_REGISTRY.keys()))
         raise ValueError(f"Unknown problem name='{key}'. Known: {known}")
 
-    return adapter_cls(problem)
+    adptr = adapter_cls(problem)
+    
+    if len(ga_parameter) > 0:
+      adptr.set_ga_parameters(ga_parameter)
+      
+    return adptr

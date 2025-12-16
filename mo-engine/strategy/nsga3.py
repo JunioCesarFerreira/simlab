@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from bson import ObjectId
 from dataclasses import dataclass
-from typing import Optional, Any, Mapping
+from typing import Optional
 import numpy as np
 
 from strategy.base import EngineStrategy
@@ -21,13 +21,11 @@ from lib.build_input_sim_cooja import create_files
 # NSGA utils
 from .util.nsga import fast_nondominated_sort
 from .util.nsga import generate_reference_points, niching_selection
-# Variation operators (real-coded)
-from .util.genetic_operators.crossover import make_sbx_crossover
-from .util.genetic_operators.mutation import make_polynomial_mutation
-from .util.genetic_operators.selection import tournament_selection_nsga
-from .problem.problem_adapter import ProblemAdapter, Chromosome
+# Problem Adapter
+from .problem.adapter import ProblemAdapter, Chromosome
 from .problem.resolve import build_adapter
 
+Objectives = list[float]
 
 logger = logging.getLogger(__name__)
 
@@ -67,10 +65,25 @@ class NSGA3LoopStrategy(EngineStrategy):
         self.population_size: int = int(params.get("population_size", 20))
         self.max_generations: int = int(params.get("number_of_generations", 5))
         self.sim_duration: int = int(params.get("duration", 120))
+                
+        # nsga3 niching
+        self.divisions: int = int(params.get("divisions", 10))      
+        self.ref_points = generate_reference_points(len(self.objective_keys), self.divisions)
+        
+        self.prob_cx = float(params.get("prob_cx", 0.8))
+        self.prob_mt = float(params.get("prob_mt", 0.2))
+        
+        ga_params: dict[str, float] = {}
+        if "eta_cx" in params:
+            ga_params["eta_cx"] = float(params.get("eta_cx"))
+        if "eta_mt" in params:
+            ga_params["eta_mt"] = float(params.get("eta_mt"))
+        if "per_gene_prob" in params:
+            ga_params["per_gene_prob"] = float(params.get("per_gene_prob")) 
         
         problem = params.get("problem", {}) or {}
         
-        self.problem_adapter = problem if problem is not None else build_adapter(problem)
+        self.problem_adapter: ProblemAdapter = build_adapter(problem, ga_params)
         
         # --- loop state ---
         self._exp_id: ObjectId | None = None
@@ -82,9 +95,9 @@ class NSGA3LoopStrategy(EngineStrategy):
         # maps simulation_id(str) -> index of the individual in the population
         self.sim_id_to_index: dict[str, int] = {}
         # results collected from current generation: idx -> list[float] objectives (minimization)
-        self.objectives_buffer: dict[int, list[float]] = {}
+        self.objectives_buffer: dict[int, Objectives] = {}
         # dictionary for reuse evaluations values
-        self._obj_by_sim_id: dict[str, list[float]] = {}
+        self._obj_by_sim_id: dict[str, Objectives] = {}
         
         # prepare objective keys
         cfg = experiment.get("transform_config", {}) or {}
@@ -92,31 +105,14 @@ class NSGA3LoopStrategy(EngineStrategy):
         self.objective_keys = [o["name"] for o in obj if "name" in o]
         
         self._awaiting_offspring: bool = False  # False => waiting P; True => waiting Q
-        self._parents_population: list[list[float]] = []   # wait P_t (genomas)
-        self._parents_objectives: list[list[float]] = []   # wait F(P_t)
-        
-        # nsga3 niching
-        self.divisions: int = int(params.get("divisions", 10))      
-        self.ref_points = generate_reference_points(len(self.objective_keys), self.divisions)
-        
-        # genetic operators
-        def gene_bounds() -> list[tuple[float, float]]:
-            x1, y1, x2, y2 = self.region
-            bounds: list[tuple[float, float]] = []
-            for _ in range(self.num_of_motes):
-                bounds.append((x1, x2))  # x
-                bounds.append((y1, y2))  # y
-            return bounds
-        
-        bounds = gene_bounds()
-        self.prob_cx = 1.0
-        self.prob_mt = 1.0
-        self._sbx = make_sbx_crossover(eta=20.0, bounds=bounds)
-        self._poly = make_polynomial_mutation(eta=25.0, bounds=bounds, per_gene_prob=1.0 / (2 * self.num_of_motes))
+        self._parents_population: list[Chromosome] = []   # wait P_t (genomas)
+        self._parents_objectives: list[Objectives] = []   # wait F(P_t)
+               
 
-    # ------------------------------
-    # API do EngineStrategy
-    # ------------------------------
+
+# ------------------------------
+# API do EngineStrategy
+# ------------------------------
     # START implementation
     def start(self):
         """
@@ -128,7 +124,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._gen_index = 0
 
         # Initial Population
-        self.current_population = [self.problem_adapter.sample_initial_population(self.population_size)]
+        self.current_population = [self.problem_adapter.random_individual_generator(self.population_size)]
 
         # Enqueue Simulations to first Generation
         self._generation_enqueue(self.current_population, self._gen_index)
@@ -179,9 +175,9 @@ class NSGA3LoopStrategy(EngineStrategy):
             t.join(timeout=1.0)
         self._watch_thread = None
 
-    # ------------------------------
-    # Watcher (Change Stream)
-    # ------------------------------
+# ------------------------------
+# Watcher (Change Stream)
+# ------------------------------
     def _start_watcher(self):
         # encerra watcher anterior, se houver
         self._stop_flag = False
@@ -206,9 +202,9 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._watch_thread = Thread(target=_run, daemon=True)
         self._watch_thread.start()
 
-    # ------------------------------
-    # Geração / Enfileiramento
-    # ------------------------------
+# ------------------------------
+# Generation / Queuing
+# ------------------------------
     def _generation_enqueue(self, population: list[Chromosome], gen_index: int)->ObjectId:
         """
         Cria a `Generation` e insere `population_size` simulações no MongoDB.
@@ -235,12 +231,11 @@ class NSGA3LoopStrategy(EngineStrategy):
         self.objectives_buffer.clear()
 
         for i, genome in enumerate(population):
-            fixed = self._genome_to_fixed_motes(genome)
             config: SimulationConfig = {
                 "name": f"nsga3-g{gen_index}-{i}",
                 "duration": self.duration,
-                "radiusOfReach": self.problem_adapter.radious_of_reach,
-                "radiusOfInter": self.problem_adapter.radious_of_inter,
+                "radiusOfReach": self.problem_adapter.radius_of_reach,
+                "radiusOfInter": self.problem_adapter.radius_of_inter,
                 "region": self.problem_adapter.bounds,
                 "simulationElements": self.problem_adapter.encode_simulation_input(genome)
             }
@@ -295,9 +290,9 @@ class NSGA3LoopStrategy(EngineStrategy):
         
         return gen_oid
 
-    # ------------------------------
-    # Conclusão de geração e evolução
-    # ------------------------------
+# ---------------------------------------
+# Conclusion of generation and evolution
+# ---------------------------------------
     def _on_generation_completed(self):
         """
         Two-phase (μ+λ) loop:
@@ -404,32 +399,48 @@ class NSGA3LoopStrategy(EngineStrategy):
 
         return
 
-    
+# ---------------------------------------
+# Run Genetic Algorithm
+# ---------------------------------------   
     def _run_genetic_algorithm(self, objectives: list[list[float]]) -> list[list[float]]:
         rng = random.Random()
         parents = self._parents_population
-        n_children = self.population_size
-        children: list[list[float]] = []        
+        children: list[Chromosome] = []        
         fronts: list[list[int]] = fast_nondominated_sort(objectives)
         individual_ranks: dict[int, int] = self._compute_individual_ranks(fronts)
-        while len(children) < n_children:
+        while len(children) < self.population_size:
             # Selection
-            parent1: list[float] = tournament_selection_nsga(parents, individual_ranks)
-            parent2: list[float] = tournament_selection_nsga(parents, individual_ranks)
+            parent1: Chromosome = self._tournament_selection(parents, individual_ranks)
+            parent2: Chromosome = self._tournament_selection(parents, individual_ranks)
             # Crossover 
             if rng.random() < self.prob_cx:
-                c1, c2 = self._sbx(parent1, parent2, rng)
+                c1, c2 = self.problem_adapter.crossover(parent1, parent2)
             else:
-                c1, c2 = list(parent1), list(parent2)
+                c1, c2 = parent1, parent2
             # Mutation
             if rng.random() < self.prob_mt:
-                c1 = self._poly(c1, rng)
-            if rng.random() < self.prob_mt:
-                c2 = self._poly(c2, rng)
+                c1 = self.problem_adapter.mutate(c1)
             children.append(c1)
-            if len(children) < n_children:
-                children.append(c2)
-        return children[:n_children]
+            if rng.random() < self.prob_mt:
+                c2 = self.problem_adapter.mutate(c2)
+            children.append(c2)
+        return children[:self.population_size]
+
+
+    def _tournament_selection(
+        population: list[Chromosome], 
+        individual_ranks: dict[int, int]
+        ) -> Chromosome:
+            i1, i2 = random.sample(range(len(population)), 2)
+            rank1: int = individual_ranks[i1]
+            rank2: int = individual_ranks[i2]
+            if rank1 < rank2:
+                return population[i1]
+            elif rank2 < rank1:
+                return population[i2]
+            else:
+                return population[random.choice([i1, i2])]
+
 
     def _compute_individual_ranks(self, fronts: list[list[int]]) -> dict[int, int]:
         individual_ranks: dict[int, int] = {}
@@ -437,30 +448,9 @@ class NSGA3LoopStrategy(EngineStrategy):
             for idx in front:
                 individual_ranks[idx] = rank
         return individual_ranks
-    
-    def _random_individual(self) -> list[float]:
-        pts = network_gen(amount=self.num_of_motes, region=self.region, radius=self.radius)
-        # Flatten [ (x,y), ... ] -> [x0,y0,x1,y1,...]
-        genome: list[float] = []
-        for (x, y) in pts:
-            genome.extend([float(x), float(y)])
-        return genome
 
-    def _genome_to_fixed_motes(self, genome: list[float]) -> list[dict]:
-        fixed: list[dict] = []
-        for j in range(self.num_of_motes):
-            x = float(genome[2*j])
-            y = float(genome[2*j + 1])
-            fixed.append({
-                "name": f"m{j}",
-                "position": [x, y],
-                "sourceCode": "default",
-                "radiusOfReach": self.radius,
-                "radiusOfInter": self.interf
-            })
-        return fixed
 
-    def _extract_objectives(self, result_doc: dict) -> list[float] | None:
+    def _extract_objectives(self, result_doc: dict) -> Objectives | None:
         """
         Extracts objective vector (minimization) from DONE simulation doc.
         Priority:
@@ -489,6 +479,7 @@ class NSGA3LoopStrategy(EngineStrategy):
 
         logger.info("[NSGA-III] Warning: objectives not found. Set 'objective_keys' via TransformConfig.")
         return None
+
 
     def _finalize_experiment(self, pareto_front: Optional[list[tuple[float, ...]]] = None):
         assert self._exp_id is not None

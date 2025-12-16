@@ -19,17 +19,3 @@ def tournament_selection(
         best = max(cand_idx, key=lambda i: scores[i])
         sel.append(best)
     return sel
-
-def tournament_selection_nsga(
-    population: list[list[float]], 
-    individual_ranks: dict[int, int]
-    ) -> list[float]:
-        i1, i2 = random.sample(range(len(population)), 2)
-        rank1: int = individual_ranks[i1]
-        rank2: int = individual_ranks[i2]
-        if rank1 < rank2:
-            return population[i1]
-        elif rank2 < rank1:
-            return population[i2]
-        else:
-            return population[random.choice([i1, i2])]
