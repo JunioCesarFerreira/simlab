@@ -3,7 +3,7 @@ import random
 
 from pylib.dto.simulation import SimulationElements
 from pylib.dto.problems import ProblemP4
-from .adapter import ProblemAdapter, Chromosome
+from .adapter import ProblemAdapter, ChromosomeP4
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:
@@ -29,7 +29,7 @@ def _blend_crossover_vec(x: list[float], y: list[float], alpha: float = 0.5) -> 
 
 # ============================================================
 # Problem 4: Data collection with mobile sink
-# Chromosome: (route, sojourn_times)
+# ChromosomeP4: (route, sojourn_times)
 #   route: list[int] indices over L, starting/ending at base index
 #   sojourn_times: list[float] nonnegative, length = len(route)
 # ============================================================
@@ -38,7 +38,7 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
     """
     Problem 4 adapter.
 
-    Chromosome representation:
+    ChromosomeP4 representation:
       chromosome := (route, tau)
         - route: [v0, v1, ..., vT] indices over L, with v0 = vT = base_index
         - tau:   [tau0, tau1, ..., tauT] nonnegative real times
@@ -253,15 +253,15 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
         lo, hi = self._tau_bounds()
         return [random.uniform(lo, hi) for _ in range(length)]
 
-    def random_individual_generator(self, size: int) -> list[Chromosome]:
-        pop: list[Chromosome] = []
+    def random_individual_generator(self, size: int) -> list[ChromosomeP4]:
+        pop: list[ChromosomeP4] = []
         for _ in range(size):
             route = self._repair_route(self._random_route())
             tau = self._random_tau(len(route))
-            pop.append(Chromosome(chromosome=(route, tau)))
+            pop.append(ChromosomeP4(chromosome=(route, tau)))
         return pop
 
-    def crossover(self, parents: Sequence[Chromosome]) -> list[Chromosome]:
+    def crossover(self, parents: Sequence[ChromosomeP4]) -> list[ChromosomeP4]:
         """
         Crossover for (route, tau):
         - Route: single cut splice (very simple), then repair
@@ -295,7 +295,7 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
 
         return [(child_r1, child_t1), (child_r2, child_t2)]
 
-    def mutate(self, chromosome: Chromosome) -> Chromosome:
+    def mutate(self, chromosome: ChromosomeP4) -> ChromosomeP4:
         """
         Mutation for (route, tau):
         - With some probability, perform a local route edit (random node replacement) then repair.
@@ -327,6 +327,6 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
 
         return (route, tau)
 
-    def encode_simulation_input(self, ind: Chromosome) -> SimulationElements:
+    def encode_simulation_input(self, ind: ChromosomeP4) -> SimulationElements:
         raise NotImplementedError
 

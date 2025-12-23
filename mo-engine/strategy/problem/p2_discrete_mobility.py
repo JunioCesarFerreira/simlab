@@ -3,7 +3,7 @@ import random
 
 from pylib.dto.simulation import SimulationElements
 from pylib.dto.problems import ProblemP2
-from .adapter import ProblemAdapter, Chromosome
+from .adapter import ProblemAdapter, ChromosomeP2
 
 def _uniform_crossover_mask(a: list[int], b: list[int]) -> tuple[list[int], list[int]]:
     """Uniform crossover for binary masks."""
@@ -54,28 +54,28 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
                 
         self.problem = cast(ProblemP2, problem)
 
-    def random_individual_generator(self, size: int) -> list[Chromosome]:
+    def random_individual_generator(self, size: int) -> list[ChromosomeP2]:
         Q = self.problem["candidates"]
         J = len(Q)
         # Bias toward sparse selections (since the primary goal is to minimize |P|)
         p_on = float(self.problem.get("problem_parameters", {}).get("p_on_init", 0.15))
 
-        pop: list[Chromosome] = []
+        pop: list[ChromosomeP2] = []
         for _ in range(size):
             mask = [1 if random.random() < p_on else 0 for _ in range(J)]
             # Ensure not empty (optional)
             if sum(mask) == 0:
                 mask[random.randrange(J)] = 1
-            pop.append(Chromosome(chromosome=mask))
+            pop.append(ChromosomeP2(chromosome=mask))
         return pop
 
-    def crossover(self, parents: Sequence[Chromosome]) -> list[Chromosome]:
+    def crossover(self, parents: Sequence[ChromosomeP2]) -> list[ChromosomeP2]:
         m1: list[int] = parents[0]
         m2: list[int] = parents[1]
         c1, c2 = _uniform_crossover_mask(m1, m2)
         return [c1, c2]
 
-    def mutate(self, chromosome: Chromosome) -> Chromosome:
+    def mutate(self, chromosome: ChromosomeP2) -> ChromosomeP2:
         mask: list[int] = chromosome
         p_bit = float(self.problem.get("problem_parameters", {}).get("p_bit_mut", 0.01))
         out = _bitflip_mutation(mask, p_bit)
@@ -84,6 +84,6 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
             out[random.randrange(len(out))] = 1
         return out
 
-    def encode_simulation_input(self, ind: Chromosome) -> SimulationElements:
+    def encode_simulation_input(self, ind: ChromosomeP2) -> SimulationElements:
         raise NotImplementedError
 

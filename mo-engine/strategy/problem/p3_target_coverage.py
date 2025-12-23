@@ -4,7 +4,7 @@ import random
 
 from pylib.dto.simulation import SimulationElements
 from pylib.dto.problems import ProblemP3
-from .adapter import ProblemAdapter, Chromosome
+from .adapter import ProblemAdapter, ChromosomeP3
 
 
 def _euclid(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -33,7 +33,7 @@ def _bitflip_mutation(mask: list[int], p: float) -> list[int]:
 
 # ============================================================
 # Problem 3: Sensing coverage with targets
-# Chromosome: binary mask over candidate positions Q
+# ChromosomeP3: binary mask over candidate positions Q
 # Constraint-style feasibility: k-coverage of targets and g-min-degree connectivity
 # ============================================================
 
@@ -41,7 +41,7 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
     """
     Problem 3 adapter.
 
-    Chromosome representation:
+    ChromosomeP3 representation:
       chromosome := mask in {0,1}^J selecting subset P ⊆ Q.
 
     Feasibility (intended):
@@ -101,28 +101,28 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
     def _Rcom(self) -> float:
         return float(self.problem.get("problem_parameters", {}).get("R_com", 0.2))
 
-    def random_individual_generator(self, size: int) -> list[Chromosome]:
+    def random_individual_generator(self, size: int) -> list[ChromosomeP3]:
         Q = self._Q()
         J = len(Q)
         # Bias toward sparse selections but ensure some minimum
         p_on = float(self.problem.get("problem_parameters", {}).get("p_on_init", 0.2))
         min_on = int(self.problem.get("problem_parameters", {}).get("min_on_init", 1))
 
-        pop: list[Chromosome] = []
+        pop: list[ChromosomeP3] = []
         for _ in range(size):
             mask = [1 if random.random() < p_on else 0 for _ in range(J)]
             while sum(mask) < min_on:
                 mask[random.randrange(J)] = 1
-            pop.append(Chromosome(chromosome=mask))
+            pop.append(ChromosomeP3(chromosome=mask))
         return pop
 
-    def crossover(self, parents: Sequence[Chromosome]) -> list[Chromosome]:
+    def crossover(self, parents: Sequence[ChromosomeP3]) -> list[ChromosomeP3]:
         m1: list[int] = parents[0]
         m2: list[int] = parents[1]
         c1, c2 = _uniform_crossover_mask(m1, m2)
         return [c1, c2]
 
-    def mutate(self, chromosome: Chromosome) -> Chromosome:
+    def mutate(self, chromosome: ChromosomeP3) -> ChromosomeP3:
         mask: list[int] = chromosome
         p_bit = float(self.problem.get("problem_parameters", {}).get("p_bit_mut", 0.02))
         out = _bitflip_mutation(mask, p_bit)
@@ -172,6 +172,6 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
 
         return cv
 
-    def encode_simulation_input(self, ind: Chromosome) -> SimulationElements:
+    def encode_simulation_input(self, ind: ChromosomeP3) -> SimulationElements:
         raise NotImplementedError
 
