@@ -34,6 +34,7 @@ services:
       - DB_NAME=simlab
       - MONGO_URI=mongodb://mongodb:27017/?replicaSet=rs0
       - IS_DOCKER=True
+      - SIMLAB_API_KEY=simlab-api-key42
     ports:
       - "8000:8000"
     depends_on:
