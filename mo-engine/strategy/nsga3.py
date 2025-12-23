@@ -62,28 +62,35 @@ class NSGA3LoopStrategy(EngineStrategy):
 
         # --- experiment parameters ---
         params = experiment.get("parameters", {}) or {}
-        self.population_size: int = int(params.get("population_size", 20))
-        self.max_generations: int = int(params.get("number_of_generations", 5))
-        self.sim_duration: int = int(params.get("duration", 120))
+        algorithm_config = params.get("algorithm", {}) or {}
+        problem_config = params.get("problem", {}) or {}
+        simulation_config = params.get("simulation", {}) or {}
+        
+        self.sim_duration: int = int(simulation_config.get("duration", 120))
+        self.population_size: int = int(algorithm_config.get("population_size", 20))
+        self.max_generations: int = int(algorithm_config.get("number_of_generations", 5))
                 
         # nsga3 niching
-        self.divisions: int = int(params.get("divisions", 10))      
+        self.divisions: int = int(algorithm_config.get("divisions", 10))      
         self.ref_points = generate_reference_points(len(self.objective_keys), self.divisions)
         
-        self.prob_cx = float(params.get("prob_cx", 0.8))
-        self.prob_mt = float(params.get("prob_mt", 0.2))
+        self.prob_cx = float(algorithm_config.get("prob_cx", 0.8))
+        self.prob_mt = float(algorithm_config.get("prob_mt", 0.2))
         
-        ga_params: dict[str, float] = {}
-        if "eta_cx" in params:
-            ga_params["eta_cx"] = float(params.get("eta_cx"))
-        if "eta_mt" in params:
-            ga_params["eta_mt"] = float(params.get("eta_mt"))
-        if "per_gene_prob" in params:
-            ga_params["per_gene_prob"] = float(params.get("per_gene_prob")) 
-        
-        problem = params.get("problem", {}) or {}
-        
-        self.problem_adapter: ProblemAdapter = build_adapter(problem, ga_params)
+        params_of_ga_operators: dict[str, float] = {}
+        if "eta_cx" in algorithm_config:
+            params_of_ga_operators["eta_cx"] = float(algorithm_config.get("eta_cx"))
+        if "eta_mt" in algorithm_config:
+            params_of_ga_operators["eta_mt"] = float(algorithm_config.get("eta_mt"))
+        if "per_gene_prob" in algorithm_config:
+            params_of_ga_operators["per_gene_prob"] = float(algorithm_config.get("per_gene_prob")) 
+                
+        self.problem_adapter: ProblemAdapter = build_adapter(problem_config, params_of_ga_operators)
+                
+        # prepare objective keys
+        cfg = experiment.get("transform_config", {}) or {}
+        obj = cfg.get("objectives", []) or []
+        self.objective_keys = [o["name"] for o in obj if "name" in o]
         
         # --- loop state ---
         self._exp_id: ObjectId | None = None
@@ -98,11 +105,6 @@ class NSGA3LoopStrategy(EngineStrategy):
         self.objectives_buffer: dict[int, Objectives] = {}
         # dictionary for reuse evaluations values
         self._obj_by_sim_id: dict[str, Objectives] = {}
-        
-        # prepare objective keys
-        cfg = experiment.get("transform_config", {}) or {}
-        obj = cfg.get("objectives", []) or []
-        self.objective_keys = [o["name"] for o in obj if "name" in o]
         
         self._awaiting_offspring: bool = False  # False => waiting P; True => waiting Q
         self._parents_population: list[Chromosome] = []   # wait P_t (genomas)

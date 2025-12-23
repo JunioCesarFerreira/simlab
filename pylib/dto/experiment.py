@@ -134,7 +134,11 @@ class TransformConfigDto(TypedDict):
     time_col: str
     objectives: list[ObjectiveItemDto]
     metrics: list[MetricItemDto]
-        
+  
+class ParametersDto(TypedDict):
+    algorithm: dict[str, Any]
+    simulation: dict[str, Any]
+    problem: dict[str, Any]
 class ExperimentDto(TypedDict):
     id: Optional[str] = None
     name: str
@@ -142,7 +146,7 @@ class ExperimentDto(TypedDict):
     created_time: datetime | None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
-    parameters: dict[str, Any]
+    parameters: ParametersDto
     generations: list[str]
     source_repository_id: str
     transform_config: TransformConfigDto
