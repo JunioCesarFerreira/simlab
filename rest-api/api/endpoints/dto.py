@@ -2,7 +2,7 @@ from typing import TypedDict, Any, Optional, NotRequired
 from datetime import datetime
 from bson import ObjectId
  
-from pylib.dto.simulation import SimulationConfig 
+from pylib.dto.simulator import SimulationConfig 
 from pylib.dto.database import (
     Simulation, 
     Generation, 

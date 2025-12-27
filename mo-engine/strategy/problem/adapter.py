@@ -6,7 +6,7 @@ from .chromosomes import (
     ChromosomeP4
 )
 from typing import Any, Mapping, Sequence
-from pylib.dto.simulation import SimulationElements
+from pylib.dto.simulator import SimulationElements
 
 # Type aliases for clarity
 Chromosome = ChromosomeP1 | ChromosomeP2 | ChromosomeP3 | ChromosomeP4

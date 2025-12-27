@@ -2,7 +2,7 @@ from typing import Any, Mapping, Sequence, cast
 import math
 import random
 
-from pylib.dto.simulation import SimulationElements
+from pylib.dto.simulator import SimulationElements
 from pylib.dto.problems import ProblemP3
 from .adapter import ProblemAdapter, ChromosomeP3
 

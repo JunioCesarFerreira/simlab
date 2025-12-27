@@ -2,7 +2,7 @@ from typing import TypedDict, Any, Optional
 from datetime import datetime
 from bson import ObjectId
  
-from .simulation import SimulationConfig 
+from .simulator import SimulationConfig 
     
 #---------------------------------------------------------------------------------------------------------    
 # Database Structure -------------------------------------------------------------------------------------
@@ -69,7 +69,7 @@ class TransformConfig(TypedDict):
 class Parameters(TypedDict):
     strategy: str
     algorithm: dict[str, Any]
-    simulation: dict[str, Any]
+    simulation: dict[str, Any] # This is not Simulation or SimulationConfig because it holds only the simulation parameters
     problem: dict[str, Any]
     
 class Experiment(TypedDict):

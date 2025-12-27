@@ -1,7 +1,7 @@
 from typing import Any, Mapping, Sequence, cast
 import random
 
-from pylib.dto.simulation import SimulationElements
+from pylib.dto.simulator import SimulationElements
 from pylib.dto.problems import ProblemP2
 from .adapter import ProblemAdapter, ChromosomeP2
 

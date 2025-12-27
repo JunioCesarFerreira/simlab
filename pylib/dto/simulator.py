@@ -7,14 +7,14 @@ from typing import TypedDict
 class BaseMote(TypedDict):
     name: str
     sourceCode: str
-    radiusOfReach: float # Atenção! no Cooja este atributo não é utilizado.
-    radiusOfInter: float # Atenção! no Cooja este atributo não é utilizado.
+    radiusOfReach: float # Attention! This attribute is not used in Cooja.
+    radiusOfInter: float # Attention! This attribute is not used in Cooja.
 
 class FixedMote(BaseMote, TypedDict):
-    position: list[float] # A priori no plano
+    position: list[float]
 
 class MobileMote(BaseMote, TypedDict):
-    functionPath: list[tuple[str, str]]  # Lista de tuplas cada par define uma parte da paremetrização
+    functionPath: list[tuple[str, str]]  # List of tuples; each pair defines a part of the parameterization.
     isClosed: bool
     isRoundTrip: bool
     speed: float
@@ -27,7 +27,7 @@ class SimulationElements(TypedDict):
 class SimulationConfig(TypedDict):
     name: str
     duration: float
-    radiusOfReach: float # Cooja admite apenas redes homogeneas
-    radiusOfInter: float # Cooja admite apenas redes homogeneas
+    radiusOfReach: float # Cooja only accepts homogeneous networks.
+    radiusOfInter: float # Cooja only accepts homogeneous networks.
     region: tuple[float, float, float, float]
     simulationElements: SimulationElements

@@ -4,7 +4,7 @@ import random
 from strategy.util.genetic_operators.crossover import make_sbx_crossover
 from strategy.util.genetic_operators.mutation import make_polynomial_mutation
 
-from pylib.dto.simulation import SimulationElements
+from pylib.dto.simulator import SimulationElements
 from pylib.dto.problems import ProblemP1
 from .chromosomes import ChromosomeP1
 from .adapter import ProblemAdapter
