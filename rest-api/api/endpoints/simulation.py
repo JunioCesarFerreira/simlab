@@ -9,8 +9,9 @@ project_path = os.path.abspath(os.path.join(os.getcwd(), ".."))
 if project_path not in sys.path:
     sys.path.insert(0, project_path)
 
-from pylib.dto.experiment import SimulationDto, simulation_to_mongo, simulation_from_mongo
 from pylib import mongo_db
+
+from .dto import SimulationDto, simulation_to_mongo, simulation_from_mongo
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/?replicaSet=rs0")
 DB_NAME = os.getenv("DB_NAME", "simlab")

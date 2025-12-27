@@ -12,7 +12,7 @@ import numpy as np
 
 from strategy.base import EngineStrategy
 from pylib.mongo_db import EnumStatus
-from pylib.dto.experiment import Simulation, SimulationConfig, Generation
+from pylib.dto.database import Simulation, SimulationConfig, Generation
 from pylib import plot_network
 
 from lib.random_network_methods import network_gen

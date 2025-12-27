@@ -2,89 +2,19 @@ from typing import TypedDict, Any, Optional, NotRequired
 from datetime import datetime
 from bson import ObjectId
  
-from .simulation import SimulationConfig 
+from pylib.dto.simulation import SimulationConfig 
+from pylib.dto.database import (
+    Simulation, 
+    Generation, 
+    Experiment, 
+    Parameters, 
+    SourceRepository,
+    TransformConfig
+)
     
-#---------------------------------------------------------------------------------------------------------    
-# Database Structure -------------------------------------------------------------------------------------
-#---------------------------------------------------------------------------------------------------------
-
-class SourceFile(TypedDict):
-    id: str          # ID do arquivo
-    file_name: str   # Nome do arquivo
-    
-class SourceRepository(TypedDict):
-    id: str
-    name : str
-    description: str
-    source_files: list[SourceFile]
-    
-class Simulation(TypedDict):
-    id: str
-    experiment_id: ObjectId
-    generation_id: ObjectId
-    status: str
-    start_time: datetime
-    end_time: datetime
-    parameters: SimulationConfig
-    pos_file_id: ObjectId
-    csc_file_id: ObjectId
-    log_cooja_id: ObjectId
-    runtime_log_id: ObjectId
-    csv_log_id: ObjectId
-    topology_picture_id: ObjectId
-    objectives: dict[str,float]
-    metrics: dict[str,float]
-    
-class Generation(TypedDict):
-    id: str
-    index: int
-    experiment_id: ObjectId
-    status: str
-    start_time: datetime
-    end_time: datetime
-    simulations_ids: list[ObjectId]
-
-class ObjectiveItem(TypedDict):
-    name: str
-    kind: str
-    column: str
-    goal: str
-    # Parâmetros opcionais (validados conforme o kind)
-    q: Optional[float] = None         # requerido se kind == QUANTILE (0<q<=1)
-    scale: Optional[float] = None     # requerido se kind == INVERSE_MEDIAN (scale>0)
-
-class MetricItem(TypedDict):
-    name: str
-    kind: str
-    column: str
-    # Parâmetros opcionais (validados conforme o kind)
-    q: Optional[float] = None         # requerido se kind == QUANTILE (0<q<=1)
-
-class TransformConfig(TypedDict):
-    node_col: str
-    time_col: str
-    objectives: list[ObjectiveItem]
-    metrics: list[MetricItem]
-    
-class Experiment(TypedDict):
-    id: str
-    name: str
-    status: str
-    created_time: datetime
-    start_time: datetime
-    end_time: datetime
-    parameters: dict[str, Any]
-    problem: dict[str, Any]
-    generations: list[ObjectId]
-    source_repository_id: str
-    transform_config: TransformConfig
-    pareto_front: Optional[Any] = None
-
-# refactor note: Por simplicidade vou manter estas estruturas aqui, caso necessário em versões futuras,
-# pode ser interessante criar um subdir em mongo para schemas.
-
 #---------------------------------------------------------------------------------------------------------
 # API DTO ------------------------------------------------------------------------------------------------
+# dto uses str for ObjectId fields
 #---------------------------------------------------------------------------------------------------------
 
 class SimulationDto(TypedDict):
@@ -112,33 +42,7 @@ class GenerationDto(TypedDict):
     start_time: datetime
     end_time: datetime
     simulations_ids: list[str]
-
-class ObjectiveItemDto(TypedDict):
-    name: str
-    kind: str
-    column: str
-    goal: str
-    # Parâmetros opcionais (validados conforme o kind)
-    q: NotRequired[float] = None         # requerido se kind == QUANTILE (0<q<=1)
-    scale: NotRequired[float] = None     # requerido se kind == INVERSE_MEDIAN (scale>0)
-
-class MetricItemDto(TypedDict):
-    name: str
-    kind: str
-    column: str
-    # Parâmetros opcionais (validados conforme o kind)
-    q: NotRequired[float] = None         # requerido se kind == QUANTILE (0<q<=1)
-
-class TransformConfigDto(TypedDict):
-    node_col: str
-    time_col: str
-    objectives: list[ObjectiveItemDto]
-    metrics: list[MetricItemDto]
-  
-class ParametersDto(TypedDict):
-    algorithm: dict[str, Any]
-    simulation: dict[str, Any]
-    problem: dict[str, Any]
+      
 class ExperimentDto(TypedDict):
     id: Optional[str] = None
     name: str
@@ -146,10 +50,10 @@ class ExperimentDto(TypedDict):
     created_time: datetime | None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
-    parameters: ParametersDto
+    parameters: Parameters
     generations: list[str]
     source_repository_id: str
-    transform_config: TransformConfigDto
+    transform_config: TransformConfig
     pareto_front: Optional[Any] = None
     
 #---------------------------------------------------------------------------------------------------------

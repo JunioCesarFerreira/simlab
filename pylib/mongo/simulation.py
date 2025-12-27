@@ -3,7 +3,7 @@ from datetime import datetime
 from bson import ObjectId, errors
 from typing import Callable
 
-from pylib.dto.experiment import Simulation
+from pylib.dto.database import Simulation
 from mongo.connection import MongoDBConnection, EnumStatus
 
 log = logging.getLogger(__name__)
