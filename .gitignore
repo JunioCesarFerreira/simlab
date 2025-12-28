@@ -18,3 +18,9 @@ mo-engine/strategy/util/__pycache__
 pylib/dto/__pycache__
 mo-engine/strategy/problem/__pycache__
 mo-engine/tests/__pycache__
+mo-engine/lib/genetic_operators/crossover/__pycache__
+mo-engine/lib/genetic_operators/mutation/__pycache__
+mo-engine/lib/genetic_operators/selection/__pycache__
+mo-engine/lib/nsga/__pycache__
+mo-engine/lib/problem/__pycache__
+mo-engine/lib/strategy/__pycache__
