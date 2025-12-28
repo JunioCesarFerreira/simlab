@@ -444,7 +444,7 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
 
         # Extrai posições dos sojourns na ordem da rota
         route_positions: list[Position] = [tuple(L[idx].position) for idx in ind.route]
-
+        
         # Discretização total em pontos (cada passo ≈ Δt)
         timeline_points: list[Position] = []
 
@@ -502,6 +502,3 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
             "fixedMotes": fixed,
             "mobileMotes": mobile,
         }
-
-
-

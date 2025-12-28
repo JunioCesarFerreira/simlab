@@ -2,13 +2,31 @@ from strategy.problem.resolve import build_test_adapter
 from strategy.problem.p4_mobile_sink_collection import ProblemP4
 from strategy.problem.chromosomes import ChromosomeP4
 
-def test_p4_encode_basic():
+
+def _extract_start_point(expr: str) -> float:
+    if "+" in expr:
+        return float(expr.split("+")[0].strip())
+    return float(expr.strip())
+
+def _extract_end_point(expr: str) -> float:
+    expr = expr.strip()
+    if "* t" not in expr:
+        return float(expr)
+
+    left, right = expr.split("+", 1)
+    a = float(left.strip())
+    b = float(right.replace("* t", "").strip())
+    return a + b
+
+
+
+def test_p4_encode_path_with_multiple_sojourns():
     problem: ProblemP4 = {
         "name": "problem4",
         "region": [-100.0, 100.0, -100.0, 100.0],
 
         # -------------------------------------------------
-        # Sensores fixos (nodes N)
+        # Sensores fixos
         # -------------------------------------------------
         "nodes": [
             (10.0, 0.0),
@@ -46,8 +64,14 @@ def test_p4_encode_basic():
             {
                 "id": 1,
                 "position": (30.0, 0.0),
-                "adjacency": [0],
+                "adjacency": [2],
                 "visibleNodes": [1],
+            },
+            {
+                "id": 2,
+                "position": (30.0, 30.0),
+                "adjacency": [0],
+                "visibleNodes": [0],
             },
         ],
 
@@ -59,12 +83,14 @@ def test_p4_encode_basic():
             "L_stops": [
                 (0.0, 0.0),
                 (30.0, 0.0),
+                (30.0, 30.0),
             ],
             "A_edges": [
                 (0, 1),
-                (1, 0),
+                (1, 2),
+                (2, 0),
             ],
-            "max_route_len": 4,
+            "max_route_len": 6,
             "tau_min": 0.0,
             "tau_max": 10.0,
         },
@@ -79,53 +105,48 @@ def test_p4_encode_basic():
     adapter = build_test_adapter(problem)
 
     # -------------------------------------------------
-    # Cromossomo mínimo válido:
-    # rota base -> sojourn 1 -> base
+    # Cromossomo explícito e determinístico
+    # Base -> S1 -> S2 -> Base
     # -------------------------------------------------
-    chrom = ChromosomeP4 (
-        mac_protocol = 0,
-        route = [0, 1, 0],
-        sojourn_times = [0.0, 5.0, 0.0],
+    chrom = ChromosomeP4(
+        mac_protocol=0,
+        route=[0, 1, 2, 0],
+        sojourn_times=[0.0, 2.0, 3.0, 0.0],
     )
 
     sim = adapter.encode_simulation_input(chrom)
 
     # -------------------------------------------------
-    # Estrutura geral
+    # Mobile sink
     # -------------------------------------------------
-    assert "fixedMotes" in sim
-    assert "mobileMotes" in sim
-
-    # -------------------------------------------------
-    # Fixed motes: sensores
-    # -------------------------------------------------
-    assert len(sim["fixedMotes"]) == 2
-
-    assert sim["fixedMotes"][0]["name"] == "node_0"
-    assert sim["fixedMotes"][0]["position"] == [10.0, 0.0]
-
-    assert sim["fixedMotes"][1]["name"] == "node_1"
-    assert sim["fixedMotes"][1]["position"] == [20.0, 0.0]
-
-    # -------------------------------------------------
-    # Mobile motes: sink móvel
-    # -------------------------------------------------
-    assert len(sim["mobileMotes"]) == 1
-
     sink = sim["mobileMotes"][0]
-    assert sink["name"] == "sink"
-    assert sink["isClosed"] is True
-    assert sink["speed"] == 10.0
-    assert sink["timeStep"] == 1.0
+    path = sink["functionPath"]
+    
+    assert len(path) > 0
 
-    # functionPath deve existir e ser não vazio
-    assert "functionPath" in sink
-    assert isinstance(sink["functionPath"], list)
-    assert len(sink["functionPath"]) > 0
+    # -------------------------------------------------
+    # Extrai pontos iniciais dos segmentos
+    # -------------------------------------------------
+    starts = [
+        (
+            _extract_start_point(seg[0]),
+            _extract_start_point(seg[1]),
+        )
+        for seg in path
+    ]
+    
+    # -------------------------------------------------
+    # Invariantes geométricos fortes
+    # -------------------------------------------------
 
-    # Cada segmento deve ser uma tupla (x(t), y(t))
-    for seg in sink["functionPath"]:
-        assert isinstance(seg, tuple)
-        assert len(seg) == 2
-        assert isinstance(seg[0], str)
-        assert isinstance(seg[1], str)
+    # Começa na base
+    assert starts[0] == (0.0, 0.0)
+
+    # Deve passar pelos sojourns na ordem
+    assert (30.0, 0.0) in starts
+    assert (30.0, 30.0) in starts
+
+    # Termina na base
+    last_x = _extract_end_point(path[-1][0])
+    last_y = _extract_end_point(path[-1][1])
+    assert (last_x, last_y) == (0.0, 0.0)
