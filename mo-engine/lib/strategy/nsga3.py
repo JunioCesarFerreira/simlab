@@ -10,7 +10,8 @@ from dataclasses import dataclass
 from typing import Optional
 import numpy as np
 
-from strategy.base import EngineStrategy
+from .base import EngineStrategy
+
 from pylib.mongo_db import EnumStatus
 from pylib.dto.database import Simulation, SimulationConfig, Generation
 from pylib import plot_network
@@ -18,11 +19,11 @@ from pylib import plot_network
 from lib.build_input_sim_cooja import create_files
 
 # NSGA utils
-from .util.nsga import fast_nondominated_sort
-from .util.nsga import generate_reference_points, niching_selection
+from lib.nsga import fast_nondominated_sort
+from lib.nsga import generate_reference_points, niching_selection
 # Problem Adapter
-from .problem.adapter import ProblemAdapter, Chromosome
-from .problem.resolve import build_adapter
+from lib.problem.adapter import ProblemAdapter, Chromosome
+from lib.problem.resolve import build_adapter
 
 Objectives = list[float]
 

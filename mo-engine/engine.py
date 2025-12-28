@@ -7,9 +7,9 @@ if project_path not in sys.path:
 
 from pylib import mongo_db
 from pylib.mongo_db import EnumStatus
-from strategy.base import EngineStrategy 
-from strategy.generator_random import GeneratorRandomStrategy
-from strategy.nsga3 import NSGA3LoopStrategy  
+from lib.strategy.base import EngineStrategy 
+from lib.strategy.generator_random import GeneratorRandomStrategy
+from lib.strategy.nsga3 import NSGA3LoopStrategy  
 
 # --------------------------- Logging --------------------------------
 logging.basicConfig(

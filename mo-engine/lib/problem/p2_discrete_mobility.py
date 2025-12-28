@@ -4,6 +4,7 @@ import random
 from pylib.dto.simulator import FixedMote, MobileMote, SimulationElements
 from pylib.dto.problems import ProblemP2
 from pylib.dto.algorithm import GeneticAlgorithmConfigDto
+
 from .adapter import ProblemAdapter, ChromosomeP2
 
 def _uniform_crossover_mask(a: list[int], b: list[int]) -> tuple[list[int], list[int]]:

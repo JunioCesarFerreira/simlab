@@ -5,7 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from bson import ObjectId
 
-from strategy.base import EngineStrategy
+from .base import EngineStrategy
+
 from lib.build_input_sim_cooja import create_files
 from lib.random_network_methods import network_gen
 from pylib.dto.database import Simulation, Generation, SimulationConfig

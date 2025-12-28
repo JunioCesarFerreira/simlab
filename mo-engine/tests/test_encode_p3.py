@@ -1,6 +1,6 @@
-from strategy.problem.resolve import build_test_adapter
-from strategy.problem.p3_target_coverage import ProblemP3
-from strategy.problem.chromosomes import ChromosomeP3
+from lib.problem.resolve import build_test_adapter
+from lib.problem.p3_target_coverage import ProblemP3
+from lib.problem.chromosomes import ChromosomeP3
 
 def test_p3_encode_basic():
     problem: ProblemP3 = {

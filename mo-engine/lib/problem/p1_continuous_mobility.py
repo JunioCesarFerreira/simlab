@@ -1,12 +1,13 @@
 from typing import Any, Mapping, Sequence, cast
 import random
 
-from strategy.util.genetic_operators.crossover import make_sbx_crossover
-from strategy.util.genetic_operators.mutation import make_polynomial_mutation
+from lib.genetic_operators.crossover import make_sbx_crossover
+from lib.genetic_operators.mutation import make_polynomial_mutation
 
 from pylib.dto.simulator import FixedMote, MobileMote, SimulationElements
 from pylib.dto.problems import ProblemP1
 from pylib.dto.algorithm import GeneticAlgorithmConfigDto
+
 from .chromosomes import ChromosomeP1
 from .adapter import ProblemAdapter
 
@@ -64,7 +65,7 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
     def set_ga_parameters(self, parameters: GeneticAlgorithmConfigDto):
         N = self.problem.number_of_relays
         def gene_bounds() -> list[tuple[float, float]]:
-            x1, y1, x2, y2 = tuple(self.problem["region"])
+            x1, y1, x2, y2 = tuple(self.problem.region)
             bounds: list[tuple[float, float]] = []
             for _ in range(N):
                 bounds.append((x1, x2))  # x

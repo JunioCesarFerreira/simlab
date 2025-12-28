@@ -83,12 +83,12 @@ def network_gen(
             points.append(best_point)
         else:
             if len(points) > 1:
-                components: List[List[int]] = []
-                visited: Set[int] = set()
+                components: list[list[int]] = []
+                visited: set[int] = set()
                 for i in range(len(points)):
                     if i not in visited:
-                        component: List[int] = []
-                        queue: Deque[int] = deque([i])
+                        component: list[int] = []
+                        queue: deque[int] = deque([i])
                         while queue:
                             node = queue.popleft()
                             if node not in visited:

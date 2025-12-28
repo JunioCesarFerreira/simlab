@@ -1,6 +1,6 @@
-from strategy.problem.resolve import build_test_adapter
-from strategy.problem.p2_discrete_mobility import ProblemP2
-from strategy.problem.chromosomes import ChromosomeP2
+from lib.problem.resolve import build_test_adapter
+from lib.problem.p2_discrete_mobility import ProblemP2
+from lib.problem.chromosomes import ChromosomeP2
 
 
 def test_p2_encode_basic():

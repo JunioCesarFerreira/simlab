@@ -1,6 +1,6 @@
-from strategy.problem.resolve import build_test_adapter
-from strategy.problem.p4_mobile_sink_collection import ProblemP4
-from strategy.problem.chromosomes import ChromosomeP4
+from lib.problem.resolve import build_test_adapter
+from lib.problem.p4_mobile_sink_collection import ProblemP4
+from lib.problem.chromosomes import ChromosomeP4
 
 
 def _extract_start_point(expr: str) -> float:
@@ -24,36 +24,26 @@ def test_p4_encode_path_with_multiple_sojourns():
     problem: ProblemP4 = {
         "name": "problem4",
         "region": [-100.0, 100.0, -100.0, 100.0],
+        "radius_of_reach": 50.0,
+        "radius_of_inter": 60.0,
 
-        # -------------------------------------------------
-        # Sensores fixos
-        # -------------------------------------------------
         "nodes": [
             (10.0, 0.0),
             (20.0, 0.0),
+            (20.0, 4.0),
+            (15.0, 8.4),
+            (21.0, 3.0),
+            (12.0, 5.0),
         ],
 
-        # -------------------------------------------------
-        # Base do sink
-        # -------------------------------------------------
         "sink_base": (0.0, 0.0),
-
-        # -------------------------------------------------
-        # Parâmetros de energia/buffer
-        # -------------------------------------------------
         "initial_energy": 100.0,
         "buffer_capacity": 50.0,
         "data_rate": 1.0,
 
-        # -------------------------------------------------
-        # Mobilidade do sink
-        # -------------------------------------------------
         "speed": 10.0,
         "time_step": 1.0,
 
-        # -------------------------------------------------
-        # Sojourn locations (L, A)
-        # -------------------------------------------------
         "sojourns": [
             {
                 "id": 0,
@@ -74,38 +64,11 @@ def test_p4_encode_path_with_multiple_sojourns():
                 "visibleNodes": [0],
             },
         ],
-
-        # -------------------------------------------------
-        # Parâmetros específicos do P4
-        # -------------------------------------------------
-        "problem_parameters": {
-            "base_index": 0,
-            "L_stops": [
-                (0.0, 0.0),
-                (30.0, 0.0),
-                (30.0, 30.0),
-            ],
-            "A_edges": [
-                (0, 1),
-                (1, 2),
-                (2, 0),
-            ],
-            "max_route_len": 6,
-            "tau_min": 0.0,
-            "tau_max": 10.0,
-        },
-
-        # -------------------------------------------------
-        # Homogêneos
-        # -------------------------------------------------
-        "radius_of_reach": 50.0,
-        "radius_of_inter": 60.0,
     }
 
     adapter = build_test_adapter(problem)
 
     # -------------------------------------------------
-    # Cromossomo explícito e determinístico
     # Base -> S1 -> S2 -> Base
     # -------------------------------------------------
     chrom = ChromosomeP4(
@@ -117,16 +80,13 @@ def test_p4_encode_path_with_multiple_sojourns():
     sim = adapter.encode_simulation_input(chrom)
 
     # -------------------------------------------------
-    # Mobile sink
+    # mobile sink
     # -------------------------------------------------
     sink = sim["mobileMotes"][0]
     path = sink["functionPath"]
     
     assert len(path) > 0
 
-    # -------------------------------------------------
-    # Extrai pontos iniciais dos segmentos
-    # -------------------------------------------------
     starts = [
         (
             _extract_start_point(seg[0]),
@@ -135,18 +95,23 @@ def test_p4_encode_path_with_multiple_sojourns():
         for seg in path
     ]
     
-    # -------------------------------------------------
-    # Invariantes geométricos fortes
-    # -------------------------------------------------
-
-    # Começa na base
     assert starts[0] == (0.0, 0.0)
 
-    # Deve passar pelos sojourns na ordem
     assert (30.0, 0.0) in starts
     assert (30.0, 30.0) in starts
 
-    # Termina na base
     last_x = _extract_end_point(path[-1][0])
     last_y = _extract_end_point(path[-1][1])
     assert (last_x, last_y) == (0.0, 0.0)
+
+    # -------------------------------------------------
+    # Fixed motes
+    # -------------------------------------------------
+    assert sim["fixedMotes"][0]["name"] == "node_0"
+    assert sim["fixedMotes"][0]["position"] == [10.0, 0.0]
+
+    assert sim["fixedMotes"][1]["name"] == "node_1"
+    assert sim["fixedMotes"][1]["position"] == [20.0, 0.0]
+
+    assert sim["fixedMotes"][2]["name"] == "node_2"
+    assert sim["fixedMotes"][2]["position"] == [20.0, 4.0]
