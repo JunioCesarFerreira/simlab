@@ -6,6 +6,7 @@ from strategy.util.genetic_operators.mutation import make_polynomial_mutation
 
 from pylib.dto.simulator import FixedMote, MobileMote, SimulationElements
 from pylib.dto.problems import ProblemP1
+from pylib.dto.algorithm import GeneticAlgorithmConfigDto
 from .chromosomes import ChromosomeP1
 from .adapter import ProblemAdapter
 
@@ -42,7 +43,7 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         if "number_of_relays" not in problem:
             raise KeyError("Missing 'number_of_relays' in P1 problem.")
                 
-        self.problem = cast(ProblemP1, problem)
+        self.problem: ProblemP1 = ProblemP1.cast(problem)
                 
                 
     def _rand_uniform_point(box: tuple[float, float, float, float]) -> tuple[float, float]:
@@ -51,8 +52,8 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         return (random.uniform(xmin, xmax), random.uniform(ymin, ymax))
 
     def random_individual_generator(self, size: int) -> list[ChromosomeP1]:
-        box = tuple(self.problem["region"]) # xmin,ymin,xmax,ymax
-        N = self.problem["number_of_relays"]
+        box = tuple(self.problem.region) # xmin,ymin,xmax,ymax
+        N = self.problem.number_of_relays
         pop: list[ChromosomeP1] = []
         for _ in range(size):
             P = [self._rand_uniform_point(box) for _ in range(N)]
@@ -60,8 +61,8 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         return pop
     
     
-    def set_ga_parameters(self, parameters):
-        N = self.problem["number_of_relays"]
+    def set_ga_parameters(self, parameters: GeneticAlgorithmConfigDto):
+        N = self.problem.number_of_relays
         def gene_bounds() -> list[tuple[float, float]]:
             x1, y1, x2, y2 = tuple(self.problem["region"])
             bounds: list[tuple[float, float]] = []
@@ -110,9 +111,9 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         fixed.append({
             "name": "sink",
             "sourceCode": "sink.c",
-            "position": list(self.problem["sink"]),
-            "radiusOfReach": self.problem["radius_of_reach"],
-            "radiusOfInter": self.problem["radius_of_inter"],
+            "position": list(self.problem.sink),
+            "radiusOfReach": self.problem.radius_of_reach,
+            "radiusOfInter": self.problem.radius_of_inter,
         })
 
         # -------------------------------------------------
@@ -123,24 +124,24 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
                 "name": f"relay_{i}",
                 "sourceCode": "node.c",
                 "position": [x, y],
-                "radiusOfReach": self.problem["radius_of_reach"],
-                "radiusOfInter": self.problem["radius_of_inter"],
+                "radiusOfReach": self.problem.radius_of_reach,
+                "radiusOfInter": self.problem.radius_of_inter,
             })
 
         # -------------------------------------------------
         # Mobile Motes Γ
         # -------------------------------------------------
-        for i, mobile_node in enumerate(self.problem["mobile_nodes"]):
+        for i, mobile_node in enumerate(self.problem.mobile_nodes):
             mobile.append({
                 "name": f"mobile_{i}",
                 "sourceCode": "node.c",
-                "functionPath": mobile_node["path_segments"],
-                "isClosed": mobile_node["is_closed"],
-                "isRoundTrip": mobile_node["is_round_trip"],
-                "speed": mobile_node["speed"],
-                "timeStep": mobile_node["time_step"],
-                "radiusOfReach": self.problem["radius_of_reach"],
-                "radiusOfInter": self.problem["radius_of_inter"],
+                "functionPath": mobile_node.path_segments,
+                "isClosed": mobile_node.is_closed,
+                "isRoundTrip": mobile_node.is_round_trip,
+                "speed": mobile_node.speed,
+                "timeStep": mobile_node.time_step,
+                "radiusOfReach": self.problem.radius_of_reach,
+                "radiusOfInter": self.problem.radius_of_inter,
             })
 
         return {
