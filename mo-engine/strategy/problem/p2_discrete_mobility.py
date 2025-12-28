@@ -72,7 +72,8 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
     
     def set_ga_parameters(self, parameters: GeneticAlgorithmConfigDto):    
         self._p_on_init = float(parameters.get("p_on_init", 0.15))    
-        self._p_cx = float(parameters.get("prob_cx", 0.9))
+        self._p_cx = float(parameters.get("prob_cx", 0.9)) 
+        self._p_mt = float(parameters.get("prob_mt", 0.2))
         self._p_bit_mut = float(parameters.get("per_gene_prob", 0.1))
         self._ensure_non_empty = bool(parameters.get("ensure_non_empty", True))
         

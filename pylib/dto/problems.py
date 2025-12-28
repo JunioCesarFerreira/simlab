@@ -83,8 +83,8 @@ class ProblemP2(HomogeneousProblem):
         obj.radius_of_reach = map["radius_of_reach"]
         obj.radius_of_inter = map["radius_of_inter"]
         obj.region = map["region"]
-        obj.sink = tuple(map["sink"])
-        obj.candidates = [tuple(cand["position"]) for cand in map["candidates"]]
+        obj.sink = Position(map["sink"])
+        obj.candidates = [Position(cand) for cand in map["candidates"]]
         obj.mobile_nodes = []
         for mn in map["mobile_nodes"]:
             mobile_node = MobileNode()
@@ -115,11 +115,11 @@ class ProblemP3(HomogeneousProblem):
         obj.radius_of_reach = map["radius_of_reach"]
         obj.radius_of_inter = map["radius_of_inter"]
         obj.region = map["region"]
-        obj.sink = tuple(map["sink"])
+        obj.sink = Position(map["sink"])
         obj.radius_of_cover = map["radius_of_cover"]
         obj.k_required = map["k_required"]
-        obj.candidates = [tuple(cand["position"]) for cand in map["candidates"]]
-        obj.targets = [tuple(tgt["position"]) for tgt in map["targets"]]
+        obj.candidates = [Position(cand) for cand in map["candidates"]]
+        obj.targets = [Position(tgt) for tgt in map["targets"]]
         return obj
 
 # --- P4: mobilidade do sink para coleta ----------------
@@ -145,8 +145,8 @@ class ProblemP4(HomogeneousProblem):
         obj.radius_of_reach = map["radius_of_reach"]
         obj.radius_of_inter = map["radius_of_inter"]
         obj.region = map["region"]
-        obj.nodes = [tuple(node) for node in map["nodes"]]
-        obj.sink_base = tuple(map["sink_base"])
+        obj.nodes = [Position(node) for node in map["nodes"]]
+        obj.sink_base = Position(map["sink_base"])
         obj.initial_energy = map["initial_energy"]
         obj.buffer_capacity = map["buffer_capacity"]
         obj.data_rate = map["data_rate"]
@@ -156,7 +156,7 @@ class ProblemP4(HomogeneousProblem):
         for sl in map["sojourns"]:
             sojourn = SojournLocation()
             sojourn.id = sl["id"]
-            sojourn.position = tuple(sl["position"])
+            sojourn.position = Position(sl["position"])
             sojourn.adjacency = sl["adjacency"]
             sojourn.visibleNodes = sl["visibleNodes"]
             obj.sojourns.append(sojourn)

@@ -2,8 +2,9 @@ from typing import Any, Mapping, Sequence, cast
 import math
 import random
 
-from pylib.dto.simulator import SimulationElements
+from pylib.dto.simulator import FixedMote, SimulationElements
 from pylib.dto.problems import ProblemP3
+from pylib.dto.algorithm import GeneticAlgorithmConfigDto
 from .adapter import ProblemAdapter, ChromosomeP3
 
 
@@ -72,8 +73,13 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
         if "k_required" not in problem:
             raise KeyError("Missing 'k_required' in P3 problem.")
                 
-        self.problem = cast(ProblemP3, problem)
+        self.problem: ProblemP3 = ProblemP3.cast(problem)
 
+    def set_ga_parameters(self, parameters: GeneticAlgorithmConfigDto):    
+        self._p_on_init = float(parameters.get("p_on_init", 0.15))    
+        self._p_cx = float(parameters.get("prob_cx", 0.9))
+        self._p_bit_mut = float(parameters.get("per_gene_prob", 0.1))
+        self._ensure_non_empty = bool(parameters.get("ensure_non_empty", True))
 
     def _Q(self) -> list[tuple[float, float]]:
         pp = self.problem.get("problem_parameters", {})
@@ -173,5 +179,42 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
         return cv
 
     def encode_simulation_input(self, ind: ChromosomeP3) -> SimulationElements:
-        raise NotImplementedError
+        fixed: list[FixedMote] = []
 
+        # -------------------------------------------------
+        # Structural checks
+        # -------------------------------------------------
+        if len(ind) != len(self.problem.candidates):
+            raise ValueError(
+                f"Chromosome length ({len(ind)}) does not match "
+                f"number of candidates ({len(self.problem.candidates)})"
+            )
+
+        # -------------------------------------------------
+        # Sink σ
+        # -------------------------------------------------
+        fixed.append({
+            "name": "sink",
+            "sourceCode": "sink.c",
+            "position": list(self.problem.sink),
+            "radiusOfReach": self.problem.radius_of_reach,
+            "radiusOfInter": self.problem.radius_of_inter,
+        })
+
+        # -------------------------------------------------
+        # Selected Relays R(ind) ⊆ Q
+        # -------------------------------------------------
+        for idx, (bit, position) in enumerate(zip(ind, self.problem.candidates)):
+            if bit == 1:
+                fixed.append({
+                    "name": f"relay_{idx}",
+                    "sourceCode": "node.c",
+                    "position": list(position),
+                    "radiusOfReach": self.problem.radius_of_reach,
+                    "radiusOfInter": self.problem.radius_of_inter,
+                })
+
+        return {
+            "fixedMotes": fixed,
+            "mobileMotes": [],
+        }
