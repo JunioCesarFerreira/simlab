@@ -68,9 +68,9 @@ class TransformConfig(TypedDict):
     
 class Parameters(TypedDict):
     strategy: str
-    algorithm: dict[str, Any]
+    algorithm: dict[str, Any] # Algorithm parameters defined in dto/algorithms.py
     simulation: dict[str, Any] # This is not Simulation or SimulationConfig because it holds only the simulation parameters
-    problem: dict[str, Any]
+    problem: dict[str, Any] # Problem parameters defined in dto/problems.py
     
 class Experiment(TypedDict):
     id: str

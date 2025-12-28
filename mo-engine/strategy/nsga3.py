@@ -15,7 +15,6 @@ from pylib.mongo_db import EnumStatus
 from pylib.dto.database import Simulation, SimulationConfig, Generation
 from pylib import plot_network
 
-from lib.random_network_methods import network_gen
 from lib.build_input_sim_cooja import create_files
 
 # NSGA utils

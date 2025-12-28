@@ -1,5 +1,3 @@
-from typing import TypedDict
-
 #---------------------------------------------------------------------------------------------------------
 # Problems Definitions -----------------------------------------------------------------------------------
 #---------------------------------------------------------------------------------------------------------
@@ -7,7 +5,7 @@ from typing import TypedDict
 # Alias para coordenadas 2D (Ω ⊂ R²)
 Position = tuple[float, float]
 
-class MobileNode(TypedDict):
+class MobileNode:
     # Trajetória parametrizada de forma simbólica
     path_segments: list[tuple[str, str]]
 
@@ -18,7 +16,7 @@ class MobileNode(TypedDict):
     time_step: float      # Δt da discretização temporal
 
 
-class SojournLocation(TypedDict):
+class SojournLocation:
     id: int
     position: Position
     
@@ -28,7 +26,7 @@ class SojournLocation(TypedDict):
 # -------------------------------------------------------------------
 # Problemas Homogêneos
 # -------------------------------------------------------------------
-class HomogeneousProblem(TypedDict):
+class HomogeneousProblem:
     name: str
 
     radius_of_reach: float            # R_com

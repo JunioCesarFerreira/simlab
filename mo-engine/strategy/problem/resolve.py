@@ -42,6 +42,21 @@ def resolve_problem_key(problem: Mapping[str, Any]) -> str:
     )
 
 
+def build_test_adapter(problem: Mapping[str, Any]) -> ProblemAdapter:
+    """
+    Instantiate the correct ProblemAdapter based on the resolved problem key.
+    """
+    key = resolve_problem_key(problem)
+
+    adapter_cls = PROBLEM_REGISTRY.get(key)
+    if adapter_cls is None:
+        known = ", ".join(sorted(PROBLEM_REGISTRY.keys()))
+        raise ValueError(f"Unknown problem name='{key}'. Known: {known}")
+
+    adptr = adapter_cls(problem)
+          
+    return adptr
+  
 def build_adapter(problem: Mapping[str, Any], ga_parameter: Mapping[str, float]) -> ProblemAdapter:
     """
     Instantiate the correct ProblemAdapter based on the resolved problem key.

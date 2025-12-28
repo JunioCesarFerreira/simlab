@@ -17,3 +17,4 @@ mo-engine/strategy/util/genetic_operators/selection/__pycache__
 mo-engine/strategy/util/__pycache__
 pylib/dto/__pycache__
 mo-engine/strategy/problem/__pycache__
+mo-engine/tests/__pycache__

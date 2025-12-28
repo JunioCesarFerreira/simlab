@@ -4,7 +4,7 @@ import random
 from strategy.util.genetic_operators.crossover import make_sbx_crossover
 from strategy.util.genetic_operators.mutation import make_polynomial_mutation
 
-from pylib.dto.simulator import SimulationElements
+from pylib.dto.simulator import FixedMote, MobileMote, SimulationElements
 from pylib.dto.problems import ProblemP1
 from .chromosomes import ChromosomeP1
 from .adapter import ProblemAdapter
@@ -101,4 +101,50 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
 
 
     def encode_simulation_input(self, ind: ChromosomeP1) -> SimulationElements:
-        raise NotImplementedError
+        fixed: list[FixedMote] = []
+        mobile: list[MobileMote] = []
+
+        # -------------------------------------------------
+        # Sink σ
+        # -------------------------------------------------
+        fixed.append({
+            "name": "sink",
+            "sourceCode": "sink.c",
+            "position": list(self.problem["sink"]),
+            "radiusOfReach": self.problem["radius_of_reach"],
+            "radiusOfInter": self.problem["radius_of_inter"],
+        })
+
+        # -------------------------------------------------
+        # Relays R(ind)
+        # -------------------------------------------------
+        for i, (x, y) in enumerate(ind):
+            fixed.append({
+                "name": f"relay_{i}",
+                "sourceCode": "node.c",
+                "position": [x, y],
+                "radiusOfReach": self.problem["radius_of_reach"],
+                "radiusOfInter": self.problem["radius_of_inter"],
+            })
+
+        # -------------------------------------------------
+        # Mobile Motes Γ
+        # -------------------------------------------------
+        for i, mobile_node in enumerate(self.problem["mobile_nodes"]):
+            mobile.append({
+                "name": f"mobile_{i}",
+                "sourceCode": "node.c",
+                "functionPath": mobile_node["path_segments"],
+                "isClosed": mobile_node["is_closed"],
+                "isRoundTrip": mobile_node["is_round_trip"],
+                "speed": mobile_node["speed"],
+                "timeStep": mobile_node["time_step"],
+                "radiusOfReach": self.problem["radius_of_reach"],
+                "radiusOfInter": self.problem["radius_of_inter"],
+            })
+
+        return {
+            "fixedMotes": fixed,
+            "mobileMotes": mobile,
+        }
+

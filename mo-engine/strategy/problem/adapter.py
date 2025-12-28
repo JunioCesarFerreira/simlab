@@ -36,7 +36,7 @@ class ProblemAdapter(ABC):
             - strategy / nsga3_parameters
             - any additional fields needed by the adapter
         """
-        self.assert_problem(problem)
+        self.assert_problem(problem) # Validate and store the problem
 
     # ------------------------------------------------------------------
     # Structural information about the problem base
