@@ -119,7 +119,7 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         # -------------------------------------------------
         # Relays R(ind)
         # -------------------------------------------------
-        for i, (x, y) in enumerate(ind):
+        for i, (x, y) in enumerate(ind.relays):
             fixed.append({
                 "name": f"relay_{i}",
                 "sourceCode": "node.c",

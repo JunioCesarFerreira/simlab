@@ -1,5 +1,6 @@
 from strategy.problem.resolve import build_test_adapter
 from strategy.problem.p2_discrete_mobility import ProblemP2
+from strategy.problem.chromosomes import ChromosomeP2
 
 
 def test_p2_encode_basic():
@@ -28,7 +29,10 @@ def test_p2_encode_basic():
     adapter = build_test_adapter(problem)
 
     # Seleciona apenas os candidatos 0 e 2
-    chrom = [1, 0, 1]
+    chrom =  ChromosomeP2(
+        mac_protocol = 0,
+        mask = [1, 0, 1]
+    )
 
     sim = adapter.encode_simulation_input(chrom)
 

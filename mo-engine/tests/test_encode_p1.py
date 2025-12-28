@@ -1,5 +1,6 @@
 from strategy.problem.resolve import build_test_adapter
 from strategy.problem.p1_continuous_mobility import ProblemP1
+from strategy.problem.chromosomes import ChromosomeP1
 
 def test_p1_encode_basic():
     problem: ProblemP1 = {
@@ -22,7 +23,10 @@ def test_p1_encode_basic():
 
     adapter = build_test_adapter(problem)
 
-    chrom = [(10.0, 0.0), (20.0, 0.0)]
+    chrom = ChromosomeP1(
+        mac_protocol=0,
+        relays=[(10.0, 0.0), (20.0, 0.0)]
+    )
 
     sim = adapter.encode_simulation_input(chrom)
 

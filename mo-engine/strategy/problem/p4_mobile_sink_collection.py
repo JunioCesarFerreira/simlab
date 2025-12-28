@@ -1,10 +1,15 @@
 from typing import Any, Mapping, Sequence, cast
 import random
+import math
 
-from pylib.dto.simulator import SimulationElements
+from pylib.dto.simulator import FixedMote, MobileMote, SimulationElements
 from pylib.dto.problems import ProblemP4
+from pylib.dto.algorithm import GeneticAlgorithmConfigDto
 from .adapter import ProblemAdapter, ChromosomeP4
 
+# Aliases (coerentes com seus DTOs)
+Position = tuple[float, float]
+PathSeg = tuple[str, str]  # (x(t), y(t)) com t em [0,1]
 
 def _clamp(x: float, lo: float, hi: float) -> float:
     """Clamp x to [lo, hi]."""
@@ -142,8 +147,13 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
                         f"but nodes has size {n_nodes}."
                     )
 
-        self.problem = cast(ProblemP4, problem)
+        self.problem: ProblemP4 = ProblemP4.cast(problem)
 
+    def set_ga_parameters(self, parameters: GeneticAlgorithmConfigDto):    
+        self._p_on_init = float(parameters.get("p_on_init", 0.15))    
+        self._p_cx = float(parameters.get("prob_cx", 0.9))
+        self._p_bit_mut = float(parameters.get("per_gene_prob", 0.1))
+        self._ensure_non_empty = bool(parameters.get("ensure_non_empty", True))
 
     @property
     def n_objectives(self) -> int:
@@ -327,6 +337,171 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
 
         return (route, tau)
 
+    def _linseg_expr(self, p0: Position, p1: Position) -> PathSeg:
+        """
+        Segmento linear de duração 1 passo (Δt), usando parâmetro local t ∈ [0,1].
+        """
+        x0, y0 = p0
+        x1, y1 = p1
+        dx = x1 - x0
+        dy = y1 - y0
+
+        # Expressões simbólicas compatíveis com o padrão já usado no SimLab
+        # (ex.: "70 - 140 * t", "44 + 31 * t")
+        def fmt(a: float) -> str:
+            # evita "-0.0"
+            if abs(a) < 1e-12:
+                a = 0.0
+            # string limpa (sem notação científica desnecessária)
+            s = f"{a:.10g}"
+            return s
+
+        x_expr = f"{fmt(x0)} + {fmt(dx)} * t" if dx != 0 else f"{fmt(x0)}"
+        y_expr = f"{fmt(y0)} + {fmt(dy)} * t" if dy != 0 else f"{fmt(y0)}"
+        return (x_expr, y_expr)
+
+
+    def _discretize_travel(self, p0: Position, p1: Position, speed: float, time_step: float) -> list[Position]:
+        """
+        Gera uma sequência de pontos intermediários para deslocamento p0 -> p1.
+        Cada passo corresponde a Δt = time_step e percorre aprox. speed*time_step.
+        Retorna pontos incluindo p0 e p1.
+        """
+        x0, y0 = p0
+        x1, y1 = p1
+        dist = math.hypot(x1 - x0, y1 - y0)
+
+        if dist == 0:
+            return [p0]
+
+        step_len = speed * time_step
+        if step_len <= 0:
+            raise ValueError("ProblemP4.speed and time_step must be positive to discretize travel.")
+
+        n_steps = max(1, int(math.ceil(dist / step_len)))
+        pts: list[Position] = []
+        for k in range(n_steps + 1):
+            alpha = k / n_steps
+            pts.append((x0 + alpha * (x1 - x0), y0 + alpha * (y1 - y0)))
+        return pts
+
+
+    def _discretize_dwell(self, p: Position, dwell_time: float, time_step: float) -> list[Position]:
+        """
+        Gera repetição de pontos para permanência (sojourn) durante dwell_time.
+        Retorna uma lista de pontos (todos iguais a p). Cada ponto corresponde a 1 passo (Δt).
+        """
+        if dwell_time <= 0:
+            return []
+        if time_step <= 0:
+            raise ValueError("ProblemP4.time_step must be positive to discretize dwell.")
+
+        n = int(math.ceil(dwell_time / time_step))
+        return [p] * n
+
+
     def encode_simulation_input(self, ind: ChromosomeP4) -> SimulationElements:
-        raise NotImplementedError
+        fixed: list[FixedMote] = []
+        mobile: list[MobileMote] = []
+
+        # -------------------------------------------------
+        # Structural checks (cromossomo)
+        # -------------------------------------------------
+        if len(ind.route) == 0:
+            raise ValueError("ChromosomeP4.route must be non-empty.")
+        if len(ind.sojourn_times) != len(ind.route):
+            raise ValueError(
+                f"ChromosomeP4.sojourn_times length ({len(ind.sojourn_times)}) must match "
+                f"route length ({len(ind.route)})."
+            )
+
+        L = self.problem.sojourns
+        if any((idx < 0 or idx >= len(L)) for idx in ind.route):
+            raise ValueError("ChromosomeP4.route has invalid sojourn index (out of bounds).")
+
+        if self.problem.speed <= 0:
+            raise ValueError("ProblemP4.speed must be > 0.")
+        if self.problem.time_step <= 0:
+            raise ValueError("ProblemP4.time_step must be > 0.")
+
+        # -------------------------------------------------
+        # Fixed motes: nodes N (sensores)
+        # -------------------------------------------------
+        for i, (x, y) in enumerate(self.problem.nodes):
+            fixed.append({
+                "name": f"node_{i}",
+                "sourceCode": "node.c",
+                "position": [x, y],
+                "radiusOfReach": self.problem.radius_of_reach,
+                "radiusOfInter": self.problem.radius_of_inter,
+            })
+
+        # -------------------------------------------------
+        # Build sink path: Base -> sojourns(route) -> Base
+        # plus dwell at each visited sojourn according to sojourn_times
+        # -------------------------------------------------
+        base: Position = self.problem.sink_base
+
+        # Extrai posições dos sojourns na ordem da rota
+        route_positions: list[Position] = [tuple(L[idx].position) for idx in ind.route]
+
+        # Discretização total em pontos (cada passo ≈ Δt)
+        timeline_points: list[Position] = []
+
+        # Move: base -> first
+        travel_pts = self._discretize_travel(
+            base, 
+            route_positions[0], 
+            self.problem.speed, 
+            self.problem.time_step
+            )
+        timeline_points.extend(travel_pts)
+
+        # Para cada sojourn i: dwell e travel para o próximo
+        for j, p in enumerate(route_positions):
+            # Dwell at current sojourn p (não duplicar ponto inicial da permanência se já está no timeline_points)
+            dwell_pts = self._discretize_dwell(p, float(ind.sojourn_times[j]), self.problem.time_step)
+            timeline_points.extend(dwell_pts)
+
+            # Travel to next sojourn (ou retorno à base no final)
+            next_p = route_positions[j + 1] if (j + 1) < len(route_positions) else base
+            travel_pts = self._discretize_travel(p, next_p, self.problem.speed, self.problem.time_step)
+
+            # Evita duplicar o primeiro ponto (p), pois já estamos em p
+            if len(travel_pts) > 1:
+                timeline_points.extend(travel_pts[1:])
+
+        # -------------------------------------------------
+        # Convert timeline points to functionPath (segments)
+        # Each consecutive pair defines one Δt segment.
+        # -------------------------------------------------
+        if len(timeline_points) < 2:
+            # Degenerado: ainda assim precisamos de ao menos um segmento
+            timeline_points = [base, base]
+
+        function_path: list[PathSeg] = []
+        for p0, p1 in zip(timeline_points[:-1], timeline_points[1:]):
+            function_path.append(self._linseg_expr(p0, p1))
+
+        # -------------------------------------------------
+        # Mobile sink
+        # -------------------------------------------------
+        mobile.append({
+            "name": "sink",
+            "sourceCode": "sink.c",
+            "functionPath": function_path,
+            "isClosed": True,        # Base -> ... -> Base
+            "isRoundTrip": False,    
+            "speed": self.problem.speed,
+            "timeStep": self.problem.time_step,
+            "radiusOfReach": self.problem.radius_of_reach,
+            "radiusOfInter": self.problem.radius_of_inter,
+        })
+
+        return {
+            "fixedMotes": fixed,
+            "mobileMotes": mobile,
+        }
+
+
 

@@ -98,9 +98,9 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
         # -------------------------------------------------
         # Structural checks
         # -------------------------------------------------
-        if len(ind) != len(self.problem.candidates):
+        if len(ind.mask) != len(self.problem.candidates):
             raise ValueError(
-                f"Chromosome length ({len(ind)}) does not match "
+                f"Chromosome length ({len(ind.mask)}) does not match "
                 f"number of candidates ({len(self.problem.candidates)})"
             )
 
@@ -118,7 +118,7 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
         # -------------------------------------------------
         # Selected Relays R(ind) ⊆ Q
         # -------------------------------------------------
-        for idx, (bit, position) in enumerate(zip(ind, self.problem.candidates)):
+        for idx, (bit, position) in enumerate(zip(ind.mask, self.problem.candidates)):
             if bit == 1:
                 fixed.append({
                     "name": f"relay_{idx}",

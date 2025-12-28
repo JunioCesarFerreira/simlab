@@ -1,6 +1,6 @@
 from strategy.problem.resolve import build_test_adapter
 from strategy.problem.p3_target_coverage import ProblemP3
-
+from strategy.problem.chromosomes import ChromosomeP3
 
 def test_p3_encode_basic():
     problem: ProblemP3 = {
@@ -24,7 +24,10 @@ def test_p3_encode_basic():
     adapter = build_test_adapter(problem)
 
     # Seleciona apenas os candidatos 1 e 2
-    chrom = [0, 1, 1]
+    chrom = ChromosomeP3 (
+        mac_protocol = 0,   
+        mask = [0, 1, 1]
+    )
 
     sim = adapter.encode_simulation_input(chrom)
 
