@@ -7,6 +7,7 @@ from .chromosomes import (
 )
 from typing import Any, Mapping, Sequence
 from pylib.dto.simulator import SimulationElements
+from pylib.dto.algorithm import GeneticAlgorithmConfigDto
 
 # Type aliases for clarity
 Chromosome = ChromosomeP1 | ChromosomeP2 | ChromosomeP3 | ChromosomeP4
@@ -83,7 +84,7 @@ class ProblemAdapter(ABC):
     # Genetic algorithm configuration
     # ------------------------------------------------------------------
     @abstractmethod
-    def set_ga_parameters(self, parameters: Mapping[str, float]) -> None:
+    def set_ga_parameters(self, parameters: GeneticAlgorithmConfigDto) -> None:
         """
         Configure problem-specific parameters of the genetic algorithm.
 

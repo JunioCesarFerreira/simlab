@@ -11,6 +11,8 @@ class GeneticAlgorithmConfigDto(TypedDict):
     per_gene_prob: float
     eta_cx: float
     eta_mt: float
+    p_on_init: float
+    ensure_non_empty: bool
     
 class NsgaIIIConfigDto(GeneticAlgorithmConfigDto):
     divisions: int
