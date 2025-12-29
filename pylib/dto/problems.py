@@ -106,7 +106,8 @@ class ProblemP3(HomogeneousProblem):
     targets: list[Position]         # Ξ 
     candidates: list[Position]      # Q
     radius_of_cover: float          # R_cov
-    k_required: int                 # k
+    k_required: int                 # k (min coverage degree)
+    g_required: int                 # g (min connectivity degree)
     
     def cast(map: dict[str, Any]) -> "ProblemP3":
         # Conversão de dicionário genérico para DTO fortemente tipado
@@ -137,6 +138,9 @@ class ProblemP4(HomogeneousProblem):
     
     speed: float          # velocidade média ao longo da trajetória
     time_step: float      # Δt da discretização temporal
+    
+    max_route_length: int        # comprimento máximo da rota do sink
+    tau_bounds: tuple[float, float]  # (τ_min, τ_max) tempos de sojourn
     
     def cast(map: dict[str, Any]) -> "ProblemP4":
         # Conversão de dicionário genérico para DTO fortemente tipado
