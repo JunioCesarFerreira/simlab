@@ -60,7 +60,7 @@ class Settings:
         Path(local_log_dir).mkdir(exist_ok=True)
 
         # Defaults
-        default_n = int(os.getenv("NUMBER_OF_CONTAINERS", "10"))
+        default_n = int(os.getenv("NUMBER_OF_CONTAINERS", "3"))
         if is_docker:
             hostnames = [f"cooja{i+1}" for i in range(default_n)]
             ports = [22 for _ in range(default_n)]
@@ -174,11 +174,19 @@ def run_cooja_simulation(
             if chan.recv_ready():
                 out = chan.recv(4096).decode("utf-8", errors="ignore")
                 if out:
-                    log.info(f"[ssh][{hostname if SET.is_docker else port}][stdout] {out}", end="")
+                    log.info(
+                        "[ssh][%s][stdout] %s",
+                        hostname if SET.is_docker else port,
+                        out
+                    )
             if chan.recv_stderr_ready():
                 err = chan.recv_stderr(4096).decode("utf-8", errors="ignore")
                 if err:
-                    log.info(f"[ssh][{hostname if SET.is_docker else port}][stderr] {err}", end="")
+                    log.error(
+                        "[ssh][%s][stderr] %s",
+                        hostname if SET.is_docker else port,
+                        err
+                    )
             time.sleep(0.1)
 
         # get cooja log
@@ -232,6 +240,7 @@ def run_cooja_simulation(
     finally:
         ssh.close()
 
+
 def simulation_worker(sim_queue: queue.Queue, port: int, hostname: str) -> None:
     """
     Worker that consumes the queue and runs simulations on a host/port.
@@ -243,7 +252,8 @@ def simulation_worker(sim_queue: queue.Queue, port: int, hostname: str) -> None:
             if sim is None:
                 return
             
-            mode = bool(os.getenv("ENABLE_DATA_SYNTHETIC", "False"))
+            mode = os.getenv("ENABLE_DATA_SYNTHETIC", "False").lower() == "true"
+            print(f"mode: {"Synthetic Data" if mode else "Simulation"}")
             if mode: # Synthetic data for validation of MO-Engine
                 from lib.synthetic_data import run_synthetic_simulation
                 run_synthetic_simulation(sim, mongo)
