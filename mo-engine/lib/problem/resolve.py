@@ -71,6 +71,6 @@ def build_adapter(problem: Mapping[str, Any], ga_parameter: Mapping[str, float])
     adptr = adapter_cls(problem)
     
     if len(ga_parameter) > 0:
-      adptr.set_ga_parameters(ga_parameter)
+      adptr.set_ga_operator_configs(ga_parameter)
       
     return adptr

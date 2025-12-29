@@ -1,35 +1,20 @@
-from typing import Any, Mapping, Sequence, cast
+from typing import Any, Mapping, Sequence
 import math
 import random
 
 from pylib.dto.simulator import FixedMote, SimulationElements
 from pylib.dto.problems import ProblemP3
 from pylib.dto.algorithm import GeneticAlgorithmConfigDto
+
+from lib.genetic_operators.crossover.uniform_crossover_mask import uniform_crossover_mask
+from lib.genetic_operators.mutation.bitflip_mutation import bitflip_mutation
+
 from .adapter import ProblemAdapter, ChromosomeP3
 
 
 def _euclid(a: tuple[float, float], b: tuple[float, float]) -> float:
     """Euclidean distance in R^2."""
     return math.hypot(a[0] - b[0], a[1] - b[1])
-
-
-def _uniform_crossover_mask(a: list[int], b: list[int]) -> tuple[list[int], list[int]]:
-    """Uniform crossover for binary masks."""
-    assert len(a) == len(b)
-    c1, c2 = a[:], b[:]
-    for i in range(len(a)):
-        if random.random() < 0.5:
-            c1[i], c2[i] = c2[i], c1[i]
-    return c1, c2
-
-
-def _bitflip_mutation(mask: list[int], p: float) -> list[int]:
-    """Bit-flip mutation with per-bit probability p."""
-    out = mask[:]
-    for i in range(len(out)):
-        if random.random() < p:
-            out[i] = 1 - out[i]
-    return out
 
 
 # ============================================================
@@ -75,49 +60,22 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
                 
         self.problem: ProblemP3 = ProblemP3.cast(problem)
 
-    def set_ga_parameters(self, parameters: GeneticAlgorithmConfigDto):    
+    def set_ga_operator_configs(self, parameters: GeneticAlgorithmConfigDto): 
+        self._p_bit_mut = float(parameters.get("per_gene_prob", 0.1))   
+        # Bias toward sparse selections but ensure some minimum
         self._p_on_init = float(parameters.get("p_on_init", 0.15))    
-        self._p_cx = float(parameters.get("prob_cx", 0.9))
-        self._p_bit_mut = float(parameters.get("per_gene_prob", 0.1))
+        self._min_on_init = int(parameters.get("min_on_init", 1))
         self._ensure_non_empty = bool(parameters.get("ensure_non_empty", True))
 
-    def _Q(self) -> list[tuple[float, float]]:
-        pp = self.problem.get("problem_parameters", {})
-        Q = pp.get("Q_candidates")
-        if Q is None:
-            raise ValueError("problem_parameters.Q_candidates must be provided for Problem 3.")
-        return [tuple(p) for p in Q]
-
-    def _targets(self) -> list[tuple[float, float]]:
-        pp = self.problem.get("problem_parameters", {})
-        Xi = pp.get("targets")
-        if Xi is None:
-            raise ValueError("problem_parameters.targets must be provided for Problem 3.")
-        return [tuple(p) for p in Xi]
-
-    def _k(self) -> int:
-        return int(self.problem.get("problem_parameters", {}).get("k_coverage", 1))
-
-    def _g(self) -> int:
-        return int(self.problem.get("problem_parameters", {}).get("g_min_degree", 0))
-
-    def _Rcov(self) -> float:
-        return float(self.problem.get("problem_parameters", {}).get("R_cov", 0.2))
-
-    def _Rcom(self) -> float:
-        return float(self.problem.get("problem_parameters", {}).get("R_com", 0.2))
 
     def random_individual_generator(self, size: int) -> list[ChromosomeP3]:
-        Q = self._Q()
+        Q = self.problem.candidates
         J = len(Q)
-        # Bias toward sparse selections but ensure some minimum
-        p_on = float(self.problem.get("problem_parameters", {}).get("p_on_init", 0.2))
-        min_on = int(self.problem.get("problem_parameters", {}).get("min_on_init", 1))
 
         pop: list[ChromosomeP3] = []
         for _ in range(size):
-            mask = [1 if random.random() < p_on else 0 for _ in range(J)]
-            while sum(mask) < min_on:
+            mask = [1 if random.random() < self._p_on_init else 0 for _ in range(J)]
+            while sum(mask) < self._min_on_init:
                 mask[random.randrange(J)] = 1
             pop.append(ChromosomeP3(chromosome=mask))
         return pop
@@ -125,13 +83,12 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
     def crossover(self, parents: Sequence[ChromosomeP3]) -> list[ChromosomeP3]:
         m1: list[int] = parents[0]
         m2: list[int] = parents[1]
-        c1, c2 = _uniform_crossover_mask(m1, m2)
+        c1, c2 = uniform_crossover_mask(m1, m2)
         return [c1, c2]
 
     def mutate(self, chromosome: ChromosomeP3) -> ChromosomeP3:
-        mask: list[int] = chromosome
-        p_bit = float(self.problem.get("problem_parameters", {}).get("p_bit_mut", 0.02))
-        out = _bitflip_mutation(mask, p_bit)
+        mask: list[int] = chromosome.mask
+        out = bitflip_mutation(mask, self._p_bit_mut)
         if sum(out) == 0 and len(out) > 0:
             out[random.randrange(len(out))] = 1
         return out
@@ -144,10 +101,10 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
 
         This does not include MAC/interference/traffic, which can be handled by simulation.
         """
-        Q = self._Q()
-        Xi = self._targets()
-        k = self._k()
-        g = self._g()
+        Q = self.problem.candidates
+        Xi = self.problem.targets
+        k = self.problem.k_required
+        g = self.problem.g_required
         Rcov = self._Rcov()
         Rcom = self._Rcom()
 

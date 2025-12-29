@@ -1,29 +1,15 @@
-from typing import Any, Mapping, Sequence, cast
+from typing import Any, Mapping, Sequence
 import random
 
 from pylib.dto.simulator import FixedMote, MobileMote, SimulationElements
 from pylib.dto.problems import ProblemP2
 from pylib.dto.algorithm import GeneticAlgorithmConfigDto
 
+from lib.genetic_operators.crossover.uniform_crossover_mask import uniform_crossover_mask
+from lib.genetic_operators.mutation.bitflip_mutation import bitflip_mutation
+
 from .adapter import ProblemAdapter, ChromosomeP2
 
-def _uniform_crossover_mask(a: list[int], b: list[int]) -> tuple[list[int], list[int]]:
-    """Uniform crossover for binary masks."""
-    assert len(a) == len(b)
-    c1, c2 = a[:], b[:]
-    for i in range(len(a)):
-        if random.random() < 0.5:
-            c1[i], c2[i] = c2[i], c1[i]
-    return c1, c2
-
-
-def _bitflip_mutation(mask: list[int], p: float) -> list[int]:
-    """Bit-flip mutation with per-bit probability p."""
-    out = mask[:]
-    for i in range(len(out)):
-        if random.random() < p:
-            out[i] = 1 - out[i]
-    return out
 
 
 # ============================================================
@@ -71,22 +57,20 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
             pop.append(ChromosomeP2(chromosome=mask))
         return pop
     
-    def set_ga_parameters(self, parameters: GeneticAlgorithmConfigDto):    
+    def set_ga_operator_configs(self, parameters: GeneticAlgorithmConfigDto):    
         self._p_on_init = float(parameters.get("p_on_init", 0.15))    
-        self._p_cx = float(parameters.get("prob_cx", 0.9)) 
-        self._p_mt = float(parameters.get("prob_mt", 0.2))
         self._p_bit_mut = float(parameters.get("per_gene_prob", 0.1))
         self._ensure_non_empty = bool(parameters.get("ensure_non_empty", True))
         
     def crossover(self, parents: Sequence[ChromosomeP2]) -> list[ChromosomeP2]:
         m1: list[int] = parents[0]
         m2: list[int] = parents[1]
-        c1, c2 = _uniform_crossover_mask(m1, m2)
+        c1, c2 = uniform_crossover_mask(m1, m2)
         return [c1, c2]
 
     def mutate(self, chromosome: ChromosomeP2) -> ChromosomeP2:
-        mask: list[int] = chromosome
-        out = _bitflip_mutation(mask, self._p_bit_mut)
+        mask: list[int] = chromosome.mask
+        out = bitflip_mutation(mask, self._p_bit_mut)
         # Keep at least one selected position (optional)
         if sum(out) == 0 and len(out) > 0:
             out[random.randrange(len(out))] = 1

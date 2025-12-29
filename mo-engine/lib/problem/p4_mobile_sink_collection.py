@@ -1,15 +1,18 @@
-from typing import Any, Mapping, Sequence, cast
+from typing import Any, Mapping, Sequence
 import random
 import math
 
 from pylib.dto.simulator import FixedMote, MobileMote, SimulationElements
 from pylib.dto.problems import ProblemP4
 from pylib.dto.algorithm import GeneticAlgorithmConfigDto
+
 from .adapter import ProblemAdapter, ChromosomeP4
 
 # Aliases (coerentes com seus DTOs)
 Position = tuple[float, float]
 PathSeg = tuple[str, str]  # (x(t), y(t)) com t em [0,1]
+
+BASE_INDEX = 0 # fixed base index for base sojourn
 
 def _clamp(x: float, lo: float, hi: float) -> float:
     """Clamp x to [lo, hi]."""
@@ -149,52 +152,43 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
 
         self.problem: ProblemP4 = ProblemP4.cast(problem)
 
-    def set_ga_parameters(self, parameters: GeneticAlgorithmConfigDto):    
+
+    def set_ga_operator_configs(self, parameters: GeneticAlgorithmConfigDto):    
         self._p_on_init = float(parameters.get("p_on_init", 0.15))    
         self._p_cx = float(parameters.get("prob_cx", 0.9))
         self._p_bit_mut = float(parameters.get("per_gene_prob", 0.1))
         self._ensure_non_empty = bool(parameters.get("ensure_non_empty", True))
+        self._pm_tau = float(parameters.get("pm_tau", 0.5))
+        self._sigma_tau = float(parameters.get("sigma_tau", 5.0))
 
-    @property
-    def n_objectives(self) -> int:
-        return int(self.problem.get("problem_parameters", {}).get("n_objectives", 3))
-
-    def _L(self) -> list[tuple[float, float]]:
-        pp = self.problem.get("problem_parameters", {})
-        L = pp.get("L_stops")
-        if L is None:
-            raise ValueError("problem_parameters.L_stops must be provided for Problem 4.")
-        return [tuple(p) for p in L]
-
-    def _base_index(self) -> int:
-        return int(self.problem.get("problem_parameters", {}).get("base_index", 0))
 
     def _A(self) -> set[tuple[int, int]]:
         """
-        Mobility edges as pairs of indices (u,v).
-        We treat A as directed or undirected depending on input.
+        Mobility edges A derived from sojourn adjacency lists.
+
+        Each sojourn s contributes edges (s.id, v) for v in s.adjacency.
         """
-        pp = self.problem.get("problem_parameters", {})
-        A = pp.get("A_edges")
-        if A is None:
-            raise ValueError("problem_parameters.A_edges must be provided for Problem 4.")
-        return set((int(u), int(v)) for (u, v) in A)
+        A: set[tuple[int, int]] = set()
 
-    def _max_route_len(self) -> int:
-        return int(self.problem.get("problem_parameters", {}).get("max_route_len", 10))
+        for s in self.problem.sojourns:
+            u = int(s.id)
+            for v in s.adjacency:
+                A.add((u, int(v)))
 
-    def _tau_bounds(self) -> tuple[float, float]:
-        pp = self.problem.get("problem_parameters", {})
-        return (float(pp.get("tau_min", 0.0)), float(pp.get("tau_max", 100.0)))
+        if not A:
+            raise ValueError("Mobility graph A is empty (check sojourn adjacency lists).")
+
+        return A
+
 
     def _random_route(self) -> list[int]:
         """
         Sample a random feasible route in the mobility graph, starting/ending at base.
         Simple random walk with a return to base.
         """
-        base = self._base_index()
+        base = BASE_INDEX
         A = self._A()
-        max_len = self._max_route_len()
+        max_len = self.problem.max_route_length
 
         route = [base]
         cur = base
@@ -232,7 +226,7 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
         - enforce endpoints = base
         - if an invalid edge occurs, truncate and return to base if possible
         """
-        base = self._base_index()
+        base = BASE_INDEX
         A = self._A()
 
         if not route:
@@ -258,9 +252,10 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
 
         return repaired
 
+
     def _random_tau(self, length: int) -> list[float]:
         """Sample nonnegative sojourn times with bounds."""
-        lo, hi = self._tau_bounds()
+        lo, hi = self.problem.tau_bounds
         return [random.uniform(lo, hi) for _ in range(length)]
 
     def random_individual_generator(self, size: int) -> list[ChromosomeP4]:
@@ -270,6 +265,7 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
             tau = self._random_tau(len(route))
             pop.append(ChromosomeP4(chromosome=(route, tau)))
         return pop
+
 
     def crossover(self, parents: Sequence[ChromosomeP4]) -> list[ChromosomeP4]:
         """
@@ -297,13 +293,14 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
             aa = (a + self._random_tau(L))[:L]
             bb = (b + self._random_tau(L))[:L]
             c, _ = _blend_crossover_vec(aa, bb, alpha=0.25)
-            lo, hi = self._tau_bounds()
+            lo, hi = self.problem.tau_bounds
             return [_clamp(x, lo, hi) for x in c]
 
         child_t1 = make_child_tau(child_r1, t1, t2)
         child_t2 = make_child_tau(child_r2, t2, t1)
 
         return [(child_r1, child_t1), (child_r2, child_t2)]
+
 
     def mutate(self, chromosome: ChromosomeP4) -> ChromosomeP4:
         """
@@ -316,12 +313,12 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
         tau = tau[:]
 
         # Route mutation
-        p_route = float(self.problem.get("problem_parameters", {}).get("pm_route", 0.2))
+        p_route = self._p_bit_mut
         if len(route) > 3 and random.random() < p_route:
             # Mutate one internal node
             idx = random.randrange(1, len(route) - 1)
             # Replace with a random node index
-            n_nodes = len(self._L())
+            n_nodes = len(self.problem.sojourns)
             route[idx] = random.randrange(0, n_nodes)
             route = self._repair_route(route)
             # Resize tau accordingly
@@ -329,13 +326,13 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
                 tau = (tau + self._random_tau(len(route)))[:len(route)]
 
         # Tau mutation
-        p_tau = float(self.problem.get("problem_parameters", {}).get("pm_tau", 0.5))
-        if random.random() < p_tau:
-            sigma = float(self.problem.get("problem_parameters", {}).get("sigma_tau", 5.0))
-            lo, hi = self._tau_bounds()
+        if random.random() < self._pm_tau:
+            sigma = self._sigma_tau
+            lo, hi = self.problem.tau_bounds
             tau = [ _clamp(x + random.gauss(0.0, sigma), lo, hi) for x in tau ]
 
         return (route, tau)
+
 
     def _linseg_expr(self, p0: Position, p1: Position) -> PathSeg:
         """

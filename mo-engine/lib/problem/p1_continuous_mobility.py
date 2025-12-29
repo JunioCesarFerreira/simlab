@@ -1,12 +1,12 @@
-from typing import Any, Mapping, Sequence, cast
+from typing import Any, Mapping, Sequence
 import random
-
-from lib.genetic_operators.crossover import make_sbx_crossover
-from lib.genetic_operators.mutation import make_polynomial_mutation
 
 from pylib.dto.simulator import FixedMote, MobileMote, SimulationElements
 from pylib.dto.problems import ProblemP1
 from pylib.dto.algorithm import GeneticAlgorithmConfigDto
+
+from lib.genetic_operators.crossover import make_sbx_crossover
+from lib.genetic_operators.mutation import make_polynomial_mutation
 
 from .chromosomes import ChromosomeP1
 from .adapter import ProblemAdapter
@@ -47,7 +47,7 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         self.problem: ProblemP1 = ProblemP1.cast(problem)
                 
                 
-    def _rand_uniform_point(box: tuple[float, float, float, float]) -> tuple[float, float]:
+    def _rand_uniform_point(self, box: tuple[float, float, float, float]) -> tuple[float, float]:
         """Sample a point uniformly in an axis-aligned bounding box (xmin, ymin, xmax, ymax)."""
         xmin, ymin, xmax, ymax = box
         return (random.uniform(xmin, xmax), random.uniform(ymin, ymax))
@@ -62,7 +62,7 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         return pop
     
     
-    def set_ga_parameters(self, parameters: GeneticAlgorithmConfigDto):
+    def set_ga_operator_configs(self, parameters: GeneticAlgorithmConfigDto):
         N = self.problem.number_of_relays
         def gene_bounds() -> list[tuple[float, float]]:
             x1, y1, x2, y2 = tuple(self.problem.region)

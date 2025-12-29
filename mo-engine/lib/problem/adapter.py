@@ -84,7 +84,7 @@ class ProblemAdapter(ABC):
     # Genetic algorithm configuration
     # ------------------------------------------------------------------
     @abstractmethod
-    def set_ga_parameters(self, parameters: GeneticAlgorithmConfigDto) -> None:
+    def set_ga_operator_configs(self, parameters: GeneticAlgorithmConfigDto) -> None:
         """
         Configure problem-specific parameters of the genetic algorithm.
 
