@@ -207,14 +207,19 @@ def run_cooja_simulation(
         log.info("[port=%s] Log converted CSV and saved with ID: %s", port, csv_id)
                 
         # Calculate objectives and metrics
-        df = pd.read_csv(csv_path)
-        exp_id = sim["experiment_id"]
-        cfg = mongo.experiment_repo.get_objectives_and_metrics(str(exp_id))
-    
-        objectives, metrics = statistics.evaluate_config(df, cfg)
-                
-        # Mark completed and record log and csv ids
-        mongo.simulation_repo.mark_done(sim_oid, log_id, csv_id, objectives, metrics)
+        csv_file = Path(csv_path)
+        if csv_file.exists() and csv_file.stat().st_size != 0:            
+            df = pd.read_csv(csv_path)
+            exp_id = sim["experiment_id"]
+            cfg = mongo.experiment_repo.get_objectives_and_metrics(str(exp_id))
+        
+            objectives, metrics = statistics.evaluate_config(df, cfg)
+                    
+            # Mark completed and record log and csv ids
+            mongo.simulation_repo.mark_done(sim_oid, log_id, csv_id, objectives, metrics)
+        else:
+            log.warning("[port=%s] CSV file is missing or empty for simulation %s", port, sim_oid)
+            mongo.simulation_repo.mark_error(sim_oid)
 
         if SET.is_docker:
             try:
@@ -253,7 +258,7 @@ def simulation_worker(sim_queue: queue.Queue, port: int, hostname: str) -> None:
                 return
             
             mode = os.getenv("ENABLE_DATA_SYNTHETIC", "False").lower() == "true"
-            print(f"mode: {"Synthetic Data" if mode else "Simulation"}")
+            log.info(f"mode: {"Synthetic Data" if mode else "Simulation"}")
             if mode: # Synthetic data for validation of MO-Engine
                 from lib.synthetic_data import run_synthetic_simulation
                 run_synthetic_simulation(sim, mongo)
