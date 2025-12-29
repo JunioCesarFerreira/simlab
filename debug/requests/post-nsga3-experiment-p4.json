@@ -1,0 +1,109 @@
+{
+    "id": null,
+    "name": "Performing optimization with NSGA-III on problem P1",
+    "status": "Waiting",
+    "created_time": "2025-12-29T17:45:00Z",
+    "start_time": null,
+    "end_time": null,    
+    "generations": [],
+    "source_repository_id": "694ac25de87b06a845206c49",
+    "parameters": {
+        "strategy": "nsga3",
+        "algorithm": {
+            "population_size": 12,
+            "number_of_generations": 30,
+            "prob_cx": 0.8,
+            "prob_mt": 0.15,
+            "selection_method": "tournament",
+            "crossover_method": "blend",
+            "mutation_method": "blend",
+            "per_gene_prob": 0.1,
+            "pm_tau": 0.5,
+            "sigma_tau": 5.1
+        },
+        "simulation": {
+            "duration": 180
+        },
+        "problem":{
+            "name": "problem4",
+            "radius_of_reach": 100,
+            "radius_of_inter": 200,
+            "region": [
+                -500,
+                -500,
+                500,
+                500
+            ],
+            "sink_base": [0, 0],
+            "initial_energy": 1000,
+            "buffer_capacity": 256,
+            "data_rate": 1.61,
+            "sojourns": [],
+            "speed": 10,
+            "time_step": 1,
+            "max_route_length": 20,
+            "tau_bounds": [0, 200]
+        }
+    },
+    "transform_config": {
+        "node_col": "node",
+        "time_col": "root_time_now",
+        "objectives": [
+            {
+                "name": "p95_latency_ms",
+                "kind": "quantile",
+                "column": "latency_ms",
+                "q": 0.95,
+                "goal": "min"
+            },
+            {
+                "name": "total_energy_mJ",
+                "kind": "sum_all",
+                "column": "total_mj",
+                "goal": "min"
+            },
+            {
+                "name": "throughput_cost_inv_median",
+                "kind": "inverse_median",
+                "column": "throughput_bps",
+                "scale": 1000000.0,
+                "goal": "min"
+            },
+            {
+                "name": "js_latency_mean_ms",
+                "kind": "js_node_mean",
+                "column": "latency_ms",
+                "goal": "min"
+            }
+        ],
+        "metrics": [
+            {
+                "name": "latency_ms_mean",
+                "kind": "mean",
+                "column": "latency_ms"
+            },
+            {
+                "name": "latency_ms_median",
+                "kind": "median",
+                "column": "latency_ms"
+            },
+            {
+                "name": "response_ms_p95",
+                "kind": "quantile",
+                "column": "response_ms",
+                "q": 0.95
+            },
+            {
+                "name": "energy_cpu_mJ_total",
+                "kind": "sum_all",
+                "column": "cpu_mj"
+            },
+            {
+                "name": "volume_B_rate_per_s",
+                "kind": "sum_rate",
+                "column": "volume_B"
+            }
+        ]
+    },
+    "pareto_front": null
+}

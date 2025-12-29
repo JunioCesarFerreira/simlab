@@ -1,0 +1,223 @@
+{
+    "id": null,
+    "name": "Performing optimization with NSGA-III on problem P2",
+    "status": "Waiting",
+    "created_time": "2025-12-29T17:45:00Z",
+    "start_time": null,
+    "end_time": null,    
+    "generations": [],
+    "source_repository_id": "694ac25de87b06a845206c49",
+    "parameters": {
+        "strategy": "nsga3",
+        "algorithm": {
+            "population_size": 15,
+            "number_of_generations": 20,
+            "prob_cx": 0.8,
+            "prob_mt": 0.15,
+            "selection_method": "tournament",
+            "crossover_method": "uniform_mask",
+            "mutation_method": "bitflip",
+            "per_gene_prob": 0.1,
+            "p_on_init": 0.15,
+            "ensure_non_empty": true
+        },
+        "simulation": {
+            "duration": 180
+        },
+        "problem":{
+            "name": "problem2",
+            "radius_of_reach": 50,
+            "radius_of_inter": 90,
+            "region": [
+                -150,
+                -150,
+                150,
+                150
+            ],
+            "sink": [0, 0],
+            "cadidates": [
+                [-29.0, 32.0],
+                [-11.0, -45.5],
+                [27.0, 39.0],
+                [-74.47885710671174, 32.41437154400245],
+                [-102.0, -21.0],
+                [-91.0, -59.0],
+                [24.144027024094726, -56.0352263042327],
+                [ -67.69032968,  142.50112841],
+                [  67.8707393,   -62.36414514],
+                [ -57.68472299, -124.83566249],
+                [ -78.04674724, -113.66712065],
+                [ 146.14800398,   -7.3791121 ],
+                [ 106.13805794,   -3.29433074],
+                [  69.40421416,  -83.26720991],
+                [ -95.96047696,   15.70418304],
+                [ -54.06035545,  143.00029275],
+                [ -57.31450534,  -76.97786151],
+                [-149.35979434,  -95.9767557 ],
+                [ -92.69040595,   46.93918866],
+                [  16.41848712, -105.77423696],
+                [74.0, 29.0],
+                [102.0, -12.0],
+                [114.0, -33.0],
+                [87.0, 44.0],
+                [ -87.71983361,  -97.07597746],
+                [ -97.54501379,  -89.63587885],
+                [ 102.33307764, -123.15145324],
+                [  39.91740445,   47.22574766],
+                [  28.00192767,  101.77950592],
+                [ -35.53333098,  109.99891708],
+                [  35.01281907,   59.08970132],
+                [  -6.41825968,  133.17764391],
+                [ -17.91739867,  -60.38480873],
+                [-49.03573903173938, -69.70902258243518],
+                [ -74.95386805,  -66.48682231],
+                [  68.20810713,   60.03277826],
+                [ -67.0985295,  -136.09832413],
+                [-115.49312114,  -86.33587195],
+                [ -58.75086876,  -94.75458927],
+                [  89.8470229,   -46.92998482],
+                [ -135.23590677,  -24.95078446],
+                [ 108.64679377,   93.55443944]
+            ],
+            "mobile_motes": [
+                {
+                    "path_segments": [
+                        [ "70", "44 + 31 * t" ],
+                        [ "70 - 140 * t", "75" ],
+                        [ "-70", "75 - 31 * t" ],
+                        [ "-70 + 140 * t", "44" ]
+                    ],
+                    "is_close": true,
+                    "is_round_trip": false,
+                    "speed": 5,
+                    "time_step": 1,
+                    "name": "node13",
+                    "source_code": "node.c"
+                },
+                {
+                    "path_segments": [
+                        [ "117 + 24 * np.cos(2 * np.pi * t)", "-28 + 52 * np.sin(2 * np.pi * t)" ]
+                    ],
+                    "is_close": true,
+                    "is_round_trip": false,
+                    "speed": 5,
+                    "time_step": 1,
+                    "name": "node14",
+                    "source_code": "node.c"
+                },
+                {
+                    "path_segments": [
+                        [ "-114*(1-t)-64*t", "61*(1-t)+20*t" ],
+                        [ "-64", "20-82*t" ],
+                        [ "-64+136*t", "-62" ]
+                    ],
+                    "is_close": false,
+                    "is_round_trip": true,
+                    "speed": 5,
+                    "time_step": 1,
+                    "name": "node15",
+                    "source_code": "node.c"
+                },
+                {
+                    "path_segments": [
+                        [ "-134+50*t", "16" ],
+                        [ "-84", "16-98*t" ],
+                        [ "-84-50*t", "-82" ],
+                        [ "-134", "-82+98*t" ]
+                    ],
+                    "is_close": true,
+                    "is_round_trip": false,
+                    "speed": 5,
+                    "time_step": 1,
+                    "name": "node16",
+                    "source_code": "node.c"
+                },
+                {
+                    "path_segments": [
+                        [ "114*(1-t)+56*t", "80*(1-t)-33*t" ],
+                        [ "56 - 77*t", "-33" ]
+                    ],
+                    "is_close": false,
+                    "is_round_trip": true,
+                    "speed": 5,
+                    "time_step": 1,
+                    "name": "node17",
+                    "source_code": "node.c"
+                },
+                {
+                    "path_segments": [
+                        [ "-54+108*t", "-81" ]
+                    ],
+                    "is_close": false,
+                    "is_round_trip": true,
+                    "speed": 5,
+                    "time_step": 1,
+                    "name": "node18",
+                    "source_code": "node.c"
+                }
+            ],
+            "number_of_relays": 10
+        }
+    },
+    "transform_config": {
+        "node_col": "node",
+        "time_col": "root_time_now",
+        "objectives": [
+            {
+                "name": "p95_latency_ms",
+                "kind": "quantile",
+                "column": "latency_ms",
+                "q": 0.95,
+                "goal": "min"
+            },
+            {
+                "name": "total_energy_mJ",
+                "kind": "sum_all",
+                "column": "total_mj",
+                "goal": "min"
+            },
+            {
+                "name": "throughput_cost_inv_median",
+                "kind": "inverse_median",
+                "column": "throughput_bps",
+                "scale": 1000000.0,
+                "goal": "min"
+            },
+            {
+                "name": "js_latency_mean_ms",
+                "kind": "js_node_mean",
+                "column": "latency_ms",
+                "goal": "min"
+            }
+        ],
+        "metrics": [
+            {
+                "name": "latency_ms_mean",
+                "kind": "mean",
+                "column": "latency_ms"
+            },
+            {
+                "name": "latency_ms_median",
+                "kind": "median",
+                "column": "latency_ms"
+            },
+            {
+                "name": "response_ms_p95",
+                "kind": "quantile",
+                "column": "response_ms",
+                "q": 0.95
+            },
+            {
+                "name": "energy_cpu_mJ_total",
+                "kind": "sum_all",
+                "column": "cpu_mj"
+            },
+            {
+                "name": "volume_B_rate_per_s",
+                "kind": "sum_rate",
+                "column": "volume_B"
+            }
+        ]
+    },
+    "pareto_front": null
+}

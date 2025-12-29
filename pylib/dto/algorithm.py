@@ -16,7 +16,7 @@ class GeneticAlgorithmConfigDto(TypedDict):
     ensure_non_empty: bool
     pm_tau: float
     sigma_tau: float
-    
+
 class NsgaIIIConfigDto(GeneticAlgorithmConfigDto):
     divisions: int
     
