@@ -5,6 +5,7 @@ from pylib.dto.simulator import FixedMote, MobileMote, SimulationElements
 from pylib.dto.problems import ProblemP1
 from pylib.dto.algorithm import GeneticAlgorithmConfigDto
 
+from lib.util.random_network_methods import network_gen
 from lib.genetic_operators.crossover import make_sbx_crossover
 from lib.genetic_operators.mutation import make_polynomial_mutation
 
@@ -47,21 +48,15 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         self.problem: ProblemP1 = ProblemP1.cast(problem)
                 
                 
-    def _rand_uniform_point(self, box: tuple[float, float, float, float]) -> tuple[float, float]:
-        """Sample a point uniformly in an axis-aligned bounding box (xmin, ymin, xmax, ymax)."""
-        xmin, ymin, xmax, ymax = box
-        return (random.uniform(xmin, xmax), random.uniform(ymin, ymax))
-
     def random_individual_generator(self, size: int) -> list[ChromosomeP1]:
         box = tuple(self.problem.region) # xmin,ymin,xmax,ymax
         N = self.problem.number_of_relays
+        R = self.problem.radius_of_reach
         pop: list[ChromosomeP1] = []
-        for _ in range(size):
-            vec = [self._rand_uniform_point(box) for _ in range(N)]
-            print(vec)
+        for i in range(size):
             chrm = ChromosomeP1(
                 mac_protocol = 0,
-                relays = [(float(x), float(y)) for x, y in vec]
+                relays = network_gen(N, box, R)
             )
             pop.append(chrm)
         return pop

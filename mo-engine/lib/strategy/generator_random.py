@@ -7,11 +7,12 @@ from bson import ObjectId
 
 from .base import EngineStrategy
 
-from lib.build_input_sim_cooja import create_files
-from lib.random_network_methods import network_gen
 from pylib.dto.database import Simulation, Generation, SimulationConfig
 from pylib.mongo_db import EnumStatus
 from pylib import plot_network
+
+from lib.util.build_input_sim_cooja import create_files
+from lib.util.random_network_methods import network_gen
 
 log = logging.getLogger(__name__)
 

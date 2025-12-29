@@ -16,7 +16,7 @@ from pylib.mongo_db import EnumStatus
 from pylib.dto.database import Simulation, SimulationConfig, Generation
 from pylib import plot_network
 
-from lib.build_input_sim_cooja import create_files
+from lib.util.build_input_sim_cooja import create_files
 
 # NSGA utils
 from lib.nsga import fast_nondominated_sort
