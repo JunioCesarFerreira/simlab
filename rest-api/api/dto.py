@@ -8,8 +8,7 @@ from pylib.dto.database import (
     Generation, 
     Experiment, 
     Parameters, 
-    SourceRepository,
-    TransformConfig
+    SourceRepository
 )
     
 #---------------------------------------------------------------------------------------------------------
@@ -42,7 +41,29 @@ class GenerationDto(TypedDict):
     start_time: datetime
     end_time: datetime
     simulations_ids: list[str]
-      
+
+class ObjectiveItemDto(TypedDict):
+    name: str
+    kind: str
+    column: str
+    goal: str
+    # Optional parameters (validated according to the type)
+    q: NotRequired[float] = None         # required if kind == QUANTILE (0<q<=1)
+    scale: NotRequired[float] = None     # required if kind == INVERSE_MEDIAN (scale>0)
+
+class MetricItemDto(TypedDict):
+    name: str
+    kind: str
+    column: str
+    # Optional parameters (validated according to the type)
+    q: NotRequired[float] = None         # required if kind == QUANTILE (0<q<=1)
+
+class TransformConfigDto(TypedDict):
+    node_col: str
+    time_col: str
+    objectives: list[ObjectiveItemDto]
+    metrics: list[MetricItemDto]
+
 class ExperimentDto(TypedDict):
     id: Optional[str] = None
     name: str
@@ -53,7 +74,7 @@ class ExperimentDto(TypedDict):
     parameters: Parameters
     generations: list[str]
     source_repository_id: str
-    transform_config: TransformConfig
+    transform_config: TransformConfigDto
     pareto_front: Optional[Any] = None
     
 #---------------------------------------------------------------------------------------------------------
