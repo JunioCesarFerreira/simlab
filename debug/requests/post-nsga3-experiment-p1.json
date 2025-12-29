@@ -35,7 +35,7 @@
                 150
             ],
             "sink": [0, 0],
-            "mobile_motes": [
+            "mobile_nodes": [
                 {
                     "path_segments": [
                         [ "70", "44 + 31 * t" ],
@@ -43,7 +43,7 @@
                         [ "-70", "75 - 31 * t" ],
                         [ "-70 + 140 * t", "44" ]
                     ],
-                    "is_close": true,
+                    "is_closed": true,
                     "is_round_trip": false,
                     "speed": 5,
                     "time_step": 1,
@@ -54,7 +54,7 @@
                     "path_segments": [
                         [ "117 + 24 * np.cos(2 * np.pi * t)", "-28 + 52 * np.sin(2 * np.pi * t)" ]
                     ],
-                    "is_close": true,
+                    "is_closed": true,
                     "is_round_trip": false,
                     "speed": 5,
                     "time_step": 1,
@@ -67,7 +67,7 @@
                         [ "-64", "20-82*t" ],
                         [ "-64+136*t", "-62" ]
                     ],
-                    "is_close": false,
+                    "is_closed": false,
                     "is_round_trip": true,
                     "speed": 5,
                     "time_step": 1,
@@ -81,7 +81,7 @@
                         [ "-84-50*t", "-82" ],
                         [ "-134", "-82+98*t" ]
                     ],
-                    "is_close": true,
+                    "is_closed": true,
                     "is_round_trip": false,
                     "speed": 5,
                     "time_step": 1,
@@ -93,7 +93,7 @@
                         [ "114*(1-t)+56*t", "80*(1-t)-33*t" ],
                         [ "56 - 77*t", "-33" ]
                     ],
-                    "is_close": false,
+                    "is_closed": false,
                     "is_round_trip": true,
                     "speed": 5,
                     "time_step": 1,
@@ -104,7 +104,7 @@
                     "path_segments": [
                         [ "-54+108*t", "-81" ]
                     ],
-                    "is_close": false,
+                    "is_closed": false,
                     "is_round_trip": true,
                     "speed": 5,
                     "time_step": 1,
