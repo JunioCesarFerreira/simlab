@@ -44,14 +44,14 @@ class ProblemAdapter(ABC):
     # ------------------------------------------------------------------  
     @property
     def radius_of_reach(self) -> float:
-        value = self.problem.get("radius_of_reach")
+        value = self.problem.radius_of_reach
         if value is None:
             raise KeyError("Missing 'radius_of_reach' in problem.")
         return float(value)
     
     @property
     def radius_of_inter(self) -> float:
-        value = self.problem.get("radius_of_inter")
+        value = self.problem.radius_of_inter
         if value is None:
             raise KeyError("Missing 'radius_of_inter' in problem.")
         return float(value)
@@ -59,7 +59,7 @@ class ProblemAdapter(ABC):
     @property
     def bounds(self) -> list[float]:
         # 'region' is your Ω ⊂ R² bounds (e.g., [xmin, xmax, ymin, ymax] or similar convention)
-        region = self.problem.get("region")
+        region = self.problem.region
         if region is None:
             raise KeyError("Missing 'region' in problem.")
         if not isinstance(region, (list, tuple)):

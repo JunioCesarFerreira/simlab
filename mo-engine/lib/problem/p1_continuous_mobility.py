@@ -57,8 +57,13 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         N = self.problem.number_of_relays
         pop: list[ChromosomeP1] = []
         for _ in range(size):
-            P = [self._rand_uniform_point(box) for _ in range(N)]
-            pop.append(ChromosomeP1(P))
+            vec = [self._rand_uniform_point(box) for _ in range(N)]
+            print(vec)
+            chrm = ChromosomeP1(
+                mac_protocol = 0,
+                relays = [(float(x), float(y)) for x, y in vec]
+            )
+            pop.append(chrm)
         return pop
     
     
@@ -75,7 +80,7 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         bounds = gene_bounds()
         eta_cx = float(parameters.get("eta_cx", 20.0))
         eta_mt = float(parameters.get("eta_mt", 25.0))
-        pgp = float(parameters.get("per_gene_prob", per_gene_prob=1.0 / (2 * N)))
+        pgp = float(parameters.get("per_gene_prob", 1.0 / (2 * N)))
         self._sbx = make_sbx_crossover(eta=eta_cx, bounds=bounds)
         self._poly = make_polynomial_mutation(eta=eta_mt, bounds=bounds, per_gene_prob= pgp)
 

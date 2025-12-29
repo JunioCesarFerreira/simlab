@@ -38,14 +38,16 @@ def select_strategy(exp_doc: dict) -> EngineStrategy:
         raise ValueError(f"[mo-engine] Experiment type unknown: {exp_type}")
 
 
-def process_experiment(exp_doc: dict):
+def process_experiment(exp_doc: dict) -> bool:
     exp_id = str(exp_doc["_id"])
     log.info(f"Processing experiment id: {exp_id}")
     try:
         strategy = select_strategy(exp_doc)
         strategy.start()
-    except Exception as e:
-        log.error(f"Failed to start strategy for experiment {exp_id}: {e}")
+        return True
+    except Exception:
+        log.exception("Failed to start strategy for experiment %s", exp_id)
+        return False
 
 
 def on_experiment_event(change: dict):
@@ -59,7 +61,8 @@ def on_experiment_event(change: dict):
     exp_id = str(exp_doc["_id"])
         
     if mongo.experiment_repo.update_starting(exp_id):
-        process_experiment(exp_doc)
+        if process_experiment(exp_doc) == False:
+            mongo.experiment_repo.update_status(exp_id, EnumStatus.ERROR)
 
 
 def run_pending_experiment(change: dict):
@@ -69,7 +72,8 @@ def run_pending_experiment(change: dict):
     exp_id = str(change["_id"])
     
     if mongo.experiment_repo.update_starting(exp_id):
-        process_experiment(change)
+        if process_experiment(change) == False:
+            mongo.experiment_repo.update_status(exp_id, EnumStatus.ERROR)
        
 def main() -> None:
     log.info("service started.")

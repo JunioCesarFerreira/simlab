@@ -152,8 +152,8 @@ def _build_plot_network(
                     else:
                         y_vals = np.array(y_eval, dtype=float)
                         
-                except Exception as e:
-                    log.error(f"Erro ao avaliar parte {part_idx} do caminho {path_idx}: {e}")
+                except Exception:
+                    log.exception(f"Erro ao avaliar parte {part_idx} do caminho {path_idx}.")
                     continue
 
                 xs_total.extend(x_vals)

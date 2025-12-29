@@ -69,11 +69,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         self.sim_duration: int = int(simulation_config.get("duration", 120))
         self.population_size: int = int(algorithm_config.get("population_size", 20))
         self.max_generations: int = int(algorithm_config.get("number_of_generations", 5))
-                
-        # nsga3 niching
-        self.divisions: int = int(algorithm_config.get("divisions", 10))      
-        self.ref_points = generate_reference_points(len(self.objective_keys), self.divisions)
-        
+                        
         self.prob_cx = float(algorithm_config.get("prob_cx", 0.8))
         self.prob_mt = float(algorithm_config.get("prob_mt", 0.2))
         
@@ -91,6 +87,10 @@ class NSGA3LoopStrategy(EngineStrategy):
         cfg = experiment.get("transform_config", {}) or {}
         obj = cfg.get("objectives", []) or []
         self.objective_keys = [o["name"] for o in obj if "name" in o]
+        
+        # nsga3 niching
+        self.divisions: int = int(algorithm_config.get("divisions", 10))      
+        self.ref_points = generate_reference_points(len(self.objective_keys), self.divisions)
         
         # --- loop state ---
         self._exp_id: ObjectId | None = None
@@ -126,7 +126,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._gen_index = 0
 
         # Initial Population
-        self.current_population = [self.problem_adapter.random_individual_generator(self.population_size)]
+        self.current_population = self.problem_adapter.random_individual_generator(self.population_size)
 
         # Enqueue Simulations to first Generation
         self._generation_enqueue(self.current_population, self._gen_index)
@@ -195,8 +195,8 @@ class NSGA3LoopStrategy(EngineStrategy):
                     return
                 try:
                     self.event_simulation_done(result_doc)
-                except Exception as e:
-                    logger.info(f"[NSGA-III] Watcher Callback Error: {e}")
+                except Exception:
+                    logger.exception(f"[NSGA-III] Watcher Callback Error.")
 
             logger.info("[NSGA-III] Starting Simulations watcher (DONE).")
             self.mongo.simulation_repo.watch_status_done(_callback)
@@ -235,7 +235,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         for i, genome in enumerate(population):
             config: SimulationConfig = {
                 "name": f"nsga3-g{gen_index}-{i}",
-                "duration": self.duration,
+                "duration": self.sim_duration,
                 "radiusOfReach": self.problem_adapter.radius_of_reach,
                 "radiusOfInter": self.problem_adapter.radius_of_inter,
                 "region": self.problem_adapter.bounds,
@@ -312,7 +312,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             indices = list(range(len(self.current_population)))
             objectives = [self.objectives_buffer[i] for i in indices]
         except Exception:
-            logger.error("[NSGA-III] Missing objectives for some individuals; aborting.")
+            logger.exception("[NSGA-III] Missing objectives for some individuals; aborting.")
             self._finalize_experiment()
             return
         
@@ -376,8 +376,8 @@ class NSGA3LoopStrategy(EngineStrategy):
                 fronts_final = fast_nondominated_sort(final_objs)
                 pareto_front = [tuple(final_objs[i]) for i in fronts_final[0]] if fronts_final else []
                 pareto_front.sort()
-            except Exception as e:
-                logger.info(f"[NSGA-III] Could not compute final Pareto: {e}")
+            except Exception:
+                logger.exception(f"[NSGA-III] Could not compute final Pareto.")
                 pareto_front = []
 
             self._finalize_experiment(pareto_front)
