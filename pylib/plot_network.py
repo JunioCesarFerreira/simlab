@@ -1,4 +1,6 @@
 import logging
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.pyplot import Figure
 import numpy as np
