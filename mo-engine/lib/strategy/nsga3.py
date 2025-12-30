@@ -319,7 +319,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         # First PHASE P
         if not self._parents_objectives:
             # Armazena P_t (genomas + objetivos) = população recém avaliada
-            self._parents_population  = [ind[:] for ind in self.current_population]
+            self._parents_population  = list(self.current_population)
             self._parents_objectives  = [row[:] for row in objectives]
 
             # Gera Q_t ranqueando P_t e enfileira para avaliação
@@ -383,7 +383,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             self._finalize_experiment(pareto_front)
             return
 
-        self._parents_population = [ind[:] for ind in next_population]
+        self._parents_population = list(next_population)
         self._parents_objectives = [list(row) for row in next_objectives]
         
         # ---------------- PHASE P: parents done -> generate offspring and enqueue ----------------
@@ -416,7 +416,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             parent2: Chromosome = self._tournament_selection(parents, individual_ranks)
             # Crossover 
             if rng.random() < self.prob_cx:
-                c1, c2 = self.problem_adapter.crossover(parent1, parent2)
+                c1, c2 = self.problem_adapter.crossover([parent1, parent2])
             else:
                 c1, c2 = parent1, parent2
             # Mutation
@@ -429,7 +429,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         return children[:self.population_size]
 
 
-    def _tournament_selection(
+    def _tournament_selection(self,
         population: list[Chromosome], 
         individual_ranks: dict[int, int]
         ) -> Chromosome:

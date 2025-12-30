@@ -6,10 +6,10 @@ from pylib.dto.problems import ProblemP1
 from pylib.dto.algorithm import GeneticAlgorithmConfigDto
 
 from lib.util.random_network_methods import network_gen
-from lib.genetic_operators.crossover import make_sbx_crossover
-from lib.genetic_operators.mutation import make_polynomial_mutation
+from lib.genetic_operators.crossover.simulated_binary_crossover import sbx
+from lib.genetic_operators.mutation.polynomial_mutation import poly_mut
 
-from .chromosomes import ChromosomeP1
+from .chromosomes import ChromosomeP1, Position
 from .adapter import ProblemAdapter
 
 # ============================================================
@@ -63,43 +63,85 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
     
     
     def set_ga_operator_configs(self, parameters: GeneticAlgorithmConfigDto):
-        N = self.problem.number_of_relays
-        def gene_bounds() -> list[tuple[float, float]]:
-            x1, y1, x2, y2 = tuple(self.problem.region)
-            bounds: list[tuple[float, float]] = []
-            for _ in range(N):
-                bounds.append((x1, x2))  # x
-                bounds.append((y1, y2))  # y
-            return bounds
-        
-        bounds = gene_bounds()
-        eta_cx = float(parameters.get("eta_cx", 20.0))
-        eta_mt = float(parameters.get("eta_mt", 25.0))
-        pgp = float(parameters.get("per_gene_prob", 1.0 / (2 * N)))
-        self._sbx = make_sbx_crossover(eta=eta_cx, bounds=bounds)
-        self._poly = make_polynomial_mutation(eta=eta_mt, bounds=bounds, per_gene_prob= pgp)
+        N = 2 * self.problem.number_of_relays # x and y for each relay  
+        self.eta_cx = float(parameters.get("eta_cx", 20.0))
+        self.eta_mt = float(parameters.get("eta_mt", 25.0))
+        self.per_gene_prob = float(parameters.get("per_gene_prob", 1.0 / N))
 
 
     def crossover(self, parents: Sequence[ChromosomeP1]) -> list[ChromosomeP1]:
-        """
-        Crossover for continuous placements:
-        - pairwise blend crossover on each corresponding sensor position.
-        """
-        P1: list[tuple[float, float]] = parents[0]
-        P2: list[tuple[float, float]] = parents[1]
-        assert len(P1) == len(P2)
+        assert len(parents) == 2, "P1 crossover requires exactly two parents"
+
+        p1, p2 = parents
+        relays1 = p1.relays
+        relays2 = p2.relays
+
+        assert len(relays1) == len(relays2), "Parents must have same number of relays"
+
         rng = random.Random()
-        self._sbx(P1, P2, rng)
+
+        child1_relays: list[Position] = []
+        child2_relays: list[Position] = []
+  
+        x_min, y_min, x_max, y_max = tuple(self.problem.region)
+        
+        for (x1, y1), (x2, y2) in zip(relays1, relays2):
+            # Apply SBX independently to x and y
+            cx1, cx2 = sbx(x1, x2, rng, self.eta_cx, (x_min, x_max))
+            cy1, cy2 = sbx(y1, y2, rng, self.eta_cx, (y_min, y_max))
+
+            child1_relays.append((cx1, cy1))
+            child2_relays.append((cx2, cy2))
+
+        # MAC gene inheritance (simple uniform choice)
+        mac1 = p1.mac_protocol if rng.random() < 0.5 else p2.mac_protocol
+        mac2 = p2.mac_protocol if rng.random() < 0.5 else p1.mac_protocol
+
+        return [
+            ChromosomeP1(mac_protocol=mac1, relays=child1_relays),
+            ChromosomeP1(mac_protocol=mac2, relays=child2_relays),
+        ]
+
     
 
     def mutate(self, chromosome: ChromosomeP1) -> ChromosomeP1:
         """
-        Mutation for continuous placements:
-        - Gaussian perturbation of a subset of points.
+        Mutation for Problem P1:
+        - Polynomial mutation on relay positions (x, y)
+        - Bit-flip mutation on MAC gene
         """
-        P: list[tuple[float, float]] = chromosome        
-        rng = random.Random()        
-        return self._poly(P, rng)
+        rng = random.Random()
+
+        xmin, ymin, xmax, ymax = map(float, self.problem.region)
+        bound_x = (xmin, xmax)
+        bound_y = (ymin, ymax)
+
+        new_relays: list[Position] = []
+
+        for (x, y) in chromosome.relays:
+            # Mutate x
+            if rng.random() < self.per_gene_prob:
+                x_new = poly_mut(x, rng, self.eta_mt, bound_x)
+            else:
+                x_new = x
+
+            # Mutate y
+            if rng.random() < self.per_gene_prob:
+                y_new = poly_mut(y, rng, self.eta_mt, bound_y)
+            else:
+                y_new = y
+
+            new_relays.append((x_new, y_new))
+
+        # MAC mutation (bit-flip)
+        mac = chromosome.mac_protocol
+        if rng.random() < self.per_gene_prob:
+            mac = 1 - mac  # 0 ↔ 1
+
+        return ChromosomeP1(
+            mac_protocol=mac,
+            relays=new_relays,
+        )
 
 
     def encode_simulation_input(self, ind: ChromosomeP1) -> SimulationElements:
