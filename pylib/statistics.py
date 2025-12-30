@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from typing import Any
+from logging import Logger
 
 def james_stein(means: np.ndarray, variances: np.ndarray) -> float:
     """
@@ -194,7 +194,7 @@ def sum_all(df: pd.DataFrame, value_col: str) -> float:
     return float(s.sum(skipna=True))
 
 
-def evaluate_config(df: pd.DataFrame, cfg: dict[str, list[dict]]) -> tuple[dict[str, float], dict[str, float]]:
+def evaluate_config(df: pd.DataFrame, cfg: dict[str, list[dict]], log: Logger) -> tuple[dict[str, float], dict[str, float]]:
     """
     Evaluates a DataFrame against a configuration of objectives and metrics.
     
@@ -219,6 +219,7 @@ def evaluate_config(df: pd.DataFrame, cfg: dict[str, list[dict]]) -> tuple[dict[
         col, kind, name = item["column"], item["kind"], item["name"]
         
         if col not in df.columns:
+            log.warning(f"Column '{col}' not found in DataFrame for objective '{name}'.")
             obj[name] = float("nan")
             continue
             
@@ -240,6 +241,7 @@ def evaluate_config(df: pd.DataFrame, cfg: dict[str, list[dict]]) -> tuple[dict[
         elif kind == "js_node_mean":
             obj[name] = js_node_mean(df, col, cfg.get("node_col", "node"))
         else:
+            log.warning(f"Unknown objective kind '{kind}' for objective '{name}'.")
             obj[name] = float("nan")
     
     # Process metrics (typically used for monitoring)
@@ -247,6 +249,7 @@ def evaluate_config(df: pd.DataFrame, cfg: dict[str, list[dict]]) -> tuple[dict[
         col, kind, name = item["column"], item["kind"], item["name"]
         
         if col not in df.columns:
+            log.warning(f"Column '{col}' not found in DataFrame for metric '{name}'.")
             met[name] = float("nan")
             continue
             
@@ -265,6 +268,7 @@ def evaluate_config(df: pd.DataFrame, cfg: dict[str, list[dict]]) -> tuple[dict[
         elif kind == "sum_rate":
             met[name] = sum_rate(df, col, cfg.get("time_col", "root_time_now"))
         else:
+            log.warning(f"Unknown metric kind '{kind}' for metric '{name}'.")
             met[name] = float("nan")
     
     return obj, met
