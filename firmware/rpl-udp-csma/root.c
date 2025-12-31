@@ -134,6 +134,11 @@ static void metrics_print(char* addr_str,
     printf("\"lpm_energy_mj\":%u, ", metrics->lpm_energy_mJ);
     printf("\"radio_tx_energy_mj\":%u, ", metrics->radio_tx_energy_mJ);
     printf("\"radio_rx_energy_mj\":%u, ", metrics->radio_rx_energy_mJ);
+    unsigned int total_energy = metrics->cpu_energy_mJ +
+                                    metrics->lpm_energy_mJ +
+                                    metrics->radio_tx_energy_mJ +
+                                    metrics->radio_rx_energy_mJ;
+    printf("\"total_energy_mj\":%u, ", total_energy);
 
     printf("\"node_time\":%lu, ", metrics->current_time);
     printf("\"total_sent\":%u, ", metrics->total_sent);
