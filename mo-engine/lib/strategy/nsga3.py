@@ -25,10 +25,7 @@ from lib.nsga import generate_reference_points, niching_selection
 from lib.problem.adapter import ProblemAdapter, Chromosome
 from lib.problem.resolve import build_adapter
 
-Objectives = list[float]
-
 logger = logging.getLogger(__name__)
-
 
 @dataclass
 class NSGA3Parameters:
@@ -83,11 +80,16 @@ class NSGA3LoopStrategy(EngineStrategy):
                 
         self.problem_adapter: ProblemAdapter = build_adapter(problem_config, params_of_ga_operators)
                 
-        # prepare objective keys
+        # prepare objective infos
         cfg = experiment.get("transform_config", {}) or {}
         obj = cfg.get("objectives", []) or []
-        self.objective_keys = [o["name"] for o in obj if "name" in o]
-        
+        self.objective_keys: list[str] = [o["name"] for o in obj]
+        self.objective_goals: list[int] = [1 if o["goal"]=='min' else -1 for o in obj]
+        if len(self.objective_keys) != len(self.objective_goals):
+            raise ValueError(
+                f"objective_keys ({len(self.objective_keys)}) and "
+                f"objective_goals ({len(self.objective_goals)}) length mismatch"
+            )
         # nsga3 niching
         self.divisions: int = int(algorithm_config.get("divisions", 10))      
         self.ref_points = generate_reference_points(len(self.objective_keys), self.divisions)
@@ -102,13 +104,13 @@ class NSGA3LoopStrategy(EngineStrategy):
         # maps simulation_id(str) -> index of the individual in the population
         self.sim_id_to_index: dict[str, int] = {}
         # results collected from current generation: idx -> list[float] objectives (minimization)
-        self.objectives_buffer: dict[int, Objectives] = {}
+        self.objectives_buffer: dict[int, list[float]] = {}
         # dictionary for reuse evaluations values
-        self._obj_by_sim_id: dict[str, Objectives] = {}
+        self._obj_by_sim_id: dict[str, list[float]] = {}
         
         self._awaiting_offspring: bool = False  # False => waiting P; True => waiting Q
         self._parents_population: list[Chromosome] = []   # wait P_t (genomas)
-        self._parents_objectives: list[Objectives] = []   # wait F(P_t)
+        self._parents_objectives: list[list[float]] = []  # wait F(P_t)
                
 
 
@@ -156,7 +158,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         if idx is None:
             return
 
-        obj = self._extract_objectives(sim)
+        obj = self._extract_objectives_to_minimization(sim)
         if obj is None:
             logger.info(f"objectives not found in {sim_id}")
             return
@@ -366,6 +368,10 @@ class NSGA3LoopStrategy(EngineStrategy):
 
         next_population = [R_genomes[i] for i in selected_idx[:self.population_size]]
         next_objectives = [R_F_list[i] for i in selected_idx[:self.population_size]]
+        
+        print(f"\nnext_population: {next_population}")
+        
+        print(f"\nnext_objectives: {next_objectives}")
 
         # stop condition?
         if self._gen_index >= self.max_generations:
@@ -452,35 +458,48 @@ class NSGA3LoopStrategy(EngineStrategy):
         return individual_ranks
 
 
-    def _extract_objectives(self, result_doc: dict) -> Objectives | None:
+    def _extract_objectives_to_minimization(
+        self,
+        result_doc: dict
+    ) -> list[float] | None:
         """
         Extracts objective vector (minimization) from DONE simulation doc.
-        Priority:
-        1) 'objectives' as list[float]
-        2) 'objectives' as dict -> follow self.objective_keys
-        3) 'metrics'    as dict -> follow self.objective_keys
         """
         obj = result_doc.get("objectives")
-        # list already in order
-        if isinstance(obj, (list, tuple)) and all(isinstance(v, (int, float)) for v in obj):
-            return [float(v) for v in obj]
 
-        # try dict by keys (from transform_config)
-        if isinstance(obj, dict) and self.objective_keys:
-            try:
-                return [float(obj[k]) for k in self.objective_keys]
-            except Exception:
-                pass
+        if not isinstance(obj, dict):
+            return None
 
-        metrics = result_doc.get("metrics") or {}
-        if isinstance(metrics, dict) and self.objective_keys:
-            try:
-                return [float(metrics[k]) for k in self.objective_keys]
-            except Exception:
-                pass
+        if not self.objective_keys:
+            logger.error("[NSGA-III] objective_keys not configured.")
+            return None
 
-        logger.info("[NSGA-III] Warning: objectives not found. Set 'objective_keys' via TransformConfig.")
-        return None
+        if len(self.objective_keys) != len(self.objective_goals):
+            raise ValueError("objective_keys and objective_goals size mismatch")
+
+        vec: list[float] = []
+
+        try:
+            for k, s in zip(self.objective_keys, self.objective_goals):
+                if k not in obj:
+                    raise KeyError(f"Missing objective key: {k}")
+
+                v = float(obj[k])
+                if not np.isfinite(v):
+                    raise ValueError(f"Non-finite objective {k}={obj[k]}")
+
+                vec.append(s * v)
+
+            return vec
+
+        except Exception as e:
+            logger.exception(
+                "[NSGA-III] Error extracting objectives. sim_id=%s obj=%s error=%s",
+                result_doc.get("_id"),
+                obj,
+                e,
+            )
+            return None
 
 
     def _finalize_experiment(self, pareto_front: Optional[list[tuple[float, ...]]] = None):
