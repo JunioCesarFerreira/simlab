@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from logging import Logger
+from typing import Callable, Any
 
 def james_stein(means: np.ndarray, variances: np.ndarray) -> float:
     """
@@ -194,7 +195,90 @@ def sum_all(df: pd.DataFrame, value_col: str) -> float:
     return float(s.sum(skipna=True))
 
 
-def evaluate_config(df: pd.DataFrame, cfg: dict[str, list[dict]], log: Logger) -> tuple[dict[str, float], dict[str, float]]:
+StatFn = Callable[[pd.DataFrame, dict[str, Any], dict[str, Any]], float]
+
+def _require_column(df: pd.DataFrame, col: str, name: str, log: Logger) -> bool:
+    if col not in df.columns:
+        log.warning(f"Column '{col}' not found for '{name}'.")
+        return False
+    return True
+
+
+STAT_DISPATCH: dict[str, StatFn] = {
+    "quantile": lambda df, item, ctx: quantile(
+        df[item["column"]], item.get("q", 0.5)
+    ),
+    "mean": lambda df, item, ctx: mean(df[item["column"]]),
+    "median": lambda df, item, ctx: median(df[item["column"]]),
+    "sum_all": lambda df, item, ctx: sum_all(df, item["column"]),
+    "sum_last_minus_first": lambda df, item, ctx: sum_last_minus_first(
+        df,
+        item["column"],
+        ctx["node_col"],
+        ctx["time_col"],
+    ),
+    "sum_rate": lambda df, item, ctx: sum_rate(
+        df,
+        item["column"],
+        ctx["time_col"],
+    ),
+    "inverse_median": lambda df, item, ctx: inverse_of(
+        median(df[item["column"]]),
+        item.get("scale", 1.0),
+    ),
+    "js_node_mean": lambda df, item, ctx: js_node_mean(
+        df,
+        item["column"],
+        ctx["node_col"],
+    ),
+}
+
+def _evaluate_items(
+    df: pd.DataFrame,
+    items: list[dict[str, Any]],
+    ctx: dict[str, Any],
+    log: Logger,
+    label: str,
+) -> dict[str, float]:
+    results: dict[str, float] = {}
+
+    for item in items:
+        name = item["name"]
+        col = item.get("column")
+        kind = item.get("kind")
+
+        if not col or not _require_column(df, col, name, log):
+            results[name] = float("nan")
+            continue
+
+        fn = STAT_DISPATCH.get(kind)
+        if fn is None:
+            log.warning(f"Unknown {label} kind '{kind}' for '{name}'.")
+            results[name] = float("nan")
+            continue
+
+        try:
+            value = fn(df, item, ctx)
+
+            if value is None or not np.isfinite(float(value)):
+                raise ValueError(f"Non-finite result: {value}")
+
+            results[name] = float(value)
+
+        except Exception as e:
+            log.exception(
+                f"Error evaluating {label} '{name}' (kind={kind}, col={col}): {e}"
+            )
+            results[name] = float("nan")
+
+    return results
+
+
+def evaluate_config(
+    df: pd.DataFrame, 
+    cfg: dict[str, list[dict]], 
+    log: Logger
+    ) -> tuple[dict[str, float], dict[str, float]]:
     """
     Evaluates a DataFrame against a configuration of objectives and metrics.
     
@@ -212,63 +296,25 @@ def evaluate_config(df: pd.DataFrame, cfg: dict[str, list[dict]], log: Logger) -
     Returns:
         Tuple: (objectives_dict, metrics_dict) with numerical results
     """
-    obj, met = {}, {}  # Dictionaries for objectives and metrics
-    
-    # Process objectives (typically used for optimization)
-    for item in cfg.get("objectives", []):
-        col, kind, name = item["column"], item["kind"], item["name"]
-        
-        if col not in df.columns:
-            log.warning(f"Column '{col}' not found in DataFrame for objective '{name}'.")
-            obj[name] = float("nan")
-            continue
-            
-        # Select aggregation function based on type
-        if kind == "quantile":
-            obj[name] = quantile(df[col], item.get("q", 0.5))
-        elif kind == "mean":
-            obj[name] = mean(df[col])
-        elif kind == "median":
-            obj[name] = median(df[col])
-        elif kind == "sum_last_minus_first":
-            obj[name] = sum_last_minus_first(df, col, 
-                                           cfg.get("node_col", "node"), 
-                                           cfg.get("time_col", "root_time_now"))
-        elif kind == "sum_all":
-            obj[name] = sum_all(df, col)
-        elif kind == "inverse_median":
-            obj[name] = inverse_of(median(df[col]), item.get("scale", 1.0))
-        elif kind == "js_node_mean":
-            obj[name] = js_node_mean(df, col, cfg.get("node_col", "node"))
-        else:
-            log.warning(f"Unknown objective kind '{kind}' for objective '{name}'.")
-            obj[name] = float("nan")
-    
-    # Process metrics (typically used for monitoring)
-    for item in cfg.get("metrics", []):
-        col, kind, name = item["column"], item["kind"], item["name"]
-        
-        if col not in df.columns:
-            log.warning(f"Column '{col}' not found in DataFrame for metric '{name}'.")
-            met[name] = float("nan")
-            continue
-            
-        if kind == "quantile":
-            met[name] = quantile(df[col], item.get("q", 0.5))
-        elif kind == "mean":
-            met[name] = mean(df[col])
-        elif kind == "median":
-            met[name] = median(df[col])
-        elif kind == "sum_all":
-            obj[name] = sum_all(df, col)
-        elif kind == "sum_last_minus_first":
-            met[name] = sum_last_minus_first(df, col, 
-                                           cfg.get("node_col", "node"), 
-                                           cfg.get("time_col", "root_time_now"))
-        elif kind == "sum_rate":
-            met[name] = sum_rate(df, col, cfg.get("time_col", "root_time_now"))
-        else:
-            log.warning(f"Unknown metric kind '{kind}' for metric '{name}'.")
-            met[name] = float("nan")
-    
-    return obj, met
+    ctx = {
+        "node_col": cfg.get("node_col", "node"),
+        "time_col": cfg.get("time_col", "root_time_now"),
+    }
+
+    objectives = _evaluate_items(
+        df,
+        cfg.get("objectives", []),
+        ctx,
+        log,
+        label="objective",
+    )
+
+    metrics = _evaluate_items(
+        df,
+        cfg.get("metrics", []),
+        ctx,
+        log,
+        label="metric",
+    )
+
+    return objectives, metrics
