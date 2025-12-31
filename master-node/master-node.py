@@ -213,8 +213,8 @@ def run_cooja_simulation(
             exp_id = sim["experiment_id"]
             cfg = mongo.experiment_repo.get_objectives_and_metrics(str(exp_id))
         
-            objectives, metrics = statistics.evaluate_config(df, cfg)
-                    
+            objectives, metrics = statistics.evaluate_config(df, cfg, log)
+            
             # Mark completed and record log and csv ids
             mongo.simulation_repo.mark_done(sim_oid, log_id, csv_id, objectives, metrics)
         else:
