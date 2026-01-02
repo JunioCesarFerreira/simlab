@@ -25,6 +25,7 @@ services:
       context: .
       dockerfile: Dockerfile.rest-api
     container_name: rest_api
+    restart: always
     working_dir: /app
     environment:
       - PYTHONPATH=/app:/app/pylib
