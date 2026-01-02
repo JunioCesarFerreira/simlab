@@ -1,7 +1,7 @@
 from typing import Optional, Any
 from bson import ObjectId
 
-from dto import SourceFile, SourceRepository
+from pylib.dto.database import SourceFile, SourceRepository
 from mongo.connection import MongoDBConnection
 
 class SourceRepositoryAccess:

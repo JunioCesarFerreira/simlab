@@ -4,7 +4,7 @@ import random
 import logging
 from bson import ObjectId
 from pylib import mongo_db
-from dto import Simulation
+from pylib.dto.database import Simulation
 
 log = logging.getLogger(__name__)
 

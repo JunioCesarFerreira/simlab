@@ -24,6 +24,11 @@ def cooja_log_to_csv(cooja_log_input: Path, csv_output: Path) -> pd.DataFrame:
 
     # -------------------------- DataFrame bruto --------------------------------
     df = pd.DataFrame(rows)
-    df.sort_values(["node", "root_time_now"], inplace=True)
+    
+    REQUIRED_COLUMNS = {"node", "root_time_now"}
+    missing = REQUIRED_COLUMNS - set(df.columns)
+    if not missing:
+        df.sort_values(["node", "root_time_now"], inplace=True)
+        
     df.to_csv(csv_output, index=False)
     return df

@@ -1,0 +1,215 @@
+{
+    "id": null,
+    "name": "Performing optimization with NSGA-III on problem P1",
+    "status": "Waiting",
+    "created_time": "2025-12-29T17:45:00Z",
+    "start_time": null,
+    "end_time": null,    
+    "generations": [],
+    "source_repository_id": "695422f06775591eaf96e862",
+    "parameters": {
+        "strategy": "nsga3",
+        "algorithm": {
+            "population_size": 15,
+            "number_of_generations": 20,
+            "prob_cx": 0.8,
+            "prob_mt": 0.15,
+            "selection_method": "tournament",
+            "crossover_method": "sbx",
+            "mutation_method": "polynomial",
+            "per_gene_prob": 0.1,
+            "eta_cx": 20.0,
+            "eta_mt": 25.0
+        },
+        "simulation": {
+            "duration": 180
+        },
+        "problem":{
+            "name": "problem1",
+            "radius_of_reach": 50,
+            "radius_of_inter": 90,
+            "region": [
+                -150,
+                -150,
+                150,
+                150
+            ],
+            "sink": [0, 0],
+            "mobile_nodes": [
+                {
+                    "path_segments": [
+                        [ "70", "44 + 31 * t" ],
+                        [ "70 - 140 * t", "75" ],
+                        [ "-70", "75 - 31 * t" ],
+                        [ "-70 + 140 * t", "44" ]
+                    ],
+                    "is_closed": true,
+                    "is_round_trip": false,
+                    "speed": 5,
+                    "time_step": 1,
+                    "name": "node13",
+                    "source_code": "node.c"
+                },
+                {
+                    "path_segments": [
+                        [ "117 + 24 * np.cos(2 * np.pi * t)", "-28 + 52 * np.sin(2 * np.pi * t)" ]
+                    ],
+                    "is_closed": true,
+                    "is_round_trip": false,
+                    "speed": 5,
+                    "time_step": 1,
+                    "name": "node14",
+                    "source_code": "node.c"
+                },
+                {
+                    "path_segments": [
+                        [ "-114*(1-t)-64*t", "61*(1-t)+20*t" ],
+                        [ "-64", "20-82*t" ],
+                        [ "-64+136*t", "-62" ]
+                    ],
+                    "is_closed": false,
+                    "is_round_trip": true,
+                    "speed": 5,
+                    "time_step": 1,
+                    "name": "node15",
+                    "source_code": "node.c"
+                },
+                {
+                    "path_segments": [
+                        [ "-134+50*t", "16" ],
+                        [ "-84", "16-98*t" ],
+                        [ "-84-50*t", "-82" ],
+                        [ "-134", "-82+98*t" ]
+                    ],
+                    "is_closed": true,
+                    "is_round_trip": false,
+                    "speed": 5,
+                    "time_step": 1,
+                    "name": "node16",
+                    "source_code": "node.c"
+                },
+                {
+                    "path_segments": [
+                        [ "114*(1-t)+56*t", "80*(1-t)-33*t" ],
+                        [ "56 - 77*t", "-33" ]
+                    ],
+                    "is_closed": false,
+                    "is_round_trip": true,
+                    "speed": 5,
+                    "time_step": 1,
+                    "name": "node17",
+                    "source_code": "node.c"
+                },
+                {
+                    "path_segments": [
+                        [ "-54+108*t", "-81" ]
+                    ],
+                    "is_closed": false,
+                    "is_round_trip": true,
+                    "speed": 5,
+                    "time_step": 1,
+                    "name": "node18",
+                    "source_code": "node.c"
+                }
+            ],
+            "number_of_relays": 10
+        }
+    },
+    "transform_config": {
+        "node_col": "node",
+        "time_col": "root_time_now",
+        "objectives": [
+            {
+                "name": "latency",
+                "kind": "mean",
+                "column": "rtt_latency",
+                "goal": "min"
+            },
+            {
+                "name": "energy",
+                "kind": "sum_all",
+                "column": "total_energy_mj",
+                "goal": "min"
+            },
+            {
+                "name": "throughput",
+                "kind": "sum_last_minus_first",
+                "column": "server_received",
+                "goal": "max"
+            }
+        ],
+        "metrics": [
+            {
+                "name": "cpu_energy_mj",
+                "kind": "sum_all",
+                "column": "cpu_energy_mj"
+            },
+            {
+                "name": "lpm_energy_mj",
+                "kind": "sum_all",
+                "column": "lpm_energy_mj"
+            },
+            {
+                "name": "radio_tx_energy_mj",
+                "kind": "sum_all",
+                "column": "radio_tx_energy_mj"
+            },
+            {
+                "name": "radio_rx_energy_mj",
+                "kind": "sum_all",
+                "column": "radio_rx_energy_mj"
+            },
+            {
+                "name": "total_sent",
+                "kind": "sum_last_minus_first",
+                "column": "total_sent"
+            },
+            {
+                "name": "total_received",
+                "kind": "sum_last_minus_first",
+                "column": "total_received"
+            },
+            {
+                "name": "server_sent",
+                "kind": "sum_last_minus_first",
+                "column": "server_received"
+            },
+            {
+                "name": "bytes_tx",
+                "kind": "sum_last_minus_first",
+                "column": "bytes_tx"
+            },
+            {
+                "name": "bytes_rx",
+                "kind": "sum_last_minus_first",
+                "column": "bytes_rx"
+            },
+            {
+                "name": "server_bytes_rx",
+                "kind": "sum_last_minus_first",
+                "column": "server_bytes_rx"
+            },
+            {
+                "name": "r2n_latency",
+                "kind": "mean",
+                "column": "r2n_latency"
+            },
+            {
+                "name": "n2r_latency",
+                "kind": "mean",
+                "column": "n2r_latency"
+            },
+            {
+                "name": "hops",
+                "kind": "mean",
+                "column": "hops"
+            },
+            {
+                "name": "rtt_latency",
+                "kind": "mean",
+                "column": "rtt_latency"
+            }
+        ]
+    },
+    "pareto_front": null
+}
