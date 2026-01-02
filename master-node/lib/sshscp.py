@@ -1,17 +1,29 @@
 import logging
 import paramiko
+from paramiko import SSHClient
 from scp import SCPClient
 
 log = logging.getLogger(__name__)
 
-def create_ssh_client(hostname, port, username, password):
+def create_ssh_client(
+            hostname: str, 
+            port: int, 
+            username: str, 
+            password: str
+        ) -> SSHClient:
     client = paramiko.SSHClient()
     client.load_system_host_keys()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     client.connect(hostname, port=port, username=username, password=password)
     return client
 
-def send_files_scp(client, local_path, remote_path, source_files, target_files):
+def send_files_scp(
+        client: SSHClient, 
+        local_path: str, 
+        remote_path: str, 
+        source_files: list[str], 
+        target_files: list[str]
+    ) -> None:
     if len(source_files) != len(target_files):
         log.info("The number of source files is not equal number of targets.")
         return

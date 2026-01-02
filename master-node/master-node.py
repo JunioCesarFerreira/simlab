@@ -12,7 +12,7 @@ from paramiko import SSHClient
 from scp import SCPClient
 
 # lib master-node
-from lib import sshscp
+from lib.sshscp import create_ssh_client, send_files_scp
 
 # SysPath for common modules
 project_path = os.path.abspath(os.path.join(os.getcwd(), ".."))
@@ -94,6 +94,7 @@ def _assert_capacity(num_workers: int) -> None:
 
 def prepare_simulation_files(
     sim: Simulation,
+    worker_port: int,
     mongo: mongo_db.MongoRepository,
 ) -> tuple[bool, list[str], list[str]]:
     """
@@ -101,8 +102,8 @@ def prepare_simulation_files(
     Retorna (success, local_files, remote_files).
     """
     sim_oid = ObjectId(sim["_id"]) if not isinstance(sim["_id"], ObjectId) else sim["_id"]
-    tmp_dir = Path("tmp")
-    tmp_dir.mkdir(exist_ok=True)
+    tmp_dir = Path(f'tmp/worker_{worker_port}')
+    tmp_dir.mkdir(parents=True, exist_ok=True)
 
     local_xml = tmp_dir / f"simulation_{sim_oid}.xml"
     local_dat = tmp_dir / f"positions_{sim_oid}.dat"
@@ -152,7 +153,7 @@ def run_cooja_simulation(
     Executa a simulação no container via SSH, acompanha logs e envia resultado ao GridFS.
     """
     sim_oid = ObjectId(sim["_id"]) if not isinstance(sim["_id"], ObjectId) else sim["_id"]
-    ssh: SSHClient = sshscp.create_ssh_client(hostname, port, "root", "root")
+    ssh: SSHClient = create_ssh_client(hostname, port, "root", "root")
     try:
         log.info("[port=%s host=%s] Starting simulation %s", port, hostname, sim_oid)
         mongo.simulation_repo.mark_running(sim_oid)
@@ -267,7 +268,7 @@ def simulation_worker(sim_queue: queue.Queue, port: int, hostname: str) -> None:
             sim_id_str = str(sim.get("_id"))
             log.info("[port=%s host=%s] Preparing simulation %s", port, hostname, sim_id_str)
 
-            success, local_files, remote_files = prepare_simulation_files(sim, mongo)
+            success, local_files, remote_files = prepare_simulation_files(sim, port, mongo)
             if not success:
                 log.warning("[port=%s] Skipping simulation %s (prepare failed)", port, sim_id_str)
                 mongo.simulation_repo.mark_error(ObjectId(sim["_id"]))
@@ -275,9 +276,9 @@ def simulation_worker(sim_queue: queue.Queue, port: int, hostname: str) -> None:
 
             # Send files
             log.debug("[port=%s] Creating SSH client %s@%s:%s", port, "root", hostname, port)
-            ssh = sshscp.create_ssh_client(hostname, port, "root", "root")
+            ssh = create_ssh_client(hostname, port, "root", "root")
             try:
-                sshscp.send_files_scp(ssh, SET.local_dir, SET.remote_dir, local_files, remote_files)
+                send_files_scp(ssh, SET.local_dir, SET.remote_dir, local_files, remote_files)
             finally:
                 ssh.close()
 
