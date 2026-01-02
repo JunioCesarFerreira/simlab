@@ -72,6 +72,11 @@ class Parameters(TypedDict):
     simulation: dict[str, Any] # This is not Simulation or SimulationConfig because it holds only the simulation parameters
     problem: dict[str, Any] # Problem parameters defined in dto/problems.py
     
+class ParetoFrontItem(TypedDict):
+    simulation_id: ObjectId
+    chromosome: dict[str, Any]
+    objectives: dict[str, float]    
+
 class Experiment(TypedDict):
     id: str
     name: str
@@ -83,4 +88,4 @@ class Experiment(TypedDict):
     generations: list[ObjectId]
     source_repository_id: str
     transform_config: TransformConfig
-    pareto_front: Optional[Any] = None
+    pareto_front: Optional[list[ParetoFrontItem]] = None

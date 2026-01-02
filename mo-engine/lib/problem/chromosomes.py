@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Literal
 
@@ -9,9 +10,21 @@ Position = tuple[float, float]
 # 1 -> TDMA
 MacGene = Literal[0, 1]
 
+class Chromosome(ABC):
+    """
+    Abstract base class for chromosomes.
+    """
+
+    @abstractmethod
+    def to_dict(self) -> dict:
+        """
+        Converts the chromosome to a dictionary representation.
+        """
+        pass
+
 
 @dataclass(frozen=True, slots=True)
-class ChromosomeP1:
+class ChromosomeP1(Chromosome):
     """
     Chromosome for Problem 1 (continuous relay placement + MAC selection).
 
@@ -21,10 +34,16 @@ class ChromosomeP1:
     """
     mac_protocol: MacGene
     relays: list[Position]
+    
+    def to_dict(self) -> dict:
+        return {
+            "mac_protocol": self.mac_protocol,
+            "relays": [ {"x": pos[0], "y": pos[1]} for pos in self.relays ]
+        }
 
 
 @dataclass(frozen=True, slots=True)
-class ChromosomeP2:
+class ChromosomeP2(Chromosome):
     """
     Chromosome for Problem 2 (discrete candidate selection + MAC selection).
 
@@ -34,10 +53,16 @@ class ChromosomeP2:
     """
     mac_protocol: MacGene
     mask: list[int]  # each entry in {0,1}
+    
+    def to_dict(self) -> dict:
+        return {
+            "mac_protocol": self.mac_protocol,
+            "mask": self.mask
+        }
 
 
 @dataclass(frozen=True, slots=True)
-class ChromosomeP3:
+class ChromosomeP3(Chromosome):
     """
     Chromosome for Problem 3 (discrete candidate selection + MAC selection).
 
@@ -47,10 +72,16 @@ class ChromosomeP3:
     """
     mac_protocol: MacGene
     mask: list[int]  # each entry in {0,1}
+    
+    def to_dict(self) -> dict:
+        return {
+            "mac_protocol": self.mac_protocol,
+            "mask": self.mask
+        }
 
 
 @dataclass(frozen=True, slots=True)
-class ChromosomeP4:
+class ChromosomeP4(Chromosome):
     """
     Chromosome for Problem 4 (mobile sink route + sojourn times + MAC selection).
 
@@ -62,3 +93,10 @@ class ChromosomeP4:
     mac_protocol: MacGene
     route: list[int]
     sojourn_times: list[float]
+    
+    def to_dict(self) -> dict:
+        return {
+            "mac_protocol": self.mac_protocol,
+            "route": self.route,
+            "sojourn_times": self.sojourn_times
+        }

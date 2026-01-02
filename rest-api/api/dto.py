@@ -63,7 +63,12 @@ class TransformConfigDto(TypedDict):
     time_col: str
     objectives: list[ObjectiveItemDto]
     metrics: list[MetricItemDto]
-
+    
+class ParetoFrontItemDto(TypedDict):
+    simulation_id: str
+    chromosome: dict[str, Any]
+    objectives: dict[str, float]   
+    
 class ExperimentDto(TypedDict):
     id: Optional[str] = None
     name: str
@@ -75,7 +80,7 @@ class ExperimentDto(TypedDict):
     generations: list[str]
     source_repository_id: str
     transform_config: TransformConfigDto
-    pareto_front: Optional[Any] = None
+    pareto_front: Optional[list[ParetoFrontItemDto]] = None
     
 #---------------------------------------------------------------------------------------------------------
 # Converters Mongo ↔ DTO
@@ -228,6 +233,21 @@ def generation_to_mongo(dto: GenerationDto) -> Generation:
 
 # --- Experiment -----------------------------------------------------
 
+def _pareto_front_from_mongo(pf: Optional[list[dict]]) -> Optional[list[ParetoFrontItemDto]]:
+    if not pf:
+        return None
+
+    out: list[ParetoFrontItemDto] = []
+
+    for item in pf:
+        out.append({
+            "simulation_id": _oid_to_str(item.get("simulation_id")),
+            "chromosome": item.get("chromosome", {}),
+            "objectives": item.get("objectives", {}),
+        })
+
+    return out
+
 def experiment_from_mongo(doc: dict) -> ExperimentDto:
     """
     Converte documento Mongo (Experiment) -> ExperimentDto (ObjectIds como str).
@@ -248,8 +268,27 @@ def experiment_from_mongo(doc: dict) -> ExperimentDto:
         "generations": _list_oid_to_str(d.get("generations", [])),
         "source_repository_id": _oid_to_str(d.get("source_repository_id") or d.get("source_repository_id".replace("_id","")) or d.get("source_repository_id_str")),
         "transform_config": d.get("transform_config", {}),
-        "pareto_front": d.get("pareto_front", {}),
+        "pareto_front": _pareto_front_from_mongo(d.get("pareto_front")),
     }
+
+def _pareto_front_to_mongo(pf: Optional[list[ParetoFrontItemDto]]) -> Optional[list[dict]]:
+    if not pf:
+        return None
+
+    out: list[dict] = []
+
+    for item in pf:
+        sim_oid = _str_to_oid(item.get("simulation_id"))
+        if sim_oid is None:
+            raise ValueError("ParetoFrontItemDto.simulation_id inválido")
+
+        out.append({
+            "simulation_id": sim_oid,
+            "chromosome": item.get("chromosome", {}),
+            "objectives": item.get("objectives", {}),
+        })
+
+    return out
 
 def experiment_to_mongo(dto: ExperimentDto) -> Experiment:
     """
@@ -277,7 +316,7 @@ def experiment_to_mongo(dto: ExperimentDto) -> Experiment:
     exp["generations"] = _list_str_to_oid(d.get("generations", []))
     exp["source_repository_id"] = d.get("source_repository_id", "")
     exp["transform_config"] = d.get("transform_config", {}) or {}
-    exp["pareto_front"] = d.get("pareto_front", {}) or {}
+    exp["pareto_front"] = _pareto_front_to_mongo(d.get("pareto_front"))
     
     return exp 
 
