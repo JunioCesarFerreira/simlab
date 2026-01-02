@@ -94,7 +94,7 @@ def _assert_capacity(num_workers: int) -> None:
 
 def prepare_simulation_files(
     sim: Simulation,
-    worker_port: int,
+    worker_id: int,
     mongo: mongo_db.MongoRepository,
 ) -> tuple[bool, list[str], list[str]]:
     """
@@ -102,7 +102,7 @@ def prepare_simulation_files(
     Retorna (success, local_files, remote_files).
     """
     sim_oid = ObjectId(sim["_id"]) if not isinstance(sim["_id"], ObjectId) else sim["_id"]
-    tmp_dir = Path(f'tmp/worker_{worker_port}')
+    tmp_dir = Path(f'tmp/worker_{worker_id}')
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     local_xml = tmp_dir / f"simulation_{sim_oid}.xml"
@@ -247,7 +247,7 @@ def run_cooja_simulation(
         ssh.close()
 
 
-def simulation_worker(sim_queue: queue.Queue, port: int, hostname: str) -> None:
+def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostname: str) -> None:
     """
     Worker that consumes the queue and runs simulations on a host/port.
     """
@@ -268,7 +268,7 @@ def simulation_worker(sim_queue: queue.Queue, port: int, hostname: str) -> None:
             sim_id_str = str(sim.get("_id"))
             log.info("[port=%s host=%s] Preparing simulation %s", port, hostname, sim_id_str)
 
-            success, local_files, remote_files = prepare_simulation_files(sim, port, mongo)
+            success, local_files, remote_files = prepare_simulation_files(sim, worker_id, mongo)
             if not success:
                 log.warning("[port=%s] Skipping simulation %s (prepare failed)", port, sim_id_str)
                 mongo.simulation_repo.mark_error(ObjectId(sim["_id"]))
@@ -314,7 +314,7 @@ def start_workers(num_workers: int) -> queue.Queue:
     for i in range(num_workers):
         t = Thread(
             target=simulation_worker,
-            args=(q, SET.ports[i], SET.hostnames[i]),
+            args=(i, q, SET.ports[i], SET.hostnames[i]),
             daemon=True,
         )
         t.start()
