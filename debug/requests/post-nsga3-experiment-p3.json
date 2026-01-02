@@ -6,7 +6,7 @@
     "start_time": null,
     "end_time": null,    
     "generations": [],
-    "source_repository_id": "694ac25de87b06a845206c49",
+    "source_repository_id": "695422f06775591eaf96e862",
     "parameters": {
         "strategy": "nsga3",
         "algorithm": {
@@ -222,58 +222,94 @@
         "time_col": "root_time_now",
         "objectives": [
             {
-                "name": "p95_latency_ms",
-                "kind": "quantile",
-                "column": "latency_ms",
-                "q": 0.95,
+                "name": "latency",
+                "kind": "mean",
+                "column": "rtt_latency",
                 "goal": "min"
             },
             {
-                "name": "total_energy_mJ",
+                "name": "energy",
                 "kind": "sum_all",
-                "column": "total_mj",
+                "column": "total_energy_mj",
                 "goal": "min"
             },
             {
-                "name": "throughput_cost_inv_median",
-                "kind": "inverse_median",
-                "column": "throughput_bps",
-                "scale": 1000000.0,
-                "goal": "min"
-            },
-            {
-                "name": "js_latency_mean_ms",
-                "kind": "js_node_mean",
-                "column": "latency_ms",
-                "goal": "min"
+                "name": "throughput",
+                "kind": "sum_last_minus_first",
+                "column": "server_received",
+                "goal": "max"
             }
         ],
         "metrics": [
             {
-                "name": "latency_ms_mean",
-                "kind": "mean",
-                "column": "latency_ms"
-            },
-            {
-                "name": "latency_ms_median",
-                "kind": "median",
-                "column": "latency_ms"
-            },
-            {
-                "name": "response_ms_p95",
-                "kind": "quantile",
-                "column": "response_ms",
-                "q": 0.95
-            },
-            {
-                "name": "energy_cpu_mJ_total",
+                "name": "cpu_energy_mj",
                 "kind": "sum_all",
-                "column": "cpu_mj"
+                "column": "cpu_energy_mj"
             },
             {
-                "name": "volume_B_rate_per_s",
-                "kind": "sum_rate",
-                "column": "volume_B"
+                "name": "lpm_energy_mj",
+                "kind": "sum_all",
+                "column": "lpm_energy_mj"
+            },
+            {
+                "name": "radio_tx_energy_mj",
+                "kind": "sum_all",
+                "column": "radio_tx_energy_mj"
+            },
+            {
+                "name": "radio_rx_energy_mj",
+                "kind": "sum_all",
+                "column": "radio_rx_energy_mj"
+            },
+            {
+                "name": "total_sent",
+                "kind": "sum_last_minus_first",
+                "column": "total_sent"
+            },
+            {
+                "name": "total_received",
+                "kind": "sum_last_minus_first",
+                "column": "total_received"
+            },
+            {
+                "name": "server_sent",
+                "kind": "sum_last_minus_first",
+                "column": "server_received"
+            },
+            {
+                "name": "bytes_tx",
+                "kind": "sum_last_minus_first",
+                "column": "bytes_tx"
+            },
+            {
+                "name": "bytes_rx",
+                "kind": "sum_last_minus_first",
+                "column": "bytes_rx"
+            },
+            {
+                "name": "server_bytes_rx",
+                "kind": "sum_last_minus_first",
+                "column": "server_bytes_rx"
+            },
+            {
+                "name": "r2n_latency",
+                "kind": "mean",
+                "column": "r2n_latency"
+            },
+            {
+                "name": "n2r_latency",
+                "kind": "mean",
+                "column": "n2r_latency"
+            },
+            {
+                "name": "hops",
+                "kind": "mean",
+                "column": "hops"
+            },
+            {
+                "name": "rtt_latency",
+                "kind": "mean",
+                "column": "rtt_latency"
             }
         ]
     },
