@@ -1,3 +1,4 @@
+import gridfs
 from pymongo import MongoClient
 from bson import ObjectId
 from typing import Any
@@ -79,3 +80,54 @@ def get_pareto_per_generation(
         pareto_by_generation[gen["index"]] = pareto
 
     return pareto_by_generation
+
+
+
+def upload_file(
+    mongo_uri: str,
+    db_name: str,
+    path: str, 
+    name: str
+) -> ObjectId:
+    client = MongoClient(mongo_uri)
+    db = client[db_name]
+    fs = gridfs.GridFS(db)
+    
+    with open(path, "rb") as f:
+        file_id = fs.put(f, filename=name)
+        
+    return ObjectId(file_id)
+
+
+
+def add_analysis_file_to_experiment(
+    mongo_uri: str,
+    db_name: str,
+    experiment_id: str,
+    description: str,
+    file_id: ObjectId
+) -> None:
+    """
+    Register an analysis artifact in the experiment document.
+
+    Parameters
+    ----------
+    description : str
+        Human-readable description of the analysis artifact (English).
+    file_id : ObjectId
+        GridFS file ObjectId.
+    """
+    client = MongoClient(mongo_uri)
+    db = client[db_name]
+
+    result = db.experiments.update_one(
+        {"_id": ObjectId(experiment_id)},
+        {
+            "$set": {
+                f"analysis_files.{description}": file_id
+            }
+        }
+    )
+
+    if result.matched_count == 0:
+        raise ValueError("Experiment not found")
