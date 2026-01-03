@@ -79,24 +79,6 @@ services:
       - mongo-net
       - cooja-net
 
-  # This container is used for direct data analysis during development.
-  analysis-node:
-    build:
-      context: .
-      dockerfile: Dockerfile.pareto-analysis
-    container_name: analysis_node
-    working_dir: /app
-    environment:
-      - PYTHONPATH=/app:/app/pylib
-      - DB_NAME=simlab
-      - MONGO_URI=mongodb://mongodb:27017/?replicaSet=rs0
-      - IS_DOCKER=True
-    ports:
-      - "2211:22"
-    depends_on:
-      - mongodb
-    networks:
-      - mongo-net
 
 # Attention! When modifying the number of Cooja containers, 
 # remember to modify the masternode's NUMBER_OF_CONTAINERS environment variable.
