@@ -44,6 +44,47 @@ def get_paretos(experiment_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/experiments/{experiment_id}/paretos_to_min")
+def get_paretos(experiment_id: str):
+    """
+    Retrieve Pareto fronts per generation for a given experiment,
+    with all objective values expressed in a minimization space.
+
+    This endpoint returns the non-dominated solutions (Pareto fronts)
+    computed independently for each generation, considering only
+    simulations with status == "Done".
+
+    Objective handling:
+    - All objectives are converted to a minimization formulation.
+    - Objectives originally defined as "max" in the experiment
+      configuration are sign-inverted prior to dominance evaluation.
+    - Objectives defined as "min" are returned unchanged.
+
+    This guarantees that the returned objective vectors are directly
+    compatible with standard multi-objective performance indicators
+    such as hypervolume (HV), generational distance (GD), and IGD,
+    without requiring any additional transformations on the client side.
+    
+    Output format:
+    {
+        generation_index: [
+            {
+                "simulation_id": ObjectId,
+                "objectives": { ... }
+            },
+            ...
+        ],
+        ...
+    }
+    """
+    try:
+        return factory.analytics_repo.get_pareto_per_generation_only_min(experiment_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
 @router.get("/experiments/{experiment_id}/individuals")
 def get_individuals(experiment_id: str):
     """

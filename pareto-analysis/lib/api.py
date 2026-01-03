@@ -14,9 +14,12 @@ def build_session(api_key: str) -> requests.Session:
 def get_pareto_per_generation_api(
     session: requests.Session,
     api_base: str,
-    experiment_id: str
+    experiment_id: str,
+    to_minimization: bool = False
 ) -> dict[int, list[dict[str, Any]]]:
     url = f"{api_base}/analysis/experiments/{experiment_id}/paretos"
+    if to_minimization:
+        url += "_to_min"
     resp = session.get(url, timeout=60)
     resp.raise_for_status()
     data = resp.json()

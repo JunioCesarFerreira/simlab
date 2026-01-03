@@ -35,6 +35,7 @@ class Pareto:
 
         return better_or_equal and strictly_better
 
+
     @staticmethod
     def pareto_front(
         items: list[dict[str, Any]],
@@ -54,6 +55,63 @@ class Pareto:
                 front.append(a)
 
         return front
+    
+    
+    @staticmethod
+    def to_minimization(
+        objectives: dict[str, float],
+        goals: dict[str, str]
+    ) -> dict[str, float]:
+        """
+        Convert objectives to minimization space.
+        - min objectives: unchanged
+        - max objectives: sign-inverted
+        """
+        out = {}
+        for k, v in objectives.items():
+            goal = goals.get(k, "min")
+            if goal == "max":
+                out[k] = -v
+            else:
+                out[k] = v
+        return out
+    
+    
+    @staticmethod
+    def dominates_min(a: dict[str, float], b: dict[str, float]) -> bool:
+        better_or_equal = True
+        strictly_better = False
+
+        for k in a.keys():
+            if a[k] > b[k]:
+                better_or_equal = False
+            if a[k] < b[k]:
+                strictly_better = True
+
+        return better_or_equal and strictly_better
+
+
+    @staticmethod
+    def pareto_front_min(
+        items: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        front = []
+
+        for i, a in enumerate(items):
+            dominated = False
+            for j, b in enumerate(items):
+                if i == j:
+                    continue
+                if Pareto.dominates_min(b["objectives"], a["objectives"]):
+                    dominated = True
+                    break
+            if not dominated:
+                front.append(a)
+
+        return front
+
+#------------------------------------------------------------------------------------------------------
+
 
 class AnalyticsRepository:
     def __init__(self, connection: MongoDBConnection):
@@ -141,6 +199,64 @@ class AnalyticsRepository:
                     })
 
                 pareto = Pareto.pareto_front(candidates, goals)
+
+                pareto_by_generation[gen["index"]] = pareto
+
+            return pareto_by_generation
+        
+        
+    def get_pareto_per_generation_only_min(
+        self,
+        experiment_id: str
+    ) -> dict[int, list[dict[str, Any]]]:
+        try:
+            oid = ObjectId(experiment_id)
+        except errors.InvalidId:
+            log.error("Invalid ID")
+            return []
+        with self.connection.connect() as db:
+            experiment = db.experiments.find_one({"_id": oid})
+                        
+            if experiment is None:
+                raise ValueError("Experiment not found")
+
+            # Map objective -> goal (min/max)
+            goals = {
+                obj["name"]: obj["goal"]
+                for obj in experiment["transform_config"]["objectives"]
+            }
+            
+            pareto_by_generation = {}
+
+            generations = db.generations.find(
+                {"_id": {"$in": experiment["generations"]}},
+                sort=[("index", 1)]
+            )
+            
+            gen_list = list(generations)
+
+            for gen in gen_list:
+                simulations = list(
+                    db.simulations.find(
+                        {
+                            "_id": {"$in": [ObjectId(oid) for oid in list(gen["simulations_ids"])]},
+                            "status": "Done"
+                        },
+                        {
+                            "_id": 1,
+                            "objectives": 1
+                        }
+                    )
+                )
+                
+                candidates = []
+                for sim in simulations:
+                    candidates.append({
+                        "simulation_id": str(sim["_id"]),
+                        "objectives": Pareto.to_minimization(sim["objectives"], goals)
+                    })
+
+                pareto = Pareto.pareto_front_min(candidates)
 
                 pareto_by_generation[gen["index"]] = pareto
 
