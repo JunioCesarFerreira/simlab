@@ -6,11 +6,11 @@
     "start_time": null,
     "end_time": null,    
     "generations": [],
-    "source_repository_id": "695422f06775591eaf96e862",
+    "source_repository_id": "69583a05f8ea24236def81c9",
     "parameters": {
         "strategy": "nsga3",
         "algorithm": {
-            "population_size": 15,
+            "population_size": 30,
             "number_of_generations": 20,
             "prob_cx": 0.8,
             "prob_mt": 0.15,
