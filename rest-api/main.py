@@ -7,8 +7,11 @@ if project_path not in sys.path:
     
 from api.router import api_router
 
-app = FastAPI(title="Simulation Management API")
-app.include_router(api_router)
+app = FastAPI(
+    title="Simulation Management API",
+    version="1.0.0"
+)
+app.include_router(api_router, prefix="/api/v1")
 
 if __name__ == "__main__":
     import uvicorn

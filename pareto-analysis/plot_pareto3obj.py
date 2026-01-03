@@ -114,7 +114,7 @@ def main():
 
     parser.add_argument(
         "--api-base",
-        default="http://localhost:8000",
+        default="http://localhost:8000/api/v1",
         help="Base URL of the SimLab API (default: http://localhost:8000)"
     )
 
