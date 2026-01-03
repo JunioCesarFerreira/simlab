@@ -89,3 +89,4 @@ class Experiment(TypedDict):
     source_repository_id: str
     transform_config: TransformConfig
     pareto_front: Optional[list[ParetoFrontItem]] = None
+    analysis_files: dict[str, ObjectId]
