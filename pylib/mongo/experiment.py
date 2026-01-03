@@ -5,6 +5,7 @@ from bson import ObjectId, errors
 
 from pylib.dto.database import Experiment, TransformConfig
 from mongo.connection import MongoDBConnection, EnumStatus
+from mongo.gridfs_handler import MongoGridFSHandler
 
 log = logging.getLogger(__name__)
 
@@ -136,6 +137,29 @@ class ExperimentRepository:
                 "deleted_generations": gens_deleted,
                 "deleted_simulations": sims_deleted,
             }
+            
+    def add_analysis_file_to_experiment(self, 
+            experiment_id: str, 
+            description: str,
+            path: str, 
+            name: str
+    ) -> ObjectId | None:
+        with self.connection.connect() as db:
+            grid = MongoGridFSHandler(self.connection)
+            file_id = grid.upload_file(path, name)
+            
+            result = db.experiments.update_one(
+                {"_id": ObjectId(experiment_id)},
+                {
+                    "$set": {
+                        f"analysis_files.{description}": file_id
+                    }
+                }
+            )
+            if result.matched_count == 0:
+                raise ValueError("Experiment not found")
+            
+            return file_id
     
     def watch_status_waiting(self, on_change: Callable[[dict], None]):
         log.info("[ExperimentRepository] Waiting new experiments...")
