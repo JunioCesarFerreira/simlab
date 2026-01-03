@@ -23,6 +23,13 @@ router = APIRouter()
 
 @router.get("/", response_model=list[SourceRepository])
 def list_sources() -> list[SourceRepository]:
+    """
+    List all registered source repositories.
+    
+    - Retrieves all source repository documents
+    - Maps each document to SourceRepository DTO
+    - Returns an empty list if no repository exists
+    """
     try:
         docs = factory.source_repo.get_all()
         return [source_repository_from_mongo(d) for d in docs]
@@ -32,6 +39,13 @@ def list_sources() -> list[SourceRepository]:
 
 @router.get("/{repository_id}", response_model=SourceRepository)
 def get_source_repository(repository_id: str) -> SourceRepository:
+    """
+    List all registered source repositories.
+    
+    - Retrieves all source repository documents
+    - Maps each document to SourceRepository DTO
+    - Returns an empty list if no repository exists
+    """
     try:
         doc = factory.source_repo.get_by_id(repository_id)
         if not doc:
@@ -49,6 +63,16 @@ async def create_source_repository(
     description: str = Form(""),
     files: list[UploadFile] = File(...)
 ) -> str:
+    """
+    Create a new source repository with uploaded files.
+    
+    - Receives repository metadata (name, description)
+    - Receives one or more uploaded files
+    - Each file is stored in GridFS
+    - Only file metadata and file_id references are stored in the repository document
+    
+    Returns the generated repository_id as string.
+    """
     source_files: list[SourceFile] = []
     try:
         for upload in files:
@@ -76,6 +100,16 @@ async def create_source_repository(
 
 @router.get("/{repository_id}/download")
 def download_source_repository(repository_id: str):
+    """
+    Download all files of a source repository as a ZIP archive.
+    
+    - repository_id must be a valid ObjectId string
+    - All files referenced by the repository are fetched from GridFS
+    - Files are packed into a temporary ZIP archive
+    - The ZIP file is returned as a download
+    
+    Returns a ZIP file containing all repository source files.
+    """
     try:
         repo = factory.source_repo.get_by_id(repository_id)
         if not repo:

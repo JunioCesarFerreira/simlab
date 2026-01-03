@@ -19,7 +19,16 @@ router = APIRouter()
 
 @router.get("/{file_id}/as/{extension}", response_class=FileResponse)
 def download_file(file_id: str, extension: str, background_tasks: BackgroundTasks):
-    # valida ObjectId
+    """
+    Download a file stored in GridFS and return it with a desired extension.
+    
+    - file_id must be a valid GridFS ObjectId
+    - The file is streamed from GridFS into a temporary file
+    - The temporary file is automatically removed after the response is sent
+    - The extension parameter affects only the response filename and MIME type
+    
+    The original file content is preserved exactly as stored.
+    """
     try:
         oid = ObjectId(file_id)
     except bson_errors.InvalidId:
