@@ -25,3 +25,5 @@ mo-engine/lib/nsga/__pycache__
 mo-engine/lib/problem/__pycache__
 mo-engine/lib/strategy/__pycache__
 mo-engine/lib/util/__pycache__
+gui/simlab/node_modules
+pareto-analysis/lib/__pycache__

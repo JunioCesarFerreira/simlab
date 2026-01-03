@@ -6,6 +6,7 @@ from .mongo.simulation import SimulationRepository
 from .mongo.generation import GenerationRepository
 from .mongo.source import SourceRepositoryAccess
 from .mongo.gridfs_handler import MongoGridFSHandler
+from .mongo.analytics import AnalyticsRepository
 
 EnumStatus = EnumStatus # Para uso externo
 
@@ -17,6 +18,7 @@ class MongoRepository(NamedTuple):
     generation_repo: GenerationRepository
     source_repo: SourceRepositoryAccess
     fs_handler: MongoGridFSHandler
+    analytics_repo: AnalyticsRepository
 
 
 def create_mongo_repository_factory(mongo_uri: str, db_name: str) -> MongoRepository:
@@ -26,10 +28,12 @@ def create_mongo_repository_factory(mongo_uri: str, db_name: str) -> MongoReposi
     simulation_repo = SimulationRepository(connection)
     simulation_queue_repo = GenerationRepository(connection)
     source_repo = SourceRepositoryAccess(connection)
+    analytics_repo = AnalyticsRepository(connection)
     return MongoRepository(
         experiment_repo=experiment_repo,
         simulation_repo=simulation_repo,
         generation_repo=simulation_queue_repo,
         source_repo=source_repo,
-        fs_handler=fs_handler
+        fs_handler=fs_handler,
+        analytics_repo=analytics_repo
     )

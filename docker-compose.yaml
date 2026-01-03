@@ -25,6 +25,7 @@ services:
       context: .
       dockerfile: Dockerfile.rest-api
     container_name: rest_api
+    restart: always
     working_dir: /app
     environment:
       - PYTHONPATH=/app:/app/pylib
@@ -77,6 +78,7 @@ services:
     networks:
       - mongo-net
       - cooja-net
+
 
 # Attention! When modifying the number of Cooja containers, 
 # remember to modify the masternode's NUMBER_OF_CONTAINERS environment variable.

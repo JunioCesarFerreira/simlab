@@ -23,6 +23,6 @@ class MongoGridFSHandler:
                 grid_out = fs.get(ObjectId(file_id))
                 with open(local_path, 'wb') as f:
                     f.write(grid_out.read())
-                logger.info(f"Arquivo {local_path} salvo com sucesso.")
+                logger.info(f"File {local_path} saved successfully.")
         except Exception as e:
-            logger.error(f"Falha ao salvar arquivo {file_id}: {e}")
+            logger.error(f"Failed to save file {file_id}: {e}")

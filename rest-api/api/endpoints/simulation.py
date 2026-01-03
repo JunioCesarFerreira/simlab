@@ -22,6 +22,15 @@ router = APIRouter()
 
 @router.post("/", response_model=str)
 def create_simulation(simulation: SimulationDto) -> str:
+    """
+    Create a new simulation.
+    
+    - Receives a validated SimulationDto
+    - Converts it to MongoDB-compatible format
+    - Persists it in the simulations collection
+    
+    Returns the generated simulation_id as string.
+    """
     try:
         doc = simulation_to_mongo(simulation)
         sim_id = factory.simulation_repo.insert(doc)
@@ -32,6 +41,15 @@ def create_simulation(simulation: SimulationDto) -> str:
 
 @router.get("/{sim_id}", response_model=SimulationDto)
 def get_simulation(sim_id: str) -> SimulationDto:
+    """
+    Create a new simulation.
+    
+    - Receives a validated SimulationDto
+    - Converts it to MongoDB-compatible format
+    - Persists it in the simulations collection
+    
+    Returns the generated simulation_id as string.
+    """
     try:
         doc = factory.simulation_repo.get_by_id(sim_id)
         if not doc:
@@ -45,6 +63,15 @@ def get_simulation(sim_id: str) -> SimulationDto:
 
 @router.put("/{sim_id}", response_model=bool)
 def update_simulation(sim_id: str, updates: dict) -> bool:
+    """
+    Update arbitrary fields of a simulation.
+    
+    - sim_id must be a valid ObjectId string
+    - updates is a partial dictionary of fields to be updated
+    - Uses a $set-like semantic in the repository layer
+    
+    Returns True if the update operation succeeds.
+    """
     try:
         return factory.simulation_repo.update(ObjectId(sim_id), updates)
     except Exception as e:
@@ -52,6 +79,15 @@ def update_simulation(sim_id: str, updates: dict) -> bool:
 
 @router.delete("/{sim_id}", response_model=bool)
 def delete_simulation(sim_id: str) -> bool:
+    """
+    Delete a simulation by its identifier.
+    
+    - sim_id must be a valid ObjectId string
+    - Deletes only the simulation document
+    - Associated GridFS files must be handled explicitly elsewhere
+    
+    Returns True if the delete operation succeeds.
+    """
     try:
         return factory.simulation_repo.delete_by_id(ObjectId(sim_id))
     except Exception as e:
@@ -59,6 +95,13 @@ def delete_simulation(sim_id: str) -> bool:
 
 @router.get("/by-status/{status}", response_model=list[SimulationDto])
 def get_simulations_by_status(status: str) -> list[SimulationDto]:
+    """
+    Retrieve all simulations with a given status.
+    
+    - Status is matched exactly as stored in the database
+    - Returns a list of SimulationDto objects
+    - Empty list is returned if no simulation matches
+    """
     try:
         docs = factory.simulation_repo.find_by_status(status)
         return [simulation_from_mongo(d) for d in docs]
@@ -68,6 +111,16 @@ def get_simulations_by_status(status: str) -> list[SimulationDto]:
 
 @router.get("/{sim_id}/file/{field_name}")
 def download_simulation_file(sim_id: str, field_name: str):
+    """
+    Download a file associated with a simulation.
+    
+    - sim_id must be a valid ObjectId string
+    - field_name refers to a file reference field stored in the simulation document
+      (e.g., pos_file_id, log_cooja_id, topology_picture_id)
+    - The file is retrieved from GridFS and returned as a binary download
+    
+    Returns the file as an attachment.
+    """
     try:
         # search sim and file id
         sim = factory.simulation_repo.get_by_id(sim_id)
@@ -96,6 +149,16 @@ def download_simulation_file(sim_id: str, field_name: str):
 
 @router.patch("/{sim_id}/status", response_model=bool)
 def update_simulation_status(sim_id: str, new_status: str) -> bool:
+    """
+    Update only the status field of a simulation.
+    
+    - Intended for controlled lifecycle transitions
+      (e.g., Queued → Running → Finished → Failed)
+    - Avoids full document updates
+    - sim_id must be a valid ObjectId string
+    
+    Returns True if the operation succeeds.
+    """
     try:
         factory.simulation_repo.update_status(sim_id, new_status)
         return True
