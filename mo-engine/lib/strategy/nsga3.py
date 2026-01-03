@@ -21,6 +21,7 @@ from lib.util.population import PopulationSnapshot, select_next_population
 # NSGA utils
 from lib.nsga import fast_nondominated_sort
 from lib.nsga import generate_reference_points, niching_selection
+from lib.genetic_operators.selection import tournament_selection_2, compute_individual_ranks
 # Problem Adapter
 from lib.problem.adapter import ProblemAdapter, Chromosome
 from lib.problem.resolve import build_adapter
@@ -299,30 +300,15 @@ class NSGA3LoopStrategy(EngineStrategy):
         }
 
 # ---------------------------------------
-# Conclusion of generation and evolution
+# NSGA-III Evolution
 # ---------------------------------------
-    def _on_generation_completed(self):
+    def _evolution(self, objectives: list[list[float]]) -> None:
         """
         Two-phase (μ+λ) loop:
         Phase P: parents (P_t) finished -> produce offspring Q_t and enqueue -> return.
         Phase Q: offspring (Q_t) finished -> environmental selection on R_t = P_t U Q_t -> spawn P_{t+1}.
-        """
-        assert self._gen_id is not None
-        logger.info(f"[NSGA-III] Generation {self._gen_index} completed.")
-
-        # close current generation
-        self.mongo.generation_repo.mark_done(self._gen_id)
-
-        # build objective matrix for the just-finished batch (aligned with self.current_population)
-        try:
-            indices = list(range(len(self._current_population)))
-            objectives = [self._current_idx_to_objectives[i] for i in indices]
-        except Exception:
-            logger.exception("[NSGA-III] Missing objectives for some individuals; aborting.")
-            self._finalize_experiment()
-            return
-        
-        # First PHASE P
+        """        
+        # ---------------- First PHASE P ----------------
         if self._parents.dont_have_objectives():
             # Store P_t (genomes + objectives) = newly assessed population
             self._parents.set(
@@ -420,12 +406,32 @@ class NSGA3LoopStrategy(EngineStrategy):
         # (note: gen_index here is just a sequence counter of batches evaluated)
         self._gen_index += 1
         self._current_population = offspring
-        self._generation_enqueue()
-        
+        self._generation_enqueue()        
         
         logger.info("[NSGA-III] Offspring enqueued; waiting for Q_t results to perform environmental selection.")
 
         return
+    
+# ---------------------------------------
+# Conclusion of generation and evolution
+# ---------------------------------------
+    def _on_generation_completed(self):
+        assert self._gen_id is not None
+        logger.info(f"[NSGA-III] Generation {self._gen_index} completed.")
+
+        # close current generation
+        self.mongo.generation_repo.mark_done(self._gen_id)
+
+        # build objective matrix for the just-finished batch (aligned with self.current_population)
+        try:
+            indices = list(range(len(self._current_population)))
+            objectives = [self._current_idx_to_objectives[i] for i in indices]
+        except Exception:
+            logger.exception("[NSGA-III] Missing objectives for some individuals; aborting.")
+            self._finalize_experiment()
+            return
+        
+        self._evolution(objectives)
 
 # ---------------------------------------
 # Run Genetic Algorithm
@@ -435,11 +441,11 @@ class NSGA3LoopStrategy(EngineStrategy):
         parents = self._parents.get_genomes()
         children: list[Chromosome] = []        
         fronts: list[list[int]] = fast_nondominated_sort(objectives)
-        individual_ranks: dict[int, int] = self._compute_individual_ranks(fronts)
+        individual_ranks: dict[int, int] = compute_individual_ranks(fronts)
         while len(children) < self._pop_size:
             # Selection
-            parent1: Chromosome = self._tournament_selection(parents, individual_ranks)
-            parent2: Chromosome = self._tournament_selection(parents, individual_ranks)
+            parent1: Chromosome = tournament_selection_2(parents, individual_ranks)
+            parent2: Chromosome = tournament_selection_2(parents, individual_ranks)
             # Crossover 
             if rng.random() < self._prob_cx:
                 c1, c2 = self._problem_adapter.crossover([parent1, parent2])
@@ -454,30 +460,9 @@ class NSGA3LoopStrategy(EngineStrategy):
             children.append(c2)
         return children[:self._pop_size]
 
-
-    def _tournament_selection(self,
-        population: list[Chromosome], 
-        individual_ranks: dict[int, int]
-        ) -> Chromosome:
-            i1, i2 = random.sample(range(len(population)), 2)
-            rank1: int = individual_ranks[i1]
-            rank2: int = individual_ranks[i2]
-            if rank1 < rank2:
-                return population[i1]
-            elif rank2 < rank1:
-                return population[i2]
-            else:
-                return population[random.choice([i1, i2])]
-
-
-    def _compute_individual_ranks(self, fronts: list[list[int]]) -> dict[int, int]:
-        individual_ranks: dict[int, int] = {}
-        for rank, front in enumerate(fronts):
-            for idx in front:
-                individual_ranks[idx] = rank
-        return individual_ranks
-
-
+# ---------------------------------------
+# Extract Objectives
+# ---------------------------------------  
     def _extract_objectives_to_minimization(
         self,
         result_doc: dict
@@ -521,7 +506,9 @@ class NSGA3LoopStrategy(EngineStrategy):
             )
             return None
 
-
+# ---------------------------------------
+# Finalize Experiment
+# ---------------------------------------  
     def _finalize_experiment(self, pareto_front: Optional[list[dict]] = None):
         assert self._exp_id is not None
         if pareto_front is not None:

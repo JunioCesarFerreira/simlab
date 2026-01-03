@@ -1,4 +1,5 @@
 from .tournament_selection import tournament_selection
 from .rank_selection import rank_selection
 from .roulette_selection import roulette_selection
-from .tournament_selection import tournament_selection_nsga
+from .tournament_selection import tournament_selection
+from .tournament_selection import tournament_selection_2, compute_individual_ranks

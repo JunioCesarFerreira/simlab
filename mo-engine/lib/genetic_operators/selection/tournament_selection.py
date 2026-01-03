@@ -1,6 +1,5 @@
 from typing import Sequence, TypeVar
 import random
-import numpy as np
 
 T = TypeVar("T")
 
@@ -19,3 +18,28 @@ def tournament_selection(
         best = max(cand_idx, key=lambda i: scores[i])
         sel.append(best)
     return sel
+
+
+from lib.problem import Chromosome
+
+def tournament_selection_2(
+    population: list[Chromosome], 
+    individual_ranks: dict[int, int]
+) -> Chromosome:
+    i1, i2 = random.sample(range(len(population)), 2)
+    rank1: int = individual_ranks[i1]
+    rank2: int = individual_ranks[i2]
+    if rank1 < rank2:
+        return population[i1]
+    elif rank2 < rank1:
+        return population[i2]
+    else:
+        return population[random.choice([i1, i2])]
+    
+    
+def compute_individual_ranks(fronts: list[list[int]]) -> dict[int, int]:
+    individual_ranks: dict[int, int] = {}
+    for rank, front in enumerate(fronts):
+        for idx in front:
+            individual_ranks[idx] = rank
+    return individual_ranks
