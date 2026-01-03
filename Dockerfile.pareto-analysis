@@ -1,0 +1,29 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# -----------------------------
+# Install dependencies
+# -----------------------------
+COPY pareto-analysis/requirements.txt /app/pareto-analysis/requirements.txt
+RUN pip install --no-cache-dir -r /app/pareto-analysis/requirements.txt
+
+# -----------------------------
+# Copy source code
+# -----------------------------
+COPY pareto-analysis /app/pareto-analysis
+COPY pylib /app/pylib
+
+# -----------------------------
+# Environment
+# -----------------------------
+ENV PYTHONPATH=/app:/app/pylib
+ENV DB_NAME=simlab
+ENV MONGO_URI=mongodb://mongodb:27017/?replicaSet=rs0
+ENV PYTHONUNBUFFERED=1
+ENV IS_DOCKER=true
+
+# -----------------------------
+# Keep container alive
+# -----------------------------
+CMD ["sleep", "infinity"]
