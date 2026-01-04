@@ -126,7 +126,7 @@ def prepare_simulation_files(
     src_repo_id = sim.get("source_repository_id")
     src: SourceRepository = mongo.source_repo.get_by_id(src_repo_id)
     if not src or "source_files" not in src:
-        log.warning("Source repository %s not found for experiment %s", src_repo_id, exp.get("_id"))
+        log.warning("Source repository %s not found for experiment %s", src_repo_id, sim.get("experiment_id"))
         return False, local_files, remote_files
 
     for sf in src["source_files"]:
