@@ -26,6 +26,7 @@ class SimulationDto(TypedDict):
     parameters: SimulationConfig
     pos_file_id: str
     csc_file_id: str
+    source_repository_id: str
     log_cooja_id: str
     runtime_log_id: str
     csv_log_id: str
@@ -78,7 +79,7 @@ class ExperimentDto(TypedDict):
     end_time: Optional[datetime] = None
     parameters: Parameters
     generations: list[str]
-    source_repository_id: str
+    source_repository_options: dict[str, str]
     transform_config: TransformConfigDto
     pareto_front: Optional[list[ParetoFrontItemDto]] = None
     analysis_files: NotRequired[dict[str, str]] = None
@@ -124,6 +125,17 @@ def _list_oid_to_str(lst: list) -> list[str]:
 
 def _list_str_to_oid(lst: list[str]) -> list[ObjectId]:
     return [ObjectId(x) for x in (lst or []) if x]
+
+
+def _dict_oid_to_str(d: dict[str,ObjectId]) -> dict[str, str]:
+    if not d:
+        return {}
+    return {k: str(v) for k, v in d.items()}
+
+def _dict_str_to_oid(d: dict[str, str]) -> dict[str, ObjectId]:
+    if not d:
+        return {}
+    return {k: ObjectId(v) for k, v in d.items() if v}
 
 
 def _ensure_datetime(x):
@@ -204,6 +216,7 @@ def simulation_from_mongo(doc: dict) -> SimulationDto:
         "parameters": d.get("parameters", {}),  # tipo: SimulationConfig
         "pos_file_id": _oid_to_str(d.get("pos_file_id")),
         "csc_file_id": _oid_to_str(d.get("csc_file_id")),
+        "source_repository_id": _oid_to_str(d.get("source_repository_id")),
         "log_cooja_id": _oid_to_str(d.get("log_cooja_id")),
         "runtime_log_id": _oid_to_str(d.get("runtime_log_id")),
         "csv_log_id": _oid_to_str(d.get("csv_log_id")),
@@ -237,7 +250,16 @@ def simulation_to_mongo(dto: SimulationDto) -> Simulation:
     sim["metrics"] = d.get("metrics", {})
 
     # IDs de arquivos
-    for k in ("pos_file_id", "csc_file_id", "log_cooja_id", "runtime_log_id", "csv_log_id", "topology_picture_id"):
+    files_ids = (
+        "pos_file_id", 
+        "csc_file_id",
+        "source_repository_id",
+        "log_cooja_id", 
+        "runtime_log_id", 
+        "csv_log_id", 
+        "topology_picture_id"
+        )
+    for k in files_ids:
         oid = _str_to_oid(d.get(k))
         if oid is not None:
             sim[k] = oid
@@ -313,7 +335,7 @@ def experiment_from_mongo(doc: dict) -> ExperimentDto:
         "end_time": _ensure_datetime(d.get("end_time")),
         "parameters": d.get("parameters", {}),
         "generations": _list_oid_to_str(d.get("generations", [])),
-        "source_repository_id": _oid_to_str(d.get("source_repository_id") or d.get("source_repository_id".replace("_id","")) or d.get("source_repository_id_str")),
+        "source_repository_options": _dict_oid_to_str(d.get("source_repository_options", [])),
         "transform_config": d.get("transform_config", {}),
         "pareto_front": _pareto_front_from_mongo(d.get("pareto_front")),
         "analysis_files": _dict_analysis_files_to_str(d.get("analysis_files", {}))
@@ -323,9 +345,6 @@ def experiment_to_mongo(dto: ExperimentDto) -> Experiment:
     """
     Converte ExperimentDto -> estrutura Mongo (Experiment).
     - 'id' (str) vira '_id' (ObjectId) se presente.
-    - 'generations' (list[str]) vira list[ObjectId].
-    - 'source_repository_id' (str) permanece string SE for modelo atual,
-      mas se você for migrar para ObjectId, troque por _str_to_oid aqui.
     """
     if not dto:
         raise ValueError("experiment_to_mongo: dto vazio")
@@ -343,7 +362,7 @@ def experiment_to_mongo(dto: ExperimentDto) -> Experiment:
     exp["end_time"] = _ensure_datetime(d.get("end_time"))
     exp["parameters"] = d.get("parameters", {})
     exp["generations"] = _list_str_to_oid(d.get("generations", []))
-    exp["source_repository_id"] = d.get("source_repository_id", "")
+    exp["source_repository_options"] = _dict_str_to_oid(d.get("source_repository_options", []))
     exp["transform_config"] = d.get("transform_config", {}) or {}
     exp["pareto_front"] = _pareto_front_to_mongo(d.get("pareto_front"))
     exp["analysis_files"] = _dict_analysis_files_to_oid(d.get("analysis_files", {}) or {})

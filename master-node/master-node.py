@@ -123,12 +123,7 @@ def prepare_simulation_files(
         remote_files.append("positions.dat")
 
     # Source repository
-    exp: Experiment = mongo.experiment_repo.get_by_id(sim["experiment_id"])
-    if not exp:
-        log.warning("Experiment not found for sim %s", sim_oid)
-        return False, local_files, remote_files
-
-    src_repo_id = exp.get("source_repository_id")
+    src_repo_id = sim.get("source_repository_id")
     src: SourceRepository = mongo.source_repo.get_by_id(src_repo_id)
     if not src or "source_files" not in src:
         log.warning("Source repository %s not found for experiment %s", src_repo_id, exp.get("_id"))

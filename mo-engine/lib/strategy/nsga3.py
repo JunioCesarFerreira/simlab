@@ -50,6 +50,13 @@ class NSGA3LoopStrategy(EngineStrategy):
         problem_config = params.get("problem", {}) or {}
         simulation_config = params.get("simulation", {}) or {}
         
+        src_repo_opts = experiment.get("source_repository_options", {}) or {}
+        
+        self.source_repository_options: dict[str, ObjectId] = {
+            str(k): ObjectId(v) if isinstance(v, (str, bytes)) else v
+            for k, v in src_repo_opts.items()
+        }
+        
         # Simulation and algorithm parameters
         self._sim_duration: int = int(simulation_config.get("duration", 120))
         self._pop_size: int = int(algorithm_config.get("population_size", 20))
@@ -234,6 +241,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             "parameters": config,
             "pos_file_id": files_ids.get("pos_file_id", ""),
             "csc_file_id": files_ids.get("csc_file_id", ""),
+            "source_repository_id": self.source_repository_options[genome.mac_protocol_str()],
             "topology_picture_id": topology_picture_id,
             "log_cooja_id": "",
             "runtime_log_id": "",

@@ -55,7 +55,7 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         pop: list[ChromosomeP1] = []
         for i in range(size):
             chrm = ChromosomeP1(
-                mac_protocol = 0,
+                mac_protocol = random.randint(0, 1),
                 relays = network_gen(N, box, R)
             )
             pop.append(chrm)
@@ -102,7 +102,6 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
             ChromosomeP1(mac_protocol=mac2, relays=child2_relays),
         ]
 
-    
 
     def mutate(self, chromosome: ChromosomeP1) -> ChromosomeP1:
         """
@@ -191,4 +190,3 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
             "fixedMotes": fixed,
             "mobileMotes": mobile,
         }
-

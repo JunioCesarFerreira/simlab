@@ -7,8 +7,11 @@ Position = tuple[float, float]
 
 # Binary MAC selector
 # 0 -> CSMA/CA
-# 1 -> TDMA
+# 1 -> TSCH
 MacGene = Literal[0, 1]
+
+def _gene_mac_to_str(gene: MacGene) -> str:
+    return "tsch" if gene == 1 else "csma"
 
 class Chromosome(ABC):
     """
@@ -20,6 +23,10 @@ class Chromosome(ABC):
         """
         Converts the chromosome to a dictionary representation.
         """
+        pass
+    
+    @abstractmethod
+    def mac_protocol_str(self) -> str:
         pass
 
 
@@ -40,6 +47,9 @@ class ChromosomeP1(Chromosome):
             "mac_protocol": self.mac_protocol,
             "relays": [ {"x": pos[0], "y": pos[1]} for pos in self.relays ]
         }
+        
+    def mac_protocol_str(self) -> str:
+        return _gene_mac_to_str(self.mac_protocol)
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +70,9 @@ class ChromosomeP2(Chromosome):
             "mask": self.mask
         }
 
+    def mac_protocol_str(self) -> str:
+        return _gene_mac_to_str(self.mac_protocol)
+
 
 @dataclass(frozen=True, slots=True)
 class ChromosomeP3(Chromosome):
@@ -78,6 +91,9 @@ class ChromosomeP3(Chromosome):
             "mac_protocol": self.mac_protocol,
             "mask": self.mask
         }
+
+    def mac_protocol_str(self) -> str:
+        return _gene_mac_to_str(self.mac_protocol)
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,3 +116,6 @@ class ChromosomeP4(Chromosome):
             "route": self.route,
             "sojourn_times": self.sojourn_times
         }
+
+    def mac_protocol_str(self) -> str:
+        return _gene_mac_to_str(self.mac_protocol)
