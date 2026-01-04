@@ -230,7 +230,9 @@ class NSGA3LoopStrategy(EngineStrategy):
         )
         if os.path.exists(image_tmp_path):
             os.remove(image_tmp_path)
-
+             
+        genome, src_id = genome.get_source_by_mac_protocol(self.source_repository_options)
+             
         sim_doc: Simulation = {
             "id": ind_idx,
             "experiment_id": exp_oid,
@@ -241,7 +243,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             "parameters": config,
             "pos_file_id": files_ids.get("pos_file_id", ""),
             "csc_file_id": files_ids.get("csc_file_id", ""),
-            "source_repository_id": self.source_repository_options[genome.mac_protocol_str()],
+            "source_repository_id": src_id,
             "topology_picture_id": topology_picture_id,
             "log_cooja_id": "",
             "runtime_log_id": "",
