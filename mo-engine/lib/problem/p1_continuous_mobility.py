@@ -64,9 +64,9 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
     
     def set_ga_operator_configs(self, parameters: GeneticAlgorithmConfigDto):
         N = 2 * self.problem.number_of_relays # x and y for each relay  
-        self.eta_cx = float(parameters.get("eta_cx", 20.0))
-        self.eta_mt = float(parameters.get("eta_mt", 25.0))
-        self.per_gene_prob = float(parameters.get("per_gene_prob", 1.0 / N))
+        self._eta_cx = float(parameters.get("eta_cx", 20.0))
+        self._eta_mt = float(parameters.get("eta_mt", 25.0))
+        self._per_gene_prob = float(parameters.get("per_gene_prob", 1.0 / N))
 
 
     def crossover(self, parents: Sequence[ChromosomeP1]) -> list[ChromosomeP1]:
@@ -87,8 +87,8 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         
         for (x1, y1), (x2, y2) in zip(relays1, relays2):
             # Apply SBX independently to x and y
-            cx1, cx2 = sbx(x1, x2, rng, self.eta_cx, (x_min, x_max))
-            cy1, cy2 = sbx(y1, y2, rng, self.eta_cx, (y_min, y_max))
+            cx1, cx2 = sbx(x1, x2, rng, self._eta_cx, (x_min, x_max))
+            cy1, cy2 = sbx(y1, y2, rng, self._eta_cx, (y_min, y_max))
 
             child1_relays.append((cx1, cy1))
             child2_relays.append((cx2, cy2))
@@ -119,14 +119,14 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
 
         for (x, y) in chromosome.relays:
             # Mutate x
-            if rng.random() < self.per_gene_prob:
-                x_new = poly_mut(x, rng, self.eta_mt, bound_x)
+            if rng.random() < self._per_gene_prob:
+                x_new = poly_mut(x, rng, self._eta_mt, bound_x)
             else:
                 x_new = x
 
             # Mutate y
-            if rng.random() < self.per_gene_prob:
-                y_new = poly_mut(y, rng, self.eta_mt, bound_y)
+            if rng.random() < self._per_gene_prob:
+                y_new = poly_mut(y, rng, self._eta_mt, bound_y)
             else:
                 y_new = y
 
@@ -134,7 +134,7 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
 
         # MAC mutation (bit-flip)
         mac = chromosome.mac_protocol
-        if rng.random() < self.per_gene_prob:
+        if rng.random() < self._per_gene_prob:
             mac = 1 - mac  # 0 ↔ 1
 
         return ChromosomeP1(
