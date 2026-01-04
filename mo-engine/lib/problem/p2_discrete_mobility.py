@@ -54,7 +54,11 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
             # Ensure not empty (optional)
             if sum(mask) == 0:
                 mask[random.randrange(J)] = 1
-            pop.append(ChromosomeP2(chromosome=mask))
+            chrm = ChromosomeP2(                
+                mac_protocol = random.randint(0, 1),
+                mask=mask
+            )
+            pop.append(chrm)
         return pop
     
     def set_ga_operator_configs(self, parameters: GeneticAlgorithmConfigDto):    
@@ -63,10 +67,20 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
         self._ensure_non_empty = bool(parameters.get("ensure_non_empty", True))
         
     def crossover(self, parents: Sequence[ChromosomeP2]) -> list[ChromosomeP2]:
-        m1: list[int] = parents[0]
-        m2: list[int] = parents[1]
-        c1, c2 = uniform_crossover_mask(m1, m2)
-        return [c1, c2]
+        p1: ChromosomeP2 = parents[0]
+        p2: ChromosomeP2 = parents[1]
+        c1, c2 = uniform_crossover_mask(p1.mask, p2.mask)
+        
+        rng = random.Random()
+        
+        # MAC gene inheritance (simple uniform choice)
+        mac1 = p1.mac_protocol if rng.random() < 0.5 else p2.mac_protocol
+        mac2 = p2.mac_protocol if rng.random() < 0.5 else p1.mac_protocol
+
+        return [
+            ChromosomeP2(mac_protocol=mac1, mask=c1),
+            ChromosomeP2(mac_protocol=mac2, mask=c2),
+        ]
 
     def mutate(self, chromosome: ChromosomeP2) -> ChromosomeP2:
         mask: list[int] = chromosome.mask
@@ -74,7 +88,18 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
         # Keep at least one selected position (optional)
         if sum(out) == 0 and len(out) > 0:
             out[random.randrange(len(out))] = 1
-        return out
+            
+        rng = random.Random()
+            
+        # MAC mutation (bit-flip)
+        mac = chromosome.mac_protocol
+        if rng.random() < self._p_bit_mut:
+            mac = 1 - mac  # 0 ↔ 1
+
+        return ChromosomeP2(
+            mac_protocol=mac,
+            mask=out,
+        )
 
     def encode_simulation_input(self, ind: ChromosomeP2) -> SimulationElements:
         fixed: list[FixedMote] = []
