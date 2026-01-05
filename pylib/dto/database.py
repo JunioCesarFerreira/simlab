@@ -82,6 +82,7 @@ class Experiment(TypedDict):
     id: str
     name: str
     status: str
+    system_message: str
     created_time: datetime
     start_time: datetime
     end_time: datetime

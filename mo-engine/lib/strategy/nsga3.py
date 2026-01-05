@@ -342,8 +342,9 @@ class NSGA3LoopStrategy(EngineStrategy):
         P_F = np.array(self._parents.get_objectives(), dtype=float)
         Q_F = np.array(objectives, dtype=float)
         if Q_F.ndim != 2 or Q_F.shape[0] == 0:
-            logger.error("[NSGA-III] Invalid objective matrix; aborting.")
-            self._finalize_experiment()
+            error_msg = "Invalid objective matrix; aborting."
+            logger.exception(f'[NSGA-III] {error_msg}')
+            self._finalize_experiment(system_msg=error_msg)
             return
         
         q_snapshot = PopulationSnapshot()
@@ -358,9 +359,10 @@ class NSGA3LoopStrategy(EngineStrategy):
             
         # fast non-dominated sort on union
         fronts = fast_nondominated_sort(R_F_list)
-        if not fronts:
-            logger.info("[NSGA-III] No fronts on union; aborting.")
-            self._finalize_experiment()
+        if not fronts:            
+            error_msg = "No fronts on union; aborting."
+            logger.exception(f'[NSGA-III] {error_msg}')
+            self._finalize_experiment(system_msg=error_msg)
             return
 
         # environmental selection
@@ -405,7 +407,7 @@ class NSGA3LoopStrategy(EngineStrategy):
                 logger.exception("[NSGA-III] Could not compute final Pareto front.")
                 pareto_front = []
 
-            self._finalize_experiment(pareto_front)
+            self._finalize_experiment(pareto_front=pareto_front)
             return
         
         # ---------------- PHASE P: parents done -> generate offspring and enqueue ----------------
@@ -437,8 +439,9 @@ class NSGA3LoopStrategy(EngineStrategy):
             indices = list(range(len(self._current_population)))
             objectives = [self._current_idx_to_objectives[i] for i in indices]
         except Exception:
-            logger.exception("[NSGA-III] Missing objectives for some individuals; aborting.")
-            self._finalize_experiment()
+            error_msg = "Missing objectives for some individuals; aborting."
+            logger.exception(f'[NSGA-III] {error_msg}')
+            self._finalize_experiment(system_msg=error_msg)
             return
         
         self._evolution(objectives)
@@ -519,19 +522,24 @@ class NSGA3LoopStrategy(EngineStrategy):
 # ---------------------------------------
 # Finalize Experiment
 # ---------------------------------------  
-    def _finalize_experiment(self, pareto_front: Optional[list[dict]] = None):
+    def _finalize_experiment(self, 
+        system_msg: Optional[str] = None, 
+        pareto_front: Optional[list[dict]] = None
+    ) -> None:
         assert self._exp_id is not None
         if pareto_front is not None:
             logger.info(f"[NSGA-III] Experiment {self._exp_id} completed.")
             self.mongo.experiment_repo.update(str(self._exp_id), {
                 "status": EnumStatus.DONE,
                 "end_time": datetime.now(),
+                "system_message": system_msg if system_msg is not None else f"Experiment {self._exp_id} completed.",
                 "pareto_front": pareto_front
             })
         else:
             logger.error(f"[NSGA-III] Experiment {self._exp_id} finished.")
             self.mongo.experiment_repo.update(str(self._exp_id), {
                 "status": EnumStatus.ERROR,
+                "system_message": system_msg if system_msg is not None else f"Experiment {self._exp_id} finished.",
                 "end_time": datetime.now()
             })
         # finish watcher

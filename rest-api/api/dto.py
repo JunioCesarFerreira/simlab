@@ -74,6 +74,7 @@ class ExperimentDto(TypedDict):
     id: Optional[str] = None
     name: str
     status: Optional[str] = 'Building'
+    system_message: Optional[str]
     created_time: datetime | None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
@@ -330,6 +331,7 @@ def experiment_from_mongo(doc: dict) -> ExperimentDto:
         "id": id_str,
         "name": d.get("name", ""),
         "status": d.get("status", "Building"),
+        "system_message": d.get("system_message", ""),
         "created_time": _ensure_datetime(d.get("created_time")),
         "start_time": _ensure_datetime(d.get("start_time")),
         "end_time": _ensure_datetime(d.get("end_time")),
@@ -357,6 +359,7 @@ def experiment_to_mongo(dto: ExperimentDto) -> Experiment:
 
     exp["name"] = d.get("name", "")
     exp["status"] = d.get("status", "Building") or "Building"
+    exp["system_message"] = d.get("system_message", "") or ""
     exp["created_time"] = _ensure_datetime(d.get("created_time"))
     exp["start_time"] = _ensure_datetime(d.get("start_time"))
     exp["end_time"] = _ensure_datetime(d.get("end_time"))
