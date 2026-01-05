@@ -6,6 +6,7 @@ from pylib.dto.problems import ProblemP1
 from pylib.dto.algorithm import GeneticAlgorithmConfigDto
 
 from lib.util.random_network import network_gen
+from lib.util.connectivity import make_graph_connected
 from lib.genetic_operators.crossover.simulated_binary_crossover import sbx
 from lib.genetic_operators.mutation.polynomial_mutation import poly_mut
 
@@ -92,6 +93,12 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
 
             child1_relays.append((cx1, cy1))
             child2_relays.append((cx2, cy2))
+        
+        # makes graph connected by radial contraction
+        radius = self.radius_of_reach
+        step = radius * 0.1
+        child1_relays = make_graph_connected(child1_relays, radius, step)
+        child2_relays = make_graph_connected(child2_relays, radius, step)
 
         # MAC gene inheritance (simple uniform choice)
         mac1 = p1.mac_protocol if rng.random() < 0.5 else p2.mac_protocol
@@ -132,6 +139,11 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
 
             new_relays.append((x_new, y_new))
 
+        # makes graph connected by radial contraction
+        radius = self.radius_of_reach
+        step = radius * 0.1
+        new_relays = make_graph_connected(new_relays, radius, step)
+        
         # MAC mutation (bit-flip)
         mac = chromosome.mac_protocol
         if rng.random() < self._per_gene_prob:
