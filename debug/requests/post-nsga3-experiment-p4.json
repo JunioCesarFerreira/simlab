@@ -2,6 +2,7 @@
     "id": null,
     "name": "Performing optimization with NSGA-III on problem P4",
     "status": "Waiting",
+    "system_message": null,
     "created_time": "2026-01-03T22:00:00Z",
     "start_time": null,
     "end_time": null,    

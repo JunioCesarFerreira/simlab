@@ -102,7 +102,7 @@ def prepare_simulation_files(
     Retorna (success, local_files, remote_files).
     """
     sim_oid = ObjectId(sim["_id"]) if not isinstance(sim["_id"], ObjectId) else sim["_id"]
-    tmp_dir = Path(f'tmp/worker_{worker_id}')
+    tmp_dir = Path(f"tmp/worker_{worker_id}")
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     local_xml = tmp_dir / f"simulation_{sim_oid}.xml"

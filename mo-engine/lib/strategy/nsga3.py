@@ -6,7 +6,7 @@ from threading import Thread
 from datetime import datetime
 from pathlib import Path
 from bson import ObjectId
-from typing import Optional
+from typing import Optional, Any
 import numpy as np
 
 from .base import EngineStrategy
@@ -64,16 +64,8 @@ class NSGA3LoopStrategy(EngineStrategy):
                         
         self._prob_cx = float(algorithm_config.get("prob_cx", 0.8))
         self._prob_mt = float(algorithm_config.get("prob_mt", 0.2))
-        
-        params_of_ga_operators: dict[str, float] = {}
-        if "eta_cx" in algorithm_config:
-            params_of_ga_operators["eta_cx"] = float(algorithm_config.get("eta_cx"))
-        if "eta_mt" in algorithm_config:
-            params_of_ga_operators["eta_mt"] = float(algorithm_config.get("eta_mt"))
-        if "per_gene_prob" in algorithm_config:
-            params_of_ga_operators["per_gene_prob"] = float(algorithm_config.get("per_gene_prob")) 
-                
-        self._problem_adapter: ProblemAdapter = build_adapter(problem_config, params_of_ga_operators)
+                        
+        self._problem_adapter: ProblemAdapter = build_adapter(problem_config, algorithm_config)
                 
         # prepare objective infos
         cfg = experiment.get("transform_config", {}) or {}
@@ -343,7 +335,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         Q_F = np.array(objectives, dtype=float)
         if Q_F.ndim != 2 or Q_F.shape[0] == 0:
             error_msg = "Invalid objective matrix; aborting."
-            logger.exception(f'[NSGA-III] {error_msg}')
+            logger.exception(f"[NSGA-III] {error_msg}")
             self._finalize_experiment(system_msg=error_msg)
             return
         
@@ -361,7 +353,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         fronts = fast_nondominated_sort(R_F_list)
         if not fronts:            
             error_msg = "No fronts on union; aborting."
-            logger.exception(f'[NSGA-III] {error_msg}')
+            logger.exception(f"[NSGA-III] {error_msg}")
             self._finalize_experiment(system_msg=error_msg)
             return
 
@@ -440,7 +432,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             objectives = [self._current_idx_to_objectives[i] for i in indices]
         except Exception:
             error_msg = "Missing objectives for some individuals; aborting."
-            logger.exception(f'[NSGA-III] {error_msg}')
+            logger.exception(f"[NSGA-III] {error_msg}")
             self._finalize_experiment(system_msg=error_msg)
             return
         
