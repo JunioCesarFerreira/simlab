@@ -86,7 +86,7 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         eta = self._eta_cx
         for (x1, y1), (x2, y2) in zip(p1, p2):
             # Apply SBX independently to x and y
-            cx1, cx2 = sbx(x1, x2, rng, eta (x_min, x_max))
+            cx1, cx2 = sbx(x1, x2, rng, eta, (x_min, x_max))
             cy1, cy2 = sbx(y1, y2, rng, eta, (y_min, y_max))
 
             c1.append((cx1, cy1))
