@@ -308,3 +308,151 @@ def make_graph_connected(
             break  # reavaliar componentes após cada conexão
 
     return points
+
+
+def repair_connectivity_to_sink(
+    candidates: list[tuple[float, float]],
+    mask: list[int],
+    sink: tuple[float, float],
+    radius: float,
+) -> tuple[bool, list[int]]:
+    """
+    Repairs a binary mask by connecting all components to the sink
+    using minimal (heuristic) node activations.
+
+    Parameters
+    ----------
+    candidates : list[(float, float)]
+        Candidate positions Q.
+    mask : list[int]
+        Binary mask (may be disconnected).
+    sink : (float, float)
+        Sink position (must be active or will be activated).
+    radius : float
+        Reachability radius.
+
+    Returns
+    -------
+    repaired_mask : tuple[bool, list[int]]
+        Error flag and repaired binary mask (globally connected to sink).
+    """
+
+    n = len(candidates)
+    mask = mask[:]  # copy
+
+    # ------------------------------------------------------------
+    # Distance helpers
+    # ------------------------------------------------------------
+    def dist(i: int, j: int) -> float:
+        x1, y1 = candidates[i]
+        x2, y2 = candidates[j]
+        return math.hypot(x1 - x2, y1 - y2)
+
+    def dist_sink(i: int) -> float:
+        x1, y1 = sink
+        x2, y2 = candidates[i]
+        return math.hypot(x1 - x2, y1 - y2)
+
+    # ------------------------------------------------------------
+    # Build full reachability graph over candidates
+    # ------------------------------------------------------------
+    adj = [[] for _ in range(n)]
+    for i in range(n):
+        for j in range(i + 1, n):
+            if dist(i, j) <= radius:
+                adj[i].append(j)
+                adj[j].append(i)
+
+    # ------------------------------------------------------------
+    # Active connected components (ignoring sink)
+    # ------------------------------------------------------------
+    def active_components():
+        visited = set()
+        components = []
+
+        for i in range(n):
+            if mask[i] == 1 and i not in visited:
+                comp = set()
+                queue = deque([i])
+                visited.add(i)
+
+                while queue:
+                    u = queue.popleft()
+                    comp.add(u)
+                    for v in adj[u]:
+                        if mask[v] == 1 and v not in visited:
+                            visited.add(v)
+                            queue.append(v)
+
+                components.append(comp)
+
+        return components
+
+    # ------------------------------------------------------------
+    # Main repair loop
+    # ------------------------------------------------------------
+    while True:
+        components = active_components()
+        if not components:
+            break
+
+        # --------------------------------------------------------
+        # Define sink component: active nodes reachable from sink
+        # --------------------------------------------------------
+        sink_comp = {
+            i for i in range(n)
+            if mask[i] == 1 and dist_sink(i) <= radius
+        }
+
+        # If no active node reaches sink, connect the closest one
+        if not sink_comp:
+            closest = min(
+                (i for i in range(n) if mask[i] == 1),
+                key=lambda i: dist_sink(i)
+            )
+            mask[closest] = 1
+            sink_comp.add(closest)
+
+        # If all components already intersect sink_comp, done
+        if all(comp & sink_comp for comp in components):
+            break
+
+        # Pick one disconnected component
+        other_comp = next(comp for comp in components if not (comp & sink_comp))
+
+        # --------------------------------------------------------
+        # BFS from sink_comp to other_comp on full graph
+        # --------------------------------------------------------
+        queue = deque()
+        parent = {}
+
+        # Virtual BFS start from all nodes in sink_comp
+        for u in sink_comp:
+            queue.append(u)
+            parent[u] = None
+
+        target = None
+
+        while queue and target is None:
+            u = queue.popleft()
+            for v in adj[u]:
+                if v not in parent:
+                    parent[v] = u
+                    if v in other_comp:
+                        target = v
+                        break
+                    queue.append(v)
+
+        if target is None:
+            # Cannot repair connectivity: unreachable component"
+            return True, []
+
+        # --------------------------------------------------------
+        # Activate path nodes
+        # --------------------------------------------------------
+        cur = target
+        while cur is not None:
+            mask[cur] = 1
+            cur = parent[cur]
+
+    return False, mask

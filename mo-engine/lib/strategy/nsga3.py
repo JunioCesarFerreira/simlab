@@ -6,7 +6,7 @@ from threading import Thread
 from datetime import datetime
 from pathlib import Path
 from bson import ObjectId
-from typing import Optional, Any
+from typing import Optional
 import numpy as np
 
 from .base import EngineStrategy

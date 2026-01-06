@@ -5,7 +5,7 @@ from pylib.dto.simulator import FixedMote, MobileMote, SimulationElements
 from pylib.dto.problems import ProblemP1
 from pylib.dto.algorithm import GeneticAlgorithmConfigDto
 
-from lib.util.random_network import network_gen
+from lib.util.random_network import continuous_network_gen
 from lib.util.connectivity import make_graph_connected
 from lib.genetic_operators.crossover.simulated_binary_crossover import sbx
 from lib.genetic_operators.mutation.polynomial_mutation import poly_mut
@@ -57,7 +57,7 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         for i in range(size):
             chrm = ChromosomeP1(
                 mac_protocol = random.randint(0, 1),
-                relays = network_gen(N, box, R)
+                relays = continuous_network_gen(N, box, R)
             )
             pop.append(chrm)
         return pop
@@ -106,8 +106,8 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         N = self.problem.number_of_relays
         R = self.problem.radius_of_reach
 
-        c1: list[Position] = network_gen(N, box, R)
-        c2: list[Position] = network_gen(N, box, R)        
+        c1: list[Position] = continuous_network_gen(N, box, R)
+        c2: list[Position] = continuous_network_gen(N, box, R)        
         return c1, c2
 
 
