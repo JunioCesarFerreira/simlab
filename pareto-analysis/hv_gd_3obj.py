@@ -50,12 +50,13 @@ def plot_hv_gd(
         figsize=(14, 5),
         sharex=True
     )
+    
+    generations = sorted(generations)
 
     # -------------------------------
     # Hypervolume
     # -------------------------------
     ax_hv.plot(generations, hv_values, marker="o")
-    ax_hv.set_xlabel("Generation")
     ax_hv.set_ylabel("Hypervolume")
     ax_hv.set_title("Hypervolume Evolution")
     ax_hv.grid(True)
@@ -64,10 +65,14 @@ def plot_hv_gd(
     # Generational Distance
     # -------------------------------
     ax_gd.plot(generations, gd_values, marker="s")
-    ax_gd.set_xlabel("Generation")
     ax_gd.set_ylabel("Generational Distance")
     ax_gd.set_title("Generational Distance Evolution")
     ax_gd.grid(True)
+    
+    for ax in (ax_hv, ax_gd):
+        ax.set_xlabel("Generation")
+        ax.set_xticks(generations)
+        ax.set_xticklabels([str(g) for g in generations])
 
     fig.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
