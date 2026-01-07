@@ -1,3 +1,4 @@
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, replace
 from typing import Literal, Self
@@ -12,6 +13,15 @@ Position = tuple[float, float]
 MacGene = Literal[0, 1]
 
 
+EPS = 1e-6
+
+def _qpos(p: Position) -> tuple[int, int]:
+    return (round(p[0] / EPS), round(p[1] / EPS))
+
+def _qt(t: float) -> int:
+    return round(t / EPS)
+
+
 class Chromosome(ABC):
     """
     Abstract base class for chromosomes.
@@ -23,6 +33,7 @@ class Chromosome(ABC):
         Converts the chromosome to a dictionary representation.
         """
         pass
+    
         
     @abstractmethod
     def get_source_by_mac_protocol(
@@ -79,6 +90,22 @@ class ChromosomeP1(ChromosomeBase, Chromosome):
             "relays": [ {"x": pos[0], "y": pos[1]} for pos in self.relays ]
         }
         
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ChromosomeP1):
+            return NotImplemented
+        return (
+            self.mac_protocol == other.mac_protocol and
+            {_qpos(p) for p in self.relays}
+            ==
+            {_qpos(p) for p in other.relays}
+        )
+
+    def __hash__(self) -> int:
+        return hash((
+            self.mac_protocol,
+            frozenset(_qpos(p) for p in self.relays)
+        ))
+        
 
 @dataclass(frozen=True, slots=True)
 class ChromosomeP2(ChromosomeBase, Chromosome):
@@ -97,6 +124,17 @@ class ChromosomeP2(ChromosomeBase, Chromosome):
             "mac_protocol": self.mac_protocol,
             "mask": self.mask
         }
+        
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ChromosomeP2):
+            return NotImplemented
+        return (
+            self.mac_protocol == other.mac_protocol and
+            self.mask == other.mask
+        )
+
+    def __hash__(self) -> int:
+        return hash((self.mac_protocol, tuple(self.mask)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +155,16 @@ class ChromosomeP3(ChromosomeBase, Chromosome):
             "mask": self.mask
         }
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ChromosomeP3):
+            return NotImplemented
+        return (
+            self.mac_protocol == other.mac_protocol and
+            self.mask == other.mask
+        )
+
+    def __hash__(self) -> int:
+        return hash((self.mac_protocol, tuple(self.mask)))
 
 @dataclass(frozen=True, slots=True)
 class ChromosomeP4(ChromosomeBase, Chromosome):
@@ -138,3 +186,22 @@ class ChromosomeP4(ChromosomeBase, Chromosome):
             "route": self.route,
             "sojourn_times": self.sojourn_times
         }
+        
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ChromosomeP4):
+            return NotImplemented
+
+        return (
+            self.mac_protocol == other.mac_protocol and
+            self.route == other.route and
+            tuple(_qt(t) for t in self.sojourn_times)
+            ==
+            tuple(_qt(t) for t in other.sojourn_times)
+        )
+
+    def __hash__(self) -> int:
+        return hash((
+            self.mac_protocol,
+            tuple(self.route),
+            tuple(_qt(t) for t in self.sojourn_times)
+        ))
