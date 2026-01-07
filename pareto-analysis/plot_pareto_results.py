@@ -124,7 +124,7 @@ def plot_pareto_fronts(
     fig = plt.figure(figsize=(16, 10))
     gs = fig.add_gridspec(2, 3, height_ratios=[1, 1.2])
 
-    pairs = [(0, 1), (0, 2), (1, 2)]
+    pairs = [(1, 0), (1, 2), (0, 2)]
     axes_2d = []
 
     # ---------- 2D projections ----------
@@ -162,8 +162,8 @@ def plot_pareto_fronts(
         if not front:
             continue
 
-        xs = [p["objectives"][objective_names[0]] for p in front]
-        ys = [p["objectives"][objective_names[1]] for p in front]
+        xs = [p["objectives"][objective_names[1]] for p in front]
+        ys = [p["objectives"][objective_names[0]] for p in front]
         zs = [p["objectives"][objective_names[2]] for p in front]
 
         sc = ax3d.scatter(
