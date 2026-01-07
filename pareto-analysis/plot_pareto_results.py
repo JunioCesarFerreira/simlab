@@ -119,7 +119,7 @@ def plot_pareto_fronts(
     fronts = sorted(pareto_by_front.keys())
     num_fronts = len(fronts)
 
-    colors = plt.cm.viridis(np.linspace(0.3, 1.0, num_fronts))
+    colors = plt.cm.coolwarm(np.linspace(0.1, 0.9, num_fronts))
 
     fig = plt.figure(figsize=(16, 10))
     gs = fig.add_gridspec(2, 3, height_ratios=[1, 1.2])
@@ -212,7 +212,7 @@ def plot_generation_front_distribution(
     x = np.arange(len(generations))
     bar_width = 0.8 / len(fronts)
 
-    colors = plt.cm.viridis(np.linspace(0.3, 1.0, len(fronts)))
+    colors = plt.cm.coolwarm(np.linspace(0.1, 0.9, len(fronts)))
 
     fig, ax = plt.subplots(figsize=(18, 6))
 
@@ -312,6 +312,13 @@ def main():
 
     print("[OK] Pareto dominance analysis completed")
 
+    # Cleanup
+    try:
+        pareto_plot.unlink(missing_ok=True)
+        dist_plot.unlink(missing_ok=True)
+        print("[OK] Temporary files removed")
+    except Exception as ex:
+        print(f"[WARN] Failed to remove temporary file: {ex}")
 
 if __name__ == "__main__":
     main()
