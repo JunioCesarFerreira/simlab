@@ -117,7 +117,7 @@ def normalize_objectives(
 ) -> np.ndarray:
     """
     Min-max normalization.
-    If objective is to maximize, invert scale so that
+    If objective is to minimize, invert scale so that
     'better' is always higher after normalization.
     """
     vmin = values.min(axis=0)
@@ -125,7 +125,7 @@ def normalize_objectives(
     norm = (values - vmin) / (vmax - vmin + 1e-12)
 
     for i, is_min in enumerate(minimize):
-        if not is_min:
+        if is_min:
             norm[:, i] = 1.0 - norm[:, i]
 
     return norm
