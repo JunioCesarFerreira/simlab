@@ -121,16 +121,14 @@ def plot_pareto_fronts(
 
     colors = plt.cm.coolwarm(np.linspace(0.1, 0.9, num_fronts))
 
-    fig = plt.figure(figsize=(16, 10))
-    gs = fig.add_gridspec(2, 3, height_ratios=[1, 1.2])
+    fig = plt.figure(figsize=(18, 12))
+    gs = fig.add_gridspec(2, 3, height_ratios=[1, 1.3])
 
     pairs = [(1, 0), (1, 2), (0, 2)]
-    axes_2d = []
 
     # ---------- 2D projections ----------
     for idx_pair, (i, j) in enumerate(pairs):
         ax = fig.add_subplot(gs[0, idx_pair])
-        axes_2d.append(ax)
 
         for idx_f, f in enumerate(fronts):
             front = pareto_by_front[f]
@@ -140,11 +138,7 @@ def plot_pareto_fronts(
             x = [p["objectives"][objective_names[i]] for p in front]
             y = [p["objectives"][objective_names[j]] for p in front]
 
-            ax.scatter(
-                x, y,
-                color=colors[idx_f],
-                alpha=0.85
-            )
+            ax.scatter(x, y, color=colors[idx_f], alpha=0.85)
 
         ax.set_xlabel(objective_names[i])
         ax.set_ylabel(objective_names[j])
@@ -152,7 +146,26 @@ def plot_pareto_fronts(
         ax.grid(True)
 
     # ---------- 3D Pareto ----------
-    ax3d = fig.add_subplot(gs[1, :], projection="3d")
+    ax3d_a = fig.add_subplot(gs[1, 0], projection="3d")
+
+    for idx_f, f in enumerate(fronts):
+        front = pareto_by_front[f]
+        if not front:
+            continue
+
+        xs = [p["objectives"][objective_names[0]] for p in front]
+        ys = [p["objectives"][objective_names[1]] for p in front]
+        zs = [p["objectives"][objective_names[2]] for p in front]
+
+        ax3d_a.scatter(xs, ys, zs, color=colors[idx_f], alpha=0.85)
+
+    ax3d_a.set_xlabel(objective_names[0])
+    ax3d_a.set_ylabel(objective_names[1])
+    ax3d_a.set_zlabel(objective_names[2])
+    ax3d_a.set_title("Pareto Fronts (view XYZ)")
+    
+    # ---------- 3D Pareto ----------
+    ax3d_b = fig.add_subplot(gs[1, 1], projection="3d")
 
     legend_handles = []
     legend_labels = []
@@ -166,25 +179,20 @@ def plot_pareto_fronts(
         ys = [p["objectives"][objective_names[0]] for p in front]
         zs = [p["objectives"][objective_names[2]] for p in front]
 
-        sc = ax3d.scatter(
-            xs, ys, zs,
-            color=colors[idx_f],
-            alpha=0.85
-        )
-
+        sc = ax3d_b.scatter(xs, ys, zs, color=colors[idx_f], alpha=0.85)
         legend_handles.append(sc)
         legend_labels.append(f"F{f}")
 
-    ax3d.set_xlabel(objective_names[0])
-    ax3d.set_ylabel(objective_names[1])
-    ax3d.set_zlabel(objective_names[2])
-    ax3d.set_title("Pareto Fronts (Dominance Layers)")
+    ax3d_b.set_xlabel(objective_names[1])
+    ax3d_b.set_ylabel(objective_names[0])
+    ax3d_b.set_zlabel(objective_names[2])
+    ax3d_b.set_title("Pareto Fronts (swapped axes)")
 
-    ax3d.legend(
+    ax3d_b.legend(
         legend_handles,
         legend_labels,
         loc="center left",
-        bbox_to_anchor=(1.25, 0.5),
+        bbox_to_anchor=(1.15, 0.5),
         title="Fronts"
     )
 
