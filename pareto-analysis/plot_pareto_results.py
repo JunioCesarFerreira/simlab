@@ -639,6 +639,15 @@ def main():
         output_path=hv_gd_plot
     )
 
+    upload_analysis_file_api(
+        session,
+        args.api_base,
+        args.expid,
+        hv_gd_plot,
+        "hv_ge",
+        "Hypervolume and generational distance evolution 2"
+    )
+    
     print("[OK] Pareto HV and GD analysis completed")
 
     # Cleanup
