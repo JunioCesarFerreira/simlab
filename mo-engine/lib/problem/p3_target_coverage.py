@@ -62,12 +62,7 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
 
 
     def set_ga_operator_configs(self, parameters: GeneticAlgorithmConfigDto): 
-        self._p_bit_mut = float(parameters.get("per_gene_prob", 0.1))   
-        # Bias toward sparse selections but ensure some minimum
-        self._p_on_init = float(parameters.get("p_on_init", 0.15))    
-        self._min_on_init = int(parameters.get("min_on_init", 1))
-        self._ensure_non_empty = bool(parameters.get("ensure_non_empty", True))
-
+        self._p_bit_mut = float(parameters.get("per_gene_prob", 0.1))
 
     def random_individual_generator(self, size: int) -> list[ChromosomeP3]:
         Q = self.problem.candidates

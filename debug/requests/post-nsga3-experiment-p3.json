@@ -21,9 +21,7 @@
             "selection_method": "tournament",
             "crossover_method": "uniform_mask",
             "mutation_method": "bitflip",
-            "per_gene_prob": 0.1,
-            "p_on_init": 0.15,
-            "ensure_non_empty": true
+            "per_gene_prob": 0.1
         },
         "simulation": {
             "duration": 180

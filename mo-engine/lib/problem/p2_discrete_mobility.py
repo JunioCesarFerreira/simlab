@@ -51,8 +51,6 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
         Q = self.problem.candidates
         S = self.problem.sink
         R = self.problem.radius_of_reach
-        # Bias toward sparse selections (since the primary goal is to minimize |P|)
-        p_on = float(self._p_on_init)
 
         pop: list[ChromosomeP2] = []
         for _ in range(size):
@@ -66,9 +64,7 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
     
     
     def set_ga_operator_configs(self, parameters: GeneticAlgorithmConfigDto):    
-        self._p_on_init = float(parameters.get("p_on_init", 0.15))    
         self._p_bit_mut = float(parameters.get("per_gene_prob", 0.1))
-        self._ensure_non_empty = bool(parameters.get("ensure_non_empty", True))
         
         
     def crossover(self, parents: Sequence[ChromosomeP2]) -> list[ChromosomeP2]:
