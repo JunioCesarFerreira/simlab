@@ -8,13 +8,13 @@
     "end_time": null,    
     "generations": [],
     "source_repository_options": {
-        "csma": "6959bb6bc4dcc513d2482796",
-        "tsch": "6959bbacc4dcc513d24827a7"
+        "csma": "695d83d256363c92c2d4f875",
+        "tsch": "695d841356363c92c2d4f886"
     },
     "parameters": {
         "strategy": "nsga3",
         "algorithm": {
-            "population_size": 15,
+            "population_size": 40,
             "number_of_generations": 20,
             "prob_cx": 0.8,
             "prob_mt": 0.15,
