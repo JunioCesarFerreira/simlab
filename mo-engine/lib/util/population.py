@@ -10,21 +10,18 @@ class PopulationSnapshot:
         
     def set(self, 
             genomes: list[Chromosome], 
-            sim_oid_to_idx: dict[str, int], 
-            objectives: list[list[float]]
+            genome_to_sim_id: dict[Chromosome, str],
+            sim_to_objectives: dict[str, list[float]]
         ) -> None:
-        if len(genomes) != len(objectives):
-            raise ValueError(
-                "genomes and objectives must have the same length"
-            )
 
-        simulations: list[ObjectId | None] = [None] * len(genomes)
-
-        for sim_oid, idx in sim_oid_to_idx.items():
-            if idx < 0 or idx >= len(genomes):
-                raise IndexError(f"Invalid index {idx} for simulation {sim_oid}")
-            simulations[idx] = ObjectId(sim_oid)
-
+        simulations: list[ObjectId] = []
+        objectives: list[list[float]] = []    
+        for chrm in genomes:
+            sim_id = genome_to_sim_id[chrm]
+            obj = sim_to_objectives[sim_id]
+            simulations.append(ObjectId(sim_id))
+            objectives.append(obj)
+            
         if any(s is None for s in simulations):
             raise ValueError("Some simulations are missing in the mapping")
 
@@ -58,6 +55,8 @@ def select_next_population(
     pop_size: int,
     P: PopulationSnapshot,
     Q: PopulationSnapshot,
+    genome_to_sim_id: dict[Chromosome, str],
+    sim_to_objectives: dict[str, list[float]]
 ) -> PopulationSnapshot:
     """
     Builds the next parent population after environmental selection
@@ -109,11 +108,7 @@ def select_next_population(
         sim_oid_to_idx[str(sim_oid)] = i
 
     snapshot = PopulationSnapshot()
-    snapshot.set(
-        genomes=genomes,
-        sim_oid_to_idx=sim_oid_to_idx,
-        objectives=objectives,
-    )
+    snapshot.set(genomes, genome_to_sim_id, sim_to_objectives)
     
     print(f"\nSelected genomes for next population: {genomes}")
 
