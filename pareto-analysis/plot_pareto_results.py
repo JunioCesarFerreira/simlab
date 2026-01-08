@@ -484,6 +484,7 @@ def main():
     parser.add_argument("--api-base", default="http://localhost:8000/api/v1")
     parser.add_argument("--api-key", default=os.getenv("SIMLAB_API_KEY", ""))
     parser.add_argument("--expid", required=True)
+    parser.add_argument("--keep-the-files", default=False)
 
     parser.add_argument(
         "--objectives",
@@ -651,15 +652,16 @@ def main():
     print("[OK] Pareto HV and GD analysis completed")
 
     # Cleanup
-    try:
-        pareto_plot.unlink(missing_ok=True)
-        dist_plot.unlink(missing_ok=True)
-        parallel_plot.unlink(missing_ok=True)
-        radar_plot.unlink(missing_ok=True)
-        hv_gd_plot.unlink(missing_ok=True)
-        print("[OK] Temporary files removed")
-    except Exception as ex:
-        print(f"[WARN] Failed to remove temporary file: {ex}")
+    if args.keep_the_files == False:
+        try:
+            pareto_plot.unlink(missing_ok=True)
+            dist_plot.unlink(missing_ok=True)
+            parallel_plot.unlink(missing_ok=True)
+            radar_plot.unlink(missing_ok=True)
+            hv_gd_plot.unlink(missing_ok=True)
+            print("[OK] Temporary files removed")
+        except Exception as ex:
+            print(f"[WARN] Failed to remove temporary file: {ex}")
 
 if __name__ == "__main__":
     main()

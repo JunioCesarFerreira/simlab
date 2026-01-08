@@ -15,7 +15,7 @@ py plot_parallel_coords.py --expid 695d27d1f2ebb0848d08df3f --api-key api-passwo
 ```
 
 ```bash
-py plot_pareto_results.py --expid 695d27d1f2ebb0848d08df3f --api-key api-password
+py plot_pareto_results.py --expid 695fba4ba8bc65564cea8697 --api-key api-password --keep-the-files True
 ```
 
 **Server**
@@ -34,4 +34,11 @@ python3 -m plot_parallel_coords --expid 695d845556363c92c2d4f888 --api-key api-p
 
 ```bash
 py plot_pareto_results.py --expid 695d27d1f2ebb0848d08df3f --api-key api-password --api-base http://localhost:8198/api/v1
+```
+
+
+**Local/Server**
+
+```bash
+py plot_pareto_results.py --expid 695fba4ba8bc65564cea8697 --keep-the-files --api-key simlab141592 --api-base http://andromeda.lasdpc.icmc.usp.br/:8198/api/v1
 ```
