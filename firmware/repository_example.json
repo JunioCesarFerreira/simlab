@@ -1,0 +1,56 @@
+[
+  {
+    "id": "695d83d256363c92c2d4f875",
+    "name": "rpl-udp-csma",
+    "description": "Basic RPL-based firmware for root and node using UDP over CSMA.",
+    "source_files": [
+      {
+        "id": "695d83d256363c92c2d4f866",
+        "file_name": "Makefile"
+      },
+      {
+        "id": "695d83d256363c92c2d4f869",
+        "file_name": "project-conf.h"
+      },
+      {
+        "id": "695d83d256363c92c2d4f86c",
+        "file_name": "metrics-packet.h"
+      },
+      {
+        "id": "695d83d256363c92c2d4f86f",
+        "file_name": "node.c"
+      },
+      {
+        "id": "695d83d256363c92c2d4f872",
+        "file_name": "root.c"
+      }
+    ]
+  },
+  {
+    "id": "695d841356363c92c2d4f886",
+    "name": "rpl-udp-tsch",
+    "description": "Basic RPL-based firmware for root and node using UDP over TSCH.",
+    "source_files": [
+      {
+        "id": "695d841356363c92c2d4f877",
+        "file_name": "Makefile"
+      },
+      {
+        "id": "695d841356363c92c2d4f87a",
+        "file_name": "project-conf.h"
+      },
+      {
+        "id": "695d841356363c92c2d4f87d",
+        "file_name": "metrics-packet.h"
+      },
+      {
+        "id": "695d841356363c92c2d4f880",
+        "file_name": "node.c"
+      },
+      {
+        "id": "695d841356363c92c2d4f883",
+        "file_name": "root.c"
+      }
+    ]
+  }
+]

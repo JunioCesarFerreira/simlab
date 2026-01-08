@@ -7,7 +7,7 @@ from pylib.dto.problems import ProblemP2
 from pylib.dto.algorithm import GeneticAlgorithmConfigDto
 
 from lib.util.random_network import stochastic_reachability_mask
-from lib.util.connectivity import is_globally_connected, repair_connectivity_to_sink
+from lib.util.connectivity import repair_connectivity_to_sink
 
 from lib.genetic_operators.crossover.uniform_crossover_mask import uniform_crossover_mask
 from lib.genetic_operators.mutation.bitflip_mutation import bitflip_mutation
