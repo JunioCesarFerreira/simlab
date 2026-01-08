@@ -25,6 +25,25 @@ class SimulationRepository:
             result = db["simulations"].find_one({"_id": oid})
             return result
 
+    def get_topology_pic_file_id(self, simulation_id: str) -> ObjectId | None:
+        try:
+            oid = ObjectId(simulation_id)
+        except errors.InvalidId:
+            log.error("[get_topology_pic_file_id] Invalid simulation_id")
+            return None
+
+        with self.connection.connect() as db:
+            result = db["simulations"].find_one(
+                {"_id": oid},
+                {"_id": 0, "topology_picture_id": 1}
+            )
+
+            if not result:
+                log.warning(f"[get_topology_pic_file_id] Simulation not found: {simulation_id}")
+                return None
+
+            return result.get("topology_picture_id")
+        
     def find_pending(self) -> list[Simulation]:
         with self.connection.connect() as db:
             return list(db["simulations"].find({"status": EnumStatus.WAITING}))

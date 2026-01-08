@@ -74,3 +74,79 @@ def download_file(file_id: str, extension: str, background_tasks: BackgroundTask
         media_type=mime_type,
         background=background_tasks,
     )
+
+
+@router.get("/{simulation_id}/topology", response_class=FileResponse)
+def download_topology_file_by_simulation(
+    simulation_id: str,
+    background_tasks: BackgroundTasks
+):
+    """
+    Download the topology image associated with a simulation.
+
+    - simulation_id must be a valid Simulation ObjectId
+    - The topology image is retrieved via SimulationRepository
+    - The file is streamed from GridFS into a temporary PNG file
+    - The temporary file is removed after the response is sent
+    """
+
+    # ------------------------------------------------------------
+    # Validate simulation_id
+    # ------------------------------------------------------------
+    try:
+        sim_oid = ObjectId(simulation_id)
+    except bson_errors.InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid simulation_id")
+
+    # ------------------------------------------------------------
+    # Get topology_picture_id from simulation
+    # ------------------------------------------------------------
+    file_id = factory.simulation_repo.get_topology_pic_file_id(simulation_id)
+
+    if file_id is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Topology picture not found for this simulation"
+        )
+
+    # ------------------------------------------------------------
+    # Create temporary PNG file
+    # ------------------------------------------------------------
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+    tmp_path = tmp.name
+    tmp.close()
+
+    # ------------------------------------------------------------
+    # Download from GridFS
+    # ------------------------------------------------------------
+    try:
+        factory.fs_handler.download_file(file_id, tmp_path)
+    except NoFile:
+        os.remove(tmp_path)
+        raise HTTPException(status_code=404, detail="File not found in GridFS")
+    except Exception as e:
+        try:
+            os.remove(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error downloading topology image: {e}"
+        )
+
+    # ------------------------------------------------------------
+    # Cleanup after response
+    # ------------------------------------------------------------
+    background_tasks.add_task(os.remove, tmp_path)
+
+    # ------------------------------------------------------------
+    # MIME type (explicit for PNG)
+    # ------------------------------------------------------------
+    mime_type = "image/png"
+
+    return FileResponse(
+        tmp_path,
+        filename=f"{simulation_id}_topology.png",
+        media_type=mime_type,
+        background=background_tasks,
+    )
