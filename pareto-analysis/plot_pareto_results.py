@@ -6,9 +6,13 @@ from collections import defaultdict
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib import colormaps
+
+from deap.tools._hypervolume import hv
 
 from lib.api import (
     build_session,
+    get_pareto_per_generation_api,
     get_individuals_per_generation_api,
     upload_analysis_file_api
 )
@@ -106,6 +110,60 @@ def build_population_from_api(
 def build_pareto_by_front(fronts: list[list[dict]]) -> dict[int, list[dict]]:
     return {i: front for i, front in enumerate(fronts)}
 
+
+def normalize_objectives(
+    values: np.ndarray,
+    minimize: list[bool]
+) -> np.ndarray:
+    """
+    Min-max normalization.
+    If objective is to maximize, invert scale so that
+    'better' is always higher after normalization.
+    """
+    vmin = values.min(axis=0)
+    vmax = values.max(axis=0)
+    norm = (values - vmin) / (vmax - vmin + 1e-12)
+
+    for i, is_min in enumerate(minimize):
+        if not is_min:
+            norm[:, i] = 1.0 - norm[:, i]
+
+    return norm
+
+
+def compute_worst_point(
+    pareto_per_gen: dict[int, list[dict]],
+    objective_names: tuple[str, str, str]
+) -> list[float]:
+    all_points = []
+
+    for fronts in pareto_per_gen.values():
+        for p in fronts:
+            all_points.append(
+                [p["objectives"][o] for o in objective_names]
+            )
+
+    arr = np.array(all_points)
+    return arr.max(axis=0).tolist()
+
+
+def compute_hypervolume(front: list[list[float]], ref_point: list[float]) -> float:
+    if not front:
+        print("Warning: Empty front for hypervolume computation")
+        return 0.0
+    return hv.hypervolume(front, ref_point)
+
+
+def compute_gd(front: np.ndarray, ref_front: np.ndarray) -> float:
+    if len(front) == 0 or len(ref_front) == 0:
+        return float("inf")
+
+    dists = []
+    for p in front:
+        dist = np.min(np.linalg.norm(ref_front - p, axis=1))
+        dists.append(dist)
+
+    return float(np.mean(dists))
 
 # ------------------------------------------------------------
 # Plot: Pareto fronts (same visual pattern)
@@ -247,6 +305,171 @@ def plot_generation_front_distribution(
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
+    
+def plot_parallel_coordinates_pareto0(
+    pareto_by_front: dict[int, list[dict]],
+    objective_names: tuple[str, str, str],
+    output_path: Path
+):
+    front0 = pareto_by_front.get(0, [])
+    if not front0:
+        print("[WARN] Empty Pareto front 0 (parallel coordinates)")
+        return
+
+    ids = [p["id"] for p in front0]
+
+    data = np.array([
+        [p["objectives"][obj] for obj in objective_names]
+        for p in front0
+    ])
+
+    # latency ↓, energy ↓, throughput ↑
+    minimize = [True, True, False]
+    norm = normalize_objectives(data, minimize)
+
+    fig, ax = plt.subplots(figsize=(16, 6))
+
+    x = np.arange(len(objective_names))
+
+    cmap = colormaps["tab20"].resampled(len(front0))
+
+    for i, row in enumerate(norm):
+        ax.plot(
+            x,
+            row,
+            color=cmap(i),
+            alpha=0.8,
+            linewidth=2,
+            label=str(ids[i])
+        )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(objective_names)
+    ax.set_ylabel("Normalized objective value")
+    ax.set_title("Pareto Front 0 — Parallel Coordinates")
+
+    ax.grid(True, axis="y", linestyle="--", alpha=0.5)
+
+    ax.legend(
+        title="Simulation ID",
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        fontsize=9
+    )
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+
+def plot_radar_pareto0(
+    pareto_by_front: dict[int, list[dict]],
+    objective_names: tuple[str, str, str],
+    output_path: Path
+):
+    front0 = pareto_by_front.get(0, [])
+    if not front0:
+        print("[WARN] Empty Pareto front 0 (radar)")
+        return
+
+    ids = [p["id"] for p in front0]
+
+    data = np.array([
+        [p["objectives"][obj] for obj in objective_names]
+        for p in front0
+    ])
+
+    minimize = [True, True, False]
+    norm = normalize_objectives(data, minimize)
+
+    num_vars = len(objective_names)
+    angles = np.linspace(0, 2 * np.pi, num_vars, endpoint=False)
+    angles = np.concatenate([angles, [angles[0]]])
+
+    fig = plt.figure(figsize=(9, 9))
+    ax = fig.add_subplot(111, polar=True)
+
+    cmap = colormaps["tab20"].resampled(len(front0))
+
+    for i, row in enumerate(norm):
+        values = np.concatenate([row, [row[0]]])
+        ax.plot(
+            angles,
+            values,
+            color=cmap(i),
+            linewidth=2,
+            alpha=0.9,
+            label=str(ids[i])
+        )
+        ax.fill(
+            angles,
+            values,
+            color=cmap(i),
+            alpha=0.12
+        )
+
+    ax.set_thetagrids(
+        angles[:-1] * 180 / np.pi,
+        objective_names
+    )
+
+    ax.set_ylim(0, 1)
+    ax.set_title("Pareto Front 0 — Radar Plot", pad=25)
+
+    ax.legend(
+        title="Simulation ID",
+        loc="center left",
+        bbox_to_anchor=(1.25, 0.5),
+        fontsize=9
+    )
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_hv_gd(
+    generations: list[int],
+    hv_values: list[float],
+    gd_values: list[float],
+    worst_point: list[float],
+    output_path: Path
+):
+    fig, (ax_hv, ax_gd) = plt.subplots(
+        1, 2,
+        figsize=(15, 5),
+        sharex=True
+    )
+
+    # -------------------------------
+    # Hypervolume
+    # -------------------------------
+    ax_hv.plot(generations, hv_values, marker="o")
+    ax_hv.set_ylabel("Hypervolume")
+    ax_hv.set_title(
+        "Hypervolume Evolution\n"
+        f"Reference point = {np.round(worst_point, 3).tolist()}"
+    )
+    ax_hv.grid(True)
+
+    # -------------------------------
+    # Generational Distance
+    # -------------------------------
+    ax_gd.plot(generations, gd_values, marker="s", color="tab:red")
+    ax_gd.set_ylabel("Generational Distance")
+    ax_gd.set_title("Generational Distance to Final Pareto Front")
+    ax_gd.grid(True)
+
+    for ax in (ax_hv, ax_gd):
+        ax.set_xlabel("Generation")
+        ax.set_xticks(generations)
+        ax.set_xticklabels([str(g) for g in generations])
+
+    fig.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
 
 
 # ------------------------------------------------------------
@@ -317,13 +540,114 @@ def main():
         "pareto_distribution",
         "Distribution of individuals per front and generation"
     )
-
+        
     print("[OK] Pareto dominance analysis completed")
+    
+    parallel_plot = Path(f"pareto_parallel_{args.expid}.png")
+    radar_plot = Path(f"pareto_radar_{args.expid}.png")
+
+    plot_parallel_coordinates_pareto0(
+        pareto_by_front,
+        tuple(args.objectives),
+        parallel_plot
+    )
+
+    plot_radar_pareto0(
+        pareto_by_front,
+        tuple(args.objectives),
+        radar_plot
+    )
+
+    upload_analysis_file_api(
+        session,
+        args.api_base,
+        args.expid,
+        parallel_plot,
+        "pareto_parallel",
+        "Pareto front 0 — parallel coordinates"
+    )
+
+    upload_analysis_file_api(
+        session,
+        args.api_base,
+        args.expid,
+        radar_plot,
+        "pareto_radar",
+        "Pareto front 0 — radar plot"
+    )
+
+    print("[OK] Pareto parallel coordenates analysis completed")
+    
+    pareto_per_gen = get_pareto_per_generation_api(
+            session=session,
+            api_base=args.api_base,
+            experiment_id=args.expid,
+            to_minimization=True
+        )
+
+    generations = sorted(pareto_per_gen.keys())
+    if not generations:
+        raise SystemExit("No Pareto fronts found")
+
+    # ------------------------------------------------------------
+    # Worst reference point for hypervolume
+    # ------------------------------------------------------------
+    worst_point = compute_worst_point(
+        pareto_per_gen,
+        tuple(args.objectives)
+    )
+
+    # ------------------------------------------------------------
+    # Final Pareto front (front 0)
+    # ------------------------------------------------------------
+    final_front = np.array([
+        [p["objectives"][o] for o in args.objectives]
+        for p in pareto_by_front[0]
+    ])
+
+    hv_values = []
+    gd_values = []
+
+    for gen in generations:
+        front = pareto_per_gen[gen]
+
+        points = np.array([
+            [p["objectives"][o] for o in args.objectives]
+            for p in front
+        ])
+
+        hv_val = compute_hypervolume(
+            points.tolist(),
+            worst_point
+        )
+
+        gd_val = compute_gd(
+            points,
+            final_front
+        )
+
+        hv_values.append(hv_val)
+        gd_values.append(gd_val)
+
+    hv_gd_plot = Path(f"hv_gd_{args.expid}.png")
+
+    plot_hv_gd(
+        generations=generations,
+        hv_values=hv_values,
+        gd_values=gd_values,
+        worst_point=worst_point,
+        output_path=hv_gd_plot
+    )
+
+    print("[OK] Pareto HV and GD analysis completed")
 
     # Cleanup
     try:
         pareto_plot.unlink(missing_ok=True)
         dist_plot.unlink(missing_ok=True)
+        parallel_plot.unlink(missing_ok=True)
+        radar_plot.unlink(missing_ok=True)
+        hv_gd_plot.unlink(missing_ok=True)
         print("[OK] Temporary files removed")
     except Exception as ex:
         print(f"[WARN] Failed to remove temporary file: {ex}")
