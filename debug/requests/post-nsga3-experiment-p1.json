@@ -2,20 +2,24 @@
     "id": null,
     "name": "Performing optimization with NSGA-III on problem P1",
     "status": "Waiting",
-    "created_time": "2025-12-29T17:45:00Z",
+    "system_message": null,
+    "created_time": "2026-01-06T21:53:00Z",
     "start_time": null,
     "end_time": null,    
     "generations": [],
-    "source_repository_id": "69583a05f8ea24236def81c9",
+    "source_repository_options": {
+        "csma": "695d83d256363c92c2d4f875",
+        "tsch": "695d841356363c92c2d4f886"
+    },
     "parameters": {
         "strategy": "nsga3",
         "algorithm": {
-            "population_size": 30,
+            "population_size": 40,
             "number_of_generations": 20,
             "prob_cx": 0.8,
             "prob_mt": 0.15,
             "selection_method": "tournament",
-            "crossover_method": "sbx",
+            "crossover_method": "sbx_with_radial_translate",
             "mutation_method": "polynomial",
             "per_gene_prob": 0.1,
             "eta_cx": 20.0,

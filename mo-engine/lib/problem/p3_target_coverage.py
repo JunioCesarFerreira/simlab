@@ -60,13 +60,9 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
                 
         self.problem: ProblemP3 = ProblemP3.cast(problem)
 
-    def set_ga_operator_configs(self, parameters: GeneticAlgorithmConfigDto): 
-        self._p_bit_mut = float(parameters.get("per_gene_prob", 0.1))   
-        # Bias toward sparse selections but ensure some minimum
-        self._p_on_init = float(parameters.get("p_on_init", 0.15))    
-        self._min_on_init = int(parameters.get("min_on_init", 1))
-        self._ensure_non_empty = bool(parameters.get("ensure_non_empty", True))
 
+    def set_ga_operator_configs(self, parameters: GeneticAlgorithmConfigDto): 
+        self._p_bit_mut = float(parameters.get("per_gene_prob", 0.1))
 
     def random_individual_generator(self, size: int) -> list[ChromosomeP3]:
         Q = self.problem.candidates
@@ -77,21 +73,49 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
             mask = [1 if random.random() < self._p_on_init else 0 for _ in range(J)]
             while sum(mask) < self._min_on_init:
                 mask[random.randrange(J)] = 1
-            pop.append(ChromosomeP3(chromosome=mask))
+            chrm = ChromosomeP3(
+                mac_protocol = random.randint(0,1),
+                mask = mask
+            )
+            pop.append(chrm)
         return pop
 
+
     def crossover(self, parents: Sequence[ChromosomeP3]) -> list[ChromosomeP3]:
-        m1: list[int] = parents[0]
-        m2: list[int] = parents[1]
-        c1, c2 = uniform_crossover_mask(m1, m2)
-        return [c1, c2]
+        p1: ChromosomeP3 = parents[0]
+        p2: ChromosomeP3 = parents[1]
+        c1, c2 = uniform_crossover_mask(p1.mask, p2.mask)
+        
+        rng = random.Random()
+        
+        # MAC gene inheritance (simple uniform choice)
+        mac1 = p1.mac_protocol if rng.random() < 0.5 else p2.mac_protocol
+        mac2 = p2.mac_protocol if rng.random() < 0.5 else p1.mac_protocol
+
+        return [
+            ChromosomeP3(mac_protocol=mac1, mask=c1),
+            ChromosomeP3(mac_protocol=mac2, mask=c2),
+        ]
+
 
     def mutate(self, chromosome: ChromosomeP3) -> ChromosomeP3:
         mask: list[int] = chromosome.mask
         out = bitflip_mutation(mask, self._p_bit_mut)
         if sum(out) == 0 and len(out) > 0:
             out[random.randrange(len(out))] = 1
-        return out
+            
+        rng = random.Random()
+            
+        # MAC mutation (bit-flip)
+        mac = chromosome.mac_protocol
+        if rng.random() < self._p_bit_mut:
+            mac = 1 - mac  # 0 ↔ 1
+
+        return ChromosomeP3(
+            mac_protocol=mac,
+            mask=out,
+        )
+
 
     def _compute_constraint_violation_static(self, mask: list[int]) -> float:
         """
@@ -134,6 +158,7 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
                     cv += float(g - deg)
 
         return cv
+
 
     def encode_simulation_input(self, ind: ChromosomeP3) -> SimulationElements:
         fixed: list[FixedMote] = []

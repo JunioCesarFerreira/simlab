@@ -11,7 +11,6 @@ from pylib.dto.algorithm import GeneticAlgorithmConfigDto
 
 # Type aliases for clarity
 Chromosome = ChromosomeP1 | ChromosomeP2 | ChromosomeP3 | ChromosomeP4
-Objectives = list[float]
 
 
 class ProblemAdapter(ABC):
@@ -65,6 +64,7 @@ class ProblemAdapter(ABC):
         if not isinstance(region, (list, tuple)):
             raise TypeError(f"'region' must be a list/tuple of floats, got {type(region).__name__}.")
         return [float(x) for x in region]
+
 
     @abstractmethod
     def assert_problem(self, problem: Mapping[str, Any]) -> None:

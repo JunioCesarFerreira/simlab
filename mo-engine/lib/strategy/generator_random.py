@@ -12,7 +12,7 @@ from pylib.mongo_db import EnumStatus
 from pylib import plot_network
 
 from lib.util.build_input_sim_cooja import create_files
-from lib.util.random_network_methods import network_gen
+from lib.util.random_network import continuous_network_gen
 
 log = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ class GeneratorRandomStrategy(EngineStrategy):
 
         for i in range(num_of_gen):
             # 1. Generates topology
-            points = network_gen(amount=num_of_motes, region=region, radius=radius)
+            points = continuous_network_gen(amount=num_of_motes, region=region, radius=radius)
             fixed = [
                 {
                     "name": f"m{j}",

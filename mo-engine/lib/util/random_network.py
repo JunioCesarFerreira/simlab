@@ -3,7 +3,7 @@ import math
 import numpy as np
 from collections import deque
 
-def network_gen(
+def continuous_network_gen(
     amount: int,
     region: tuple[float, float, float, float],
     radius: float,
@@ -172,3 +172,110 @@ def network_gen(
                     components.append(component)
 
     return points
+
+
+
+def stochastic_reachability_mask(
+    candidates: list[tuple[float, float]],
+    sink: tuple[float, float],
+    radius: float,
+    rng: random.Random | None = None,
+) -> list[int]:
+    """
+    Stochastic reachability-guided growth algorithm.
+
+    Parameters
+    ----------
+    candidates : list[(float, float)]
+        List of candidate positions Q.
+    sink : (float, float)
+        Root position (must be in candidates).
+    radius : float
+        Reachability radius.
+    rng : random.Random | None
+        Optional RNG for reproducibility.
+
+    Returns
+    -------
+    mask : list[int]
+        Binary mask over candidates (1 = selected, 0 = not selected).
+    """
+
+    if rng is None:
+        rng = random.Random()
+
+    n = len(candidates)
+
+    # ------------------------------------------------------------
+    # State sets (indices)
+    # ------------------------------------------------------------
+    FREE = set(range(n))
+    SELECTED = set()
+    DISCARDED = set()
+
+    # Frontier (active expansion nodes)
+    frontier = set()
+
+    # ------------------------------------------------------------
+    # Distance helpers
+    # ------------------------------------------------------------
+    def dist_sink(i: int) -> float:
+        x1, y1 = sink
+        x2, y2 = candidates[i]
+        return math.hypot(x1 - x2, y1 - y2)
+    
+    def dist(i: int, j: int) -> float:
+        x1, y1 = candidates[i]
+        x2, y2 = candidates[j]
+        return math.hypot(x1 - x2, y1 - y2)
+
+    # ------------------------------------------------------------
+    # Initial expansion from sink (virtual root)
+    # ------------------------------------------------------------
+    reachable_from_sink = [
+        i for i in FREE
+        if dist_sink(i) <= radius
+    ]
+
+    if reachable_from_sink:
+        c = rng.randint(1, len(reachable_from_sink))
+        chosen = set(rng.sample(reachable_from_sink, c))
+        rejected = set(reachable_from_sink) - chosen
+
+        SELECTED.update(chosen)
+        frontier.update(chosen)
+
+        FREE.difference_update(chosen)
+        FREE.difference_update(rejected)
+        DISCARDED.update(rejected)
+
+    # ------------------------------------------------------------
+    # Main growth loop (from selected candidates)
+    # ------------------------------------------------------------
+    while frontier and FREE:
+        u = frontier.pop()
+
+        reachable = [
+            v for v in FREE
+            if dist(u, v) <= radius
+        ]
+
+        if not reachable:
+            continue
+
+        c = rng.randint(1, len(reachable))
+        chosen = set(rng.sample(reachable, c))
+        rejected = set(reachable) - chosen
+
+        SELECTED.update(chosen)
+        frontier.update(chosen)
+
+        FREE.difference_update(chosen)
+        FREE.difference_update(rejected)
+        DISCARDED.update(rejected)
+
+    # ------------------------------------------------------------
+    # Build binary mask
+    # ------------------------------------------------------------
+    mask = [1 if i in SELECTED else 0 for i in range(n)]
+    return mask

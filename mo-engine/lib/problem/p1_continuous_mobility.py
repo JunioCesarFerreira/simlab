@@ -5,7 +5,8 @@ from pylib.dto.simulator import FixedMote, MobileMote, SimulationElements
 from pylib.dto.problems import ProblemP1
 from pylib.dto.algorithm import GeneticAlgorithmConfigDto
 
-from lib.util.random_network_methods import network_gen
+from lib.util.random_network import continuous_network_gen
+from lib.util.connectivity import make_graph_connected
 from lib.genetic_operators.crossover.simulated_binary_crossover import sbx
 from lib.genetic_operators.mutation.polynomial_mutation import poly_mut
 
@@ -55,8 +56,8 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         pop: list[ChromosomeP1] = []
         for i in range(size):
             chrm = ChromosomeP1(
-                mac_protocol = 0,
-                relays = network_gen(N, box, R)
+                mac_protocol = random.randint(0, 1),
+                relays = continuous_network_gen(N, box, R)
             )
             pop.append(chrm)
         return pop
@@ -64,45 +65,83 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
     
     def set_ga_operator_configs(self, parameters: GeneticAlgorithmConfigDto):
         N = 2 * self.problem.number_of_relays # x and y for each relay  
-        self.eta_cx = float(parameters.get("eta_cx", 20.0))
-        self.eta_mt = float(parameters.get("eta_mt", 25.0))
-        self.per_gene_prob = float(parameters.get("per_gene_prob", 1.0 / N))
+        self._eta_cx = float(parameters.get("eta_cx", 20.0))
+        self._eta_mt = float(parameters.get("eta_mt", 25.0))
+        self._per_gene_prob = float(parameters.get("per_gene_prob", 1.0 / N))
+        self._crossover_method = str(parameters.get("crossover_method"))
+        self._mutation_method = str(parameters.get("mutation_method"))
+
+    
+    def _sbx_with_radial_translate(
+        self, 
+        p1: list[Position], 
+        p2: list[Position]
+    ) -> tuple[list[Position], list[Position]]:        
+        rng = random.Random()
+
+        c1: list[Position] = []
+        c2: list[Position] = []
+  
+        x_min, y_min, x_max, y_max = tuple(self.problem.region)
+        eta = self._eta_cx
+        for (x1, y1), (x2, y2) in zip(p1, p2):
+            # Apply SBX independently to x and y
+            cx1, cx2 = sbx(x1, x2, rng, eta, (x_min, x_max))
+            cy1, cy2 = sbx(y1, y2, rng, eta, (y_min, y_max))
+
+            c1.append((cx1, cy1))
+            c2.append((cx2, cy2))
+        
+        # makes graph connected by radial contraction
+        radius = self.radius_of_reach
+        step = radius * 0.1
+        c1 = make_graph_connected(c1, radius, step)
+        c2 = make_graph_connected(c2, radius, step)
+        
+        return c1, c2
+
+
+    def _rand_network(self) -> tuple[list[Position], list[Position]]:
+        box = tuple(self.problem.region) # xmin,ymin,xmax,ymax
+        N = self.problem.number_of_relays
+        R = self.problem.radius_of_reach
+
+        c1: list[Position] = continuous_network_gen(N, box, R)
+        c2: list[Position] = continuous_network_gen(N, box, R)        
+        return c1, c2
 
 
     def crossover(self, parents: Sequence[ChromosomeP1]) -> list[ChromosomeP1]:
         assert len(parents) == 2, "P1 crossover requires exactly two parents"
 
         p1, p2 = parents
-        relays1 = p1.relays
-        relays2 = p2.relays
+        relays1: list[Position] = p1.relays
+        relays2: list[Position] = p2.relays
 
         assert len(relays1) == len(relays2), "Parents must have same number of relays"
 
         rng = random.Random()
 
-        child1_relays: list[Position] = []
-        child2_relays: list[Position] = []
+        c1_relays: list[Position] = []
+        c2_relays: list[Position] = []
   
-        x_min, y_min, x_max, y_max = tuple(self.problem.region)
-        
-        for (x1, y1), (x2, y2) in zip(relays1, relays2):
-            # Apply SBX independently to x and y
-            cx1, cx2 = sbx(x1, x2, rng, self.eta_cx, (x_min, x_max))
-            cy1, cy2 = sbx(y1, y2, rng, self.eta_cx, (y_min, y_max))
-
-            child1_relays.append((cx1, cy1))
-            child2_relays.append((cx2, cy2))
+        cx_method = self._crossover_method.lower()
+        if cx_method == 'sbx_with_radial_translate':
+            c1_relays, c2_relays = self._sbx_with_radial_translate(relays1, relays2)
+        elif cx_method == 'rand' or cx_method=='rand_network':
+            c1_relays, c2_relays = self._rand_network()
+        else:
+            raise ValueError(f"crossover method {self._crossover_method} not found.")
 
         # MAC gene inheritance (simple uniform choice)
         mac1 = p1.mac_protocol if rng.random() < 0.5 else p2.mac_protocol
         mac2 = p2.mac_protocol if rng.random() < 0.5 else p1.mac_protocol
 
         return [
-            ChromosomeP1(mac_protocol=mac1, relays=child1_relays),
-            ChromosomeP1(mac_protocol=mac2, relays=child2_relays),
+            ChromosomeP1(mac_protocol=mac1, relays=c1_relays),
+            ChromosomeP1(mac_protocol=mac2, relays=c2_relays),
         ]
 
-    
 
     def mutate(self, chromosome: ChromosomeP1) -> ChromosomeP1:
         """
@@ -120,22 +159,27 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
 
         for (x, y) in chromosome.relays:
             # Mutate x
-            if rng.random() < self.per_gene_prob:
-                x_new = poly_mut(x, rng, self.eta_mt, bound_x)
+            if rng.random() < self._per_gene_prob:
+                x_new = poly_mut(x, rng, self._eta_mt, bound_x)
             else:
                 x_new = x
 
             # Mutate y
-            if rng.random() < self.per_gene_prob:
-                y_new = poly_mut(y, rng, self.eta_mt, bound_y)
+            if rng.random() < self._per_gene_prob:
+                y_new = poly_mut(y, rng, self._eta_mt, bound_y)
             else:
                 y_new = y
 
             new_relays.append((x_new, y_new))
 
+        # makes graph connected by radial contraction
+        radius = self.radius_of_reach
+        step = radius * 0.1
+        new_relays = make_graph_connected(new_relays, radius, step)
+        
         # MAC mutation (bit-flip)
         mac = chromosome.mac_protocol
-        if rng.random() < self.per_gene_prob:
+        if rng.random() < self._per_gene_prob:
             mac = 1 - mac  # 0 ↔ 1
 
         return ChromosomeP1(
@@ -191,4 +235,3 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
             "fixedMotes": fixed,
             "mobileMotes": mobile,
         }
-

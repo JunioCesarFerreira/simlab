@@ -20,7 +20,7 @@ def tournament_selection(
     return sel
 
 
-from lib.problem import Chromosome
+from lib.problem.chromosomes import Chromosome
 
 def tournament_selection_2(
     population: list[Chromosome], 

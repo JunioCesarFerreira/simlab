@@ -45,7 +45,7 @@ def get_paretos(experiment_id: str):
 
 
 @router.get("/experiments/{experiment_id}/paretos_to_min")
-def get_paretos(experiment_id: str):
+def get_paretos_to_min(experiment_id: str):
     """
     Retrieve Pareto fronts per generation for a given experiment,
     with all objective values expressed in a minimization space.

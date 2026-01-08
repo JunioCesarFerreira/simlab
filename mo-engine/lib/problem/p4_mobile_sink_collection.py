@@ -155,7 +155,6 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
 
     def set_ga_operator_configs(self, parameters: GeneticAlgorithmConfigDto):  
         self._p_bit_mut = float(parameters.get("per_gene_prob", 0.1))
-        self._ensure_non_empty = bool(parameters.get("ensure_non_empty", True))
         self._pm_tau = float(parameters.get("pm_tau", 0.5))
         self._sigma_tau = float(parameters.get("sigma_tau", 5.0))
 

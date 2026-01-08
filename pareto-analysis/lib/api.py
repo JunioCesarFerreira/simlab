@@ -28,6 +28,20 @@ def get_pareto_per_generation_api(
     return {int(k): v for k, v in data.items()}
 
 
+def get_individuals_per_generation_api(
+    session: requests.Session,
+    api_base: str,
+    experiment_id: str
+) -> dict[int, list[dict[str, Any]]]:
+    url = f"{api_base}/analysis/experiments/{experiment_id}/individuals"
+    resp = session.get(url, timeout=60)
+    resp.raise_for_status()
+    data = resp.json()
+
+    # JSON keys come as strings; normalize to int
+    return {int(k): v for k, v in data.items()}
+
+
 def upload_analysis_file_api(
     session: requests.Session,
     api_base: str,

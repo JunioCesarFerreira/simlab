@@ -1,16 +1,20 @@
 from typing import Any, Mapping, Sequence
 import random
+import logging
 
 from pylib.dto.simulator import FixedMote, MobileMote, SimulationElements
 from pylib.dto.problems import ProblemP2
 from pylib.dto.algorithm import GeneticAlgorithmConfigDto
+
+from lib.util.random_network import stochastic_reachability_mask
+from lib.util.connectivity import is_globally_connected, repair_connectivity_to_sink
 
 from lib.genetic_operators.crossover.uniform_crossover_mask import uniform_crossover_mask
 from lib.genetic_operators.mutation.bitflip_mutation import bitflip_mutation
 
 from .adapter import ProblemAdapter, ChromosomeP2
 
-
+log = logging.getLogger(__name__)
 
 # ============================================================
 # Problem 2: Discrete coverage with mobility
@@ -42,39 +46,80 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
                 
         self.problem: ProblemP2 = ProblemP2.cast(problem)
 
+
     def random_individual_generator(self, size: int) -> list[ChromosomeP2]:
         Q = self.problem.candidates
-        J = len(Q)
-        # Bias toward sparse selections (since the primary goal is to minimize |P|)
-        p_on = float(self._p_on_init)
+        S = self.problem.sink
+        R = self.problem.radius_of_reach
 
         pop: list[ChromosomeP2] = []
         for _ in range(size):
-            mask = [1 if random.random() < p_on else 0 for _ in range(J)]
-            # Ensure not empty (optional)
-            if sum(mask) == 0:
-                mask[random.randrange(J)] = 1
-            pop.append(ChromosomeP2(chromosome=mask))
+            mask = stochastic_reachability_mask(Q, S, R)
+            chrm = ChromosomeP2(                
+                mac_protocol = random.randint(0, 1),
+                mask=mask
+            )
+            pop.append(chrm)            
         return pop
     
+    
     def set_ga_operator_configs(self, parameters: GeneticAlgorithmConfigDto):    
-        self._p_on_init = float(parameters.get("p_on_init", 0.15))    
         self._p_bit_mut = float(parameters.get("per_gene_prob", 0.1))
-        self._ensure_non_empty = bool(parameters.get("ensure_non_empty", True))
+        
         
     def crossover(self, parents: Sequence[ChromosomeP2]) -> list[ChromosomeP2]:
-        m1: list[int] = parents[0]
-        m2: list[int] = parents[1]
-        c1, c2 = uniform_crossover_mask(m1, m2)
-        return [c1, c2]
+        Q = self.problem.candidates
+        S = self.problem.sink
+        R = self.problem.radius_of_reach
+        p1: ChromosomeP2 = parents[0]
+        p2: ChromosomeP2 = parents[1]
+        c1, c2 = uniform_crossover_mask(p1.mask, p2.mask)
+        
+        err, c1 = repair_connectivity_to_sink(Q, c1, S, R)
+        if err:
+            log.error(f"[P2] Repair failed. c1 crossover.")
+            c1 = p1.mask
+        err, c2 = repair_connectivity_to_sink(Q, c2, S, R)
+        if err:
+            log.error(f"[P2] Repair failed. c2 crossover.")
+            c2 = p2.mask
+        
+        rng = random.Random()
+        
+        # MAC gene inheritance (simple uniform choice)
+        mac1 = p1.mac_protocol if rng.random() < 0.5 else p2.mac_protocol
+        mac2 = p2.mac_protocol if rng.random() < 0.5 else p1.mac_protocol
+
+        return [
+            ChromosomeP2(mac_protocol=mac1, mask=c1),
+            ChromosomeP2(mac_protocol=mac2, mask=c2),
+        ]
+
 
     def mutate(self, chromosome: ChromosomeP2) -> ChromosomeP2:
+        Q = self.problem.candidates
+        S = self.problem.sink
+        R = self.problem.radius_of_reach
         mask: list[int] = chromosome.mask
-        out = bitflip_mutation(mask, self._p_bit_mut)
-        # Keep at least one selected position (optional)
-        if sum(out) == 0 and len(out) > 0:
-            out[random.randrange(len(out))] = 1
-        return out
+        bitflip_result = bitflip_mutation(mask, self._p_bit_mut)
+        
+        err, out = repair_connectivity_to_sink(Q, bitflip_result, S, R)
+        if err:
+            log.error(f"[P2] Repair failed. mutation.")
+            out = mask
+        
+        rng = random.Random()
+            
+        # MAC mutation (bit-flip)
+        mac = chromosome.mac_protocol
+        if rng.random() < self._p_bit_mut:
+            mac = 1 - mac  # 0 ↔ 1
+
+        return ChromosomeP2(
+            mac_protocol=mac,
+            mask=out,
+        )
+
 
     def encode_simulation_input(self, ind: ChromosomeP2) -> SimulationElements:
         fixed: list[FixedMote] = []
@@ -133,6 +178,3 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
             "fixedMotes": fixed,
             "mobileMotes": mobile,
         }
-
-
-

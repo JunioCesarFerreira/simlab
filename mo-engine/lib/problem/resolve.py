@@ -57,7 +57,7 @@ def build_test_adapter(problem: Mapping[str, Any]) -> ProblemAdapter:
           
     return adptr
   
-def build_adapter(problem: Mapping[str, Any], ga_parameter: Mapping[str, float]) -> ProblemAdapter:
+def build_adapter(problem: Mapping[str, Any], ga_parameter: Mapping[str, Any]) -> ProblemAdapter:
     """
     Instantiate the correct ProblemAdapter based on the resolved problem key.
     """

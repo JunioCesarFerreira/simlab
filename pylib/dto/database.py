@@ -28,6 +28,7 @@ class Simulation(TypedDict):
     parameters: SimulationConfig
     pos_file_id: ObjectId
     csc_file_id: ObjectId
+    source_repository_id: ObjectId
     log_cooja_id: ObjectId
     runtime_log_id: ObjectId
     csv_log_id: ObjectId
@@ -81,12 +82,13 @@ class Experiment(TypedDict):
     id: str
     name: str
     status: str
+    system_message: str
     created_time: datetime
     start_time: datetime
     end_time: datetime
     parameters: Parameters
     generations: list[ObjectId]
-    source_repository_id: str
+    source_repository_options: dict[str, ObjectId]
     transform_config: TransformConfig
     pareto_front: Optional[list[ParetoFrontItem]] = None
     analysis_files: dict[str, ObjectId]
