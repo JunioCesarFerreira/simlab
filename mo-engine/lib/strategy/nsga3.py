@@ -57,7 +57,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             for k, v in src_repo_opts.items()
         }
         
-        # Simulation and algorithm parameters
+        # --- simulation and algorithm parameters ---
         self._sim_duration: int = int(simulation_config.get("duration", 120))
         self._pop_size: int = int(algorithm_config.get("population_size", 20))
         self._max_gen: int = int(algorithm_config.get("number_of_generations", 5))
@@ -78,7 +78,7 @@ class NSGA3LoopStrategy(EngineStrategy):
                 f"objective_goals ({len(self._objective_goals)}) length mismatch"
             )
             
-        # nsga3 niching
+        # --- nsga3 niching ---
         self._divisions: int = int(algorithm_config.get("divisions", 10))      
         self._ref_points = generate_reference_points(len(self._objective_keys), self._divisions)
         
@@ -88,11 +88,9 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._gen_id: ObjectId | None = None
         self._evaluated_count: int = 0
 
-        # nsga3 workflow
-        self._current_population: list[Chromosome] = []
-        
-        self._parents = PopulationSnapshot()         
-        
+        # --- nsga3 workflow ---
+        self._current_population: list[Chromosome] = []        
+        self._parents = PopulationSnapshot()                 
         self._map_genome_sim: dict[Chromosome, str] = {}  
         self._map_sim_objectives: dict[str, list[float]] = {}
 
@@ -113,7 +111,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         # Initial Population P_0
         self._current_population = self._problem_adapter.random_individual_generator(self._pop_size)
 
-        # Enqueue Simulations to first (compute ε_0)
+        # Enqueue Simulations to first (compute F_0=f(P_0))
         self._generation_enqueue()
 
         # Starts watcher for receive results from this generation
@@ -323,84 +321,29 @@ class NSGA3LoopStrategy(EngineStrategy):
     def _evolution(self) -> None:
         """
         Two-phase (μ+λ) loop:
-        Phase P: parents (P_t) finished -> produce offspring Q_t and enqueue -> return.
-        Phase Q: offspring (Q_t) finished -> environmental selection on R_t = P_t U Q_t -> spawn P_{t+1}.
+        Phase P_1: parents (P_0) finished -> produce offspring P_1 and enqueue -> return.
+        Phase P_{t+1}: offspring (P_t) finished -> environmental selection on R_t = P_t U P_{t-1} -> spawn P_{t+1}.
         """        
-        # ---------------- First PHASE P ----------------
+        # ---------------- First PHASE P_1 ----------------
         if self._parents.dont_have_objectives():
-            # Store P_t (genomes + objectives) = newly assessed population
+            # Store P_0 (genomes + objectives) = newly assessed population
             self._parents.set(
                 genomes= self._current_population,
                 genome_to_sim_id= self._map_genome_sim,
                 sim_to_objectives= self._map_sim_objectives
             )
 
-            # Gera Q_t ranqueando P_t e enfileira para avaliação
+            # Generate P_1 from P_0
             offspring = self._run_genetic_algorithm()
             
+            # current population is P_1 and next generation
             self._gen_index += 1
             self._current_population = offspring
             self._generation_enqueue()
             
-            logger.info("[NSGA-III] Enqueued Q_t; waiting results.")
+            logger.info("[NSGA-III] Enqueued P_{t+1}; waiting results.")
             return
         
-        # ---------------- PHASE Q: offspring done -> environmental selection on union ----------------       
-        q_snapshot = PopulationSnapshot()
-        q_snapshot.set(
-            genomes= self._current_population,
-            genome_to_sim_id= self._map_genome_sim,
-            sim_to_objectives= self._map_sim_objectives
-        )
-        
-        # union R_t = P_t ∪ Q_t
-        P_F = np.array(self._parents.get_objectives(), dtype=float)
-        Q_F = np.array(q_snapshot.get_objectives(), dtype=float)
-        
-        if P_F.ndim != 2 or P_F.shape[0] == 0:
-            error_msg = "Invalid objective matrix P_F; aborting."
-            logger.exception(f"[NSGA-III] {error_msg}")
-            self._finalize_experiment(system_msg=error_msg)
-            return
-        if Q_F.ndim != 2 or Q_F.shape[0] == 0:
-            error_msg = "Invalid objective matrix Q_F; aborting."
-            logger.exception(f"[NSGA-III] {error_msg}")
-            self._finalize_experiment(system_msg=error_msg)
-            return
-
-        # concatenate
-        R_F_list = [list(row) for row in P_F.tolist()] + [list(row) for row in Q_F.tolist()]
-            
-        # fast non-dominated sort on union
-        fronts = fast_nondominated_sort(R_F_list)
-        if not fronts:            
-            error_msg = "No fronts on union; aborting."
-            logger.exception(f"[NSGA-III] {error_msg}")
-            self._finalize_experiment(system_msg=error_msg)
-            return
-
-        # environmental selection
-        selected_idx: list[int] = []
-        for front in fronts:
-            if len(selected_idx) + len(front) <= self._pop_size:
-                selected_idx.extend(front)
-            else:
-                remaining = self._pop_size - len(selected_idx)
-                if remaining > 0:
-                    partial = niching_selection(front, R_F_list, self._ref_points, remaining)
-                    selected_idx.extend(partial)
-                break
-
-        # build next parents P_{t+1}
-        self._parents = select_next_population(
-            selected_idxs= selected_idx,
-            pop_size= self._pop_size,
-            P= self._parents,
-            Q= q_snapshot,
-            genome_to_sim_id= self._map_genome_sim,
-            sim_to_objectives= self._map_sim_objectives
-        )
-
         # stop condition?
         if self._gen_index >= self._max_gen:
             try:
@@ -424,19 +367,75 @@ class NSGA3LoopStrategy(EngineStrategy):
                 first_pareto_front = []
 
             self._finalize_experiment(pareto_front=first_pareto_front)
-            return
+            return        
         
-        # ---------------- PHASE P: parents done -> generate offspring and enqueue ----------------
-        # produce Q_t from P_t (variation on parents)            
+        # ------- PHASE P_{t+1}: offspring done -> environmental selection on union -------       
+        p_t_snapshot = PopulationSnapshot()
+        p_t_snapshot.set(
+            genomes= self._current_population,
+            genome_to_sim_id= self._map_genome_sim,
+            sim_to_objectives= self._map_sim_objectives
+        )
+        
+        # union R_t = P_t ∪ P_{t-1}
+        p_previous = np.array(self._parents.get_objectives(), dtype=float)
+        p_current = np.array(p_t_snapshot.get_objectives(), dtype=float)
+        
+        if p_previous.ndim != 2 or p_previous.shape[0] == 0:
+            error_msg = "Invalid objective matrix P_{t-1}; aborting."
+            logger.exception(f"[NSGA-III] {error_msg}")
+            self._finalize_experiment(system_msg=error_msg)
+            return
+        if p_current.ndim != 2 or p_current.shape[0] == 0:
+            error_msg = "Invalid objective matrix P_t; aborting."
+            logger.exception(f"[NSGA-III] {error_msg}")
+            self._finalize_experiment(system_msg=error_msg)
+            return
+
+        # ------- PHASE Pareto front and environmental selection -------
+        # concatenate
+        R_F_list = [list(row) for row in p_previous.tolist()] + [list(row) for row in p_current.tolist()]
+            
+        # fast non-dominated sort on union
+        fronts = fast_nondominated_sort(R_F_list)
+        if not fronts:            
+            error_msg = "No fronts on union; aborting."
+            logger.exception(f"[NSGA-III] {error_msg}")
+            self._finalize_experiment(system_msg=error_msg)
+            return
+
+        # environmental selection
+        selected_idx: list[int] = []
+        for front in fronts:
+            if len(selected_idx) + len(front) <= self._pop_size:
+                selected_idx.extend(front)
+            else:
+                remaining = self._pop_size - len(selected_idx)
+                if remaining > 0:
+                    partial = niching_selection(front, R_F_list, self._ref_points, remaining)
+                    selected_idx.extend(partial)
+                break
+
+        # build next parents Q=E(R_t,α_t)
+        self._parents = select_next_population(
+            selected_idxs= selected_idx,
+            pop_size= self._pop_size,
+            P= self._parents,
+            Q= p_t_snapshot,
+            genome_to_sim_id= self._map_genome_sim,
+            sim_to_objectives= self._map_sim_objectives
+        )
+        
+        # ------- PHASE Q: parents done -> generate offspring and enqueue -------
+        # produce P_{t+1} from GA(Q,H) (variation on parents)            
         offspring = self._run_genetic_algorithm()
 
-        # enqueue Q_t as next "generation" to be evaluated
-        # (note: gen_index here is just a sequence counter of batches evaluated)
+        # enqueue P_{t+1} as next "generation" to be evaluated
         self._gen_index += 1
         self._current_population = offspring
         self._generation_enqueue()        
         
-        logger.info("[NSGA-III] Offspring enqueued; waiting for Q_t results to perform environmental selection.")
+        logger.info("[NSGA-III] Offspring enqueued; waiting for P_t results to perform environmental selection.")
 
         return
     
