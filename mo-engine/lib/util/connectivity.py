@@ -456,3 +456,45 @@ def repair_connectivity_to_sink(
             cur = parent[cur]
 
     return False, mask
+
+
+def repair_k_coverage(
+    candidates: list[tuple[float, float]],
+    targets: list[tuple[float, float]],
+    mask: list[int],
+    Rcov: float,
+    k: int,
+) -> list[int]:
+
+    mask = mask[:]
+
+    for tx, ty in targets:
+        covering = [
+            i for i, (x, y) in enumerate(candidates)
+            if mask[i] == 1 and math.hypot(x - tx, y - ty) <= Rcov
+        ]
+
+        if len(covering) >= k:
+            continue
+
+        # Candidates that could cover this target
+        possible = [
+            i for i, (x, y) in enumerate(candidates)
+            if math.hypot(x - tx, y - ty) <= Rcov
+        ]
+
+        possible.sort(
+            key=lambda i: math.hypot(
+                candidates[i][0] - tx,
+                candidates[i][1] - ty
+            )
+        )
+
+        for i in possible:
+            if mask[i] == 0:
+                mask[i] = 1
+                covering.append(i)
+                if len(covering) >= k:
+                    break
+
+    return mask

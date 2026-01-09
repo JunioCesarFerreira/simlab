@@ -1,16 +1,22 @@
 from typing import Any, Mapping, Sequence
 import math
 import random
+import logging
 
 from pylib.dto.simulator import FixedMote, SimulationElements
 from pylib.dto.problems import ProblemP3
 from pylib.dto.algorithm import GeneticAlgorithmConfigDto
+
+from lib.util.random_network import stochastic_reachability_mask
+from lib.util.connectivity import repair_connectivity_to_sink, repair_k_coverage
+from lib.util.connectivity import is_connected_and_k_covered
 
 from lib.genetic_operators.crossover.uniform_crossover_mask import uniform_crossover_mask
 from lib.genetic_operators.mutation.bitflip_mutation import bitflip_mutation
 
 from .adapter import ProblemAdapter, ChromosomeP3
 
+log = logging.getLogger(__name__)
 
 def _euclid(a: tuple[float, float], b: tuple[float, float]) -> float:
     """Euclidean distance in R^2."""
@@ -64,27 +70,69 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
     def set_ga_operator_configs(self, parameters: GeneticAlgorithmConfigDto): 
         self._p_bit_mut = float(parameters.get("per_gene_prob", 0.1))
 
+
     def random_individual_generator(self, size: int) -> list[ChromosomeP3]:
         Q = self.problem.candidates
-        J = len(Q)
+        S = self.problem.sink
+        R = self.problem.radius_of_reach
 
         pop: list[ChromosomeP3] = []
+
+        max_attempts = 20
+
         for _ in range(size):
-            mask = [1 if random.random() < self._p_on_init else 0 for _ in range(J)]
-            while sum(mask) < self._min_on_init:
-                mask[random.randrange(J)] = 1
-            chrm = ChromosomeP3(
-                mac_protocol = random.randint(0,1),
-                mask = mask
+            for _ in range(max_attempts):
+                mask = stochastic_reachability_mask(Q, S, R)
+
+                if self._is_feasible_static(mask):
+                    break
+            else:
+                # fallback: Accept even if unfeasible (GA corrects later)
+                log.warning("[P3] Random gen fallback: infeasible individual")
+
+            pop.append(
+                ChromosomeP3(
+                    mac_protocol=random.randint(0, 1),
+                    mask=mask
+                )
             )
-            pop.append(chrm)
+
         return pop
 
 
     def crossover(self, parents: Sequence[ChromosomeP3]) -> list[ChromosomeP3]:
+        Q = self.problem.candidates
+        S = self.problem.sink
+        R = self.problem.radius_of_reach
         p1: ChromosomeP3 = parents[0]
         p2: ChromosomeP3 = parents[1]
         c1, c2 = uniform_crossover_mask(p1.mask, p2.mask)
+        
+        err, c1 = repair_connectivity_to_sink(Q, c1, S, R)
+        if err:
+            log.error(f"[P2] Repair failed. c1 crossover.")
+            c1 = p1.mask
+        else:            
+            c1 = repair_k_coverage(
+                Q,
+                self.problem.targets,
+                c1,
+                self.problem.radius_of_cover,
+                self.problem.k_required
+            )
+            
+        err, c2 = repair_connectivity_to_sink(Q, c2, S, R)
+        if err:
+            log.error(f"[P2] Repair failed. c2 crossover.")
+            c2 = p2.mask
+        else:                
+            c2 = repair_k_coverage(
+                Q,
+                self.problem.targets,
+                c2,
+                self.problem.radius_of_cover,
+                self.problem.k_required
+            )
         
         rng = random.Random()
         
@@ -99,11 +147,25 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
 
 
     def mutate(self, chromosome: ChromosomeP3) -> ChromosomeP3:
+        Q = self.problem.candidates
+        S = self.problem.sink
+        R = self.problem.radius_of_reach
         mask: list[int] = chromosome.mask
-        out = bitflip_mutation(mask, self._p_bit_mut)
-        if sum(out) == 0 and len(out) > 0:
-            out[random.randrange(len(out))] = 1
-            
+        bitflip_result = bitflip_mutation(mask, self._p_bit_mut)
+        
+        err, out = repair_connectivity_to_sink(Q, bitflip_result, S, R)
+        if err:
+            log.error(f"[P2] Repair failed. mutation.")
+            out = mask
+        else:                    
+            out = repair_k_coverage(
+                Q,
+                self.problem.targets,
+                out,
+                self.problem.radius_of_cover,
+                self.problem.k_required
+            )
+        
         rng = random.Random()
             
         # MAC mutation (bit-flip)
@@ -117,47 +179,20 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
         )
 
 
-    def _compute_constraint_violation_static(self, mask: list[int]) -> float:
-        """
-        Compute a static (geometry-only) feasibility penalty:
-        - k-coverage of targets within R_cov
-        - g-min-degree among installed sensors within R_com
-
-        This does not include MAC/interference/traffic, which can be handled by simulation.
-        """
+    def _is_feasible_static(self, mask: list[int]) -> bool:
         Q = self.problem.candidates
-        Xi = self.problem.targets
-        k = self.problem.k_required
-        g = self.problem.g_required
-        Rcov = self._Rcov()
-        Rcom = self._Rcom()
-
         P = [Q[i] for i, b in enumerate(mask) if b == 1]
-        if len(P) == 0:
-            # Heavily penalize empty deployment
-            return 1e6
 
-        cv = 0.0
+        if not P:
+            return False
 
-        # k-coverage violations
-        for xi in Xi:
-            covered = sum(1 for p in P if _euclid(p, xi) <= Rcov)
-            if covered < k:
-                cv += float(k - covered)
-
-        # g-min-degree violations
-        if g > 0:
-            for i in range(len(P)):
-                deg = 0
-                for j in range(len(P)):
-                    if i == j:
-                        continue
-                    if _euclid(P[i], P[j]) <= Rcom:
-                        deg += 1
-                if deg < g:
-                    cv += float(g - deg)
-
-        return cv
+        return is_connected_and_k_covered(
+            sensor_positions=P,
+            target_positions=self.problem.targets,
+            communication_radius=self.problem.radius_of_reach,
+            sensing_radius=self.problem.radius_of_cover,
+            k=self.problem.k_required,
+        )
 
 
     def encode_simulation_input(self, ind: ChromosomeP3) -> SimulationElements:

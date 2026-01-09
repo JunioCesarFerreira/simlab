@@ -47,6 +47,10 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
         self.problem: ProblemP2 = ProblemP2.cast(problem)
 
 
+    def set_ga_operator_configs(self, parameters: GeneticAlgorithmConfigDto):    
+        self._p_bit_mut = float(parameters.get("per_gene_prob", 0.1))
+
+
     def random_individual_generator(self, size: int) -> list[ChromosomeP2]:
         Q = self.problem.candidates
         S = self.problem.sink
@@ -61,11 +65,7 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
             )
             pop.append(chrm)            
         return pop
-    
-    
-    def set_ga_operator_configs(self, parameters: GeneticAlgorithmConfigDto):    
-        self._p_bit_mut = float(parameters.get("per_gene_prob", 0.1))
-        
+                
         
     def crossover(self, parents: Sequence[ChromosomeP2]) -> list[ChromosomeP2]:
         Q = self.problem.candidates
