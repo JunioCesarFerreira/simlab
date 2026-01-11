@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from typing import Optional, Callable
+from typing import Optional, Callable, Any
 from bson import ObjectId, errors
 
 from pylib.dto.database import Experiment, TransformConfig
@@ -17,9 +17,12 @@ class ExperimentRepository:
         with self.connection.connect() as db:
             return db["experiments"].insert_one(experiment).inserted_id
 
-    def find_by_status(self, status: EnumStatus) -> list[Experiment]:
+    def find_by_status(self, status: EnumStatus) -> list[dict[str,Any]]:
         with self.connection.connect() as db:
-            return list(db["experiments"].find({"status": status}))
+            return list(db["experiments"].find(
+                {"status": status},
+                {"_id": 1, "name": 1, "system_message": 1, "start_time": 1, "end_time": 1}
+                ))
 
     def find_first_by_status(self, status: str) -> Optional[Experiment]:
         with self.connection.connect() as db:

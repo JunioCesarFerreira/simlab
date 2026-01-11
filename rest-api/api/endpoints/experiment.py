@@ -11,7 +11,12 @@ if project_path not in sys.path:
 
 from pylib import mongo_db
 
-from api.dto import ExperimentDto, experiment_to_mongo, experiment_from_mongo
+from api.dto import (
+    ExperimentDto,
+    ExperimentInfoDto,
+    experiment_to_mongo, 
+    experiment_from_mongo
+)
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/?replicaSet=rs0")
 DB_NAME = os.getenv("DB_NAME", "simlab")
@@ -59,8 +64,8 @@ def get_experiment(experiment_id: str) -> ExperimentDto:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/by-status/{status}", response_model=list[ExperimentDto])
-def get_experiments_by_status(status: str) -> list[ExperimentDto]:
+@router.get("/by-status/{status}", response_model=list[ExperimentInfoDto])
+def get_experiments_by_status(status: str) -> list[ExperimentInfoDto]:
     """
     Retrieve all experiments with a given status.
     

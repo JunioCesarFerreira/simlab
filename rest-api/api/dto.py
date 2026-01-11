@@ -85,6 +85,12 @@ class ExperimentDto(TypedDict):
     pareto_front: Optional[list[ParetoFrontItemDto]] = None
     analysis_files: NotRequired[dict[str, str]] = None
     
+class ExperimentInfoDto(TypedDict):
+    id: Optional[str] = None
+    name: str
+    system_message: Optional[str]
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
     
 #---------------------------------------------------------------------------------------------------------
 # Converters Mongo ↔ DTO
