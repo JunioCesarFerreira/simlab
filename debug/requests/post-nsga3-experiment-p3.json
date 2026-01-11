@@ -8,14 +8,14 @@
     "end_time": null,    
     "generations": [],
     "source_repository_options": {
-        "csma": "695fb041125e5141b896bcf0",
-        "tsch": "695fb074125e5141b896bd01"
+        "csma": "695fbcef3be5f623aa9af73f",
+        "tsch": "695fbd343be5f623aa9af750"
     },
     "parameters": {
         "strategy": "nsga3",
         "algorithm": {
-            "population_size": 6,
-            "number_of_generations": 5,
+            "population_size": 40,
+            "number_of_generations": 20,
             "prob_cx": 0.8,
             "prob_mt": 0.15,
             "selection_method": "tournament",

@@ -1,3 +1,5 @@
+import zipfile
+import shutil
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
 from bson import ObjectId, errors as bson_errors
@@ -76,7 +78,7 @@ def download_file(file_id: str, extension: str, background_tasks: BackgroundTask
     )
 
 
-@router.get("/{simulation_id}/topology", response_class=FileResponse)
+@router.get("/simulations/{simulation_id}/topology", response_class=FileResponse)
 def download_topology_file_by_simulation(
     simulation_id: str,
     background_tasks: BackgroundTasks
@@ -94,7 +96,7 @@ def download_topology_file_by_simulation(
     # Validate simulation_id
     # ------------------------------------------------------------
     try:
-        sim_oid = ObjectId(simulation_id)
+        _ = ObjectId(simulation_id)
     except bson_errors.InvalidId:
         raise HTTPException(status_code=400, detail="Invalid simulation_id")
 
@@ -148,5 +150,98 @@ def download_topology_file_by_simulation(
         tmp_path,
         filename=f"{simulation_id}_topology.png",
         media_type=mime_type,
+        background=background_tasks,
+    )
+    
+@router.get("/experiments/{experiment_id}/analysis/zip", response_class=FileResponse)
+def download_experiment_analysis_zip(
+    experiment_id: str,
+    background_tasks: BackgroundTasks
+):
+    """
+    Download all analysis files of an experiment as a ZIP archive.
+
+    - experiment_id must be a valid Experiment ObjectId
+    - All files referenced in experiment.analysis_files are fetched from GridFS
+    - Files are packed into a ZIP and returned
+    - Temporary files are removed after response
+    """
+
+    # ------------------------------------------------------------
+    # Validate experiment_id
+    # ------------------------------------------------------------
+    try:
+        exp_oid = ObjectId(experiment_id)
+    except bson_errors.InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid experiment_id")
+
+    # ------------------------------------------------------------
+    # Fetch analysis_files metadata
+    # ------------------------------------------------------------
+    analysis_files = factory.experiment_repo.find_analysis_files(experiment_id)
+
+    if not analysis_files:
+        raise HTTPException(
+            status_code=404,
+            detail="No analysis files found for this experiment"
+        )
+
+    # ------------------------------------------------------------
+    # Create temp working directory
+    # ------------------------------------------------------------
+    work_dir = tempfile.mkdtemp(prefix="simlab_analysis_")
+    zip_path = os.path.join(work_dir, f"{experiment_id}_analysis.zip")
+
+    try:
+        # --------------------------------------------------------
+        # Download each analysis file
+        # --------------------------------------------------------
+        for description, file_id in analysis_files.items():
+            if not file_id:
+                continue
+
+            try:
+                oid = ObjectId(file_id)
+            except bson_errors.InvalidId:
+                continue
+
+            # filename inside zip
+            safe_name = description.replace(" ", "_") + ".png"
+            file_path = os.path.join(work_dir, safe_name)
+
+            factory.fs_handler.download_file(oid, file_path)
+
+        # --------------------------------------------------------
+        # Create ZIP
+        # --------------------------------------------------------
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+            for fname in os.listdir(work_dir):
+                fpath = os.path.join(work_dir, fname)
+                if fpath == zip_path:
+                    continue
+                zipf.write(fpath, arcname=fname)
+
+    except NoFile:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=404,
+            detail="One or more analysis files were not found in GridFS"
+        )
+    except Exception as e:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error creating analysis ZIP: {e}"
+        )
+
+    # ------------------------------------------------------------
+    # Cleanup after response
+    # ------------------------------------------------------------
+    background_tasks.add_task(shutil.rmtree, work_dir, True)
+
+    return FileResponse(
+        zip_path,
+        filename=f"{experiment_id}_analysis.zip",
+        media_type="application/zip",
         background=background_tasks,
     )

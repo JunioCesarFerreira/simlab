@@ -24,6 +24,17 @@ class ExperimentRepository:
                 {"_id": 1, "name": 1, "system_message": 1, "start_time": 1, "end_time": 1}
                 ))
 
+    def find_analysis_files(self, experiment_id: str) -> dict[str,Any]:
+        try:
+            oid = ObjectId(experiment_id)
+        except errors.InvalidId:
+            log.error("Invalid ID")
+        with self.connection.connect() as db:
+            result = db["experiments"].find_one(
+                {"_id": oid},
+                {"analysis_files": 1})
+            return result["analysis_files"]
+            
     def find_first_by_status(self, status: str) -> Optional[Experiment]:
         with self.connection.connect() as db:
             return db["experiments"].find_one({"status": status})
