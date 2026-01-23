@@ -100,7 +100,6 @@ class ProblemAdapter(ABC):
           and genetic operators
         """
         raise NotImplementedError
-
     
     # ------------------------------------------------------------------
     # Genetic operators
@@ -121,6 +120,7 @@ class ProblemAdapter(ABC):
             New child chromosomes produced by the crossover.
         """
         raise NotImplementedError
+
 
     @abstractmethod
     def mutate(self, chromosome: Chromosome) -> Chromosome:

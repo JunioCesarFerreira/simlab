@@ -26,6 +26,7 @@ DB_NAME = os.getenv("DB_NAME", "simlab")
 
 mongo = mongo_db.create_mongo_repository_factory(MONGO_URI, DB_NAME)
 
+
 def select_strategy(exp_doc: dict) -> EngineStrategy:
     log.info("select strategy")
     exp_type = exp_doc.get("parameters", {}).get("strategy", "simple")
@@ -75,6 +76,7 @@ def run_pending_experiment(change: dict):
         if process_experiment(change) == False:
             mongo.experiment_repo.update_status(exp_id, EnumStatus.ERROR)
        
+       
 def main() -> None:
     log.info("service started.")
     log.info(f"env:\n\tMONGO_URI: {MONGO_URI}\n\tDB_NAME: {DB_NAME}")
@@ -93,6 +95,7 @@ def main() -> None:
 
     while True:
         time.sleep(10)
+
 
 if __name__ == "__main__":
     main()

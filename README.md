@@ -17,7 +17,7 @@ The system is composed of five main components:
    - Supports downloading of logs and output files stored in MongoDB/GridFS.
    - Ensures compatibility with external clients.
 
-2. **Database (MongoDB + GridFS)**
+2. **database (MongoDB + GridFS)**
    - Central data lake for storing experiments, generations, and simulation metadata.
    - Uses GridFS to manage large files (e.g., logs, Cooja `.csc` configs, `.dat` position files).
    - Provides Change Streams to trigger workflows when new experiments or results are available.
@@ -62,24 +62,28 @@ Below is a simplified diagram of the SimLab workflow:
 
 ```mermaid
 sequenceDiagram
-    API->>+MongoDb: Create<br/>Source Repository
-    API->>+MongoDb: New Experiment
+    API->>database: Create source repository
+    API->>database: Create new experiment
     
-    MongoDb-->>+mo-engine: ChangeStream<br/>New Experiment
+    database->>+mo-engine: Change stream event:<br/>New experiment created
     
     loop Iterative optimization
-        mo-engine->>mo-engine: Generate input Simulations
-        mo-engine->>-MongoDb: Create<br/>Generation
+        mo-engine->>mo-engine: Generate simulation inputs
+        mo-engine->>-database: Create generation
         
-        MongoDb-->>+master-node: ChangeStream: New Generation
+        database->>+master-node: Change stream event:<br/>New generation created
+        
         loop For each available worker container
-            master-node->>+CoojaWorker[1...N]: Starts and<br/>monitors Simulation
-            CoojaWorker[1...N]-->>-master-node: End Simulation              
-            master-node-->>-MongoDb: Write Simulation results logs<br/>Change Simulation status DONE/ERROR<br/>If Generation finished change status DONE
+            master-node->>+sim-worker[1...N]: Start and monitor<br/>simulation
+            sim-worker[1...N]-->>-master-node: Simulation completed
+            master-node->>-database: Persist simulation logs and results<br/>Update simulation status (DONE / ERROR)<br/>If all simulations completed, mark generation as DONE
         end
-        MongoDb-->>+mo-engine: ChangeStream<br/>End Simalations 
+        
+        database->>+mo-engine: Change stream event:<br/>All simulations completed
     end
-    mo-engine-->>-MongoDb: Change DONE<br/>If Experiment<br/>finished
+    
+    mo-engine->>-database: Update experiment<br/>status to DONE<br/>If optimization is finished
+
 ```
 ### Core Data Model (Entity-Relationship)
 
