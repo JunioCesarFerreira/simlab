@@ -16,6 +16,7 @@
         "algorithm": {
             "population_size": 12,
             "number_of_generations": 30,
+            "random_seed": 42,
             "prob_cx": 0.8,
             "prob_mt": 0.15,
             "selection_method": "tournament",
@@ -26,7 +27,8 @@
             "sigma_tau": 5.1
         },
         "simulation": {
-            "duration": 180
+            "duration": 180,
+            "random_seed": 123456
         },
         "problem":{
             "name": "problem4",
