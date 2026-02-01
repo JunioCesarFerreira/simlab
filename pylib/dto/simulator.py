@@ -27,6 +27,7 @@ class SimulationElements(TypedDict):
 class SimulationConfig(TypedDict):
     name: str
     duration: float
+    randomSeed: int
     radiusOfReach: float # Cooja only accepts homogeneous networks.
     radiusOfInter: float # Cooja only accepts homogeneous networks.
     region: tuple[float, float, float, float]

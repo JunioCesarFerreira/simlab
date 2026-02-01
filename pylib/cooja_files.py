@@ -34,6 +34,7 @@ def convert_simulation_files(
         simulation_time=config["duration"],
         tx_range=config["radiusOfReach"],
         interference_range=config["radiusOfInter"],
+        random_seed=config.get("randomSeed", 123456),
         input_file=template_file,
         output_file=outsim
     )

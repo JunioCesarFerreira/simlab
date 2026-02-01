@@ -1,4 +1,5 @@
 import os
+import random
 import logging
 from threading import Thread
 from datetime import datetime
@@ -85,6 +86,7 @@ class GeneratorRandomStrategy(EngineStrategy):
             config: SimulationConfig = {
                 "name": f"auto-{i}",
                 "duration": 120,
+                "randomSeed": random.randint(1, 1_000_000),
                 "radiusOfReach": radius,
                 "radiusOfInter": interf,
                 "region": region,

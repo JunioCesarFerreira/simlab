@@ -59,6 +59,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         
         # --- simulation and algorithm parameters ---
         self._sim_duration: int = int(simulation_config.get("duration", 120))
+        self._random_seed: int = int(simulation_config.get("random_seed", 123456))
         self._pop_size: int = int(algorithm_config.get("population_size", 20))
         self._max_gen: int = int(algorithm_config.get("number_of_generations", 5))
                         
@@ -204,6 +205,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         config: SimulationConfig = {
                 "name": f"nsga3-g{gen_index}-{ind_idx}",
                 "duration": self._sim_duration,
+                "randomSeed": self._random_seed,
                 "radiusOfReach": self._problem_adapter.radius_of_reach,
                 "radiusOfInter": self._problem_adapter.radius_of_inter,
                 "region": self._problem_adapter.bounds,

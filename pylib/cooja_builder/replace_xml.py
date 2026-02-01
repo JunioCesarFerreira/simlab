@@ -11,6 +11,7 @@ def update_simulation_xml(
     simulation_time: float,
     tx_range: float,
     interference_range: float,
+    random_seed: int,
     input_file: str,
     output_file: str
 ) -> None:
@@ -38,7 +39,19 @@ def update_simulation_xml(
         interference_range_elem = radiomedium.find("interference_range")
         if interference_range_elem is not None:
             interference_range_elem.text = str(interference_range)
-    
+            
+    # Update random seed
+    simulation = root.find(".//simulation")
+    if simulation is not None:
+        randomseed_elem = simulation.find("randomseed")
+        if randomseed_elem is not None:
+            randomseed_elem.text = str(random_seed)
+        else:
+            # Caso o template não tenha randomseed (robustez)
+            randomseed_elem = ET.SubElement(simulation, "randomseed")
+            randomseed_elem.text = str(random_seed)
+            
+
     # Update simulation time in JS script keeping CDATA
     script_element = root.find(".//script")
     if script_element is not None and script_element.text is not None:
