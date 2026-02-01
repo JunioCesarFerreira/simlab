@@ -459,8 +459,8 @@ class NSGA3LoopStrategy(EngineStrategy):
         individual_ranks: dict[int, int] = compute_individual_ranks(fronts)
         while len(children) < self._pop_size:
             # Selection
-            parent1: Chromosome = tournament_selection_2(parents, individual_ranks)
-            parent2: Chromosome = tournament_selection_2(parents, individual_ranks)
+            parent1: Chromosome = tournament_selection_2(parents, individual_ranks, self._ga_rng)
+            parent2: Chromosome = tournament_selection_2(parents, individual_ranks, self._ga_rng)
             # Crossover 
             if self._rng.random() < self._prob_cx:
                 c1, c2 = self._problem_adapter.crossover([parent1, parent2])
