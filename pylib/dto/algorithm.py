@@ -3,6 +3,7 @@ from typing import TypedDict
 class GeneticAlgorithmConfigDto(TypedDict):
     population_size: int
     number_of_generations: int
+    random_seed: int
     prob_cx: float
     prob_mt: float
     per_gene_prob: float

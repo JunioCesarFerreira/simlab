@@ -23,6 +23,7 @@ class Simulation(TypedDict):
     experiment_id: ObjectId
     generation_id: ObjectId
     status: str
+    random_seed: int
     start_time: datetime
     end_time: datetime
     parameters: SimulationConfig
@@ -66,7 +67,7 @@ class TransformConfig(TypedDict):
     time_col: str
     objectives: list[ObjectiveItem]
     metrics: list[MetricItem]
-    
+      
 class Parameters(TypedDict):
     strategy: str
     algorithm: dict[str, Any] # Algorithm parameters defined in dto/algorithms.py

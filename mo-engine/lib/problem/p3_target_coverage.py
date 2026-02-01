@@ -1,6 +1,5 @@
 from typing import Any, Mapping, Sequence
 import math
-import random
 import logging
 
 from pylib.dto.simulator import FixedMote, SimulationElements
@@ -14,13 +13,9 @@ from lib.util.connectivity import is_connected_and_k_covered
 from lib.genetic_operators.crossover.uniform_crossover_mask import uniform_crossover_mask
 from lib.genetic_operators.mutation.bitflip_mutation import bitflip_mutation
 
-from .adapter import ProblemAdapter, ChromosomeP3
+from .adapter import ProblemAdapter, ChromosomeP3, Random
 
 log = logging.getLogger(__name__)
-
-def _euclid(a: tuple[float, float], b: tuple[float, float]) -> float:
-    """Euclidean distance in R^2."""
-    return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
 # ============================================================
@@ -67,8 +62,9 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
         self.problem: ProblemP3 = ProblemP3.cast(problem)
 
 
-    def set_ga_operator_configs(self, parameters: GeneticAlgorithmConfigDto): 
+    def set_ga_operator_configs(self, rng: Random, parameters: GeneticAlgorithmConfigDto): 
         self._p_bit_mut = float(parameters.get("per_gene_prob", 0.1))
+        self._rng = rng
 
 
     def random_individual_generator(self, size: int) -> list[ChromosomeP3]:
@@ -92,7 +88,7 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
 
             pop.append(
                 ChromosomeP3(
-                    mac_protocol=random.randint(0, 1),
+                    mac_protocol=self._rng.randint(0, 1),
                     mask=mask
                 )
             )
@@ -133,12 +129,10 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
                 self.problem.radius_of_cover,
                 self.problem.k_required
             )
-        
-        rng = random.Random()
-        
+                
         # MAC gene inheritance (simple uniform choice)
-        mac1 = p1.mac_protocol if rng.random() < 0.5 else p2.mac_protocol
-        mac2 = p2.mac_protocol if rng.random() < 0.5 else p1.mac_protocol
+        mac1 = p1.mac_protocol if self._rng.random() < 0.5 else p2.mac_protocol
+        mac2 = p2.mac_protocol if self._rng.random() < 0.5 else p1.mac_protocol
 
         return [
             ChromosomeP3(mac_protocol=mac1, mask=c1),
@@ -165,12 +159,10 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
                 self.problem.radius_of_cover,
                 self.problem.k_required
             )
-        
-        rng = random.Random()
-            
+                    
         # MAC mutation (bit-flip)
         mac = chromosome.mac_protocol
-        if rng.random() < self._p_bit_mut:
+        if self._rng.random() < self._p_bit_mut:
             mac = 1 - mac  # 0 ↔ 1
 
         return ChromosomeP3(

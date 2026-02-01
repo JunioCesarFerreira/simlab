@@ -1,3 +1,4 @@
+import random
 from abc import ABC, abstractmethod
 from .chromosomes import (
     ChromosomeP1,
@@ -12,6 +13,7 @@ from pylib.dto.algorithm import GeneticAlgorithmConfigDto
 # Type aliases for clarity
 Chromosome = ChromosomeP1 | ChromosomeP2 | ChromosomeP3 | ChromosomeP4
 
+Random = random.Random
 
 class ProblemAdapter(ABC):
     """
@@ -84,7 +86,7 @@ class ProblemAdapter(ABC):
     # Genetic algorithm configuration
     # ------------------------------------------------------------------
     @abstractmethod
-    def set_ga_operator_configs(self, parameters: GeneticAlgorithmConfigDto) -> None:
+    def set_ga_operator_configs(self, rng: Random, parameters: GeneticAlgorithmConfigDto) -> None:
         """
         Configure problem-specific parameters of the genetic algorithm.
 

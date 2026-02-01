@@ -1,3 +1,5 @@
+import random
+
 from typing import Any, Mapping
 from typing import Type
 
@@ -57,7 +59,12 @@ def build_test_adapter(problem: Mapping[str, Any]) -> ProblemAdapter:
           
     return adptr
   
-def build_adapter(problem: Mapping[str, Any], ga_parameter: Mapping[str, Any]) -> ProblemAdapter:
+  
+def build_adapter(
+    problem: Mapping[str, Any], 
+    ga_parameter: Mapping[str, Any], 
+    rng: random.Random
+    ) -> ProblemAdapter:
     """
     Instantiate the correct ProblemAdapter based on the resolved problem key.
     """
@@ -71,6 +78,6 @@ def build_adapter(problem: Mapping[str, Any], ga_parameter: Mapping[str, Any]) -
     adptr = adapter_cls(problem)
     
     if len(ga_parameter) > 0:
-      adptr.set_ga_operator_configs(ga_parameter)
+      adptr.set_ga_operator_configs(rng, ga_parameter)
       
     return adptr

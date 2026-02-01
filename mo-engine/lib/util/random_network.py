@@ -7,7 +7,8 @@ def continuous_network_gen(
     amount: int,
     region: tuple[float, float, float, float],
     radius: float,
-    max_attempts: int = 100
+    max_attempts: int = 100,
+    rng: random.Random | None = None,
 ) -> list[tuple[float, float]]:
     """
     Gera pontos aleatórios maximizando a cobertura da região, garantindo que o grafo seja conexo.
@@ -59,11 +60,11 @@ def continuous_network_gen(
         max_min_distance = 0.0
 
         for _ in range(max_attempts):
-            anchor_idx = random.choice(range(len(points)))
+            anchor_idx = rng.choice(range(len(points)))
             anchor = points[anchor_idx]
 
-            angle = random.uniform(0, 2 * math.pi)
-            distance = random.uniform(0.5 * radius, radius)
+            angle = rng.uniform(0, 2 * math.pi)
+            distance = rng.uniform(0.5 * radius, radius)
 
             new_x = anchor[0] + distance * math.cos(angle)
             new_y = anchor[1] + distance * math.sin(angle)
@@ -100,16 +101,16 @@ def continuous_network_gen(
                         components.append(component)
 
                 if len(components) > 1:
-                    comp1, comp2 = random.sample(components, 2)
-                    point1 = points[random.choice(comp1)]
-                    point2 = points[random.choice(comp2)]
+                    comp1, comp2 = rng.sample(components, 2)
+                    point1 = points[rng.choice(comp1)]
+                    point2 = points[rng.choice(comp2)]
 
                     mid_x = (point1[0] + point2[0]) / 2
                     mid_y = (point1[1] + point2[1]) / 2
                     direction = math.atan2(point2[1] - point1[1], point2[0] - point1[0])
 
-                    new_x = mid_x + random.uniform(-0.3 * radius, 0.3 * radius) * math.sin(direction)
-                    new_y = mid_y + random.uniform(-0.3 * radius, 0.3 * radius) * math.cos(direction)
+                    new_x = mid_x + rng.uniform(-0.3 * radius, 0.3 * radius) * math.sin(direction)
+                    new_y = mid_y + rng.uniform(-0.3 * radius, 0.3 * radius) * math.cos(direction)
 
                     new_x = float(np.clip(new_x, x_min, x_max))
                     new_y = float(np.clip(new_y, y_min, y_max))
@@ -117,9 +118,9 @@ def continuous_network_gen(
                     points.append((new_x, new_y))
                     continue
 
-            anchor = random.choice(points)
-            angle = random.uniform(0, 2 * math.pi)
-            distance = random.uniform(0, radius)
+            anchor = rng.choice(points)
+            angle = rng.uniform(0, 2 * math.pi)
+            distance = rng.uniform(0, radius)
             new_x = anchor[0] + distance * math.cos(angle)
             new_y = anchor[1] + distance * math.sin(angle)
 
@@ -146,9 +147,9 @@ def continuous_network_gen(
                 components.append(component)
 
         while len(components) > 1:
-            comp1, comp2 = random.sample(components, 2)
-            point1 = points[random.choice(comp1)]
-            point2 = points[random.choice(comp2)]
+            comp1, comp2 = rng.sample(components, 2)
+            point1 = points[rng.choice(comp1)]
+            point2 = points[rng.choice(comp2)]
 
             mid_x = (point1[0] + point2[0]) / 2
             mid_y = (point1[1] + point2[1]) / 2

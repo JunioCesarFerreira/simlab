@@ -59,14 +59,20 @@ class NSGA3LoopStrategy(EngineStrategy):
         
         # --- simulation and algorithm parameters ---
         self._sim_duration: int = int(simulation_config.get("duration", 120))
-        self._random_seed: int = int(simulation_config.get("random_seed", 123456))
+        self._sim_rand_seed: int = int(simulation_config.get("random_seed", 123456))
         self._pop_size: int = int(algorithm_config.get("population_size", 20))
         self._max_gen: int = int(algorithm_config.get("number_of_generations", 5))
-                        
         self._prob_cx = float(algorithm_config.get("prob_cx", 0.8))
         self._prob_mt = float(algorithm_config.get("prob_mt", 0.2))
+    
+        ga_random_seed: int = int(algorithm_config.get("random_seed", 42))
+        self._ga_rng = random.Random(ga_random_seed)
                         
-        self._problem_adapter: ProblemAdapter = build_adapter(problem_config, algorithm_config)
+        self._problem_adapter: ProblemAdapter = build_adapter(
+            problem_config, 
+            algorithm_config, 
+            self._ga_rng
+            )
                 
         # prepare objective infos
         cfg = experiment.get("transform_config", {}) or {}
@@ -205,7 +211,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         config: SimulationConfig = {
                 "name": f"nsga3-g{gen_index}-{ind_idx}",
                 "duration": self._sim_duration,
-                "randomSeed": self._random_seed,
+                "randomSeed": self._sim_rand_seed,
                 "radiusOfReach": self._problem_adapter.radius_of_reach,
                 "radiusOfInter": self._problem_adapter.radius_of_inter,
                 "region": self._problem_adapter.bounds,
@@ -229,6 +235,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             "experiment_id": exp_oid,
             "generation_id": gen_oid,
             "status": EnumStatus.WAITING,
+            "random_seed": self._sim_rand_seed,
             "start_time": None,
             "end_time": None,
             "parameters": config,
@@ -445,7 +452,6 @@ class NSGA3LoopStrategy(EngineStrategy):
 # Run Genetic Algorithm
 # ---------------------------------------   
     def _run_genetic_algorithm(self) -> list[list[float]]:
-        rng = random.Random()
         parents = self._parents.get_genomes()
         objectives = self._parents.get_objectives()
         children: list[Chromosome] = []        
@@ -456,15 +462,15 @@ class NSGA3LoopStrategy(EngineStrategy):
             parent1: Chromosome = tournament_selection_2(parents, individual_ranks)
             parent2: Chromosome = tournament_selection_2(parents, individual_ranks)
             # Crossover 
-            if rng.random() < self._prob_cx:
+            if self._rng.random() < self._prob_cx:
                 c1, c2 = self._problem_adapter.crossover([parent1, parent2])
             else:
                 c1, c2 = parent1, parent2
             # Mutation
-            if rng.random() < self._prob_mt:
+            if self._rng.random() < self._prob_mt:
                 c1 = self._problem_adapter.mutate(c1)
             children.append(c1)
-            if rng.random() < self._prob_mt:
+            if self._rng.random() < self._prob_mt:
                 c2 = self._problem_adapter.mutate(c2)
             children.append(c2)
         return children[:self._pop_size]

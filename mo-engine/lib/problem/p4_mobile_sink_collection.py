@@ -1,12 +1,11 @@
 from typing import Any, Mapping, Sequence
-import random
 import math
 
 from pylib.dto.simulator import FixedMote, MobileMote, SimulationElements
 from pylib.dto.problems import ProblemP4
 from pylib.dto.algorithm import GeneticAlgorithmConfigDto
 
-from .adapter import ProblemAdapter, ChromosomeP4
+from .adapter import ProblemAdapter, ChromosomeP4, Random
 
 # Aliases (coerentes com seus DTOs)
 Position = tuple[float, float]
@@ -18,7 +17,12 @@ def _clamp(x: float, lo: float, hi: float) -> float:
     """Clamp x to [lo, hi]."""
     return lo if x < lo else hi if x > hi else x
 
-def _blend_crossover_vec(x: list[float], y: list[float], alpha: float = 0.5) -> tuple[list[float], list[float]]:
+def _blend_crossover_vec(
+    x: list[float], 
+    y: list[float], 
+    rng: Random,
+    alpha: float = 0.5
+    ) -> tuple[list[float], list[float]]:
     """
     Simple BLX-like blend crossover for real vectors.
     This is a lightweight placeholder; you can replace with SBX later.
@@ -31,8 +35,8 @@ def _blend_crossover_vec(x: list[float], y: list[float], alpha: float = 0.5) -> 
         span = hi - lo
         a = lo - alpha * span
         b = hi + alpha * span
-        c1.append(random.uniform(a, b))
-        c2.append(random.uniform(a, b))
+        c1.append(rng.uniform(a, b))
+        c2.append(rng.uniform(a, b))
     return c1, c2
 
 # ============================================================
@@ -153,10 +157,11 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
         self.problem: ProblemP4 = ProblemP4.cast(problem)
 
 
-    def set_ga_operator_configs(self, parameters: GeneticAlgorithmConfigDto):  
+    def set_ga_operator_configs(self, rng: Random, parameters: GeneticAlgorithmConfigDto):  
         self._p_bit_mut = float(parameters.get("per_gene_prob", 0.1))
         self._pm_tau = float(parameters.get("pm_tau", 0.5))
         self._sigma_tau = float(parameters.get("sigma_tau", 5.0))
+        self._rng = rng
 
 
     def _A(self) -> set[tuple[int, int]]:
@@ -194,11 +199,11 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
             neighbors = [v for (u, v) in A if u == cur]
             if not neighbors:
                 break
-            nxt = random.choice(neighbors)
+            nxt = self._rng.choice(neighbors)
             route.append(nxt)
             cur = nxt
             # Occasionally decide to stop early
-            if random.random() < 0.2:
+            if self._rng.random() < 0.2:
                 break
 
         # Ensure return to base with one more hop if possible; otherwise force base (may be infeasible and repaired later)
@@ -253,7 +258,7 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
     def _random_tau(self, length: int) -> list[float]:
         """Sample nonnegative sojourn times with bounds."""
         lo, hi = self.problem.tau_bounds
-        return [random.uniform(lo, hi) for _ in range(length)]
+        return [self._rng.uniform(lo, hi) for _ in range(length)]
 
     def random_individual_generator(self, size: int) -> list[ChromosomeP4]:
         pop: list[ChromosomeP4] = []
@@ -274,8 +279,8 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
         (r2, t2) = parents[1]
 
         # Route crossover: splice
-        cut1 = random.randrange(1, max(2, len(r1))) if len(r1) > 2 else 1
-        cut2 = random.randrange(1, max(2, len(r2))) if len(r2) > 2 else 1
+        cut1 = self._rng.randrange(1, max(2, len(r1))) if len(r1) > 2 else 1
+        cut2 = self._rng.randrange(1, max(2, len(r2))) if len(r2) > 2 else 1
 
         child_r1 = r1[:cut1] + r2[cut2:]
         child_r2 = r2[:cut2] + r1[cut1:]
@@ -289,7 +294,7 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
             # Build base vectors by trunc/pad
             aa = (a + self._random_tau(L))[:L]
             bb = (b + self._random_tau(L))[:L]
-            c, _ = _blend_crossover_vec(aa, bb, alpha=0.25)
+            c, _ = _blend_crossover_vec(aa, bb, rng=self._rng, alpha=0.25)
             lo, hi = self.problem.tau_bounds
             return [_clamp(x, lo, hi) for x in c]
 
@@ -311,22 +316,22 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
 
         # Route mutation
         p_route = self._p_bit_mut
-        if len(route) > 3 and random.random() < p_route:
+        if len(route) > 3 and self._rng.random() < p_route:
             # Mutate one internal node
-            idx = random.randrange(1, len(route) - 1)
+            idx = self._rng.randrange(1, len(route) - 1)
             # Replace with a random node index
             n_nodes = len(self.problem.sojourns)
-            route[idx] = random.randrange(0, n_nodes)
+            route[idx] = self._rng.randrange(0, n_nodes)
             route = self._repair_route(route)
             # Resize tau accordingly
             if len(tau) != len(route):
                 tau = (tau + self._random_tau(len(route)))[:len(route)]
 
         # Tau mutation
-        if random.random() < self._pm_tau:
+        if self._rng.random() < self._pm_tau:
             sigma = self._sigma_tau
             lo, hi = self.problem.tau_bounds
-            tau = [ _clamp(x + random.gauss(0.0, sigma), lo, hi) for x in tau ]
+            tau = [ _clamp(x + self._rng.gauss(0.0, sigma), lo, hi) for x in tau ]
 
         return (route, tau)
 
