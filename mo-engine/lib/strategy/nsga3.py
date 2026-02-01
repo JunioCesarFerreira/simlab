@@ -462,15 +462,15 @@ class NSGA3LoopStrategy(EngineStrategy):
             parent1: Chromosome = tournament_selection_2(parents, individual_ranks, self._ga_rng)
             parent2: Chromosome = tournament_selection_2(parents, individual_ranks, self._ga_rng)
             # Crossover 
-            if self._rng.random() < self._prob_cx:
+            if self._ga_rng.random() < self._prob_cx:
                 c1, c2 = self._problem_adapter.crossover([parent1, parent2])
             else:
                 c1, c2 = parent1, parent2
             # Mutation
-            if self._rng.random() < self._prob_mt:
+            if self._ga_rng.random() < self._prob_mt:
                 c1 = self._problem_adapter.mutate(c1)
             children.append(c1)
-            if self._rng.random() < self._prob_mt:
+            if self._ga_rng.random() < self._prob_mt:
                 c2 = self._problem_adapter.mutate(c2)
             children.append(c2)
         return children[:self._pop_size]
