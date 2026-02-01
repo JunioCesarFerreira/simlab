@@ -22,6 +22,8 @@ def continuous_network_gen(
     Retorna:
     - Lista de coordenadas dos pontos gerados
     """
+    if rng is None:
+        rng = random.Random()
 
     if amount <= 0:
         return []
