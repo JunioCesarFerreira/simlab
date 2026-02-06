@@ -70,7 +70,7 @@ services:
       - DB_NAME=simlab
       - MONGO_URI=mongodb://mongodb:27017/?replicaSet=rs0
       - IS_DOCKER=True
-      - NUMBER_OF_CONTAINERS=10
+      - NUMBER_OF_CONTAINERS=15
     ports:
       - "2220:22"
     depends_on:
@@ -170,6 +170,51 @@ services:
     restart: unless-stopped
     ports:
       - "2240:22"
+    networks:
+      - cooja-net
+
+  cooja11:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja11
+    restart: unless-stopped
+    ports:
+      - "2241:22"
+    networks:
+      - cooja-net
+      
+  cooja12:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja12
+    restart: unless-stopped
+    ports:
+      - "2242:22"
+    networks:
+      - cooja-net
+      
+  cooja13:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja13
+    restart: unless-stopped
+    ports:
+      - "2243:22"
+    networks:
+      - cooja-net
+      
+  cooja14:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja14
+    restart: unless-stopped
+    ports:
+      - "2244:22"
+    networks:
+      - cooja-net
+      
+  cooja15:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja15
+    restart: unless-stopped
+    ports:
+      - "2245:22"
     networks:
       - cooja-net
 
