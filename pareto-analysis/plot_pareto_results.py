@@ -131,20 +131,20 @@ def normalize_objectives(
     return norm
 
 
-def compute_worst_point(
+def compute_worst_point_min_space(
     pareto_per_gen: dict[int, list[dict]],
-    objective_names: tuple[str, str, str]
+    objective_names: tuple[str, str, str],
+    minimize: list[bool],
 ) -> list[float]:
     all_points = []
+    for front in pareto_per_gen.values():  # aqui front é lista de pontos (Pareto 0 por gen)
+        for p in front:
+            all_points.append([p["objectives"][o] for o in objective_names])
 
-    for fronts in pareto_per_gen.values():
-        for p in fronts:
-            all_points.append(
-                [p["objectives"][o] for o in objective_names]
-            )
+    arr = np.array(all_points, dtype=float)
+    arr_min = to_minimization_array(arr, minimize)
+    return arr_min.max(axis=0).tolist()  # worst (largest) in minimization space
 
-    arr = np.array(all_points)
-    return arr.max(axis=0).tolist()
 
 
 def compute_hypervolume(front: list[list[float]], ref_point: list[float]) -> float:
@@ -306,10 +306,12 @@ def plot_generation_front_distribution(
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     
+    
 def plot_parallel_coordinates_pareto0(
     pareto_by_front: dict[int, list[dict]],
     objective_names: tuple[str, str, str],
-    output_path: Path
+    output_path: Path,
+    minimize: list[bool]
 ):
     front0 = pareto_by_front.get(0, [])
     if not front0:
@@ -323,8 +325,6 @@ def plot_parallel_coordinates_pareto0(
         for p in front0
     ])
 
-    # latency ↓, energy ↓, throughput ↑
-    minimize = [True, True, False]
     norm = normalize_objectives(data, minimize)
 
     fig, ax = plt.subplots(figsize=(16, 6))
@@ -366,7 +366,8 @@ def plot_parallel_coordinates_pareto0(
 def plot_radar_pareto0(
     pareto_by_front: dict[int, list[dict]],
     objective_names: tuple[str, str, str],
-    output_path: Path
+    output_path: Path,
+    minimize: list[bool]
 ):
     front0 = pareto_by_front.get(0, [])
     if not front0:
@@ -379,8 +380,7 @@ def plot_radar_pareto0(
         [p["objectives"][obj] for obj in objective_names]
         for p in front0
     ])
-
-    minimize = [True, True, False]
+    
     norm = normalize_objectives(data, minimize)
 
     num_vars = len(objective_names)
@@ -471,6 +471,18 @@ def plot_hv_gd(
     plt.close(fig)
 
 
+def to_minimization_array(points: np.ndarray, minimize: list[bool]) -> np.ndarray:
+    """
+    Convert objectives to an equivalent minimization space.
+    For max objectives, multiply by -1 so that 'smaller is better' holds.
+    """
+    out = points.astype(float).copy()
+    for j, is_min in enumerate(minimize):
+        if not is_min:
+            out[:, j] *= -1.0
+    return out
+
+
 
 # ------------------------------------------------------------
 # CLI
@@ -492,6 +504,8 @@ def main():
         default=("latency", "energy", "throughput"),
         metavar=("X", "Y", "Z")
     )
+    # latency ↓, energy ↓, throughput ↑
+    minimize = [True, True, False]
 
     args = parser.parse_args()
 
@@ -550,13 +564,15 @@ def main():
     plot_parallel_coordinates_pareto0(
         pareto_by_front,
         tuple(args.objectives),
-        parallel_plot
+        parallel_plot,
+        minimize
     )
 
     plot_radar_pareto0(
         pareto_by_front,
         tuple(args.objectives),
-        radar_plot
+        radar_plot,
+        minimize
     )
 
     upload_analysis_file_api(
@@ -593,18 +609,22 @@ def main():
     # ------------------------------------------------------------
     # Worst reference point for hypervolume
     # ------------------------------------------------------------
-    worst_point = compute_worst_point(
+    worst_point = compute_worst_point_min_space(
         pareto_per_gen,
-        tuple(args.objectives)
+        tuple(args.objectives),
+        minimize
     )
 
     # ------------------------------------------------------------
     # Final Pareto front (front 0)
     # ------------------------------------------------------------
-    final_front = np.array([
+    final_front_raw = np.array([
         [p["objectives"][o] for o in args.objectives]
-        for p in pareto_by_front[0]
-    ])
+        for p in pareto_by_front.get(0, [])
+    ], dtype=float)
+
+    final_front = to_minimization_array(final_front_raw, minimize)
+
 
     hv_values = []
     gd_values = []
@@ -612,20 +632,16 @@ def main():
     for gen in generations:
         front = pareto_per_gen[gen]
 
-        points = np.array([
+        points_raw = np.array([
             [p["objectives"][o] for o in args.objectives]
             for p in front
-        ])
+        ], dtype=float)
 
-        hv_val = compute_hypervolume(
-            points.tolist(),
-            worst_point
-        )
+        points = to_minimization_array(points_raw, minimize)
 
-        gd_val = compute_gd(
-            points,
-            final_front
-        )
+        hv_val = compute_hypervolume(points.tolist(), worst_point)
+        gd_val = compute_gd(points, final_front)
+
 
         hv_values.append(hv_val)
         gd_values.append(gd_val)
