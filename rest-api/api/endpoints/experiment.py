@@ -96,6 +96,7 @@ def update_experiment(experiment_id: str, updates: dict) -> bool:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.delete("/{experiment_id}", response_model=bool)
 def delete_experiment(experiment_id: str) -> bool:
     """
@@ -118,6 +119,7 @@ def delete_experiment(experiment_id: str) -> bool:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.patch("/{experiment_id}/status", response_model=bool)
 def update_experiment_status(experiment_id: str, new_status: str) -> bool:
     """
@@ -134,6 +136,7 @@ def update_experiment_status(experiment_id: str, new_status: str) -> bool:
         return True
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.patch("/{experiment_id}/analysis-file", response_model=str)
 async def attach_analysis_file(

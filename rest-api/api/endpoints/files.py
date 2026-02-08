@@ -19,6 +19,7 @@ factory = mongo_db.create_mongo_repository_factory(MONGO_URI, DB_NAME)
 
 router = APIRouter()
 
+
 @router.get("/{file_id}/as/{extension}", response_class=FileResponse)
 def download_file(file_id: str, extension: str, background_tasks: BackgroundTasks):
     """
@@ -153,6 +154,7 @@ def download_topology_file_by_simulation(
         background=background_tasks,
     )
     
+    
 @router.get("/experiments/{experiment_id}/analysis/zip", response_class=FileResponse)
 def download_experiment_analysis_zip(
     experiment_id: str,
@@ -242,6 +244,180 @@ def download_experiment_analysis_zip(
     return FileResponse(
         zip_path,
         filename=f"{experiment_id}_analysis.zip",
+        media_type="application/zip",
+        background=background_tasks,
+    )
+    
+
+@router.get("/experiments/{experiment_id}/topologies/zip", response_class=FileResponse)
+def download_experiment_topologies_zip(
+    experiment_id: str,
+    background_tasks: BackgroundTasks
+):
+    """
+    Download all topology images of all generations in an experiment as a ZIP archive.
+    
+    Structure:
+    - {experiment_id}_topologies.zip
+      ├── 0-{generation_id_1}/
+      │   ├── 0-{simulation_id_1}_topology.png
+      │   ├── 1-{simulation_id_2}_topology.png
+      │   └── ...
+      ├── 1-{generation_id_2}/
+      │   ├── 0-{simulation_id_N}_topology.png
+      │   ├── 1-{simulation_id_M}_topology.png
+      │   └── ...
+      └── ...
+      
+    - experiment_id must be a valid Experiment ObjectId
+    - Retrieves all generations for the experiment
+    - For each generation, retrieves all simulations
+    - For each simulation, fetches the topology image from GridFS
+    - Files are organized in subfolders named "{gen_index}-{generation_id}"
+    - Files within folders are named "{sim_index}-{simulation_id}_topology.png"
+    - Temporary files are removed after response
+    """
+    
+    # Validate experiment_id
+    try:
+        exp_oid = ObjectId(experiment_id)
+    except bson_errors.InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid experiment_id")
+    
+    # Get experiment document to retrieve generation IDs
+    experiment = factory.experiment_repo.get_by_id(experiment_id)
+    
+    if not experiment:
+        raise HTTPException(
+            status_code=404,
+            detail="Experiment not found"
+        )
+    
+    # Get all generation IDs from experiment
+    generation_ids = experiment.get("generations", [])
+    
+    if not generation_ids or len(generation_ids) == 0:
+        raise HTTPException(
+            status_code=404,
+            detail="No generations found for this experiment"
+        )
+    
+    # Create temp working directory for files (separate from ZIP location)
+    work_dir = tempfile.mkdtemp(prefix="simlab_exp_topologies_")
+    files_dir = os.path.join(work_dir, "files")
+    os.makedirs(files_dir, exist_ok=True)
+    zip_path = os.path.join(work_dir, f"{experiment_id}_topologies.zip")
+    
+    try:
+        # Process each generation
+        for gen_index, generation_id in enumerate(generation_ids):
+            try:
+                gen_id_str = str(generation_id) if isinstance(generation_id, ObjectId) else generation_id
+                
+                # Get generation document
+                generation = factory.generation_repo.get_by_id(gen_id_str)
+                
+                if not generation:
+                    print(f"Warning: Generation {gen_id_str} not found")
+                    continue
+                
+                # Get simulations for this generation
+                simulation_ids = generation.get("simulations_ids", [])
+                
+                if not simulation_ids:
+                    print(f"Warning: No simulations found for generation {gen_id_str}")
+                    continue
+                
+                # Create subfolder for this generation: {gen_index}-{generation_id}
+                gen_subfolder = os.path.join(files_dir, f"{gen_index}-{gen_id_str}")
+                os.makedirs(gen_subfolder, exist_ok=True)
+                
+                # Download topologies for each simulation in this generation
+                for sim_index, simulation_id in enumerate(simulation_ids):
+                    try:
+                        sim_id_str = str(simulation_id) if isinstance(simulation_id, ObjectId) else simulation_id
+                        
+                        # Get simulation document
+                        simulation = factory.simulation_repo.get_by_id(sim_id_str)
+                        
+                        if not simulation:
+                            print(f"Warning: Simulation {sim_id_str} not found")
+                            continue
+                        
+                        topology_file_id = simulation.get("topology_picture_id")
+                        
+                        if not topology_file_id:
+                            print(f"Warning: No topology found for simulation {sim_id_str}")
+                            continue
+                        
+                        try:
+                            oid = ObjectId(topology_file_id)
+                        except bson_errors.InvalidId:
+                            print(f"Warning: Invalid topology file ID for simulation {sim_id_str}")
+                            continue
+                        
+                        # Create filename inside subfolder: {sim_index}-{simulation_id}_topology.png
+                        safe_name = f"{sim_index}-{sim_id_str}_topology.png"
+                        file_path = os.path.join(gen_subfolder, safe_name)
+                        
+                        factory.fs_handler.download_file(oid, file_path)
+                        
+                    except Exception as e:
+                        # Log and continue with next simulation
+                        print(f"Warning: Could not download topology for simulation {simulation_id}: {e}")
+                        continue
+                        
+            except Exception as e:
+                # Log and continue with next generation
+                print(f"Warning: Could not process generation {generation_id}: {e}")
+                continue
+        
+        # Verify that at least one topology was downloaded
+        has_files = False
+        for item in os.walk(files_dir):
+            dirpath, dirnames, filenames = item
+            if filenames:
+                has_files = True
+                break
+        
+        if not has_files:
+            raise HTTPException(
+                status_code=404,
+                detail="No topology files were successfully downloaded"
+            )
+        
+        # Create ZIP with nested subfolder structure from files_dir only
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+            for dirpath, dirnames, filenames in os.walk(files_dir):
+                for fname in filenames:
+                    fpath = os.path.join(dirpath, fname)
+                    
+                    # Calculate relative path for archive (relative to files_dir, not work_dir)
+                    arcname = os.path.relpath(fpath, files_dir)
+                    zipf.write(fpath, arcname=arcname)
+    
+    except NoFile:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=404,
+            detail="One or more topology files were not found in GridFS"
+        )
+    except HTTPException:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        raise
+    except Exception as e:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error creating experiment topologies ZIP: {e}"
+        )
+    
+    # Cleanup after response
+    background_tasks.add_task(shutil.rmtree, work_dir, True)
+    
+    return FileResponse(
+        zip_path,
+        filename=f"{experiment_id}_topologies.zip",
         media_type="application/zip",
         background=background_tasks,
     )
