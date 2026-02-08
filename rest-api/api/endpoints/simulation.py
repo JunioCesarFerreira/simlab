@@ -77,6 +77,7 @@ def update_simulation(sim_id: str, updates: dict) -> bool:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.delete("/{sim_id}", response_model=bool)
 def delete_simulation(sim_id: str) -> bool:
     """
@@ -92,6 +93,7 @@ def delete_simulation(sim_id: str) -> bool:
         return factory.simulation_repo.delete_by_id(ObjectId(sim_id))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/by-status/{status}", response_model=list[SimulationDto])
 def get_simulations_by_status(status: str) -> list[SimulationDto]:
