@@ -66,7 +66,12 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         for i in range(size):
             chrm = ChromosomeP1(
                 mac_protocol = self._rng.randint(0, 1),
-                relays = continuous_network_gen(N, box, R, self._rng)
+                relays = continuous_network_gen(
+                    amount=N, 
+                    region=box, 
+                    radius=R, 
+                    sink=self.problem.sink, 
+                    rng=self._rng)
             )
             pop.append(chrm)
         return pop
@@ -104,8 +109,8 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         N = self.problem.number_of_relays
         R = self.problem.radius_of_reach
         
-        c1: list[Position] = continuous_network_gen(N, box, R, self._rng)
-        c2: list[Position] = continuous_network_gen(N, box, R, self._rng)        
+        c1: list[Position] = continuous_network_gen(N, box, R, self.problem.sink, self._rng)
+        c2: list[Position] = continuous_network_gen(N, box, R, self.problem.sink, self._rng)
         return c1, c2
 
 

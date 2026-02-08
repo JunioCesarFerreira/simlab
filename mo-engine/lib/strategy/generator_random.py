@@ -72,7 +72,7 @@ class GeneratorRandomStrategy(EngineStrategy):
 
         for i in range(num_of_gen):
             # 1. Generates topology
-            points = continuous_network_gen(num_of_motes, region, radius, rng)
+            points = continuous_network_gen(num_of_motes, region, radius, None, rng)
             fixed = [
                 {
                     "name": f"m{j}",

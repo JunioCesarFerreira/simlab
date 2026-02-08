@@ -174,6 +174,7 @@ def continuous_network_gen(
     amount: int,
     region: RectangleRegion,
     radius: float,
+    sink: Point2D,
     rng: random.Random,
     max_attempts: int = 100
 ) -> list[Point2D]:
@@ -196,7 +197,10 @@ def continuous_network_gen(
         Rectangular spatial domain.
     radius : float
         Communication radius.
+    sink: (float, float)
+        Sink position (if None, uses region center).
     rng : random.Random
+        RNG for reproducibility.
     max_attempts : int
         Candidate samples per iteration.
 
@@ -213,16 +217,16 @@ def continuous_network_gen(
     points: list[Point2D] = []
 
     # -------------------------------------------------
-    # Seed at geometric center
+    # Sink position or seed at geometric center as sink
     # -------------------------------------------------
-    first_x = (x_min + x_max) / 2
-    first_y = (y_min + y_max) / 2
+    first_x = sink[0] if sink else (x_min + x_max) / 2
+    first_y = sink[1] if sink else (y_min + y_max) / 2
     points.append((first_x, first_y))
 
     # -------------------------------------------------
     # Growth process
     # -------------------------------------------------
-    while len(points) < amount:
+    while len(points) < amount + 1: # +1 for sink
 
         best_point: Optional[Point2D] = None
         max_min_distance = 0.0
@@ -266,7 +270,7 @@ def continuous_network_gen(
     if not _is_connected(points, radius):
         points = _repair_connectivity(points, radius, rng)
 
-    return points
+    return points[1:] # exclude sink
 
 
 def stochastic_reachability_mask(
