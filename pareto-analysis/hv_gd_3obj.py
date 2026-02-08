@@ -78,6 +78,17 @@ def plot_hv_gd(
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
+def to_minimization_array(points: np.ndarray, minimize: list[bool]) -> np.ndarray:
+    """
+    Convert objectives to an equivalent minimization space.
+    For max objectives, multiply by -1 so that 'smaller is better' holds.
+    """
+    out = points.astype(float).copy()
+    for j, is_min in enumerate(minimize):
+        if not is_min:
+            out[:, j] *= -1.0
+    return out
+
 
 # ---------------------------------------------------------------------
 # CLI
@@ -162,6 +173,8 @@ def main():
             [p["objectives"][o] for o in args.objectives]
             for p in front
         ])
+        
+        points = to_minimization_array(points, minimize=[True, True, False])
 
         hv_val = compute_hypervolume(points.tolist(), args.ref_point)
         gd_val = compute_gd(points, final_front)
