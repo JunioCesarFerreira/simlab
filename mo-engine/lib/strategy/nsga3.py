@@ -280,6 +280,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             if genome in self._map_genome_sim.keys():
                 self._evaluated_count+=1
                 logger.info(f"genome computed: count={self._evaluated_count}")
+                simulation_ids.append(self._map_genome_sim[genome])
                 continue
             sim_oid = self._build_simulation(genome, exp_oid, gen_oid, gen_index, i)
             logger.info(f"sim_oid={sim_oid}")
@@ -421,7 +422,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             else:
                 remaining = self._pop_size - len(selected_idx)
                 if remaining > 0:
-                    partial = niching_selection(front, R_F_list, self._ref_points, remaining)
+                    partial = niching_selection(front, R_F_list, self._ref_points, remaining, self._ga_rng)
                     selected_idx.extend(partial)
                 break
 

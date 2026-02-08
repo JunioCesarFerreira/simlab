@@ -67,10 +67,12 @@ class GeneratorRandomStrategy(EngineStrategy):
         simulation_ids: list[ObjectId] = []
         tmp_dir = Path("./tmp")
         tmp_dir.mkdir(parents=True, exist_ok=True)
+        
+        rng = random.Random()
 
         for i in range(num_of_gen):
             # 1. Generates topology
-            points = continuous_network_gen(amount=num_of_motes, region=region, radius=radius)
+            points = continuous_network_gen(num_of_motes, region, radius, rng)
             fixed = [
                 {
                     "name": f"m{j}",

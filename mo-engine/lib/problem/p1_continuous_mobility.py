@@ -66,7 +66,7 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         for i in range(size):
             chrm = ChromosomeP1(
                 mac_protocol = self._rng.randint(0, 1),
-                relays = continuous_network_gen(N, box, R)
+                relays = continuous_network_gen(N, box, R, self._rng)
             )
             pop.append(chrm)
         return pop

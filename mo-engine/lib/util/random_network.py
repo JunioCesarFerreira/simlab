@@ -174,8 +174,8 @@ def continuous_network_gen(
     amount: int,
     region: RectangleRegion,
     radius: float,
-    max_attempts: int = 100,
-    rng: Optional[random.Random] = None,
+    rng: random.Random,
+    max_attempts: int = 100
 ) -> list[Point2D]:
     """
     Generates spatial points attempting to maximize coverage while
@@ -196,19 +196,15 @@ def continuous_network_gen(
         Rectangular spatial domain.
     radius : float
         Communication radius.
+    rng : random.Random
     max_attempts : int
         Candidate samples per iteration.
-    rng : random.Random | None
-        Optional random generator.
 
     Returns
     -------
     list[(float, float)]
         Generated point set.
     """
-    if rng is None:
-        rng = random.Random()
-
     if amount <= 0:
         return []
 
@@ -277,7 +273,7 @@ def stochastic_reachability_mask(
     candidates: list[tuple[float, float]],
     sink: tuple[float, float],
     radius: float,
-    rng: random.Random | None = None,
+    rng: random.Random
 ) -> list[int]:
     """
     Stochastic reachability-guided growth algorithm.
@@ -290,18 +286,14 @@ def stochastic_reachability_mask(
         Root position (must be in candidates).
     radius : float
         Reachability radius.
-    rng : random.Random | None
-        Optional RNG for reproducibility.
+    rng : random.Random
+        RNG for reproducibility.
 
     Returns
     -------
     mask : list[int]
         Binary mask over candidates (1 = selected, 0 = not selected).
     """
-
-    if rng is None:
-        rng = random.Random()
-
     n = len(candidates)
 
     # ------------------------------------------------------------

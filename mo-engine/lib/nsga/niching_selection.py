@@ -55,6 +55,7 @@ def environmental_selection(
     fronts: Sequence[Sequence[int]],
     reference_points: NDArray[np.float64],
     pop_size: int,
+    rng: random.Random
 ) -> list[T]:
     """
     NSGA-III environmental selection (simplified).
@@ -76,7 +77,7 @@ def environmental_selection(
         else:
             n_needed = pop_size - len(next_idx)
             if n_needed > 0:
-                chosen = niching_selection(front, objectives, reference_points, n_needed)
+                chosen = niching_selection(front, objectives, reference_points, n_needed, rng)
                 next_idx.extend(chosen)
             break
 
@@ -88,6 +89,7 @@ def niching_selection(
     objectives: Sequence[ObjectiveVec],
     reference_points: NDArray[np.float64],
     N: int,
+    rng: random.Random
 ) -> list[int]:
     """
     NSGA-III niching selection (simplified Euclidean association).
@@ -146,7 +148,7 @@ def niching_selection(
         min_occ = min(niche_count.values())
         # Consider all reference points with that occupancy (randomized order avoids bias).
         least_crowded = [r for r, c in niche_count.items() if c == min_occ]
-        random.shuffle(least_crowded)
+        rng.shuffle(least_crowded)
 
         picked_this_round = False
         for r in least_crowded:
@@ -167,7 +169,7 @@ def niching_selection(
             remaining = [pid for pid, flag in selected_flag.items() if not flag]
             if not remaining:
                 break
-            chosen_pid = random.choice(remaining)
+            chosen_pid = rng.choice(remaining)
             selected.append(chosen_pid)
             selected_flag[chosen_pid] = True
             # (Optionally, increment the niche of its association if you keep it.)
