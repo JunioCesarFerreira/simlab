@@ -455,10 +455,18 @@ class NSGA3LoopStrategy(EngineStrategy):
     def _run_genetic_algorithm(self) -> list[list[float]]:
         parents = self._parents.get_genomes()
         objectives = self._parents.get_objectives()
-        children: list[Chromosome] = []        
+        
+        children: list[Chromosome] = []    
+        seen: set[Chromosome] = set()    
+        
         fronts: list[list[int]] = fast_nondominated_sort(objectives)
         individual_ranks: dict[int, int] = compute_individual_ranks(fronts)
-        while len(children) < self._pop_size:
+                    
+        max_attempts = self._pop_size * 10
+        attempts = 0
+        
+        while len(children) < self._pop_size and attempts < max_attempts:
+            attempts += 1
             # Selection
             parent1: Chromosome = tournament_selection_2(parents, individual_ranks, self._ga_rng)
             parent2: Chromosome = tournament_selection_2(parents, individual_ranks, self._ga_rng)
@@ -470,10 +478,20 @@ class NSGA3LoopStrategy(EngineStrategy):
             # Mutation
             if self._ga_rng.random() < self._prob_mt:
                 c1 = self._problem_adapter.mutate(c1)
-            children.append(c1)
+                
+            if c1 not in seen:
+                children.append(c1)
+                seen.add(c1)
+
+            if len(children) >= self._pop_size:
+                break
+
             if self._ga_rng.random() < self._prob_mt:
                 c2 = self._problem_adapter.mutate(c2)
-            children.append(c2)
+
+            if c2 not in seen:
+                children.append(c2)
+                seen.add(c2)
         return children[:self._pop_size]
 
 # ---------------------------------------
