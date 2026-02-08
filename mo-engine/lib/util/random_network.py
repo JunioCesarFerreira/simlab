@@ -2,25 +2,209 @@ import random
 import math
 import numpy as np
 from collections import deque
+from typing import Optional
+
+
+Point2D = tuple[float, float]
+RectangleRegion = tuple[float, float, float, float]
+
+#=====================================
+# PRIVATE HELPERS
+#=====================================
+
+def _is_connected(points: list[Point2D], radius: float) -> bool:
+    """
+    Checks whether the geometric graph induced by the point set is connected.
+
+    Two points are adjacent if their Euclidean distance is <= radius.
+
+    Parameters
+    ----------
+    points : list[(float, float)]
+        Set of 2D coordinates.
+    radius : float
+        Communication radius.
+
+    Returns
+    -------
+    bool
+        True if the graph is connected, False otherwise.
+    """
+    if not points:
+        return True
+
+    visited: set[int] = set()
+    queue: deque[int] = deque([0])
+
+    adjacency: dict[int, list[int]] = {i: [] for i in range(len(points))}
+
+    for i in range(len(points)):
+        for j in range(i + 1, len(points)):
+            if math.dist(points[i], points[j]) <= radius:
+                adjacency[i].append(j)
+                adjacency[j].append(i)
+
+    while queue:
+        node = queue.popleft()
+        if node not in visited:
+            visited.add(node)
+            queue.extend(adjacency[node])
+
+    return len(visited) == len(points)
+
+
+def _get_components(points: list[Point2D], radius: float) -> list[list[int]]:
+    """
+    Computes connected components of the geometric graph.
+    """
+    components: list[list[int]] = []
+    visited: set[int] = set()
+
+    for i in range(len(points)):
+        if i in visited:
+            continue
+
+        component: list[int] = []
+        queue: deque[int] = deque([i])
+
+        while queue:
+            node = queue.popleft()
+            if node not in visited:
+                visited.add(node)
+                component.append(node)
+
+                for j in range(len(points)):
+                    if j != node and math.dist(points[node], points[j]) <= radius:
+                        queue.append(j)
+
+        components.append(component)
+
+    return components
+
+
+def _fallback_insert_point(
+    points: list[Point2D],
+    region: RectangleRegion,
+    radius: float,
+    rng: random.Random,
+) -> Point2D:
+    """
+    Executes the fallback insertion strategy when no valid best_point
+    is found during stochastic sampling.
+
+    Strategy hierarchy:
+    1) Try to connect disconnected components.
+    2) Otherwise perform anchored random insertion.
+    """
+    x_min, y_min, x_max, y_max = region
+
+    # -------------------------------------------------
+    # Try to connect components
+    # -------------------------------------------------
+    if len(points) > 1:
+        components = _get_components(points, radius)
+
+        if len(components) > 1:
+            comp1, comp2 = rng.sample(components, 2)
+            p1 = points[rng.choice(comp1)]
+            p2 = points[rng.choice(comp2)]
+
+            mid_x = (p1[0] + p2[0]) / 2
+            mid_y = (p1[1] + p2[1]) / 2
+
+            direction = math.atan2(p2[1] - p1[1], p2[0] - p1[0])
+
+            new_x = mid_x + rng.uniform(-0.3 * radius, 0.3 * radius) * math.sin(direction)
+            new_y = mid_y + rng.uniform(-0.3 * radius, 0.3 * radius) * math.cos(direction)
+
+            new_x = float(np.clip(new_x, x_min, x_max))
+            new_y = float(np.clip(new_y, y_min, y_max))
+
+            return (new_x, new_y)
+
+    # -------------------------------------------------
+    # Anchored random insertion
+    # -------------------------------------------------
+    anchor = rng.choice(points)
+
+    angle = rng.uniform(0, 2 * math.pi)
+    distance = rng.uniform(0, radius)
+
+    new_x = anchor[0] + distance * math.cos(angle)
+    new_y = anchor[1] + distance * math.sin(angle)
+
+    new_x = float(np.clip(new_x, x_min, x_max))
+    new_y = float(np.clip(new_y, y_min, y_max))
+
+    return (new_x, new_y)
+
+
+def _repair_connectivity(
+    points: list[Point2D],
+    radius: float,
+    rng: random.Random,
+) -> list[Point2D]:
+    """
+    Ensures global connectivity by iteratively inserting midpoint relays
+    between disconnected components.
+    """
+    components = _get_components(points, radius)
+
+    while len(components) > 1:
+        comp1, comp2 = rng.sample(components, 2)
+
+        p1 = points[rng.choice(comp1)]
+        p2 = points[rng.choice(comp2)]
+
+        mid_x = (p1[0] + p2[0]) / 2
+        mid_y = (p1[1] + p2[1]) / 2
+
+        points.append((mid_x, mid_y))
+
+        components = _get_components(points, radius)
+
+    return points
+
+
+#=====================================
+# PUBLIC API
+#=====================================
 
 def continuous_network_gen(
     amount: int,
-    region: tuple[float, float, float, float],
+    region: RectangleRegion,
     radius: float,
     max_attempts: int = 100,
-    rng: random.Random | None = None,
-) -> list[tuple[float, float]]:
+    rng: Optional[random.Random] = None,
+) -> list[Point2D]:
     """
-    Gera pontos aleatórios maximizando a cobertura da região, garantindo que o grafo seja conexo.
+    Generates spatial points attempting to maximize coverage while
+    preserving geometric connectivity.
 
-    Parâmetros:
-    - amount: número de pontos a serem gerados
-    - region: (x_min, y_min, x_max, y_max) definindo a região retangular
-    - radius: raio de conexão entre pontos
-    - max_attempts: tentativas máximas para encontrar posição válida para cada ponto
+    Growth model:
+    - Seed at region center.
+    - Iteratively sample anchored candidates.
+    - Select the point maximizing minimum distance.
+    - Apply fallback insertion when sampling fails.
+    - Perform final connectivity repair if necessary.
 
-    Retorna:
-    - Lista de coordenadas dos pontos gerados
+    Parameters
+    ----------
+    amount : int
+        Number of points to generate.
+    region : (x_min, y_min, x_max, y_max)
+        Rectangular spatial domain.
+    radius : float
+        Communication radius.
+    max_attempts : int
+        Candidate samples per iteration.
+    rng : random.Random | None
+        Optional random generator.
+
+    Returns
+    -------
+    list[(float, float)]
+        Generated point set.
     """
     if rng is None:
         rng = random.Random()
@@ -29,41 +213,27 @@ def continuous_network_gen(
         return []
 
     x_min, y_min, x_max, y_max = region
-    points: list[tuple[float, float]] = []
 
-    # Primeiro ponto no centro da região
+    points: list[Point2D] = []
+
+    # -------------------------------------------------
+    # Seed at geometric center
+    # -------------------------------------------------
     first_x = (x_min + x_max) / 2
     first_y = (y_min + y_max) / 2
     points.append((first_x, first_y))
 
-    def is_connected(points: list[tuple[float, float]], radius: float) -> bool:
-        if not points:
-            return True
-        visited: set[int] = set()
-        queue: deque[int] = deque([0])
-        adjacency: dict[int, list[int]] = {i: [] for i in range(len(points))}
-
-        for i in range(len(points)):
-            for j in range(i + 1, len(points)):
-                if math.dist(points[i], points[j]) <= radius:
-                    adjacency[i].append(j)
-                    adjacency[j].append(i)
-
-        while queue:
-            node = queue.popleft()
-            if node not in visited:
-                visited.add(node)
-                queue.extend(adjacency[node])
-
-        return len(visited) == len(points)
-
+    # -------------------------------------------------
+    # Growth process
+    # -------------------------------------------------
     while len(points) < amount:
-        best_point: tuple[float, float] = None
+
+        best_point: Optional[Point2D] = None
         max_min_distance = 0.0
 
         for _ in range(max_attempts):
-            anchor_idx = rng.choice(range(len(points)))
-            anchor = points[anchor_idx]
+
+            anchor = rng.choice(points)
 
             angle = rng.uniform(0, 2 * math.pi)
             distance = rng.uniform(0.5 * radius, radius)
@@ -74,108 +244,33 @@ def continuous_network_gen(
             if not (x_min <= new_x <= x_max and y_min <= new_y <= y_max):
                 continue
 
-            temp_points = points + [(new_x, new_y)]
+            candidate = (new_x, new_y)
+            temp_points = points + [candidate]
 
-            if is_connected(temp_points, radius):
-                min_dist = min(math.dist((new_x, new_y), p) for p in points)
+            if _is_connected(temp_points, radius):
+
+                min_dist = min(math.dist(candidate, p) for p in points)
+
                 if min_dist > max_min_distance:
                     max_min_distance = min_dist
-                    best_point = (new_x, new_y)
+                    best_point = candidate
 
-        if best_point:
+        # -------------------------------------------------
+        # Insert best candidate or fallback
+        # -------------------------------------------------
+        if best_point is not None:
             points.append(best_point)
         else:
-            if len(points) > 1:
-                components: list[list[int]] = []
-                visited: set[int] = set()
-                for i in range(len(points)):
-                    if i not in visited:
-                        component: list[int] = []
-                        queue: deque[int] = deque([i])
-                        while queue:
-                            node = queue.popleft()
-                            if node not in visited:
-                                visited.add(node)
-                                component.append(node)
-                                for j in range(len(points)):
-                                    if j != node and math.dist(points[node], points[j]) <= radius:
-                                        queue.append(j)
-                        components.append(component)
+            new_point = _fallback_insert_point(points, region, radius, rng)
+            points.append(new_point)
 
-                if len(components) > 1:
-                    comp1, comp2 = rng.sample(components, 2)
-                    point1 = points[rng.choice(comp1)]
-                    point2 = points[rng.choice(comp2)]
-
-                    mid_x = (point1[0] + point2[0]) / 2
-                    mid_y = (point1[1] + point2[1]) / 2
-                    direction = math.atan2(point2[1] - point1[1], point2[0] - point1[0])
-
-                    new_x = mid_x + rng.uniform(-0.3 * radius, 0.3 * radius) * math.sin(direction)
-                    new_y = mid_y + rng.uniform(-0.3 * radius, 0.3 * radius) * math.cos(direction)
-
-                    new_x = float(np.clip(new_x, x_min, x_max))
-                    new_y = float(np.clip(new_y, y_min, y_max))
-
-                    points.append((new_x, new_y))
-                    continue
-
-            anchor = rng.choice(points)
-            angle = rng.uniform(0, 2 * math.pi)
-            distance = rng.uniform(0, radius)
-            new_x = anchor[0] + distance * math.cos(angle)
-            new_y = anchor[1] + distance * math.sin(angle)
-
-            new_x = float(np.clip(new_x, x_min, x_max))
-            new_y = float(np.clip(new_y, y_min, y_max))
-            points.append((new_x, new_y))
-
-    # Verificação final de conectividade
-    if not is_connected(points, radius):
-        components: list[list[int]] = []
-        visited: set[int] = set()
-        for i in range(len(points)):
-            if i not in visited:
-                component: list[int] = []
-                queue: deque[int] = deque([i])
-                while queue:
-                    node = queue.popleft()
-                    if node not in visited:
-                        visited.add(node)
-                        component.append(node)
-                        for j in range(len(points)):
-                            if j != node and math.dist(points[node], points[j]) <= radius:
-                                queue.append(j)
-                components.append(component)
-
-        while len(components) > 1:
-            comp1, comp2 = rng.sample(components, 2)
-            point1 = points[rng.choice(comp1)]
-            point2 = points[rng.choice(comp2)]
-
-            mid_x = (point1[0] + point2[0]) / 2
-            mid_y = (point1[1] + point2[1]) / 2
-            points.append((mid_x, mid_y))
-
-            # Recalcular componentes
-            components = []
-            visited = set()
-            for i in range(len(points)):
-                if i not in visited:
-                    component: list[int] = []
-                    queue: deque[int] = deque([i])
-                    while queue:
-                        node = queue.popleft()
-                        if node not in visited:
-                            visited.add(node)
-                            component.append(node)
-                            for j in range(len(points)):
-                                if j != node and math.dist(points[node], points[j]) <= radius:
-                                    queue.append(j)
-                    components.append(component)
+    # -------------------------------------------------
+    # Final repair
+    # -------------------------------------------------
+    if not _is_connected(points, radius):
+        points = _repair_connectivity(points, radius, rng)
 
     return points
-
 
 
 def stochastic_reachability_mask(
@@ -190,7 +285,7 @@ def stochastic_reachability_mask(
     Parameters
     ----------
     candidates : list[(float, float)]
-        List of candidate positions Q.
+        list of candidate positions Q.
     sink : (float, float)
         Root position (must be in candidates).
     radius : float

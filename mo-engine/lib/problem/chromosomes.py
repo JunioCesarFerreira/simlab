@@ -1,4 +1,3 @@
-import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, replace
 from typing import Literal, Self
