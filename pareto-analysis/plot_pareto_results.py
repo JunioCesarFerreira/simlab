@@ -589,6 +589,147 @@ def plot_hv_gd(
     plt.close(fig)
 
 
+
+def plot_individual_lifetime(
+    individuals_per_generation: dict[int, list[dict[str, Any]]],
+    pareto_by_front: dict[int, list[dict]],
+    output_path: Path
+):
+    """
+    Plot individual survival across generations.
+
+    Each horizontal bar represents the lifespan of an individual:
+        birth_generation -> death_generation
+
+    Color encodes the GLOBAL Pareto rank.
+    """
+
+    # ------------------------------------------------------------
+    # Build presence map
+    # ------------------------------------------------------------
+    presence = defaultdict(list)
+
+    for gen, individuals in individuals_per_generation.items():
+        for ind in individuals:
+            iid = ind["simulation_id"]
+            presence[iid].append(gen)
+
+    # ------------------------------------------------------------
+    # Birth / death extraction
+    # ------------------------------------------------------------
+    lifetimes = []
+
+    for iid, gens in presence.items():
+        birth = min(gens)
+        death = max(gens)
+        lifetimes.append((iid, birth, death))
+
+    # ------------------------------------------------------------
+    # Global rank map
+    # ------------------------------------------------------------
+    rank_map = {}
+
+    for rank, front in pareto_by_front.items():
+        for ind in front:
+            rank_map[ind["id"]] = rank
+
+    # Default rank for missing (should not happen)
+    max_rank = max(rank_map.values(), default=0)
+
+    # ------------------------------------------------------------
+    # Sorting individuals
+    # Strategy: by birth → rank → death
+    # ------------------------------------------------------------
+    lifetimes.sort(
+        key=lambda x: (
+            x[1],                     # birth
+            rank_map.get(x[0], max_rank),
+            x[2]                      # death
+        )
+    )
+
+    ids = [x[0] for x in lifetimes]
+    births = [x[1] for x in lifetimes]
+    deaths = [x[2] for x in lifetimes]
+    durations = [d - b + 1 for b, d in zip(births, deaths)]
+
+    # ------------------------------------------------------------
+    # Color mapping by global Pareto front
+    # ------------------------------------------------------------
+    unique_ranks = sorted(set(rank_map.values()))
+    cmap = plt.cm.coolwarm(
+        np.linspace(0.1, 0.9, len(unique_ranks))
+    )
+
+    rank_to_color = {
+        r: cmap[i]
+        for i, r in enumerate(unique_ranks)
+    }
+
+    colors = [
+        rank_to_color.get(
+            rank_map.get(iid, max_rank),
+            (0.5, 0.5, 0.5, 1.0)
+        )
+        for iid in ids
+    ]
+
+    # ------------------------------------------------------------
+    # Plot
+    # ------------------------------------------------------------
+    fig, ax = plt.subplots(
+        figsize=(18, max(6, len(ids) * 0.25))
+    )
+
+    y_pos = np.arange(len(ids))
+
+    ax.barh(
+        y_pos,
+        durations,
+        left=births,
+        color=colors,
+        edgecolor="black",
+        alpha=0.9
+    )
+
+    # ------------------------------------------------------------
+    # Labels
+    # ------------------------------------------------------------
+    ax.set_xlabel("Generation")
+    ax.set_ylabel("Individual (Simulation ID)")
+    ax.set_title(
+        "Individual Lifetime Across Generations\n"
+        "Color = Global Pareto Rank"
+    )
+
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(ids, fontsize=8)
+
+    ax.grid(axis="x", linestyle="--", alpha=0.6)
+
+    # ------------------------------------------------------------
+    # Legend (Pareto fronts)
+    # ------------------------------------------------------------
+    handles = [
+        plt.Rectangle((0, 0), 1, 1, color=rank_to_color[r])
+        for r in unique_ranks
+    ]
+
+    labels = [f"F{r}" for r in unique_ranks]
+
+    ax.legend(
+        handles,
+        labels,
+        title="Global Pareto Front",
+        bbox_to_anchor=(1.02, 0.5),
+        loc="center left"
+    )
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
 # ------------------------------------------------------------
 # CLI
 # ------------------------------------------------------------
@@ -667,6 +808,24 @@ def main():
             experiment_id=args.expid,
             to_minimization=True
         )
+    
+    lifetime_plot = Path(f"individual_lifetime_{args.expid}.png")
+
+    plot_individual_lifetime(
+        individuals_per_generation=individuals_per_gen,
+        pareto_by_front=pareto_by_front,
+        output_path=lifetime_plot
+    )
+
+    upload_analysis_file_api(
+        session,
+        args.api_base,
+        args.expid,
+        lifetime_plot,
+        "individual_lifetime",
+        "Individual survival across generations (colored by global Pareto rank)"
+    )
+
 
     generations = sorted(pareto_per_gen.keys())
     if not generations:
@@ -798,6 +957,8 @@ def main():
             parallel_plot.unlink(missing_ok=True)
             radar_plot.unlink(missing_ok=True)
             hv_gd_plot.unlink(missing_ok=True)
+            lifetime_plot.unlink(missing_ok=True)
+            front_gen_plot.unlink(missing_ok=True)
             print("[OK] Temporary files removed")
         except Exception as ex:
             print(f"[WARN] Failed to remove temporary file: {ex}")
