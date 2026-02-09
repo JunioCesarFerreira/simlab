@@ -962,8 +962,8 @@ def main():
             args.api_base,
             args.expid,
             file,
-            "lifetime_per_generation",
-            file.name
+            file.name,
+            "lifetime_per_generation"            
         )
 
 
