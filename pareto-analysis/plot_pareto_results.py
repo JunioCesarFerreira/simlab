@@ -557,42 +557,7 @@ def main():
     )
         
     print("[OK] Pareto dominance analysis completed")
-    
-    parallel_plot = Path(f"pareto_parallel_{args.expid}.png")
-    radar_plot = Path(f"pareto_radar_{args.expid}.png")
-
-    plot_parallel_coordinates_pareto0(
-        pareto_by_front,
-        tuple(args.objectives),
-        parallel_plot
-    )
-
-    plot_radar_pareto0(
-        pareto_by_front,
-        tuple(args.objectives),
-        radar_plot
-    )
-
-    upload_analysis_file_api(
-        session,
-        args.api_base,
-        args.expid,
-        parallel_plot,
-        "pareto_parallel",
-        "Pareto front 0 — parallel coordinates"
-    )
-
-    upload_analysis_file_api(
-        session,
-        args.api_base,
-        args.expid,
-        radar_plot,
-        "pareto_radar",
-        "Pareto front 0 — radar plot"
-    )
-
-    print("[OK] Pareto parallel coordenates analysis completed")
-    
+        
     pareto_per_gen = get_pareto_per_generation_api(
             session=session,
             api_base=args.api_base,
@@ -666,6 +631,42 @@ def main():
     )
     
     print("[OK] Pareto HV and GD analysis completed")
+
+
+    parallel_plot = Path(f"pareto_parallel_{args.expid}.png")
+    radar_plot = Path(f"pareto_radar_{args.expid}.png")
+
+    plot_parallel_coordinates_pareto0(
+        pareto_by_front,
+        tuple(args.objectives),
+        parallel_plot
+    )
+
+    plot_radar_pareto0(
+        pareto_by_front,
+        tuple(args.objectives),
+        radar_plot
+    )
+
+    upload_analysis_file_api(
+        session,
+        args.api_base,
+        args.expid,
+        parallel_plot,
+        "pareto_parallel",
+        "Pareto front 0 — parallel coordinates"
+    )
+
+    upload_analysis_file_api(
+        session,
+        args.api_base,
+        args.expid,
+        radar_plot,
+        "pareto_radar",
+        "Pareto front 0 — radar plot"
+    )
+
+    print("[OK] Pareto parallel coordenates analysis completed")
 
     # Cleanup
     if args.keep_the_files == False:
