@@ -902,7 +902,7 @@ def plot_individual_lifetime_per_generation(
 
         out_path = output_dir / f"lifetime_gen_{g}.png"
 
-        plt.savefig(out_path, dpi=300, bbox_inches="tight")
+        plt.savefig(out_path, dpi=300)
         plt.close(fig)
 
         print(f"[OK] Lifetime plot generated for generation {g}")
