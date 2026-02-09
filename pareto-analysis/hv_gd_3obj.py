@@ -175,6 +175,7 @@ def main():
         ])
         
         points = to_minimization_array(points, minimize=[True, True, False])
+        final_front = to_minimization_array(final_front, minimize=[True, True, False])
 
         hv_val = compute_hypervolume(points.tolist(), args.ref_point)
         gd_val = compute_gd(points, final_front)

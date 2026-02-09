@@ -167,7 +167,6 @@ def compute_hypervolume(front: list[list[float]], ref_point: list[float]) -> flo
         return 0.0
     return hv.hypervolume(front, ref_point)
 
-
 def compute_gd(front: np.ndarray, ref_front: np.ndarray) -> float:
     if len(front) == 0 or len(ref_front) == 0:
         return float("inf")
@@ -584,6 +583,8 @@ def main():
         [p["objectives"][o] for o in args.objectives]
         for p in pareto_by_front[0]
     ])
+    
+    final_front = to_minimization_array(final_front, minimize=[True, True, False])
 
     hv_values = []
     gd_values = []
