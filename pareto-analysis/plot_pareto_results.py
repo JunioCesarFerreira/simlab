@@ -677,11 +677,18 @@ def plot_individual_lifetime(
     # ------------------------------------------------------------
     # Plot
     # ------------------------------------------------------------
+    N = len(ids)
+
+    HEIGHT_PER_INDIVIDUAL = 0.25
+    MAX_HEIGHT_IN = 30
+
+    height = min(MAX_HEIGHT_IN, max(6, N * HEIGHT_PER_INDIVIDUAL))
+
     fig, ax = plt.subplots(
-        figsize=(18, max(6, len(ids) * 0.25))
+        figsize=(18, height)
     )
 
-    y_pos = np.arange(len(ids))
+    y_pos = np.arange(N)
 
     ax.barh(
         y_pos,
@@ -691,6 +698,23 @@ def plot_individual_lifetime(
         edgecolor="black",
         alpha=0.9
     )
+
+    # Labels
+    ax.set_xlabel("Generation")
+    ax.set_title(
+        "Individual Lifetime Across Generations\n"
+        "Color = Global Pareto Rank"
+    )
+
+    if N > 80:
+        ax.set_yticks([])
+        ax.set_ylabel("Individuals (labels hidden)")
+    else:
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(ids, fontsize=8)
+
+    ax.grid(axis="x", linestyle="--", alpha=0.6)
+
 
     # ------------------------------------------------------------
     # Labels
