@@ -289,7 +289,7 @@ def plot_generation_front_distribution(
     fronts = sorted({ind["rank"] for ind in population})
 
     x = np.arange(len(generations))
-    bar_width = 0.8 / len(fronts)
+    bar_width = 1 / len(fronts)
 
     colors = plt.cm.coolwarm(np.linspace(0.1, 0.9, len(fronts)))
 
@@ -318,6 +318,112 @@ def plot_generation_front_distribution(
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
+    
+
+def plot_front_per_generation_distribution(
+    pareto_per_generation: dict[int, list[dict[str, Any]]],
+    output_path: Path
+):
+    """
+    Plot distribution of Pareto fronts per generation.
+
+    The non-dominated sorting is computed independently
+    inside each generation.
+    """
+
+    # ------------------------------------------------------------
+    # Build counts[generation][front] = number of individuals
+    # ------------------------------------------------------------
+    counts = defaultdict(lambda: defaultdict(int))
+
+    for gen, individuals in pareto_per_generation.items():
+
+        # --------------------------------------------
+        # Build local population (generation only)
+        # --------------------------------------------
+        local_population = []
+
+        for ind in individuals:
+            local_population.append({
+                "id": ind["simulation_id"],
+                "generation": gen,
+                "objectives": ind["objectives"]
+            })
+
+        if not local_population:
+            continue
+
+        # --------------------------------------------
+        # Fast non-dominated sorting (intra-generation)
+        # --------------------------------------------
+        fronts = fast_nondominated_sort(local_population)
+
+        for f_idx, front in enumerate(fronts):
+            counts[gen][f_idx] = len(front)
+
+    # ------------------------------------------------------------
+    # Axes construction
+    # ------------------------------------------------------------
+    generations = sorted(counts.keys())
+
+    all_fronts = sorted({
+        f for gen_counts in counts.values()
+        for f in gen_counts.keys()
+    })
+
+    if not generations or not all_fronts:
+        print("[WARN] No data for front-per-generation distribution")
+        return
+
+    x = np.arange(len(generations))
+    bar_width = 0.8 / len(all_fronts)
+
+    colors = plt.cm.coolwarm(
+        np.linspace(0.1, 0.9, len(all_fronts))
+    )
+
+    # ------------------------------------------------------------
+    # Plot
+    # ------------------------------------------------------------
+    fig, ax = plt.subplots(figsize=(18, 6))
+
+    for idx_f, f in enumerate(all_fronts):
+
+        values = [
+            counts[g].get(f, 0)
+            for g in generations
+        ]
+
+        ax.bar(
+            x + idx_f * bar_width,
+            values,
+            width=bar_width,
+            color=colors[idx_f],
+            label=f"F{f}"
+        )
+
+    # ------------------------------------------------------------
+    # Labels & layout
+    # ------------------------------------------------------------
+    ax.set_xlabel("Generation")
+    ax.set_ylabel("Number of Individuals")
+    ax.set_title(
+        "Pareto Front Distribution per Generation\n"
+        "(Ranking computed intra-generation)"
+    )
+
+    ax.set_xticks(
+        x + bar_width * (len(all_fronts) - 1) / 2
+    )
+    ax.set_xticklabels(generations)
+
+    ax.legend(title="Pareto Fronts")
+    ax.grid(axis="y", linestyle="--", alpha=0.6)
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
     
 def plot_parallel_coordinates_pareto0(
     pareto_by_front: dict[int, list[dict]],
@@ -373,7 +479,6 @@ def plot_parallel_coordinates_pareto0(
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
-
 
 
 def plot_radar_pareto0(
@@ -482,7 +587,6 @@ def plot_hv_gd(
     fig.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
-
 
 
 # ------------------------------------------------------------
@@ -632,6 +736,23 @@ def main():
     )
     
     print("[OK] Pareto HV and GD analysis completed")
+
+
+    front_gen_plot = Path(f"pareto_fronts_per_generation_{args.expid}.png")
+
+    plot_front_per_generation_distribution(
+        pareto_per_generation=pareto_per_gen,
+        output_path=front_gen_plot
+    )
+
+    upload_analysis_file_api(
+        session,
+        args.api_base,
+        args.expid,
+        front_gen_plot,
+        "pareto_fronts_per_generation",
+        "Pareto fronts distribution computed intra-generation"
+    )
 
 
     parallel_plot = Path(f"pareto_parallel_{args.expid}.png")
