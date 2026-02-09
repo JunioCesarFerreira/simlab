@@ -167,6 +167,7 @@ def compute_hypervolume(front: list[list[float]], ref_point: list[float]) -> flo
         return 0.0
     return hv.hypervolume(front, ref_point)
 
+
 def compute_gd(front: np.ndarray, ref_front: np.ndarray) -> float:
     if len(front) == 0 or len(ref_front) == 0:
         return float("inf")
@@ -754,6 +755,159 @@ def plot_individual_lifetime(
     plt.close(fig)
 
 
+def plot_individual_lifetime_per_generation(
+    individuals_per_generation: dict[int, list[dict[str, Any]]],
+    pareto_by_front: dict[int, list[dict]],
+    output_dir: Path
+):
+    """
+    Generate one lifetime plot per generation.
+
+    For each generation g:
+        - individuals present in g are selected
+        - survival is tracked forward
+        - color = global Pareto rank
+    """
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # ------------------------------------------------------------
+    # Presence map
+    # ------------------------------------------------------------
+    presence = defaultdict(list)
+
+    for gen, individuals in individuals_per_generation.items():
+        for ind in individuals:
+            presence[ind["simulation_id"]].append(gen)
+
+    # ------------------------------------------------------------
+    # Global rank map
+    # ------------------------------------------------------------
+    rank_map = {}
+
+    for rank, front in pareto_by_front.items():
+        for ind in front:
+            rank_map[ind["id"]] = rank
+
+    unique_ranks = sorted(rank_map.values())
+    cmap = plt.cm.coolwarm(
+        np.linspace(0.1, 0.9, len(unique_ranks))
+    )
+
+    rank_to_color = {
+        r: cmap[i]
+        for i, r in enumerate(unique_ranks)
+    }
+
+    generations = sorted(individuals_per_generation.keys())
+
+    # ------------------------------------------------------------
+    # Plot per generation
+    # ------------------------------------------------------------
+    for g in generations:
+
+        individuals = individuals_per_generation[g]
+
+        lifetimes = []
+
+        for ind in individuals:
+            iid = ind["simulation_id"]
+            gens = presence[iid]
+
+            birth = g
+            death = max(t for t in gens if t >= g)
+
+            lifetimes.append((iid, birth, death))
+
+        if not lifetimes:
+            continue
+
+        # Sort by rank then survival
+        lifetimes.sort(
+            key=lambda x: (
+                rank_map.get(x[0], 999),
+                -(x[2] - x[1])
+            )
+        )
+
+        ids = [x[0] for x in lifetimes]
+        births = [x[1] for x in lifetimes]
+        durations = [x[2] - x[1] + 1 for x in lifetimes]
+
+        colors = [
+            rank_to_color.get(
+                rank_map.get(iid, 999),
+                (0.5, 0.5, 0.5, 1.0)
+            )
+            for iid in ids
+        ]
+
+        # --------------------------------------------------------
+        # Adaptive sizing
+        # --------------------------------------------------------
+        N = len(ids)
+
+        HEIGHT_PER_INDIVIDUAL = 0.25
+        MAX_HEIGHT_IN = 25
+
+        height = min(
+            MAX_HEIGHT_IN,
+            max(5, N * HEIGHT_PER_INDIVIDUAL)
+        )
+
+        fig, ax = plt.subplots(figsize=(18, height))
+
+        y_pos = np.arange(N)
+
+        ax.barh(
+            y_pos,
+            durations,
+            left=births,
+            color=colors,
+            edgecolor="black",
+            alpha=0.9
+        )
+
+        ax.set_xlabel("Generation")
+        ax.set_title(
+            f"Individual Survival Starting at Generation {g}\n"
+            "Color = Global Pareto Rank"
+        )
+
+        if N > 60:
+            ax.set_yticks([])
+        else:
+            ax.set_yticks(y_pos)
+            ax.set_yticklabels(ids, fontsize=8)
+
+        ax.grid(axis="x", linestyle="--", alpha=0.6)
+
+        # Legend
+        handles = [
+            plt.Rectangle((0, 0), 1, 1, color=rank_to_color[r])
+            for r in unique_ranks
+        ]
+
+        labels = [f"F{r}" for r in unique_ranks]
+
+        ax.legend(
+            handles,
+            labels,
+            title="Global Pareto Front",
+            bbox_to_anchor=(1.02, 0.5),
+            loc="center left"
+        )
+
+        plt.tight_layout()
+
+        out_path = output_dir / f"lifetime_gen_{g}.png"
+
+        plt.savefig(out_path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+
+        print(f"[OK] Lifetime plot generated for generation {g}")
+
+
 # ------------------------------------------------------------
 # CLI
 # ------------------------------------------------------------
@@ -795,17 +949,29 @@ def main():
     pareto_plot = Path(f"pareto_fronts_{args.expid}.png")
     dist_plot = Path(f"pareto_distribution_{args.expid}.png")
 
+    lifetime_dir = Path(f"lifetimes_{args.expid}")
+
+    plot_individual_lifetime_per_generation(
+        individuals_per_generation=individuals_per_gen,
+        pareto_by_front=pareto_by_front,
+        output_dir=lifetime_dir
+    )
+    for file in lifetime_dir.glob("*.png"):
+        upload_analysis_file_api(
+            session,
+            args.api_base,
+            args.expid,
+            file,
+            "lifetime_per_generation",
+            file.name
+        )
+
+
     plot_pareto_fronts(
         pareto_by_front,
         tuple(args.objectives),
         pareto_plot
     )
-
-    plot_generation_front_distribution(
-        population,
-        dist_plot
-    )
-
     upload_analysis_file_api(
         session,
         args.api_base,
@@ -815,6 +981,10 @@ def main():
         "Pareto fronts (dominance layers)"
     )
 
+    plot_generation_front_distribution(
+        population,
+        dist_plot
+    )
     upload_analysis_file_api(
         session,
         args.api_base,
@@ -983,6 +1153,8 @@ def main():
             hv_gd_plot.unlink(missing_ok=True)
             lifetime_plot.unlink(missing_ok=True)
             front_gen_plot.unlink(missing_ok=True)
+            for file in lifetime_dir.glob("*.png"):
+                file.unlink(missing_ok=True)
             print("[OK] Temporary files removed")
         except Exception as ex:
             print(f"[WARN] Failed to remove temporary file: {ex}")
