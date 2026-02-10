@@ -1281,6 +1281,8 @@ def main():
         tuple(args.objectives),
         minimize=args.minimize
     )
+    for coord in worst_point:
+        coord += 1.0
 
     # ------------------------------------------------------------
     # HV and GD computation
@@ -1303,7 +1305,7 @@ def main():
             for p in front
         ])
         
-        #points = to_minimization_array(points, objectives=args.objectives, minimize=args.minimize)
+        points = to_minimization_array(points, objectives=args.objectives, minimize=args.minimize)
 
         print(f"points: {points}")
         print(f"worst_point: {worst_point}")
