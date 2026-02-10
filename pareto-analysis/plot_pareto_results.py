@@ -1,7 +1,7 @@
 import os
 import argparse
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Any
 from collections import defaultdict
 
 import numpy as np
@@ -20,25 +20,55 @@ from lib.api import (
 # ------------------------------------------------------------
 # Pareto dominance
 # ------------------------------------------------------------
-
-def dominates(a: Dict[str, float], b: Dict[str, float]) -> bool:
+def dominates(
+    a: dict[str, float], 
+    b: dict[str, float],
+    objectives: list[str] = ["latency", "energy", "throughput"],
+    minimize: list[bool] = [True, True, False]
+    ) -> bool:
     """
-    Objectives:
-      - latency:     minimize
-      - energy:      minimize
-      - throughput:  maximize
-    """
-    better_or_equal = (
-        a["latency"] <= b["latency"] and
-        a["energy"] <= b["energy"] and
-        a["throughput"] >= b["throughput"]
-    )
+    Returns True if solution `a` Pareto-dominates solution `b`.
 
-    strictly_better = (
-        a["latency"] < b["latency"] or
-        a["energy"] < b["energy"] or
-        a["throughput"] > b["throughput"]
-    )
+    Parameters
+    ----------
+    a, b : dict[str, float]
+        Objective vectors.
+    objectives : list[str]
+        Objective names to evaluate.
+    minimize : list[bool]
+        Orientation vector:
+            True  -> minimize objective
+            False -> maximize objective
+
+    Dominance definition
+    --------------------
+    a dominates b iff:
+        ∀i: a_i <= b_i   (min)   or   a_i >= b_i (max)
+        ∃j: a_j <  b_j   (min)   or   a_j >  b_j (max)
+    """
+
+    if len(objectives) != len(minimize):
+        raise ValueError("`objectives` and `minimize` must have same length")
+
+    better_or_equal = True
+    strictly_better = False
+
+    for obj, is_min in zip(objectives, minimize):
+        va = a[obj]
+        vb = b[obj]
+
+        if is_min:
+            if va > vb:
+                better_or_equal = False
+                break
+            if va < vb:
+                strictly_better = True
+        else:  # maximization
+            if va < vb:
+                better_or_equal = False
+                break
+            if va > vb:
+                strictly_better = True
 
     return better_or_equal and strictly_better
 
@@ -46,13 +76,14 @@ def dominates(a: Dict[str, float], b: Dict[str, float]) -> bool:
 # ------------------------------------------------------------
 # Fast non-dominated sorting
 # ------------------------------------------------------------
-
 def fast_nondominated_sort(
-    population: List[Dict[str, Any]]
-) -> List[List[Dict[str, Any]]]:
+    population: list[dict[str, Any]],
+    objectives: list[str] = ["latency", "energy", "throughput"],
+    minimize: list[bool] = [True, True, False]
+) -> list[list[dict[str, Any]]]:
     S = {}
     n = {}
-    fronts: List[List[Dict[str, Any]]] = [[]]
+    fronts: list[list[dict[str, Any]]] = [[]]
 
     for p in population:
         pid = p["id"]
@@ -63,9 +94,9 @@ def fast_nondominated_sort(
             if pid == q["id"]:
                 continue
 
-            if dominates(p["objectives"], q["objectives"]):
+            if dominates(p["objectives"], q["objectives"], objectives=objectives, minimize=minimize):
                 S[pid].append(q)
-            elif dominates(q["objectives"], p["objectives"]):
+            elif dominates(q["objectives"], p["objectives"], objectives=objectives, minimize=minimize):
                 n[pid] += 1
 
         if n[pid] == 0:
@@ -90,10 +121,9 @@ def fast_nondominated_sort(
 # ------------------------------------------------------------
 # Population builder (API → flat list)
 # ------------------------------------------------------------
-
 def build_population_from_api(
     individuals_by_generation: dict[int, list[dict]]
-) -> list[dict]:
+    ) -> list[dict]:
     population = []
 
     for gen, inds in individuals_by_generation.items():
@@ -107,14 +137,14 @@ def build_population_from_api(
     return population
 
 
-def build_pareto_by_front(fronts: list[list[dict]]) -> dict[int, list[dict]]:
+def convert_pareto_by_front(fronts: list[list[dict]]) -> dict[int, list[dict]]:
     return {i: front for i, front in enumerate(fronts)}
 
 
 def normalize_objectives(
     values: np.ndarray,
     minimize: list[bool]
-) -> np.ndarray:
+    ) -> np.ndarray:
     """
     Min-max normalization.
     If objective is to minimize, invert scale so that
@@ -131,21 +161,77 @@ def normalize_objectives(
     return norm
 
 
-def to_minimization_array(points: np.ndarray, minimize: list[bool]) -> np.ndarray:
+def to_minimization_array(
+    points: np.ndarray,
+    objectives: list[str],
+    minimize: list[bool],
+) -> np.ndarray:
     """
-    Convert objectives to an equivalent minimization space.
-    For max objectives, multiply by -1 so that 'smaller is better' holds.
+    Convert objective matrix to an equivalent minimization space.
+
+    Parameters
+    ----------
+    points : np.ndarray
+        Objective matrix of shape (N, M), where:
+            N = number of solutions
+            M = number of objectives
+    objectives : list[str]
+        Objective names (metadata / ordering reference).
+    minimize : list[bool]
+        Orientation vector:
+            True  -> objective already minimized
+            False -> objective is maximized (will be inverted)
+
+    Returns
+    -------
+    np.ndarray
+        Transformed matrix where all objectives follow
+        'smaller is better' semantics.
+
+    Transformation
+    --------------
+    For each maximization objective j:
+
+        f'_j(x) = - f_j(x)
+
+    This preserves Pareto dominance relations.
     """
-    out = points.astype(float).copy()
+
+    # --- Shape normalization ---
+    points = np.asarray(points, dtype=float)
+
+    if points.ndim == 1:
+        points = points.reshape(1, -1)
+
+    n_obj_matrix = points.shape[1]
+    n_obj_meta = len(objectives)
+
+    if n_obj_matrix != n_obj_meta:
+        raise ValueError(
+            f"Points have {n_obj_matrix} objectives, "
+            f"but metadata defines {n_obj_meta}"
+        )
+
+    if len(minimize) != n_obj_meta:
+        raise ValueError(
+            "`objectives` and `minimize` must have same length"
+        )
+
+    # --- Copy to avoid mutating original array ---
+    out = points.copy()
+
+    # --- Orientation transform ---
     for j, is_min in enumerate(minimize):
         if not is_min:
             out[:, j] *= -1.0
+
     return out
 
 
 def compute_worst_point(
     pareto_per_gen: dict[int, list[dict]],
-    objective_names: tuple[str, str, str]
+    objective_names: tuple[str, str, str],
+    minimize: list[bool]
 ) -> list[float]:
     all_points = []
 
@@ -155,18 +241,10 @@ def compute_worst_point(
                 [p["objectives"][o] for o in objective_names]
             )
             
-    all_points = to_minimization_array(np.array(all_points), minimize=[True, True, False])
+    all_points = to_minimization_array(np.array(all_points), objectives=objective_names, minimize=minimize)
 
     arr = np.array(all_points)
     return arr.max(axis=0).tolist()
-
-
-def compute_hypervolume(front: list[list[float]], ref_point: list[float]) -> float:
-    if not front:
-        print("Warning: Empty front for hypervolume computation")
-        return 0.0
-    return hv.hypervolume(front, ref_point)
-
 
 def compute_gd(front: np.ndarray, ref_front: np.ndarray) -> float:
     if len(front) == 0 or len(ref_front) == 0:
@@ -177,7 +255,7 @@ def compute_gd(front: np.ndarray, ref_front: np.ndarray) -> float:
         dist = np.min(np.linalg.norm(ref_front - p, axis=1))
         dists.append(dist)
 
-    return float(np.mean(dists))
+    return float(np.sqrt(np.mean(np.square(dists))))
 
 # ------------------------------------------------------------
 # Plot: Pareto fronts (same visual pattern)
@@ -284,7 +362,12 @@ def plot_generation_front_distribution(
     counts = defaultdict(lambda: defaultdict(int))
 
     for ind in population:
-        counts[ind["generation"]][ind["rank"]] += 1
+        gen = ind.get("generation")
+        rank = ind.get("rank")
+        if rank is None:
+            rank = 999
+            ind["rank"] = rank
+        counts[gen][rank] += 1
 
     generations = sorted(counts.keys())
     fronts = sorted({ind["rank"] for ind in population})
@@ -429,6 +512,7 @@ def plot_front_per_generation_distribution(
 def plot_parallel_coordinates_pareto0(
     pareto_by_front: dict[int, list[dict]],
     objective_names: tuple[str, str, str],
+    minimize: list[bool],
     output_path: Path
 ):
     front0 = pareto_by_front.get(0, [])
@@ -443,8 +527,6 @@ def plot_parallel_coordinates_pareto0(
         for p in front0
     ])
 
-    # latency ↓, energy ↓, throughput ↑
-    minimize = [True, True, False]
     norm = normalize_objectives(data, minimize)
 
     fig, ax = plt.subplots(figsize=(16, 6))
@@ -485,6 +567,7 @@ def plot_parallel_coordinates_pareto0(
 def plot_radar_pareto0(
     pareto_by_front: dict[int, list[dict]],
     objective_names: tuple[str, str, str],
+    minimize: list[bool],
     output_path: Path
 ):
     front0 = pareto_by_front.get(0, [])
@@ -499,7 +582,6 @@ def plot_radar_pareto0(
         for p in front0
     ])
 
-    minimize = [True, True, False]
     norm = normalize_objectives(data, minimize)
 
     num_vars = len(objective_names)
@@ -700,23 +782,6 @@ def plot_individual_lifetime(
         alpha=0.9
     )
 
-    # Labels
-    ax.set_xlabel("Generation")
-    ax.set_title(
-        "Individual Lifetime Across Generations\n"
-        "Color = Global Pareto Rank"
-    )
-
-    if N > 80:
-        ax.set_yticks([])
-        ax.set_ylabel("Individuals (labels hidden)")
-    else:
-        ax.set_yticks(y_pos)
-        ax.set_yticklabels(ids, fontsize=8)
-
-    ax.grid(axis="x", linestyle="--", alpha=0.6)
-
-
     # ------------------------------------------------------------
     # Labels
     # ------------------------------------------------------------
@@ -908,6 +973,178 @@ def plot_individual_lifetime_per_generation(
         print(f"[OK] Lifetime plot generated for generation {g}")
 
 
+def plot_last_generation_pareto_front(
+    pareto_per_generation: dict[int, list[dict]],
+    objective_names: tuple[str, str, str],
+    output_path: Path
+):
+    """
+    Plot ONLY the Pareto front of the last generation,
+    following the EXACT visual pattern of plot_pareto_fronts().
+    """
+
+    if not pareto_per_generation:
+        print("[WARN] No Pareto data available")
+        return
+
+    # ------------------------------------------------------------
+    # Identify last generation
+    # ------------------------------------------------------------
+    last_gen = max(pareto_per_generation.keys())
+    front = pareto_per_generation[last_gen]
+
+    if not front:
+        print(f"[WARN] Empty Pareto front at generation {last_gen}")
+        return
+
+    # ------------------------------------------------------------
+    # Mimic structure of 'pareto_by_front'
+    # Single front → index 0
+    # ------------------------------------------------------------
+    pareto_by_front = {0: front}
+
+    fronts = [0]
+    num_fronts = 1
+
+    colors = plt.cm.coolwarm(
+        np.linspace(0.1, 0.9, num_fronts)
+    )
+
+    # ------------------------------------------------------------
+    # Figure layout (IDENTICAL)
+    # ------------------------------------------------------------
+    fig = plt.figure(figsize=(18, 12))
+    gs = fig.add_gridspec(2, 3, height_ratios=[1, 1.3])
+
+    pairs = [(1, 0), (1, 2), (0, 2)]
+
+    # ------------------------------------------------------------
+    # 2D projections
+    # ------------------------------------------------------------
+    for idx_pair, (i, j) in enumerate(pairs):
+
+        ax = fig.add_subplot(gs[0, idx_pair])
+
+        front_data = pareto_by_front[0]
+
+        x = [
+            p["objectives"][objective_names[i]]
+            for p in front_data
+        ]
+
+        y = [
+            p["objectives"][objective_names[j]]
+            for p in front_data
+        ]
+
+        ax.scatter(
+            x,
+            y,
+            color=colors[0],
+            alpha=0.85
+        )
+
+        ax.set_xlabel(objective_names[i])
+        ax.set_ylabel(objective_names[j])
+        ax.set_title(
+            f"{objective_names[i]} vs {objective_names[j]}"
+        )
+        ax.grid(True)
+
+    # ------------------------------------------------------------
+    # 3D view A (XYZ)
+    # ------------------------------------------------------------
+    ax3d_a = fig.add_subplot(
+        gs[1, 0],
+        projection="3d"
+    )
+
+    xs = [
+        p["objectives"][objective_names[0]]
+        for p in front
+    ]
+    ys = [
+        p["objectives"][objective_names[1]]
+        for p in front
+    ]
+    zs = [
+        p["objectives"][objective_names[2]]
+        for p in front
+    ]
+
+    ax3d_a.scatter(
+        xs,
+        ys,
+        zs,
+        color=colors[0],
+        alpha=0.85
+    )
+
+    ax3d_a.set_xlabel(objective_names[0])
+    ax3d_a.set_ylabel(objective_names[1])
+    ax3d_a.set_zlabel(objective_names[2])
+    ax3d_a.set_title(
+        f"Pareto Front — Last Generation (XYZ)\nG{last_gen}"
+    )
+
+    # ------------------------------------------------------------
+    # 3D view B (swapped axes)
+    # ------------------------------------------------------------
+    ax3d_b = fig.add_subplot(
+        gs[1, 1],
+        projection="3d"
+    )
+
+    xs = [
+        p["objectives"][objective_names[1]]
+        for p in front
+    ]
+    ys = [
+        p["objectives"][objective_names[0]]
+        for p in front
+    ]
+    zs = [
+        p["objectives"][objective_names[2]]
+        for p in front
+    ]
+
+    sc = ax3d_b.scatter(
+        xs,
+        ys,
+        zs,
+        color=colors[0],
+        alpha=0.85
+    )
+
+    ax3d_b.set_xlabel(objective_names[1])
+    ax3d_b.set_ylabel(objective_names[0])
+    ax3d_b.set_zlabel(objective_names[2])
+
+    ax3d_b.set_title(
+        f"Pareto Front — Last Generation (swapped)\nG{last_gen}"
+    )
+
+    # Legend (same pattern)
+    ax3d_b.legend(
+        [sc],
+        [f"F0 (Gen {last_gen})"],
+        loc="center left",
+        bbox_to_anchor=(1.15, 0.5),
+        title="Fronts"
+    )
+
+    # ------------------------------------------------------------
+    # Layout & save
+    # ------------------------------------------------------------
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+    print(
+        f"[OK] Last generation Pareto front plotted → {output_path}"
+    )
+
+
 # ------------------------------------------------------------
 # CLI
 # ------------------------------------------------------------
@@ -929,7 +1166,16 @@ def main():
         metavar=("X", "Y", "Z")
     )
 
+    parser.add_argument(
+        "--minimize",
+        nargs=3,
+        default=("True", "True", "False"),
+        metavar=("X", "Y", "Z")
+    )
+    
     args = parser.parse_args()
+    
+    args.minimize = [s.lower() == "true" for s in args.minimize]
 
     if not args.api_key:
         raise SystemExit("Missing API key")
@@ -943,30 +1189,11 @@ def main():
     )
 
     population = build_population_from_api(individuals_per_gen)
-    fronts = fast_nondominated_sort(population)
-    pareto_by_front = build_pareto_by_front(fronts)
+    fronts = fast_nondominated_sort(population, args.objectives, args.minimize)
+    pareto_by_front = convert_pareto_by_front(fronts)
+
 
     pareto_plot = Path(f"pareto_fronts_{args.expid}.png")
-    dist_plot = Path(f"pareto_distribution_{args.expid}.png")
-
-    lifetime_dir = Path(f"lifetimes_{args.expid}")
-
-    plot_individual_lifetime_per_generation(
-        individuals_per_generation=individuals_per_gen,
-        pareto_by_front=pareto_by_front,
-        output_dir=lifetime_dir
-    )
-    for file in lifetime_dir.glob("*.png"):
-        upload_analysis_file_api(
-            session,
-            args.api_base,
-            args.expid,
-            file,
-            file.name,
-            "lifetime_per_generation"            
-        )
-
-
     plot_pareto_fronts(
         pareto_by_front,
         tuple(args.objectives),
@@ -980,37 +1207,33 @@ def main():
         "pareto_fronts",
         "Pareto fronts (dominance layers)"
     )
-
-    plot_generation_front_distribution(
-        population,
-        dist_plot
-    )
-    upload_analysis_file_api(
-        session,
-        args.api_base,
-        args.expid,
-        dist_plot,
-        "pareto_distribution",
-        "Distribution of individuals per front and generation"
-    )
-        
     print("[OK] Pareto dominance analysis completed")
-        
-    pareto_per_gen = get_pareto_per_generation_api(
-            session=session,
-            api_base=args.api_base,
-            experiment_id=args.expid,
-            to_minimization=True
+    
+
+    lifetime_dir = Path(f"lifetimes_{args.expid}")
+    plot_individual_lifetime_per_generation(
+        individuals_per_generation=individuals_per_gen,
+        pareto_by_front=pareto_by_front,
+        output_dir=lifetime_dir
+    )
+    for file in lifetime_dir.glob("*.png"):
+        upload_analysis_file_api(
+            session,
+            args.api_base,
+            args.expid,
+            file,
+            file.name.replace(".png", ""),
+            file.name.replace(".png", "")        
         )
+    print("[OK] Lifetime per generation completed")
+    
     
     lifetime_plot = Path(f"individual_lifetime_{args.expid}.png")
-
     plot_individual_lifetime(
         individuals_per_generation=individuals_per_gen,
         pareto_by_front=pareto_by_front,
         output_path=lifetime_plot
     )
-
     upload_analysis_file_api(
         session,
         args.api_base,
@@ -1019,29 +1242,55 @@ def main():
         "individual_lifetime",
         "Individual survival across generations (colored by global Pareto rank)"
     )
+    print("[OK] Individual lifetime completed")
 
-
+        
+    pareto_per_gen = get_pareto_per_generation_api(
+            session=session,
+            api_base=args.api_base,
+            experiment_id=args.expid,
+        )
+        
     generations = sorted(pareto_per_gen.keys())
     if not generations:
         raise SystemExit("No Pareto fronts found")
+    
+    
+    last_front_plot = Path(
+        f"pareto_last_generation_{args.expid}.png"
+    )
+    plot_last_generation_pareto_front(
+        pareto_per_generation=pareto_per_gen,
+        objective_names=tuple(args.objectives),
+        output_path=last_front_plot
+    )
+    upload_analysis_file_api(
+        session,
+        args.api_base,
+        args.expid,
+        last_front_plot,
+        "pareto_last_generation",
+        "Pareto front of the last generation"
+    )
 
     # ------------------------------------------------------------
     # Worst reference point for hypervolume
     # ------------------------------------------------------------
     worst_point = compute_worst_point(
         pareto_per_gen,
-        tuple(args.objectives)
+        tuple(args.objectives),
+        minimize=args.minimize
     )
 
     # ------------------------------------------------------------
-    # Final Pareto front (front 0)
+    # HV and GD computation
     # ------------------------------------------------------------
     final_front = np.array([
         [p["objectives"][o] for o in args.objectives]
         for p in pareto_by_front[0]
     ])
     
-    final_front = to_minimization_array(final_front, minimize=[True, True, False])
+    final_front = to_minimization_array(final_front, objectives=args.objectives, minimize=args.minimize)
 
     hv_values = []
     gd_values = []
@@ -1054,12 +1303,11 @@ def main():
             for p in front
         ])
         
-        points = to_minimization_array(points, minimize=[True, True, False])
+        #points = to_minimization_array(points, objectives=args.objectives, minimize=args.minimize)
 
-        hv_val = compute_hypervolume(
-            points.tolist(),
-            worst_point
-        )
+        print(f"points: {points}")
+        print(f"worst_point: {worst_point}")
+        hv_val = hv.hypervolume(points, worst_point)
 
         gd_val = compute_gd(
             points,
@@ -1078,26 +1326,23 @@ def main():
         worst_point=worst_point,
         output_path=hv_gd_plot
     )
-
     upload_analysis_file_api(
         session,
         args.api_base,
         args.expid,
         hv_gd_plot,
-        "hv_ge",
+        "hv_gd",
         "Hypervolume and generational distance evolution 2"
-    )
-    
+    )    
     print("[OK] Pareto HV and GD analysis completed")
+    # ------------------------------------------------------------
 
 
     front_gen_plot = Path(f"pareto_fronts_per_generation_{args.expid}.png")
-
     plot_front_per_generation_distribution(
         pareto_per_generation=pareto_per_gen,
         output_path=front_gen_plot
     )
-
     upload_analysis_file_api(
         session,
         args.api_base,
@@ -1106,23 +1351,16 @@ def main():
         "pareto_fronts_per_generation",
         "Pareto fronts distribution computed intra-generation"
     )
+    print("[OK] Pareto fronts per generation completed")
 
 
     parallel_plot = Path(f"pareto_parallel_{args.expid}.png")
-    radar_plot = Path(f"pareto_radar_{args.expid}.png")
-
     plot_parallel_coordinates_pareto0(
         pareto_by_front,
         tuple(args.objectives),
+        args.minimize,
         parallel_plot
     )
-
-    plot_radar_pareto0(
-        pareto_by_front,
-        tuple(args.objectives),
-        radar_plot
-    )
-
     upload_analysis_file_api(
         session,
         args.api_base,
@@ -1131,7 +1369,15 @@ def main():
         "pareto_parallel",
         "Pareto front 0 — parallel coordinates"
     )
+    print("[OK] Pareto parallel coordenates analysis completed")
 
+    radar_plot = Path(f"pareto_radar_{args.expid}.png")
+    plot_radar_pareto0(
+        pareto_by_front,
+        tuple(args.objectives),
+        args.minimize,
+        radar_plot
+    )
     upload_analysis_file_api(
         session,
         args.api_base,
@@ -1140,9 +1386,24 @@ def main():
         "pareto_radar",
         "Pareto front 0 — radar plot"
     )
+    print("[OK] Pareto radar coordenates analysis completed")
 
-    print("[OK] Pareto parallel coordenates analysis completed")
 
+    dist_plot = Path(f"pareto_distribution_{args.expid}.png")
+    plot_generation_front_distribution(
+        population,
+        dist_plot
+    )
+    upload_analysis_file_api(
+        session,
+        args.api_base,
+        args.expid,
+        dist_plot,
+        "pareto_distribution",
+        "Distribution of individuals per front and generation"
+    )        
+    print("[OK] Distribution of individuals per front and generation completed")
+    
     # Cleanup
     if args.keep_the_files == False:
         try:
