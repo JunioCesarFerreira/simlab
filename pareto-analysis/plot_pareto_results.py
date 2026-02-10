@@ -360,7 +360,7 @@ def plot_pareto_fronts(
 # ------------------------------------------------------------
 # Plot: distribution by generation × front
 # ------------------------------------------------------------
-def plot_generation_front_distribution(
+def plot_global_front_per_generation_distribution(
     population: list[dict],
     output_path: Path
 ):
@@ -378,7 +378,7 @@ def plot_generation_front_distribution(
     fronts = sorted({ind["rank"] for ind in population})
 
     x = np.arange(len(generations))
-    bar_width = 1 / len(fronts)
+    bar_width = 0.9 / len(fronts)
 
     colors = plt.cm.coolwarm(np.linspace(0.1, 0.9, len(fronts)))
 
@@ -396,7 +396,7 @@ def plot_generation_front_distribution(
 
     ax.set_xlabel("Generation")
     ax.set_ylabel("Number of Individuals")
-    ax.set_title("Individuals per Pareto Front by Generation")
+    ax.set_title("Individuals per Pareto Front by Generation (Global)")
 
     ax.set_xticks(x + bar_width * (len(fronts) - 1) / 2)
     ax.set_xticklabels(generations)
@@ -411,8 +411,8 @@ def plot_generation_front_distribution(
 # ------------------------------------------------------------
 # Plot: distribution by generation × front (intra-generation ranking)
 # ------------------------------------------------------------
-def plot_front_per_generation_distribution(
-    pareto_per_generation: dict[int, list[dict[str, Any]]],
+def plot_local_front_per_generation_distribution(
+    population: dict[int, list[dict[str, Any]]],
     output_path: Path
 ):
     """
@@ -427,7 +427,7 @@ def plot_front_per_generation_distribution(
     # ------------------------------------------------------------
     counts = defaultdict(lambda: defaultdict(int))
 
-    for gen, individuals in pareto_per_generation.items():
+    for gen, individuals in population.items():
 
         # --------------------------------------------
         # Build local population (generation only)
@@ -499,8 +499,7 @@ def plot_front_per_generation_distribution(
     ax.set_xlabel("Generation")
     ax.set_ylabel("Number of Individuals")
     ax.set_title(
-        "Pareto Front Distribution per Generation\n"
-        "(Ranking computed intra-generation)"
+        "Pareto Front Distribution per Generation (Local)"
     )
 
     ax.set_xticks(
@@ -1158,10 +1157,6 @@ def plot_last_generation_pareto_front(
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
-    print(
-        f"[OK] Last generation Pareto front plotted → {output_path}"
-    )
-
 # ------------------------------------------------------------
 # Plot: global distribution of individuals across fronts
 # ------------------------------------------------------------
@@ -1255,10 +1250,6 @@ def plot_global_front_distribution(
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
-    print(
-        f"[OK] Global Pareto distribution saved → {output_path}"
-    )
-
 
 # ------------------------------------------------------------
 # CLI
@@ -1310,7 +1301,29 @@ def main():
 
     population = build_population_from_api(individuals_per_gen)
     fronts = fast_nondominated_sort(population, args.objectives, args.minimize)
-    pareto_by_front: dict[int, list[dict]] = {i: front for i, front in enumerate(fronts)}
+
+    # Build `pareto_by_front` from the `rank` values assigned to `population`.
+    # This guarantees consistency between the population-based distributions
+    # and the pareto_by_front mapping used by plotting functions.
+    pareto_by_front = defaultdict(list)
+    for p in population:
+        pareto_by_front[p.get("rank", 999)].append(p)
+
+    # Ensure every rank in the range [0, max_rank] exists (possibly empty)
+    max_rank = max((p.get("rank", 0) for p in population), default=0)
+    for r in range(max_rank + 1):
+        pareto_by_front.setdefault(r, [])
+
+    # Propagate `rank` assigned to population elements back to the
+    # original `individuals_per_gen` items so downstream analyses can use it.
+    id_rank_map = {p["id"]: p.get("rank") for p in population}
+    for gen, inds in individuals_per_gen.items():
+        for ind in inds:
+            iid = ind.get("simulation_id")
+            if iid is None:
+                continue
+            if iid in id_rank_map and id_rank_map[iid] is not None:
+                ind["rank"] = id_rank_map[iid]
 
     # ------------------------------------------------------------
     # Pareto dominance analysis and plots
@@ -1332,11 +1345,10 @@ def main():
     print("[OK] Pareto dominance analysis completed")
     
     # ------------------------------------------------------------
-    # Distribution of individuals per front and generation
+    # Distribution of individuals per global front and generation
     # ------------------------------------------------------------
-
     dist_plot = Path(f"pareto_distribution_{args.expid}.png")
-    plot_generation_front_distribution(
+    plot_global_front_per_generation_distribution(
         population,
         dist_plot
     )
@@ -1350,6 +1362,44 @@ def main():
     )        
     print("[OK] Distribution of individuals per front and generation completed")
     
+    # ------------------------------------------------------------
+    # Global distribution of individuals across fronts
+    # ------------------------------------------------------------
+    global_dist_plot = Path(
+        f"pareto_global_distribution_{args.expid}.png"
+    )
+    plot_global_front_distribution(
+        population=population,
+        output_path=global_dist_plot
+    )
+    upload_analysis_file_api(
+        session,
+        args.api_base,
+        args.expid,
+        global_dist_plot,
+        "pareto_global_distribution",
+        "Global distribution of individuals across Pareto fronts"
+    )
+    print("[OK] Global Pareto distribution completed")
+
+    # ------------------------------------------------------------
+    # Front distribution per local front and generation
+    # ------------------------------------------------------------
+    front_gen_plot = Path(f"pareto_fronts_per_generation_{args.expid}.png")
+    plot_local_front_per_generation_distribution(
+        population=individuals_per_gen,
+        output_path=front_gen_plot
+    )
+    upload_analysis_file_api(
+        session,
+        args.api_base,
+        args.expid,
+        front_gen_plot,
+        "pareto_fronts_per_generation",
+        "Pareto fronts distribution computed intra-generation"
+    )
+    print("[OK] Pareto fronts per generation completed")
+
     # ------------------------------------------------------------
     # Lifetime analysis
     # ------------------------------------------------------------
@@ -1370,8 +1420,7 @@ def main():
             file.name.replace(".png", "")        
         )
     print("[OK] Lifetime per generation completed")
-    
-    
+        
     lifetime_plot = Path(f"individual_lifetime_{args.expid}.png")
     plot_individual_lifetime(
         individuals_per_generation=individuals_per_gen,
@@ -1387,24 +1436,16 @@ def main():
         "Individual survival across generations (colored by global Pareto rank)"
     )
     print("[OK] Individual lifetime completed")
-
-        
-    pareto_per_gen = get_pareto_per_generation_api(
-            session=session,
-            api_base=args.api_base,
-            experiment_id=args.expid,
-        )
-        
-    generations = sorted(pareto_per_gen.keys())
-    if not generations:
-        raise SystemExit("No Pareto fronts found")
     
-    
+    # ------------------------------------------------------------
+    # Pareto front per generation
+    # ------------------------------------------------------------    
+            
     last_front_plot = Path(
         f"pareto_last_generation_{args.expid}.png"
     )
     plot_last_generation_pareto_front(
-        pareto_per_generation=pareto_per_gen,
+        pareto_per_generation=individuals_per_gen,
         objective_names=tuple(args.objectives),
         output_path=last_front_plot
     )
@@ -1416,6 +1457,7 @@ def main():
         "pareto_last_generation",
         "Pareto front of the last generation"
     )
+    print("[OK] Pareto front of last generation completed")
 
     # ------------------------------------------------------------
     # HV and GD computation
@@ -1423,7 +1465,7 @@ def main():
     
     # Worst reference point for hypervolume
     worst_point = compute_worst_point(
-        pareto_per_gen,
+        individuals_per_gen,
         tuple(args.objectives),
         minimize=args.minimize
     )
@@ -1440,14 +1482,37 @@ def main():
     hv_values = []
     gd_values = []
 
-    for gen in generations:
-        front = pareto_per_gen[gen]
+    for gen, inds in individuals_per_gen.items():
+        # handle empty generations
+        if not inds:
+            hv_values.append(0.0)
+            gd_values.append(np.nan)
+            continue
+
+        # normalize API items to internal population format expected by
+        # fast_nondominated_sort (uses keys: "id", "objectives")
+        local_population = [
+            {
+                "id": ind.get("id", ind.get("simulation_id")),
+                "generation": gen,
+                "objectives": ind["objectives"]
+            }
+            for ind in inds
+        ]
+
+        fronts = fast_nondominated_sort(local_population, args.objectives, args.minimize)
+        if not fronts:
+            hv_values.append(0.0)
+            gd_values.append(np.nan)
+            continue
+
+        front = fronts[0]
 
         points = np.array([
             [p["objectives"][o] for o in args.objectives]
             for p in front
         ])
-        
+
         points = to_minimization_array(points, objectives=args.objectives, minimize=args.minimize)
 
         print(f"points: {points}")
@@ -1463,7 +1528,8 @@ def main():
         gd_values.append(gd_val)
 
     hv_gd_plot = Path(f"hv_gd_{args.expid}.png")
-
+    
+    generations = sorted(individuals_per_gen.keys())
     plot_hv_gd(
         generations=generations,
         hv_values=hv_values,
@@ -1481,25 +1547,6 @@ def main():
     )    
     print("[OK] Pareto HV and GD analysis completed")
     
-    # ------------------------------------------------------------
-    # Front distribution per generation (intra-generation ranking)
-    # ------------------------------------------------------------
-
-    front_gen_plot = Path(f"pareto_fronts_per_generation_{args.expid}.png")
-    plot_front_per_generation_distribution(
-        pareto_per_generation=pareto_per_gen,
-        output_path=front_gen_plot
-    )
-    upload_analysis_file_api(
-        session,
-        args.api_base,
-        args.expid,
-        front_gen_plot,
-        "pareto_fronts_per_generation",
-        "Pareto fronts distribution computed intra-generation"
-    )
-    print("[OK] Pareto fronts per generation completed")
-
     # ------------------------------------------------------------
     # Parallel coordinates and radar for Pareto front 0
     # ------------------------------------------------------------
@@ -1538,28 +1585,9 @@ def main():
     )
     print("[OK] Pareto radar coordenates analysis completed")
 
-    # ------------------------------------------------------------
-    # Global distribution of individuals across fronts
-    # ------------------------------------------------------------
-
-    global_dist_plot = Path(
-        f"pareto_global_distribution_{args.expid}.png"
-    )
-    plot_global_front_distribution(
-        population=population,
-        output_path=global_dist_plot
-    )
-    upload_analysis_file_api(
-        session,
-        args.api_base,
-        args.expid,
-        global_dist_plot,
-        "pareto_global_distribution",
-        "Global distribution of individuals across Pareto fronts"
-    )
-
-    
+    # ------------------------------------------------------------    
     # Cleanup
+    # ------------------------------------------------------------
     if args.keep_the_files == False:
         try:
             pareto_plot.unlink(missing_ok=True)
