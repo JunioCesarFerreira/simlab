@@ -21,7 +21,7 @@ from lib.util.population import PopulationSnapshot, select_next_population
 # NSGA utils
 from lib.nsga import fast_nondominated_sort
 from lib.nsga import generate_reference_points, niching_selection
-from lib.genetic_operators.selection import tournament_selection_2, compute_individual_ranks
+from lib.genetic_operators.selection import tournament_selection, compute_individual_ranks
 # Problem Adapter
 from lib.problem.adapter import ProblemAdapter, Chromosome
 from lib.problem.resolve import build_adapter
@@ -456,10 +456,15 @@ class NSGA3LoopStrategy(EngineStrategy):
         parents = self._parents.get_genomes()
         objectives = self._parents.get_objectives()
         
+        print(f"objectives: {objectives}")
+        
         children: list[Chromosome] = []    
         seen: set[Chromosome] = set()    
         
         fronts: list[list[int]] = fast_nondominated_sort(objectives)
+        
+        print(f"fronts: {fronts}")
+        
         individual_ranks: dict[int, int] = compute_individual_ranks(fronts)
                     
         max_attempts = self._pop_size * 10
@@ -468,8 +473,8 @@ class NSGA3LoopStrategy(EngineStrategy):
         while len(children) < self._pop_size and attempts < max_attempts:
             attempts += 1
             # Selection
-            parent1: Chromosome = tournament_selection_2(parents, individual_ranks, self._ga_rng)
-            parent2: Chromosome = tournament_selection_2(parents, individual_ranks, self._ga_rng)
+            parent1: Chromosome = tournament_selection(parents, individual_ranks, self._ga_rng)
+            parent2: Chromosome = tournament_selection(parents, individual_ranks, self._ga_rng)
             # Crossover 
             if self._ga_rng.random() < self._prob_cx:
                 c1, c2 = self._problem_adapter.crossover([parent1, parent2])
