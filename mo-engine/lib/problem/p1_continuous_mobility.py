@@ -98,10 +98,10 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         # makes graph connected by radial contraction
         radius = self.radius_of_reach
         step = radius * 0.1
-        c1 = make_graph_connected(c1, radius, step)
-        c2 = make_graph_connected(c2, radius, step)
+        c1_rep = make_graph_connected(c1, radius, step)
+        c2_rep = make_graph_connected(c2, radius, step)
         
-        return c1, c2
+        return c1_rep, c2_rep
 
 
     def _rand_network(self) -> tuple[list[Position], list[Position]]:
@@ -174,7 +174,7 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         # makes graph connected by radial contraction
         radius = self.radius_of_reach
         step = radius * 0.1
-        new_relays = make_graph_connected(new_relays, radius, step)
+        new_relays_rep = make_graph_connected(new_relays, radius, step)
         
         # MAC mutation (bit-flip)
         mac = chromosome.mac_protocol
@@ -183,7 +183,7 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
 
         return ChromosomeP1(
             mac_protocol=mac,
-            relays=new_relays,
+            relays=new_relays_rep,
         )
 
 
