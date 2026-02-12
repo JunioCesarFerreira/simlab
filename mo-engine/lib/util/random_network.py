@@ -4,6 +4,7 @@ import numpy as np
 from collections import deque
 from typing import Optional
 
+from lib.util.connectivity import is_connected
 
 Point2D = tuple[float, float]
 RectangleRegion = tuple[float, float, float, float]
@@ -11,47 +12,6 @@ RectangleRegion = tuple[float, float, float, float]
 #=====================================
 # PRIVATE HELPERS
 #=====================================
-
-def _is_connected(points: list[Point2D], radius: float) -> bool:
-    """
-    Checks whether the geometric graph induced by the point set is connected.
-
-    Two points are adjacent if their Euclidean distance is <= radius.
-
-    Parameters
-    ----------
-    points : list[(float, float)]
-        Set of 2D coordinates.
-    radius : float
-        Communication radius.
-
-    Returns
-    -------
-    bool
-        True if the graph is connected, False otherwise.
-    """
-    if not points:
-        return True
-
-    visited: set[int] = set()
-    queue: deque[int] = deque([0])
-
-    adjacency: dict[int, list[int]] = {i: [] for i in range(len(points))}
-
-    for i in range(len(points)):
-        for j in range(i + 1, len(points)):
-            if math.dist(points[i], points[j]) <= radius:
-                adjacency[i].append(j)
-                adjacency[j].append(i)
-
-    while queue:
-        node = queue.popleft()
-        if node not in visited:
-            visited.add(node)
-            queue.extend(adjacency[node])
-
-    return len(visited) == len(points)
-
 
 def _get_components(points: list[Point2D], radius: float) -> list[list[int]]:
     """
@@ -247,7 +207,7 @@ def continuous_network_gen(
             candidate = (new_x, new_y)
             temp_points = points + [candidate]
 
-            if _is_connected(temp_points, radius):
+            if is_connected(temp_points, radius):
 
                 min_dist = min(math.dist(candidate, p) for p in points)
 
@@ -267,7 +227,7 @@ def continuous_network_gen(
     # -------------------------------------------------
     # Final repair
     # -------------------------------------------------
-    if not _is_connected(points, radius):
+    if not is_connected(points, radius):
         points = _repair_connectivity(points, radius, rng)
 
     return points[1:] # exclude sink

@@ -5,7 +5,7 @@ from pylib.dto.problems import ProblemP1
 from pylib.dto.algorithm import GeneticAlgorithmConfigDto
 
 from lib.util.random_network import continuous_network_gen
-from lib.util.connectivity import make_graph_connected
+from lib.util.connectivity import make_graph_connected, is_connected
 from lib.genetic_operators.crossover.simulated_binary_crossover import sbx
 from lib.genetic_operators.mutation.polynomial_mutation import poly_mut
 
@@ -101,6 +101,22 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         c1_rep = make_graph_connected(c1, radius, step)
         c2_rep = make_graph_connected(c2, radius, step)
         
+        if not is_connected(c1_rep, radius):
+            c1_rep = make_graph_connected(c1_rep, radius, step)
+            if not is_connected(c1_rep, radius):
+                box = tuple(self.problem.region)
+                N = self.problem.number_of_relays
+                R = self.problem.radius_of_reach
+                c1_rep = continuous_network_gen(N, box, R, self.problem.sink, self._rng)
+        
+        if not is_connected(c2_rep, radius):
+            c2_rep = make_graph_connected(c2_rep, radius, step)
+            if not is_connected(c2_rep, radius):
+                box = tuple(self.problem.region)
+                N = self.problem.number_of_relays
+                R = self.problem.radius_of_reach
+                c2_rep = continuous_network_gen(N, box, R, self.problem.sink, self._rng)
+        
         return c1_rep, c2_rep
 
 
@@ -175,6 +191,14 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         radius = self.radius_of_reach
         step = radius * 0.1
         new_relays_rep = make_graph_connected(new_relays, radius, step)
+        
+        if not is_connected(new_relays_rep, radius):
+            new_relays_rep = make_graph_connected(new_relays_rep, radius, step)
+            if not is_connected(new_relays_rep, radius):
+                box = tuple(self.problem.region)
+                N = self.problem.number_of_relays
+                R = self.problem.radius_of_reach
+                new_relays_rep = continuous_network_gen(N, box, R, self.problem.sink, self._rng)
         
         # MAC mutation (bit-flip)
         mac = chromosome.mac_protocol
