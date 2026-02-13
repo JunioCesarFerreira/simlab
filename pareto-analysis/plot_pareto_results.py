@@ -1598,6 +1598,7 @@ def main():
             parallel_plot.unlink(missing_ok=True)
             radar_plot.unlink(missing_ok=True)
             global_dist_plot.unlink(missing_ok=True)
+            last_front_plot.unlink(missing_ok=True)
             for file in lifetime_dir.glob("*.png"):
                 file.unlink(missing_ok=True)
             print("[OK] Temporary files removed")
