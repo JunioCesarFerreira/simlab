@@ -261,7 +261,7 @@ When simulations complete, use the **Swagger UI** again to:
 All raw outputs, logs, and metadata are stored in MongoDB/GridFS for reproducibility and traceability.
 
 
-### Additional Resources
+### 6. Additional Resources
 
 * **Synthetic Problems Guide**
   A detailed usage guide for running synthetic benchmark problems (without requiring Cooja) is available in the [documentation directory](./docs/markdown/SYNTHETIC_MODE.md).
@@ -279,6 +279,18 @@ All raw outputs, logs, and metadata are stored in MongoDB/GridFS for reproducibi
 - Benchmark dataset publication and performance validation  
 - Development of a graphical user interface (GUI) in Vue.js to simplify experiment configuration, execution monitoring, and result visualization  
 - English and Portuguese documentation parity  
+
+---
+
+## Releases
+
+
+* [`v1.1.0`](https://github.com/JunioCesarFerreira/simlab/releases/tag/v1.1.0) (*2026-02-13*):
+  Introduces the first consolidated layer of **problem adapters and abstraction interfaces** for multiple Wireless Sensor Network (WSN) optimization formulations. At this stage, problems **P1, P2, and P3** are fully integrated into the experimental pipeline and can be instantiated, evaluated, and benchmarked through the **NSGA-III optimization loop**. This release enables the generation of the first reproducible and analytically viable multi-objective results within the SimLab environment.
+
+
+* [`v1.0.0`](https://github.com/JunioCesarFerreira/simlab/releases/tag/v1.0.0) (*2025-10-12*):
+  Initial stable release establishing the **foundational execution workflow** of the platform, including the integration between the **MO-Engine**, **Master-Node orchestration layer**, and **MongoDB persistence infrastructure**. This version marks the architectural baseline of SimLab, consolidating the core services required for distributed simulation management and optimization experiment lifecycle control.
 
 ---
 

@@ -15,7 +15,7 @@ py plot_parallel_coords.py --expid 695d27d1f2ebb0848d08df3f --api-key api-passwo
 ```
 
 ```bash
-py plot_pareto_results.py --expid 69610399efa1000afe8a4f85 --api-key api-password --keep-the-files True
+py plot_pareto_results.py --expid 698a87d3655387dbc92a91de --api-key api-password --keep-the-files True
 ```
 
 **Server**
