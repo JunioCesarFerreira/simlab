@@ -78,7 +78,7 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
 
         for _ in range(size):
             for _ in range(max_attempts):
-                mask = stochastic_reachability_mask(Q, S, R)
+                mask = stochastic_reachability_mask(Q, S, R, self._rng)
 
                 if self._is_feasible_static(mask):
                     break

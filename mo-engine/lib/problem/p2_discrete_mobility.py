@@ -58,7 +58,7 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
 
         pop: list[ChromosomeP2] = []
         for _ in range(size):
-            mask = stochastic_reachability_mask(Q, S, R)
+            mask = stochastic_reachability_mask(Q, S, R, self._rng)
             chrm = ChromosomeP2(                
                 mac_protocol = self._rng.randint(0, 1),
                 mask=mask
