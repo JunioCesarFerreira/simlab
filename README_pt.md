@@ -63,7 +63,42 @@ O sistema é composto por cinco componentes principais:
 
 ### Topologia do Sistema
 
-![alt text](./docs/images/system-topology.png)
+```mermaid
+%%{init: {"flowchart": {"curve": "stepAfter"}}}%%
+flowchart LR
+    user([User])
+    subgraph SIMLAB["simlab<br/>docker-compose"]
+        direction LR
+        mo["mo-engine<br/><i>optimization logic</i>"]
+        db[(Database)]
+        api["API"]
+        gui["GUI"]
+        proxy["Proxy Reverse"]
+        master["master-node<br/><i>simulation orchestration</i>"]
+        subgraph workers["Simulator Workers<br/>"]
+            w1["Worker 1"]
+            w2["..."]
+            w3["Worker N"]
+        end
+    end
+
+    user --- proxy
+
+    mo --- db
+
+    proxy --- api
+    proxy --- gui
+
+    api --- db
+    gui --- db
+
+
+    db --- master
+
+    master --- w1
+    master --- w2
+    master --- w3
+```
 
 ### Sequência de Trabalho do SimLab
 
@@ -71,29 +106,29 @@ O diagrama abaixo ilustra o fluxo de trabalho simplificado do SimLab:
 
 ```mermaid
 sequenceDiagram
-    API->>+MongoDb: Criação<br/>Repositório de Arquivos
-    API->>+MongoDb: Novo Experimento
+    API->>Database: Create source repository.
+    API->>Database: Create new experiment.
     
-    MongoDb-->>+mo-engine: ChangeStream<br/>Novo Experimento
+    Database->>+MO-Engine: Change stream event:<br/>New experiment created.
     
-    loop Otimização iterativa
-        mo-engine->>mo-engine: Gera Simulações de Entrada
-        mo-engine->>-MongoDb: Cria<br/>Geração
+    loop Iterative optimization
+        MO-Engine->>MO-Engine: Generate Individuals.
+        MO-Engine->>-Database: Updates generation<br/>in experiment and<br/>creates simulations Batch.
         
-        MongoDb-->>+master-node: ChangeStream: Nova Geração
-        loop Para cada container de simulação disponível
-            master-node->>+CoojaWorker[1...N]: Inicia e<br/>monitora Simulação
-            CoojaWorker[1...N]-->>-master-node: Finaliza Simulação              
-            master-node-->>-MongoDb: Registra resultados e logs<br/>Atualiza status da simulação DONE/ERROR<br/>Se geração finalizada, altera status para DONE
+        Database->>+MasterNode: Change stream event:<br/>New Batch created
+        
+        loop For each available worker container
+            MasterNode->>+SimulationWorker: Start and monitor<br/>simulation.
+            SimulationWorker-->>-MasterNode: Simulation completed.
+            MasterNode->>-Database: Persist simulation logs and results<br/>Update simulation status (DONE / ERROR)<br/>If all simulations completed, mark Batch as DONE.
         end
-        MongoDb-->>+mo-engine: ChangeStream<br/>Fim das Simulações 
+        
+        Database->>+MO-Engine: Change stream event:<br/>All simulations completed.
     end
-    mo-engine-->>-MongoDb: Atualiza status para DONE<br/>Se o experimento<br/>for concluído
+    
+    MO-Engine->>-Database: Update experiment<br/>status to DONE<br/>If optimization is finished.
+
 ```
-
-### Modelo de Dados Central (Entidade-Relacionamento)
-
-![alt text](./docs/images/er.png)
 
 ---
 

@@ -54,7 +54,42 @@ The system is composed of five main components:
 
 ### System Topology
 
-![alt text](./docs/images/system-topology.png)
+```mermaid
+%%{init: {"flowchart": {"curve": "stepAfter"}}}%%
+flowchart LR
+    user([User])
+    subgraph SIMLAB["simlab<br/>docker-compose"]
+        direction LR
+        mo["mo-engine<br/><i>optimization logic</i>"]
+        db[(Database)]
+        api["API"]
+        gui["GUI"]
+        proxy["Proxy Reverse"]
+        master["master-node<br/><i>simulation orchestration</i>"]
+        subgraph workers["Simulator Workers<br/>"]
+            w1["Worker 1"]
+            w2["..."]
+            w3["Worker N"]
+        end
+    end
+
+    user --- proxy
+
+    mo --- db
+
+    proxy --- api
+    proxy --- gui
+
+    api --- db
+    gui --- db
+
+
+    db --- master
+
+    master --- w1
+    master --- w2
+    master --- w3
+```
 
 ### SimLab Work Sequence
 
@@ -62,32 +97,29 @@ Below is a simplified diagram of the SimLab workflow:
 
 ```mermaid
 sequenceDiagram
-    API->>database: Create source repository
-    API->>database: Create new experiment
+    API->>Database: Create source repository.
+    API->>Database: Create new experiment.
     
-    database->>+mo-engine: Change stream event:<br/>New experiment created
+    Database->>+MO-Engine: Change stream event:<br/>New experiment created.
     
     loop Iterative optimization
-        mo-engine->>mo-engine: Generate simulation inputs
-        mo-engine->>-database: Create generation
+        MO-Engine->>MO-Engine: Generate Individuals.
+        MO-Engine->>-Database: Updates generation<br/>in experiment and<br/>creates simulations Batch.
         
-        database->>+master-node: Change stream event:<br/>New generation created
+        Database->>+MasterNode: Change stream event:<br/>New Batch created
         
         loop For each available worker container
-            master-node->>+sim-worker[1...N]: Start and monitor<br/>simulation
-            sim-worker[1...N]-->>-master-node: Simulation completed
-            master-node->>-database: Persist simulation logs and results<br/>Update simulation status (DONE / ERROR)<br/>If all simulations completed, mark generation as DONE
+            MasterNode->>+SimulationWorker: Start and monitor<br/>simulation.
+            SimulationWorker-->>-MasterNode: Simulation completed.
+            MasterNode->>-Database: Persist simulation logs and results<br/>Update simulation status (DONE / ERROR)<br/>If all simulations completed, mark Batch as DONE.
         end
         
-        database->>+mo-engine: Change stream event:<br/>All simulations completed
+        Database->>+MO-Engine: Change stream event:<br/>All simulations completed.
     end
     
-    mo-engine->>-database: Update experiment<br/>status to DONE<br/>If optimization is finished
+    MO-Engine->>-Database: Update experiment<br/>status to DONE<br/>If optimization is finished.
 
 ```
-### Core Data Model (Entity-Relationship)
-
-![alt text](./docs/images/er.png)
 
 ---
 
