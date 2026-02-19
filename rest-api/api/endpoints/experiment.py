@@ -54,7 +54,7 @@ def get_experiment(experiment_id: str) -> ExperimentDto:
     - Returns 404 if the experiment does not exist
     """
     try:
-        doc = factory.experiment_repo.get_by_id(experiment_id)
+        doc = factory.experiment_repo.get(experiment_id)
         if not doc:
             raise HTTPException(status_code=404, detail="Experiment not found")
         return experiment_from_mongo(doc)
@@ -110,7 +110,7 @@ def delete_experiment(experiment_id: str) -> bool:
     Returns True if exactly one experiment was deleted.
     """
     try:
-        res = factory.experiment_repo.delete_by_id(experiment_id)
+        res = factory.experiment_repo.delete(experiment_id)
         if isinstance(res, dict):
             return res.get("deleted_experiments", 0) == 1
         return bool(res)

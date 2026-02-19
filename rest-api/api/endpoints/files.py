@@ -285,7 +285,7 @@ def download_experiment_topologies_zip(
         raise HTTPException(status_code=400, detail="Invalid experiment_id")
     
     # Get experiment document to retrieve generation IDs
-    experiment = factory.experiment_repo.get_by_id(experiment_id)
+    experiment = factory.experiment_repo.get(experiment_id)
     
     if not experiment:
         raise HTTPException(
@@ -315,16 +315,16 @@ def download_experiment_topologies_zip(
                 gen_id_str = str(generation_id) if isinstance(generation_id, ObjectId) else generation_id
                 
                 # Get generation document
-                generation = factory.generation_repo.get_by_id(gen_id_str)
+                generation = factory.batch_repo.get(gen_id_str)
                 
                 if not generation:
                     print(f"Warning: Generation {gen_id_str} not found")
                     continue
                 
                 # Get simulations for this generation
-                simulation_ids = generation.get("simulations_ids", [])
+                simulations_ids = generation.get("simulations_ids", [])
                 
-                if not simulation_ids:
+                if not simulations_ids:
                     print(f"Warning: No simulations found for generation {gen_id_str}")
                     continue
                 
@@ -333,12 +333,12 @@ def download_experiment_topologies_zip(
                 os.makedirs(gen_subfolder, exist_ok=True)
                 
                 # Download topologies for each simulation in this generation
-                for sim_index, simulation_id in enumerate(simulation_ids):
+                for sim_index, simulation_id in enumerate(simulations_ids):
                     try:
                         sim_id_str = str(simulation_id) if isinstance(simulation_id, ObjectId) else simulation_id
                         
                         # Get simulation document
-                        simulation = factory.simulation_repo.get_by_id(sim_id_str)
+                        simulation = factory.simulation_repo.get(sim_id_str)
                         
                         if not simulation:
                             print(f"Warning: Simulation {sim_id_str} not found")

@@ -1,26 +1,26 @@
 from typing import TypedDict, Any, Optional, NotRequired
 from datetime import datetime
 from bson import ObjectId
- 
-from pylib.dto.simulator import SimulationConfig 
+
+from pylib.dto.simulator import SimulationConfig
 from pylib.dto.database import (
-    Simulation, 
-    Generation, 
-    Experiment, 
-    Parameters, 
-    SourceRepository
+    Simulation,
+    Experiment,
+    Parameters,
+    SourceRepository,
+    Batch,
 )
-    
-#---------------------------------------------------------------------------------------------------------
-# API DTO ------------------------------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------------------------------------
+# API DTO
 # dto uses str for ObjectId fields
-#---------------------------------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------------------------------
 
 class SimulationDto(TypedDict):
     id: str
     experiment_id: str
-    generation_id: str
     status: str
+    random_seed: int
     start_time: datetime
     end_time: datetime
     parameters: SimulationConfig
@@ -30,46 +30,41 @@ class SimulationDto(TypedDict):
     log_cooja_id: str
     runtime_log_id: str
     csv_log_id: str
+    network_metrics: dict[str, float]
+
+class IndividualDto(TypedDict):
+    chromosome: dict[str, Any]
+    objectives: list[float]
     topology_picture_id: str
-    objectives: dict[str,float]
-    metrics: dict[str,float]
-    
+    simulations_ids: list[str]
+
 class GenerationDto(TypedDict):
-    id: str
     index: int
-    experiment_id: str
+    population: list[IndividualDto]
+
+class BatchDto(TypedDict):
+    id: str
     status: str
     start_time: datetime
     end_time: datetime
     simulations_ids: list[str]
 
-class ObjectiveItemDto(TypedDict):
-    name: str
-    kind: str
-    column: str
-    goal: str
-    # Optional parameters (validated according to the type)
-    q: NotRequired[float] = None         # required if kind == QUANTILE (0<q<=1)
-    scale: NotRequired[float] = None     # required if kind == INVERSE_MEDIAN (scale>0)
-
 class MetricItemDto(TypedDict):
     name: str
     kind: str
     column: str
-    # Optional parameters (validated according to the type)
-    q: NotRequired[float] = None         # required if kind == QUANTILE (0<q<=1)
+    q: NotRequired[float] = None
+    scale: NotRequired[float] = None
 
-class TransformConfigDto(TypedDict):
+class DataConversionConfigDto(TypedDict):
     node_col: str
     time_col: str
-    objectives: list[ObjectiveItemDto]
     metrics: list[MetricItemDto]
-    
+
 class ParetoFrontItemDto(TypedDict):
-    simulation_id: str
     chromosome: dict[str, Any]
-    objectives: dict[str, float]   
-    
+    objectives: dict[str, float]
+
 class ExperimentDto(TypedDict):
     id: Optional[str] = None
     name: str
@@ -79,47 +74,40 @@ class ExperimentDto(TypedDict):
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     parameters: Parameters
-    generations: list[str]
+    generations: list[GenerationDto]
     source_repository_options: dict[str, str]
-    transform_config: TransformConfigDto
+    data_conversion_config: DataConversionConfigDto
     pareto_front: Optional[list[ParetoFrontItemDto]] = None
     analysis_files: NotRequired[dict[str, str]] = None
-    
+
 class ExperimentInfoDto(TypedDict):
     id: Optional[str] = None
     name: str
     system_message: Optional[str]
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
-    
-#---------------------------------------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------------------------------------
 # Converters Mongo ↔ DTO
 from copy import deepcopy
 
 
-# --- helpers --------------------------------------------------------
-
-
 def _oid_to_str(x) -> str:
-    """Converte ObjectId -> str; se já for str, retorna; se vazio/None, retorna ''."""
     if x is None:
         return ""
     if isinstance(x, ObjectId):
         return str(x)
     return str(x)
 
+
 def _str_to_oid(x: Optional[str]) -> Optional[ObjectId]:
-    """Converte str -> ObjectId; se string vazia/None, retorna None (útil para campos opcionais)."""
     if not x:
         return None
     return ObjectId(x)
 
 
 def _pop_id_fields(doc: dict) -> tuple[Optional[str], dict]:
-    """
-    Extrai id de doc['_id'] (ou 'id' fallback) e retorna (id_str, doc_sem_ids).
-    Não muta o dicionário original.
-    """
     d = dict(doc)
     _id = d.pop("_id", None)
     id_fallback = d.pop("id", None) if _id is None else None
@@ -130,14 +118,16 @@ def _pop_id_fields(doc: dict) -> tuple[Optional[str], dict]:
 def _list_oid_to_str(lst: list) -> list[str]:
     return [_oid_to_str(x) for x in (lst or [])]
 
+
 def _list_str_to_oid(lst: list[str]) -> list[ObjectId]:
     return [ObjectId(x) for x in (lst or []) if x]
 
 
-def _dict_oid_to_str(d: dict[str,ObjectId]) -> dict[str, str]:
+def _dict_oid_to_str(d: dict[str, ObjectId]) -> dict[str, str]:
     if not d:
         return {}
     return {k: str(v) for k, v in d.items()}
+
 
 def _dict_str_to_oid(d: dict[str, str]) -> dict[str, ObjectId]:
     if not d:
@@ -146,68 +136,96 @@ def _dict_str_to_oid(d: dict[str, str]) -> dict[str, ObjectId]:
 
 
 def _ensure_datetime(x):
-    # FastAPI/Pydantic podem serializar datetime nativamente.
-    # Este método é para caso no futuro queira converter string ISO.
     return x
 
+
+# --- Pareto front (ajuste mínimo: remove simulation_id) -----------------------
 
 def _pareto_front_from_mongo(pf: Optional[list[dict]]) -> Optional[list[ParetoFrontItemDto]]:
     if not pf:
         return None
 
     out: list[ParetoFrontItemDto] = []
-
     for item in pf:
         out.append({
-            "simulation_id": _oid_to_str(item.get("simulation_id")),
             "chromosome": item.get("chromosome", {}),
             "objectives": item.get("objectives", {}),
         })
-
     return out
+
 
 def _pareto_front_to_mongo(pf: Optional[list[ParetoFrontItemDto]]) -> Optional[list[dict]]:
     if not pf:
         return None
 
     out: list[dict] = []
-
     for item in pf:
-        sim_oid = _str_to_oid(item.get("simulation_id"))
-        if sim_oid is None:
-            raise ValueError("ParetoFrontItemDto.simulation_id inválido")
-
         out.append({
-            "simulation_id": sim_oid,
             "chromosome": item.get("chromosome", {}),
             "objectives": item.get("objectives", {}),
         })
-
     return out
 
 
 def _dict_analysis_files_to_str(d: dict[str, ObjectId]) -> dict[str, str]:
     out: dict[str, str] = {}
-    for k, v in d.items():
+    for k, v in (d or {}).items():
         out[k] = _oid_to_str(v)
     return out
 
+
 def _dict_analysis_files_to_oid(d: dict[str, str]) -> dict[str, ObjectId]:
     out: dict[str, ObjectId] = {}
-    for k, v in d.items():
+    for k, v in (d or {}).items():
         oid = _str_to_oid(v)
         if oid is not None:
             out[k] = oid
     return out
 
+
+# --- Generations embedadas (mínimo necessário) --------------------------------
+
+def _generations_from_mongo(gens: list[dict] | None) -> list[GenerationDto]:
+    out: list[GenerationDto] = []
+    for g in (gens or []):
+        pop_out: list[IndividualDto] = []
+        for ind in (g.get("population", []) or []):
+            pop_out.append({
+                "chromosome": ind.get("chromosome", {}),
+                "objectives": ind.get("objectives", []),
+                "topology_picture_id": _oid_to_str(ind.get("topology_picture_id")),
+                "simulations_ids": _list_oid_to_str(ind.get("simulations_ids", [])),
+            })
+
+        out.append({
+            "index": g.get("index", 0),
+            "population": pop_out,
+        })
+    return out
+
+
+def _generations_to_mongo(gens: list[GenerationDto] | None) -> list[dict]:
+    out: list[dict] = []
+    for g in (gens or []):
+        pop_out: list[dict] = []
+        for ind in (g.get("population", []) or []):
+            pop_out.append({
+                "chromosome": ind.get("chromosome", {}),
+                "objectives": ind.get("objectives", []),
+                "topology_picture_id": _str_to_oid(ind.get("topology_picture_id")),
+                "simulations_ids": _list_str_to_oid(ind.get("simulations_ids", [])),
+            })
+
+        out.append({
+            "index": g.get("index", 0),
+            "population": pop_out,
+        })
+    return out
+
+
 # --- Simulation -----------------------------------------------------
 
-
 def simulation_from_mongo(doc: dict) -> SimulationDto:
-    """
-    Converte um documento Mongo (Simulation) em SimulationDto.
-    Aceita '_id' e converte todos os ObjectIds para str.
-    """
     if not doc:
         raise ValueError("simulation_from_mongo: doc vazio")
 
@@ -216,118 +234,91 @@ def simulation_from_mongo(doc: dict) -> SimulationDto:
     return {
         "id": id_str,
         "experiment_id": _oid_to_str(d.get("experiment_id")),
-        "generation_id": _oid_to_str(d.get("generation_id")),
         "status": d.get("status", ""),
+        "random_seed": d.get("random_seed", 0),
         "start_time": _ensure_datetime(d.get("start_time")),
         "end_time": _ensure_datetime(d.get("end_time")),
-        "parameters": d.get("parameters", {}),  # tipo: SimulationConfig
+        "parameters": d.get("parameters", {}),
         "pos_file_id": _oid_to_str(d.get("pos_file_id")),
         "csc_file_id": _oid_to_str(d.get("csc_file_id")),
         "source_repository_id": _oid_to_str(d.get("source_repository_id")),
         "log_cooja_id": _oid_to_str(d.get("log_cooja_id")),
         "runtime_log_id": _oid_to_str(d.get("runtime_log_id")),
         "csv_log_id": _oid_to_str(d.get("csv_log_id")),
-        "topology_picture_id": _oid_to_str(d.get("topology_picture_id")),
-        "objectives": d.get("objectives", {}),
-        "metrics": d.get("metrics", {}),
+        "network_metrics": d.get("network_metrics", {}),
     }
 
+
 def simulation_to_mongo(dto: SimulationDto) -> Simulation:
-    """
-    Converte SimulationDto -> estrutura Mongo (Simulation).
-    - 'id' (str) vira '_id' (ObjectId) se presente.
-    - Campos *file_id (str) viram ObjectId quando não vazios.
-    """
     if not dto:
         raise ValueError("simulation_to_mongo: dto vazio")
 
     d = deepcopy(dto)
-
     sim: dict[str, Any] = {}
+
     if d.get("id"):
         sim["_id"] = _str_to_oid(d["id"])
 
-    sim["experiment_id"] = _str_to_oid(d["experiment_id"])
-    sim["generation_id"] = _str_to_oid(d["generation_id"])
     sim["status"] = d.get("status", "")
+    sim["random_seed"] = d.get("random_seed", 0)
     sim["start_time"] = _ensure_datetime(d.get("start_time"))
     sim["end_time"] = _ensure_datetime(d.get("end_time"))
     sim["parameters"] = d.get("parameters", {})
-    sim["objectives"] = d.get("objectives", {})
-    sim["metrics"] = d.get("metrics", {})
+    sim["network_metrics"] = d.get("network_metrics", {})
 
-    # IDs de arquivos
-    files_ids = (
-        "pos_file_id", 
+    oid_fields = (
+        "experiment_id",
+        "pos_file_id",
         "csc_file_id",
         "source_repository_id",
-        "log_cooja_id", 
-        "runtime_log_id", 
-        "csv_log_id", 
-        "topology_picture_id"
-        )
-    for k in files_ids:
-        oid = _str_to_oid(d.get(k))
-        if oid is not None:
-            sim[k] = oid
-        else:
-            sim[k] = None
+        "log_cooja_id",
+        "runtime_log_id",
+        "csv_log_id",
+    )
+    for k in oid_fields:
+        sim[k] = _str_to_oid(d.get(k))
 
     return sim  # type: ignore[return-value]
 
 
-# --- Generation -----------------------------------------------------
+# --- Batch ----------------------------------------------------------
 
-
-def generation_from_mongo(doc: dict) -> GenerationDto:
-    """
-    Converte documento Mongo (Generation) -> GenerationDto (ObjectIds como str).
-    """
+def batch_from_mongo(doc: dict) -> BatchDto:
     if not doc:
-        raise ValueError("generation_from_mongo: doc vazio")
+        raise ValueError("batch_from_mongo: doc vazio")
 
     id_str, d = _pop_id_fields(doc)
 
     return {
         "id": id_str,
-        "index": d.get("index", 0),
-        "experiment_id": _oid_to_str(d.get("experiment_id")),
         "status": d.get("status", ""),
         "start_time": _ensure_datetime(d.get("start_time")),
         "end_time": _ensure_datetime(d.get("end_time")),
         "simulations_ids": _list_oid_to_str(d.get("simulations_ids", [])),
     }
 
-def generation_to_mongo(dto: GenerationDto) -> Generation:
-    """
-    Converte GenerationDto -> estrutura Mongo (Generation).
-    """
+
+def batch_to_mongo(dto: BatchDto) -> Batch:
     if not dto:
-        raise ValueError("generation_to_mongo: dto vazio")
+        raise ValueError("batch_to_mongo: dto vazio")
 
     d = deepcopy(dto)
-    gen: dict[str, Any] = {}
+    b: dict[str, Any] = {}
 
     if d.get("id"):
-        gen["_id"] = _str_to_oid(d["id"])
+        b["_id"] = _str_to_oid(d["id"])
 
-    gen["index"] = d.get("index", 0)
-    gen["experiment_id"] = _str_to_oid(d["experiment_id"])
-    gen["status"] = d.get("status", "")
-    gen["start_time"] = _ensure_datetime(d.get("start_time"))
-    gen["end_time"] = _ensure_datetime(d.get("end_time"))
-    gen["simulations_ids"] = _list_str_to_oid(d.get("simulations_ids", []))
+    b["status"] = d.get("status", "")
+    b["start_time"] = _ensure_datetime(d.get("start_time"))
+    b["end_time"] = _ensure_datetime(d.get("end_time"))
+    b["simulations_ids"] = _list_str_to_oid(d.get("simulations_ids", []))
 
-    return gen  # type: ignore[return-value]
+    return b  # type: ignore[return-value]
 
 
 # --- Experiment -----------------------------------------------------
 
-
 def experiment_from_mongo(doc: dict) -> ExperimentDto:
-    """
-    Converte documento Mongo (Experiment) -> ExperimentDto (ObjectIds como str).
-    """
     if not doc:
         raise ValueError("experiment_from_mongo: doc vazio")
 
@@ -342,18 +333,15 @@ def experiment_from_mongo(doc: dict) -> ExperimentDto:
         "start_time": _ensure_datetime(d.get("start_time")),
         "end_time": _ensure_datetime(d.get("end_time")),
         "parameters": d.get("parameters", {}),
-        "generations": _list_oid_to_str(d.get("generations", [])),
-        "source_repository_options": _dict_oid_to_str(d.get("source_repository_options", [])),
-        "transform_config": d.get("transform_config", {}),
+        "generations": _generations_from_mongo(d.get("generations", [])),
+        "source_repository_options": _dict_oid_to_str(d.get("source_repository_options", {})),
+        "data_conversion_config": d.get("data_conversion_config", {}),
         "pareto_front": _pareto_front_from_mongo(d.get("pareto_front")),
-        "analysis_files": _dict_analysis_files_to_str(d.get("analysis_files", {}))
+        "analysis_files": _dict_analysis_files_to_str(d.get("analysis_files", {})),
     }
 
+
 def experiment_to_mongo(dto: ExperimentDto) -> Experiment:
-    """
-    Converte ExperimentDto -> estrutura Mongo (Experiment).
-    - 'id' (str) vira '_id' (ObjectId) se presente.
-    """
     if not dto:
         raise ValueError("experiment_to_mongo: dto vazio")
 
@@ -370,29 +358,23 @@ def experiment_to_mongo(dto: ExperimentDto) -> Experiment:
     exp["start_time"] = _ensure_datetime(d.get("start_time"))
     exp["end_time"] = _ensure_datetime(d.get("end_time"))
     exp["parameters"] = d.get("parameters", {})
-    exp["generations"] = _list_str_to_oid(d.get("generations", []))
-    exp["source_repository_options"] = _dict_str_to_oid(d.get("source_repository_options", []))
-    exp["transform_config"] = d.get("transform_config", {}) or {}
+    exp["generations"] = _generations_to_mongo(d.get("generations", []))
+    exp["source_repository_options"] = _dict_str_to_oid(d.get("source_repository_options", {}) or {})
+    exp["data_conversion_config"] = d.get("data_conversion_config", {}) or {}
     exp["pareto_front"] = _pareto_front_to_mongo(d.get("pareto_front"))
     exp["analysis_files"] = _dict_analysis_files_to_oid(d.get("analysis_files", {}) or {})
-    
-    return exp 
+
+    return exp  # type: ignore[return-value]
 
 
 # --- SourceRepository (opcional) -----------------------------------
 
-
 def source_repository_from_mongo(doc: dict) -> SourceRepository:
-    """
-    Converte documento Mongo (SourceRepository) -> SourceRepository TypedDict.
-    Garante 'id' como str e 'source_files' com ids em str.
-    """
     if not doc:
         raise ValueError("source_repository_from_mongo: doc vazio")
 
     id_str, d = _pop_id_fields(doc)
 
-    # Normaliza lista de arquivos
     sf_list = []
     for sf in d.get("source_files", []) or []:
         sf_list.append({
@@ -407,11 +389,8 @@ def source_repository_from_mongo(doc: dict) -> SourceRepository:
         "source_files": sf_list,
     }
 
+
 def source_repository_to_mongo(sr: SourceRepository) -> dict:
-    """
-    Converte SourceRepository TypedDict -> doc Mongo.
-    Mantém 'source_files.id' como str (GridFS usa ObjectId; converta se desejar).
-    """
     d = deepcopy(sr)
     out: dict[str, Any] = {}
 
@@ -420,6 +399,9 @@ def source_repository_to_mongo(sr: SourceRepository) -> dict:
 
     out["name"] = d.get("name", "")
     out["description"] = d.get("description", "")
-    out["source_files"] = [{"id": f["id"], "file_name": f.get("file_name", "")} for f in d.get("source_files", [])]
+    out["source_files"] = [
+        {"id": f["id"], "file_name": f.get("file_name", "")}
+        for f in d.get("source_files", []) or []
+    ]
 
     return out

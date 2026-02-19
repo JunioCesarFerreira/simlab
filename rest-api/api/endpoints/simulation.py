@@ -51,7 +51,7 @@ def get_simulation(sim_id: str) -> SimulationDto:
     Returns the generated simulation_id as string.
     """
     try:
-        doc = factory.simulation_repo.get_by_id(sim_id)
+        doc = factory.simulation_repo.get(sim_id)
         if not doc:
             raise HTTPException(status_code=404, detail="Simulation not found")
         return simulation_from_mongo(doc)
@@ -125,7 +125,7 @@ def download_simulation_file(sim_id: str, field_name: str):
     """
     try:
         # search sim and file id
-        sim = factory.simulation_repo.get_by_id(sim_id)
+        sim = factory.simulation_repo.get(sim_id)
         if not sim:
             raise HTTPException(status_code=404, detail="Simulation not found")
 
