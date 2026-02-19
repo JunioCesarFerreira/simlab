@@ -8,7 +8,7 @@ from bson import ObjectId
 
 from .base import EngineStrategy
 
-from pylib.dto.database import Simulation, Generation, SimulationConfig
+from pylib.dto.database import Simulation, Batch, SimulationConfig
 from pylib.mongo_db import EnumStatus
 from pylib import plot_network
 
@@ -52,8 +52,7 @@ class GeneratorRandomStrategy(EngineStrategy):
         interf = float(params.get("radius_of_interference", 60))
         mobile_motes = params.get("mobileMotes", [])
 
-        gen: Generation = {
-            "index": 1,
+        gen: Batch = {
             "experiment_id": exp_oid,
             "status": EnumStatus.BUILDING,
             "start_time": datetime.now(),
@@ -61,10 +60,10 @@ class GeneratorRandomStrategy(EngineStrategy):
             "simulations_ids": []
         }
 
-        gen_oid: ObjectId = self.mongo.generation_repo.insert(gen)
+        gen_oid: ObjectId = self.mongo.batch_repo.insert(gen)
         self._gen_id = gen_oid
 
-        simulation_ids: list[ObjectId] = []
+        simulations_ids: list[ObjectId] = []
         tmp_dir = Path("./tmp")
         tmp_dir.mkdir(parents=True, exist_ok=True)
         
@@ -127,14 +126,14 @@ class GeneratorRandomStrategy(EngineStrategy):
 
             sim_oid = self.mongo.simulation_repo.insert(sim_doc)
             log.info(f"sim_oid={sim_oid}")
-            simulation_ids.append(sim_oid)
+            simulations_ids.append(sim_oid)
         
         # 5. Update generation and experiment
-        self.mongo.generation_repo.update(gen_oid, {
-            "simulations_ids": [str(_id) for _id in simulation_ids],
+        self.mongo.batch_repo.update(gen_oid, {
+            "simulations_ids": [str(_id) for _id in simulations_ids],
             "status": EnumStatus.WAITING
         })
-        self.mongo.generation_repo.mark_waiting(gen_oid)
+        self.mongo.batch_repo.mark_waiting(gen_oid)
 
         self.mongo.experiment_repo.update(str(exp_oid), {
             "status": EnumStatus.RUNNING,
@@ -143,9 +142,9 @@ class GeneratorRandomStrategy(EngineStrategy):
         })
 
         # 6. Internal state for monitoring
-        self.number_of_simulations = len(simulation_ids)
+        self.number_of_simulations = len(simulations_ids)
         self.counter = 0
-        self.pending = set(simulation_ids)
+        self.pending = set(simulations_ids)
 
         # 7. Starts watcher (listens for DONE) and filters by generation in callback
         self._stop_flag = False # closes previous watcher, if any
@@ -195,7 +194,7 @@ class GeneratorRandomStrategy(EngineStrategy):
 
         if remaining == 0:
             # 3. change generation status DONE
-            self.mongo.generation_repo.update(str(self._gen_id), {
+            self.mongo.batch_repo.update(str(self._gen_id), {
                 "status": EnumStatus.DONE,
                 "end_time": datetime.now()
             })
