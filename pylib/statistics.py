@@ -237,8 +237,7 @@ def _evaluate_items(
     df: pd.DataFrame,
     items: list[dict[str, Any]],
     ctx: dict[str, Any],
-    log: Logger,
-    label: str,
+    log: Logger
 ) -> dict[str, float]:
     results: dict[str, float] = {}
 
@@ -253,7 +252,7 @@ def _evaluate_items(
 
         fn = STAT_DISPATCH.get(kind)
         if fn is None:
-            log.warning(f"Unknown {label} kind '{kind}' for '{name}'.")
+            log.warning(f"Unknown kind '{kind}' for '{name}'.")
             results[name] = float("nan")
             continue
 
@@ -267,7 +266,7 @@ def _evaluate_items(
 
         except Exception as e:
             log.exception(
-                f"Error evaluating {label} '{name}' (kind={kind}, col={col}): {e}"
+                f"Error evaluating '{name}' (kind={kind}, col={col}): {e}"
             )
             results[name] = float("nan")
 
@@ -278,43 +277,33 @@ def evaluate_config(
     df: pd.DataFrame, 
     cfg: dict[str, list[dict]], 
     log: Logger
-    ) -> tuple[dict[str, float], dict[str, float]]:
+    ) -> dict[str, float]:
     """
-    Evaluates a DataFrame against a configuration of objectives and metrics.
+    Evaluates a DataFrame against a configuration of objectives or metrics.
     
     Processes a JSON/YAML configuration that defines which metrics to calculate
-    and how to calculate them, returning dictionaries of results.
+    and how to calculate them, returning a dictionary of results.
     
     Args:
         df: DataFrame with data to evaluate
         cfg: Configuration dictionary with:
-            - objectives: List of objectives to optimize
-            - metrics: List of metrics for monitoring
+            - metrics: List of metrics for monitoring or objectives to optimize
             - node_col: Grouping column name (optional)
             - time_col: Temporal column name (optional)
             
     Returns:
-        Tuple: (objectives_dict, metrics_dict) with numerical results
+        Dictionary with numerical results for each objective or metric defined in the config.
     """
     ctx = {
         "node_col": cfg.get("node_col", "node"),
         "time_col": cfg.get("time_col", "root_time_now"),
     }
 
-    objectives = _evaluate_items(
-        df,
-        cfg.get("objectives", []),
-        ctx,
-        log,
-        label="objective",
-    )
-
     metrics = _evaluate_items(
         df,
         cfg.get("metrics", []),
         ctx,
-        log,
-        label="metric",
+        log
     )
 
-    return objectives, metrics
+    return metrics
