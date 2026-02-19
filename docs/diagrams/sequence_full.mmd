@@ -22,7 +22,7 @@ sequenceDiagram
     MDB-->>ENG: ChangeStream: Experiment(status="Waiting")
     ENG->>ENG: Select strategy (simple/nsga3)
     ENG->>+MDB: Insert Generations {status:"Waiting"}<br/>Insert Simulations {status:"Waiting"} (refs to SourceRepository & GridFS)
-    MDB-->>-ENG: generation_ids, simulation_ids
+    MDB-->>-ENG: generation_ids, simulations_ids
 
     %% --- Master-Node reacts to new generations ---
     MDB-->>MN: ChangeStream: Generation(status="Waiting")
