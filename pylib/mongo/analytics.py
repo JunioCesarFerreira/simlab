@@ -165,7 +165,7 @@ class AnalyticsRepository:
             # Map objective -> goal (min/max)
             goals = {
                 obj["name"]: obj["goal"]
-                for obj in experiment["transform_config"]["objectives"]
+                for obj in experiment["data_conversion_config"]["objectives"]
             }
             
             pareto_by_generation = {}
@@ -223,7 +223,7 @@ class AnalyticsRepository:
             # Map objective -> goal (min/max)
             goals = {
                 obj["name"]: obj["goal"]
-                for obj in experiment["transform_config"]["objectives"]
+                for obj in experiment["data_conversion_config"]["objectives"]
             }
             
             pareto_by_generation = {}

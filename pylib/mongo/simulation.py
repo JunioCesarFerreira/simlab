@@ -11,12 +11,17 @@ log = logging.getLogger(__name__)
 class SimulationRepository:
     def __init__(self, connection: MongoDBConnection):
         self.connection = connection
+        with self.connection.connect() as db:
+            db["simulations"].create_index([("status", 1)], name="idx_simulations_status")
+            db["simulations"].create_index([("experiment_id", 1)], name="idx_simulations_experiment_id")
+
 
     def insert(self, simulation: Simulation) -> ObjectId:
         with self.connection.connect() as db:
             return db["simulations"].insert_one(simulation).inserted_id
 
-    def get_by_id(self, simulation_id: str)->Simulation:
+
+    def get(self, simulation_id: str)->Simulation:
         try:
             oid = ObjectId(simulation_id)
         except errors.InvalidId:
@@ -24,6 +29,7 @@ class SimulationRepository:
         with self.connection.connect() as db:
             result = db["simulations"].find_one({"_id": oid})
             return result
+
 
     def get_topology_pic_file_id(self, simulation_id: str) -> ObjectId | None:
         try:
@@ -44,9 +50,11 @@ class SimulationRepository:
 
             return result.get("topology_picture_id")
         
+        
     def find_pending(self) -> list[Simulation]:
         with self.connection.connect() as db:
             return list(db["simulations"].find({"status": EnumStatus.WAITING}))
+        
         
     def find_pending_by_generation(self, gen_id: ObjectId) -> list[Simulation]:
         with self.connection.connect() as db:
@@ -56,9 +64,11 @@ class SimulationRepository:
                     "generation_id": gen_id
                 }))
             
+            
     def find_by_status(self, status: str) -> list[Simulation]:
         with self.connection.connect() as db:
             return list(db["simulations"].find({"status": status}))
+    
     
     def update_status(self, sim_id: str, status: str):
         with self.connection.connect() as db:
@@ -66,6 +76,7 @@ class SimulationRepository:
                 {"_id": ObjectId(sim_id)},
                 {"$set": {"status": status}}
             )
+    
     
     def mark_running(self, sim_id: ObjectId):
         with self.connection.connect() as db:
@@ -78,12 +89,12 @@ class SimulationRepository:
                  }
             )
     
+    
     def mark_done(self, 
                   sim_id: ObjectId, 
                   log_id: ObjectId, 
                   csv_id: ObjectId, 
-                  objectives: dict[str,float],
-                  metrics: dict[str, float]
+                  network_metrics: dict[str,float]
                   ):
         with self.connection.connect() as db:
             db["simulations"].update_one(
@@ -93,8 +104,7 @@ class SimulationRepository:
                     "end_time": datetime.now(),
                     "log_cooja_id": log_id,
                     "csv_log_id": csv_id,
-                    "objectives": objectives,
-                    "metrics": metrics
+                    "network_metrics": network_metrics,
                     }
                  }
             )
@@ -110,6 +120,7 @@ class SimulationRepository:
                  }
             )
     
+    
     def delete_by_id(self, simulation_id: str) -> bool:
         try:
             oid = ObjectId(simulation_id)
@@ -122,13 +133,13 @@ class SimulationRepository:
             return result.deleted_count > 0
 
     
-    def watch_status_done(self, on_change: Callable[[dict], None]):
+    def watch_status(self, status: EnumStatus, on_change: Callable[[dict], None]):
         log.info("[SimulationRepository] Waiting changes...")
         pipeline = [
             {
                 "$match": {
                     "operationType": {"$in": ["insert", "update", "replace"]},
-                    "fullDocument.status": EnumStatus.DONE
+                    "fullDocument.status": status
                 }
             }
         ]
@@ -138,3 +149,7 @@ class SimulationRepository:
             on_change, 
             full_document="updateLookup"
             )
+        
+        
+    def watch_status_done(self, on_change: Callable[[dict], None]):
+        self.watch_status(EnumStatus.DONE, on_change)

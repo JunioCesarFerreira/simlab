@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional, Callable, Any
 from bson import ObjectId, errors
 
-from pylib.dto.database import Experiment, TransformConfig
+from pylib.dto.database import Experiment, DataConversionConfig, Generation
 from mongo.connection import MongoDBConnection, EnumStatus
 from mongo.gridfs_handler import MongoGridFSHandler
 
@@ -13,9 +13,11 @@ class ExperimentRepository:
     def __init__(self, connection: MongoDBConnection):
         self.connection = connection
 
+
     def insert(self, experiment: Experiment) -> ObjectId:
         with self.connection.connect() as db:
             return db["experiments"].insert_one(experiment).inserted_id
+
 
     def find_by_status(self, status: EnumStatus) -> list[dict[str,Any]]:
         with self.connection.connect() as db:
@@ -23,6 +25,7 @@ class ExperimentRepository:
                 {"status": status},
                 {"_id": 1, "name": 1, "system_message": 1, "start_time": 1, "end_time": 1}
                 ))
+
 
     def find_analysis_files(self, experiment_id: str) -> dict[str,Any]:
         try:
@@ -34,10 +37,7 @@ class ExperimentRepository:
                 {"_id": oid},
                 {"analysis_files": 1})
             return result["analysis_files"]
-            
-    def find_first_by_status(self, status: str) -> Optional[Experiment]:
-        with self.connection.connect() as db:
-            return db["experiments"].find_one({"status": status})
+                        
 
     def update(self, experiment_id: str, updates: dict) -> bool:
         updates["id"] = experiment_id
@@ -45,21 +45,20 @@ class ExperimentRepository:
             result = db["experiments"].update_one({"_id": ObjectId(experiment_id)}, {"$set": updates})
             return result.modified_count > 0
         
-    def update_status(self, sim_id: str, status: str):
-        with self.connection.connect() as db:
-            db["experiments"].update_one(
-                {"_id": ObjectId(sim_id)},
-                {"$set": {"status": status}}
-            )    
+        
+    def update_status(self, experiment_id: str, status: str)->bool:
+        return self.update(experiment_id, {"status": status})
             
-    def update_starting(self, exp_id: str)->bool:
-        success = self.update(exp_id, {
+            
+    def update_starting(self, experiment_id: str)->bool:
+        success = self.update(experiment_id, {
         "status": EnumStatus.RUNNING,
         "start_time": datetime.now()
         })  
         return success
             
-    def get_by_id(self, experiment_id: str)->Experiment:
+            
+    def get(self, experiment_id: str)->Experiment:
         try:
             oid = ObjectId(experiment_id)
         except errors.InvalidId:
@@ -68,7 +67,8 @@ class ExperimentRepository:
             result = db["experiments"].find_one({"_id": oid})
             return result
         
-    def get_objectives_and_metrics(self, experiment_id: str) -> TransformConfig:
+        
+    def get_metrics_data_conversion(self, experiment_id: str) -> DataConversionConfig:
         try:
             oid = ObjectId(experiment_id)
         except errors.InvalidId:
@@ -79,78 +79,57 @@ class ExperimentRepository:
                 {"_id": oid},
                 {
                     "_id": 0,
-                    "transform_config.objectives": 1,
-                    "transform_config.metrics": 1,
+                    "data_conversion_config.node_col": 1,
+                    "data_conversion_config.time_col": 1,
+                    "data_conversion_config.metrics": 1,
                 }
             )
 
         if not doc:
             return {}
 
-        return doc.get("transform_config") or {}
+        return doc.get("data_conversion_config") or {}
     
-    def add_generation(self, exp_id: ObjectId, gen_id: ObjectId) -> bool:
+    
+    def add_generation(self, experiment_id: ObjectId, generation: Generation) -> bool:
         with self.connection.connect() as db:
             result = db["experiments"].update_one(
-                {"_id": exp_id},
-                {"$push": {"generations": gen_id}}
+                {"_id": experiment_id},
+                {"$push": {"generations": generation}}
             )
             return result.modified_count > 0
         
-    def delete_by_id(self, experiment_id: str) -> dict[str, int]:
+        
+    def delete(self, experiment_id: str) -> dict[str, int]:
         """
-        Delete an experiment by _id and cascade-delete all its generations and simulations.
+        Delete an experiment by _id and cascade-delete all its simulations.
         Returns counters: {"deleted_experiments": 0|1, "deleted_generations": N, "deleted_simulations": M}.
-        """
+        """            
         try:
             exp_oid = ObjectId(experiment_id)
         except errors.InvalidId:
             log.error("Invalid ID")
-            return {"deleted_experiments": 0, "deleted_generations": 0, "deleted_simulations": 0}
-
-        def _coerce_oid(x):
-            if isinstance(x, ObjectId):
-                return x
-            try:
-                return ObjectId(str(x))
-            except Exception:
-                return None
+            return {"deleted_experiments": 0, "deleted_simulations": 0}
 
         with self.connection.connect() as db:
-            # 1) Collect generations linked to the experiment
-            gen_docs = list(db["generations"].find({"experiment_id": exp_oid}, {"_id": 1}))
-            gen_ids = [doc["_id"] for doc in gen_docs]
 
-            exp_doc = db["experiments"].find_one({"_id": exp_oid}, {"generations": 1})
-            if exp_doc and isinstance(exp_doc.get("generations"), list):
-                for g in exp_doc["generations"]:
-                    go = _coerce_oid(g)
-                    if go and go not in gen_ids:
-                        gen_ids.append(go)
+            # delete simulations
+            sim_del_res = db["simulations"].delete_many(
+                {"experiment_id": exp_oid}
+            )
 
-            # 2) delete simulations
-            sim_filter = {"experiment_id": exp_oid}
-            if gen_ids:
-                sim_filter = {"$or": [{"generation_id": {"$in": gen_ids}}, {"experiment_id": exp_oid}]}
-
-            sim_del_res = db["simulations"].delete_many(sim_filter)
             sims_deleted = int(sim_del_res.deleted_count)
 
-            # 3) delete generations
-            gens_deleted = 0
-            if gen_ids:
-                gen_del_res = db["generations"].delete_many({"_id": {"$in": gen_ids}})
-                gens_deleted = int(gen_del_res.deleted_count)
-
-            # 4) delete experiment
-            exp_del_res = db["experiments"].delete_one({"_id": exp_oid})
-            exps_deleted = int(exp_del_res.deleted_count)
+            # delete experiment
+            exp_del_res = db["experiments"].delete_one(
+                {"_id": exp_oid}
+            )
 
             return {
-                "deleted_experiments": exps_deleted,
-                "deleted_generations": gens_deleted,
+                "deleted_experiments": int(exp_del_res.deleted_count),
                 "deleted_simulations": sims_deleted,
             }
+            
             
     def add_analysis_file_to_experiment(self, 
             experiment_id: str, 
@@ -174,6 +153,7 @@ class ExperimentRepository:
                 raise ValueError("Experiment not found")
             
             return file_id
+    
     
     def watch_status_waiting(self, on_change: Callable[[dict], None]):
         log.info("[ExperimentRepository] Waiting new experiments...")
