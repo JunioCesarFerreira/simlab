@@ -8,11 +8,25 @@
     "end_time": null,    
     "generations": [],
     "source_repository_options": {
-        "csma": "695fbcef3be5f623aa9af73f",
-        "tsch": "695fbd343be5f623aa9af750"
+        "csma": "698e62259cbacacef7f85f2d",
+        "tsch": "698e62569cbacacef7f85f3e"
     },
     "parameters": {
         "strategy": "nsga3",
+        "objectives":[
+            {
+                "metric_name": "latency",
+                "goal": "min"
+            },
+            {
+                "metric_name": "energy",
+                "goal": "min"
+            },
+            {
+                "metric_name": "throughput",
+                "goal": "max"
+            }
+        ],
         "algorithm": {
             "population_size": 40,
             "number_of_generations": 20,
@@ -222,7 +236,7 @@
             ]
         }
     },
-    "transform_config": {
+    "data_conversion_config": {
         "node_col": "node",
         "time_col": "root_time_now",
         "objectives": [

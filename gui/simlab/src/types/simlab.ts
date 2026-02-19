@@ -209,7 +209,7 @@ export interface ExperimentDto {
   // Repositório de fontes referenciado (detalhes via endpoint específico)
   source_repository_id: ID;
 
-  transform_config: TransformConfigDto;
+  data_conversion_config: TransformConfigDto;
 
   // Front normalmente trata como dataset/estrutura serializada
   pareto_front?: JsonValue | null;

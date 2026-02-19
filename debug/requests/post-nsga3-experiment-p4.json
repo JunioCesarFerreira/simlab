@@ -13,6 +13,20 @@
     },
     "parameters": {
         "strategy": "nsga3",
+        "objectives":[
+            {
+                "metric_name": "latency",
+                "goal": "min"
+            },
+            {
+                "metric_name": "energy",
+                "goal": "min"
+            },
+            {
+                "metric_name": "throughput",
+                "goal": "max"
+            }
+        ],
         "algorithm": {
             "population_size": 12,
             "number_of_generations": 30,
@@ -51,30 +65,25 @@
             "tau_bounds": [0, 200]
         }
     },
-    "transform_config": {
+    "data_conversion_config": {
         "node_col": "node",
         "time_col": "root_time_now",
-        "objectives": [
+        "metrics": [
             {
                 "name": "latency",
                 "kind": "mean",
-                "column": "rtt_latency",
-                "goal": "min"
+                "column": "rtt_latency"
             },
             {
                 "name": "energy",
                 "kind": "sum_all",
-                "column": "total_energy_mj",
-                "goal": "min"
+                "column": "total_energy_mj"
             },
             {
                 "name": "throughput",
                 "kind": "sum_last_minus_first",
-                "column": "server_received",
-                "goal": "max"
-            }
-        ],
-        "metrics": [
+                "column": "server_received"
+            },
             {
                 "name": "cpu_energy_mj",
                 "kind": "sum_all",
