@@ -12,7 +12,7 @@ if project_path not in sys.path:
 from pylib.dto.database import SourceRepository, SourceFile
 from pylib import mongo_db
 
-from api.dto import source_repository_from_mongo
+from api.dto_conversor import source_repository_from_mongo
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/?replicaSet=rs0")
 DB_NAME = os.getenv("DB_NAME", "simlab")
