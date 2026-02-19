@@ -13,6 +13,7 @@ from scp import SCPClient
 
 # lib master-node
 from lib.sshscp import create_ssh_client, send_files_scp
+from lib.mongowatch import watch_status_waiting_enqueue
 
 # SysPath for common modules
 project_path = os.path.abspath(os.path.join(os.getcwd(), ".."))
@@ -81,6 +82,7 @@ class Settings:
             ports=ports,
             sim_timeout_sec=sim_timeout_sec,
         )
+
 
 SET = Settings.from_env()
 
@@ -207,12 +209,14 @@ def run_cooja_simulation(
         if csv_file.exists() and csv_file.stat().st_size != 0:            
             df = pd.read_csv(csv_path)
             exp_id = sim["experiment_id"]
-            cfg = mongo.experiment_repo.get_objectives_and_metrics(str(exp_id))
+            cfg = mongo.experiment_repo.get_metrics_data_conversion(str(exp_id))
         
-            objectives, metrics = statistics.evaluate_config(df, cfg, log)
+            net_meas = statistics.evaluate_config(df, cfg, log)
+            
+            print(f"[port={port}] Metrics calculated: {net_meas}")
             
             # Mark completed and record log and csv ids
-            mongo.simulation_repo.mark_done(sim_oid, log_id, csv_id, objectives, metrics)
+            mongo.simulation_repo.mark_done(sim_oid, log_id, csv_id, net_meas)
         else:
             log.warning("[port=%s] CSV file is missing or empty for simulation %s", port, sim_oid)
             mongo.simulation_repo.mark_error(sim_oid)
@@ -227,10 +231,12 @@ def run_cooja_simulation(
             except Exception as ex:
                 log.warning("Failed to remove temp csv file %s: %s", csv_path, ex)
 
-        # Generation completion
-        gen_id = sim["generation_id"]
-        if mongo.generation_repo.all_simulations_done(gen_id):
-            mongo.generation_repo.mark_done(gen_id)
+        # Batch completion
+        batch_id = sim["batch_id"]
+        if mongo.batch_repo.all_simulations_done(batch_id):
+            mongo.batch_repo.mark_done(batch_id)
+        elif mongo.batch_repo.any_simulation_error(batch_id):
+            mongo.batch_repo.mark_error(batch_id)
 
     except Exception as e:
         log.exception("[port=%s host=%s] Simulation ERROR %s: %s", port, hostname, sim_oid, e)
@@ -340,8 +346,8 @@ def main() -> None:
     load_initial_waiting_jobs(mongo, sim_queue)
 
     Thread(
-        target=mongo.generation_repo.watch_status_waiting_enqueue,
-        args=(sim_queue,),
+        target=watch_status_waiting_enqueue,
+        args=(mongo.simulation_repo, sim_queue,),
         daemon=True,
     ).start()
 

@@ -88,7 +88,7 @@ def _eval_benchmark(genome_xy: list[float], region: tuple[float,float,float,floa
 def run_synthetic_simulation(sim: Simulation, mongo: mongo_db.MongoRepository) -> None:
     """
     Emula execução usando um benchmark clássico (DTLZ2 ou ZDT1) e grava os
-    objetivos conforme o transform_config do experimento.
+    objetivos conforme o data_conversion_config do experimento.
     """
     sim_oid = ObjectId(sim["_id"]) if not isinstance(sim["_id"], ObjectId) else sim["_id"]
     log.info("Starting benchmark simulation %s", sim_oid)
@@ -96,12 +96,12 @@ def run_synthetic_simulation(sim: Simulation, mongo: mongo_db.MongoRepository) -
 
     # config do experimento (objetivos e região)
     exp_id = sim["experiment_id"]
-    cfg = mongo.experiment_repo.get_objectives_and_metrics(str(exp_id))
+    cfg = mongo.experiment_repo.get_metrics_data_conversion(str(exp_id))
     obj_items = cfg.get("objectives", []) or []
     objective_names = [it["name"] for it in obj_items if "name" in it]
 
     # parâmetros necessários para reescalar
-    params = (mongo.experiment_repo.get_by_id(exp_id) or {}).get("parameters", {}) or {}
+    params = (mongo.experiment_repo.get(exp_id) or {}).get("parameters", {}) or {}
     region = tuple(params.get("region", (-100.0, -100.0, 100.0, 100.0)))
     M = len(cfg.get("objectives", []))
     bench = os.getenv("BENCH", "DTLZ2").upper()  # "DTLZ2" | "ZDT1" | "SCH1"
@@ -114,7 +114,7 @@ def run_synthetic_simulation(sim: Simulation, mongo: mongo_db.MongoRepository) -
     # garante número correto de objetivos
     if bench == "ZDT1":
         if len(objective_names) != 2:
-            log.warning("ZDT1 requer 2 objetivos; transform_config tem %d. Ajuste recomendado.", len(objective_names))
+            log.warning("ZDT1 requer 2 objetivos; data_conversion_config tem %d. Ajuste recomendado.", len(objective_names))
         vals = vals[:2]
     else:
         if len(vals) < len(objective_names):
@@ -130,5 +130,5 @@ def run_synthetic_simulation(sim: Simulation, mongo: mongo_db.MongoRepository) -
 
     # checa conclusão da geração
     gen_id = sim["generation_id"]
-    if mongo.generation_repo.all_simulations_done(gen_id):
-        mongo.generation_repo.mark_done(gen_id)
+    if mongo.batch_repo.all_simulations_done(gen_id):
+        mongo.batch_repo.mark_done(gen_id)
