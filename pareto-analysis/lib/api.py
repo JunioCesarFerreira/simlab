@@ -11,35 +11,31 @@ def build_session(api_key: str) -> requests.Session:
     return s
 
 
-def get_pareto_per_generation_api(
+def get_generations_from_experiment(
     session: requests.Session,
     api_base: str,
     experiment_id: str,
-    to_minimization: bool = False
-) -> dict[int, list[dict[str, Any]]]:
-    url = f"{api_base}/analysis/experiments/{experiment_id}/paretos"
-    if to_minimization:
-        url += "_to_min"
+    label_objectives: list[str]
+) -> dict[str, Any]:
+    url = f"{api_base}/experiments/{experiment_id}"
     resp = session.get(url, timeout=60)
     resp.raise_for_status()
     data = resp.json()
 
-    # JSON keys come as strings; normalize to int
-    return {int(k): v for k, v in data.items()}
+    generations = data.get("generations")
+    
+    gen_return: dict[int, list[dict]] = {}
+    for gen in generations:
+        pop: dict[str, Any] = {}
+        for ind in gen["population"]:
+            ind_id = ind["id"]
+            pop[ind_id] = {
+                "id": ind_id,
+                "objectives": {k: v for k, v in zip(label_objectives, ind["objectives"])}
+            }
+        gen_return[gen["index"]] = list(pop.values())
 
-
-def get_individuals_per_generation_api(
-    session: requests.Session,
-    api_base: str,
-    experiment_id: str
-) -> dict[int, list[dict[str, Any]]]:
-    url = f"{api_base}/analysis/experiments/{experiment_id}/individuals"
-    resp = session.get(url, timeout=60)
-    resp.raise_for_status()
-    data = resp.json()
-
-    # JSON keys come as strings; normalize to int
-    return {int(k): v for k, v in data.items()}
+    return gen_return
 
 
 def upload_analysis_file_api(

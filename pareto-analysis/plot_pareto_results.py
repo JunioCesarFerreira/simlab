@@ -12,8 +12,7 @@ from deap.tools._hypervolume import hv
 
 from lib.api import (
     build_session,
-    get_pareto_per_generation_api,
-    get_individuals_per_generation_api,
+    get_generations_from_experiment,
     upload_analysis_file_api
 )
 
@@ -131,7 +130,7 @@ def build_population_from_api(
     for gen, inds in individuals_by_generation.items():
         for ind in inds:
             population.append({
-                "id": ind["simulation_id"],
+                "id": ind["id"],
                 "generation": gen,
                 "objectives": ind["objectives"]
             })
@@ -436,7 +435,7 @@ def plot_local_front_per_generation_distribution(
 
         for ind in individuals:
             local_population.append({
-                "id": ind["simulation_id"],
+                "id": ind["id"],
                 "generation": gen,
                 "objectives": ind["objectives"]
             })
@@ -707,7 +706,7 @@ def plot_individual_lifetime(
 
     for gen, individuals in individuals_per_generation.items():
         for ind in individuals:
-            iid = ind["simulation_id"]
+            iid = ind["id"]
             presence[iid].append(gen)
 
     # ------------------------------------------------------------
@@ -858,7 +857,7 @@ def plot_individual_lifetime_per_generation(
 
     for gen, individuals in individuals_per_generation.items():
         for ind in individuals:
-            presence[ind["simulation_id"]].append(gen)
+            presence[ind["id"]].append(gen)
 
     # ------------------------------------------------------------
     # Global rank map
@@ -891,7 +890,7 @@ def plot_individual_lifetime_per_generation(
         lifetimes = []
 
         for ind in individuals:
-            iid = ind["simulation_id"]
+            iid = ind["id"]
             gens = presence[iid]
 
             birth = g
@@ -1263,7 +1262,7 @@ def main():
     )
 
     parser.add_argument("--api-base", default="http://localhost:8000/api/v1")
-    parser.add_argument("--api-key", default=os.getenv("SIMLAB_API_KEY", ""))
+    parser.add_argument("--api-key", default=os.getenv("SIMLAB_API_KEY", "api-password"))
     parser.add_argument("--expid", required=True)
     parser.add_argument("--keep-the-files", default=False)
 
@@ -1285,20 +1284,20 @@ def main():
     
     args.minimize = [s.lower() == "true" for s in args.minimize]
 
-    if not args.api_key:
-        raise SystemExit("Missing API key")
-
     # ------------------------------------------------------------
     # INITIAL DATA FETCHING & PREPARATION
     # ------------------------------------------------------------
     session = build_session(args.api_key)
 
-    individuals_per_gen = get_individuals_per_generation_api(
+    individuals_per_gen = get_generations_from_experiment(
         session=session,
         api_base=args.api_base,
-        experiment_id=args.expid
+        experiment_id=args.expid,
+        label_objectives=args.objectives
     )
-
+    
+    print(individuals_per_gen)
+    
     population = build_population_from_api(individuals_per_gen)
     fronts = fast_nondominated_sort(population, args.objectives, args.minimize)
 
@@ -1319,7 +1318,7 @@ def main():
     id_rank_map = {p["id"]: p.get("rank") for p in population}
     for gen, inds in individuals_per_gen.items():
         for ind in inds:
-            iid = ind.get("simulation_id")
+            iid = ind.get("id")
             if iid is None:
                 continue
             if iid in id_rank_map and id_rank_map[iid] is not None:
@@ -1493,7 +1492,7 @@ def main():
         # fast_nondominated_sort (uses keys: "id", "objectives")
         local_population = [
             {
-                "id": ind.get("id", ind.get("simulation_id")),
+                "id": ind.get("id"),
                 "generation": gen,
                 "objectives": ind["objectives"]
             }
