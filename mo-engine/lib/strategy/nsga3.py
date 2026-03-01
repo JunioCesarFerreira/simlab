@@ -95,13 +95,23 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._exp_id: ObjectId | None = None
         self._gen_index: int = 0
         self._batch_id: ObjectId | None = None
-
+                        
         # --- nsga3 workflow ---
         self._current_population: list[Chromosome] = [] # P_t       
         self._parents: list[Chromosome] = [] # P_{t-1}               
         self._map_genome_sim: dict[Chromosome, list[ObjectId]] = {}  
         self._map_genome_objectives: dict[Chromosome, list[float]] = {}
-
+        
+        # Preciso completar isto!
+        gen = self.experiment.get("generations") or []
+        if len(gen) > 0:
+            for generation in gen:
+                for ind in generation.get("population", []):
+                    chromo_dict = ind.get("chromosome", {})
+                    chromo = Chromosome.from_dict(chromo_dict)
+                    self._current_population.append(chromo)
+                    self._map_genome_objectives[chromo] = ind.get("objectives", [])
+                    self._map_genome_sim[chromo] = ind.get("simulations_ids", [])
 
 # ------------------------------
 # Interface EngineStrategy
@@ -151,7 +161,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         for ind in self._current_population:
             sims = self._map_genome_sim.get(ind, [])
             if self._map_genome_objectives.get(ind) is not None:
-                logger.info(f"Objectives already calculated for genome {ind.__hash__()}; skipping.")
+                logger.info(f"Objectives already calculated for genome {ind.get_hash()}; skipping.")
                 continue
             if sims is None or len(sims) == 0:
                 logger.warning(f"No simulations found for genome {ind}; skipping in objectives calculation.")
@@ -246,7 +256,7 @@ class NSGA3LoopStrategy(EngineStrategy):
                 config["randomSeed"] = seed
                 sim_oid = self._insert_simulation_db(genome, exp_oid, config, topology_picture_id)
                 simulation_ids_for_genome.append(sim_oid)
-                logger.info(f"SIM_OID={sim_oid} SEED={seed} for genome {genome.__hash__()}")
+                logger.info(f"SIM_OID={sim_oid} SEED={seed} for genome {genome.get_hash()}")
                 
             self._map_genome_sim[genome] = simulation_ids_for_genome
             batch_simulation_ids.extend(simulation_ids_for_genome)
@@ -302,6 +312,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             )
             
             generation["population"].append({
+                "id": genome.get_hash(),
                 "chromosome": genome.to_dict(),
                 "objectives": self._map_genome_objectives[genome],
                 "topology_picture_id": topology_picture_id,
@@ -524,6 +535,7 @@ class NSGA3LoopStrategy(EngineStrategy):
              
         sim_doc: Simulation = {
             "experiment_id": exp_oid,
+            "individual_id": genome.get_hash(),
             "status": EnumStatus.WAITING,
             "random_seed": config.get("randomSeed", 0),
             "start_time": None,

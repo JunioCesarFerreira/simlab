@@ -32,8 +32,7 @@ class Chromosome(ABC):
         Converts the chromosome to a dictionary representation.
         """
         pass
-    
-        
+            
     @abstractmethod
     def get_source_by_mac_protocol(
         self, options: dict[str, ObjectId]
@@ -42,13 +41,24 @@ class Chromosome(ABC):
         Returns to the selected source and adjusts the MacGene if there are no options.
         """
         pass
+    
+    @abstractmethod
+    def __eq__(self, other: object) -> bool:
+        pass
 
+    @abstractmethod
+    def __hash__(self) -> int:
+        pass
+
+    def get_hash(self) -> int:
+        return self.__hash__()
 
 class ChromosomeBase:
     mac_protocol: MacGene
 
     def mac_protocol_str(self) -> str:
         return "tsch" if self.mac_protocol == 1 else "csma"
+
 
     def get_source_by_mac_protocol(
         self, options: dict[str, ObjectId]
@@ -82,12 +92,13 @@ class ChromosomeP1(ChromosomeBase, Chromosome):
     """
     mac_protocol: MacGene
     relays: list[Position]
-    
+
+
     def to_dict(self) -> dict:
         return {
             "mac_protocol": self.mac_protocol,
             "relays": [ {"x": pos[0], "y": pos[1]} for pos in self.relays ]
-        }
+        }       
         
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ChromosomeP1):
@@ -117,12 +128,13 @@ class ChromosomeP2(ChromosomeBase, Chromosome):
     """
     mac_protocol: MacGene
     mask: list[int]  # each entry in {0,1}
-    
+
+
     def to_dict(self) -> dict:
         return {
             "mac_protocol": self.mac_protocol,
             "mask": self.mask
-        }
+        }       
         
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ChromosomeP2):
@@ -147,13 +159,14 @@ class ChromosomeP3(ChromosomeBase, Chromosome):
     """
     mac_protocol: MacGene
     mask: list[int]  # each entry in {0,1}
-    
+
+
     def to_dict(self) -> dict:
         return {
             "mac_protocol": self.mac_protocol,
             "mask": self.mask
         }
-
+        
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ChromosomeP3):
             return NotImplemented
