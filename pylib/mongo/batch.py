@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 from bson import ObjectId, errors
-from pyparsing import Callable
+from typing import Callable
 
 from pylib.dto.database import Batch
 from mongo.connection import MongoDBConnection, EnumStatus
