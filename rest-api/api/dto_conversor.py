@@ -119,6 +119,7 @@ def _generations_from_mongo(gens: list[dict] | None) -> list[GenerationDto]:
         pop_out: list[IndividualDto] = []
         for ind in (g.get("population", []) or []):
             pop_out.append({
+                "id": ind.get("id", 0),
                 "chromosome": ind.get("chromosome", {}),
                 "objectives": ind.get("objectives", []),
                 "topology_picture_id": _oid_to_str(ind.get("topology_picture_id")),
@@ -138,6 +139,7 @@ def _generations_to_mongo(gens: list[GenerationDto] | None) -> list[dict]:
         pop_out: list[dict] = []
         for ind in (g.get("population", []) or []):
             pop_out.append({
+                "id": ind.get("id", 0),
                 "chromosome": ind.get("chromosome", {}),
                 "objectives": ind.get("objectives", []),
                 "topology_picture_id": _str_to_oid(ind.get("topology_picture_id")),

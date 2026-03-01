@@ -26,6 +26,7 @@ class SimulationDto(TypedDict):
     network_metrics: dict[str, float]
 
 class IndividualDto(TypedDict):
+    id: int
     chromosome: dict[str, Any]
     objectives: list[float]
     topology_picture_id: str

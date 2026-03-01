@@ -22,6 +22,7 @@ class Simulation(TypedDict):
     id: str
     experiment_id: ObjectId
     batch_id: ObjectId
+    individual_id: int
     status: str
     random_seed: int
     start_time: datetime
@@ -35,16 +36,6 @@ class Simulation(TypedDict):
     csv_log_id: ObjectId
     topology_picture_id: ObjectId
     network_metrics: dict[str,float]
-
-class Individual(TypedDict):
-    chromosome: dict[str, Any]
-    objectives: list[float]
-    topology_picture_id: ObjectId
-    simulations_ids: list[ObjectId]
-
-class Generation(TypedDict):
-    index: int
-    population: list[Individual]
 
 class Batch(TypedDict):
     _id: ObjectId
@@ -81,6 +72,17 @@ class ParetoFrontItem(TypedDict):
     chromosome: dict[str, Any]
     objectives: dict[str, float]    
 
+class Individual(TypedDict):
+    id: int
+    chromosome: dict[str, Any]
+    objectives: list[float]
+    topology_picture_id: ObjectId
+    simulations_ids: list[ObjectId]
+
+class Generation(TypedDict):
+    index: int
+    population: list[Individual]
+    
 class Experiment(TypedDict):
     id: str
     name: str
