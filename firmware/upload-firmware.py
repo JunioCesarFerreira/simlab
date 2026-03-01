@@ -9,7 +9,8 @@ from typing import List
 # ============================================================
 
 API_URL = "http://localhost:8198/api/v1/sources/"
-FIRMWARE_DIR = Path(".")  # executar dentro de firmware/
+API_KEY = "api-password"  # set same value in .env of rest-api/ and here
+FIRMWARE_DIR = Path(".")  # run in firmware/ directory containing rpl-udp-csma/ and rpl-udp-tsch/
 
 # ============================================================
 # Helpers
@@ -47,6 +48,11 @@ def create_repository(name: str, description: str, directory: Path):
 
     files = collect_files(directory)
 
+    headers = {
+        "accept": "application/json",
+        "X-API-Key": API_KEY,
+    }
+    
     data = {
         "name": name,
         "description": description,
@@ -55,6 +61,7 @@ def create_repository(name: str, description: str, directory: Path):
     try:
         response = requests.post(
             API_URL,
+            headers=headers,
             data=data,
             files=files,
             timeout=120,
