@@ -2,4 +2,3 @@ fastapi
 uvicorn
 pymongo
 python-multipart
-swagger-ui-bundle
