@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-
+# pip install requests
 import requests
 from pathlib import Path
 from typing import List
@@ -8,9 +8,8 @@ from typing import List
 # CONFIG
 # ============================================================
 
-API_URL = "http://localhost:8198/api/v1/source-repository/"
+API_URL = "http://localhost:8198/api/v1/sources/"
 FIRMWARE_DIR = Path(".")  # executar dentro de firmware/
-
 
 # ============================================================
 # Helpers
