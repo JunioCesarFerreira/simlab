@@ -4,7 +4,6 @@ from bson import ObjectId
 import os, sys, tempfile
 from tempfile import NamedTemporaryFile
 from zipfile import ZipFile
-from typing import List
 
 project_path = os.path.abspath(os.path.join(os.getcwd(), ".."))
 if project_path not in sys.path:
@@ -62,7 +61,7 @@ def get_source_repository(repository_id: str) -> SourceRepository:
 async def create_source_repository(
     name: str = Form(...),
     description: str = Form(""),
-    files: List[UploadFile] = File(...)
+    files: list[UploadFile] = File(...)
 ) -> str:
     """
     Create a new source repository with uploaded files.
