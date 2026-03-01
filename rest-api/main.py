@@ -9,7 +9,7 @@ from api.router import api_router
 
 app = FastAPI(
     title="Simulation Management API",
-    version="1.0.0"
+    version="1.2.0"
 )
 app.include_router(api_router, prefix="/api/v1")
 
