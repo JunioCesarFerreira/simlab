@@ -102,17 +102,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._map_genome_sim: dict[Chromosome, list[ObjectId]] = {}  
         self._map_genome_objectives: dict[Chromosome, list[float]] = {}
         
-        # Preciso completar isto!
-        gen = self.experiment.get("generations") or []
-        if len(gen) > 0:
-            for generation in gen:
-                for ind in generation.get("population", []):
-                    chromo_dict = ind.get("chromosome", {})
-                    chromo = Chromosome.from_dict(chromo_dict)
-                    self._current_population.append(chromo)
-                    self._map_genome_objectives[chromo] = ind.get("objectives", [])
-                    self._map_genome_sim[chromo] = ind.get("simulations_ids", [])
-
+        
 # ------------------------------
 # Interface EngineStrategy
 # ------------------------------
@@ -248,6 +238,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             
             # check if genome was already evaluated (duplicate in population or previous generation)
             if genome in self._map_genome_sim.keys():
+                logger.info(f"Genome {genome.get_hash()} already evaluated; skipping simulation creation and reusing previous simulation ids.")
                 continue        
                 
             # build and insert simulation per seed, and collect simulation ids for this genome
@@ -278,9 +269,9 @@ class NSGA3LoopStrategy(EngineStrategy):
                 "start_time": datetime.now()
             })
         else:
-            self._generation_to_db()
+            self._generation_to_db() # register previous generation with objectives and topology pictures in experiment generations list
             
-        self._gen_index += 1
+        self._gen_index += 1 # next generation index
             
         logger.info(f"[NSGA-III] Generation {gen_index} enqueued with {len(population)} Individuals.")
                 
@@ -290,7 +281,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         gen_idx = self._gen_index
                 
         generation: Generation = {
-            "index": gen_idx,
+            "index": gen_idx-1,
             "population": []
         }
         
