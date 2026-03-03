@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+
+import requests
+
+# ==========================================================
+# CONFIG
+# ==========================================================
+
+API_URL = "http://localhost:8000/api/v1/experiments/"
+API_KEY = "simlab-api-key42"
+
+HEADERS = {
+    "accept": "application/json",
+    "X-API-Key": API_KEY,
+    "Content-Type": "application/json",
+}
+
+# ==========================================================
+# BODY
+# ==========================================================
+
+body = {
+    "id": None,
+    "name": "Performing Sweep Random Seeds problem P1",
+    "status": "Waiting",
+    "system_message": None,
+    "created_time": "2026-03-02T23:09:00Z",
+    "start_time": None,
+    "end_time": None,
+    "generations": [],
+    "source_repository_options": {
+        "csma": "69a631b5d4f7364ec8f9db1f"
+    },
+    "parameters": {
+        "strategy": "sweep_seed",
+        "algorithm": {
+            "random_seed": 42
+        },
+        "simulation": {
+            "duration": 180
+        },
+        "objectives": [
+            {"metric_name": "latency", "goal": "min"},
+            {"metric_name": "energy", "goal": "min"},
+            {"metric_name": "throughput", "goal": "max"}
+        ],
+        "problem": {
+            "name": "problem1",
+            "radius_of_reach": 50,
+            "radius_of_inter": 90,
+            "region": [-150, -150, 150, 150],
+            "sink": [0, 0],
+            "mobile_nodes": [
+                {
+                    "path_segments": [
+                        ["70", "44 + 31 * t"],
+                        ["70 - 140 * t", "75"],
+                        ["-70", "75 - 31 * t"],
+                        ["-70 + 140 * t", "44"]
+                    ],
+                    "is_closed": True,
+                    "is_round_trip": False,
+                    "speed": 5,
+                    "time_step": 1,
+                    "name": "node13",
+                    "source_code": "node.c"
+                },
+                {
+                    "path_segments": [
+                        ["117 + 24 * np.cos(2 * np.pi * t)", "-28 + 52 * np.sin(2 * np.pi * t)"]
+                    ],
+                    "is_closed": True,
+                    "is_round_trip": False,
+                    "speed": 5,
+                    "time_step": 1,
+                    "name": "node14",
+                    "source_code": "node.c"
+                },
+                {
+                    "path_segments": [
+                        ["-114*(1-t)-64*t", "61*(1-t)+20*t"],
+                        ["-64", "20-82*t"],
+                        ["-64+136*t", "-62"]
+                    ],
+                    "is_closed": False,
+                    "is_round_trip": True,
+                    "speed": 5,
+                    "time_step": 1,
+                    "name": "node15",
+                    "source_code": "node.c"
+                },
+                {
+                    "path_segments": [
+                        ["-134+50*t", "16"],
+                        ["-84", "16-98*t"],
+                        ["-84-50*t", "-82"],
+                        ["-134", "-82+98*t"]
+                    ],
+                    "is_closed": True,
+                    "is_round_trip": False,
+                    "speed": 5,
+                    "time_step": 1,
+                    "name": "node16",
+                    "source_code": "node.c"
+                },
+                {
+                    "path_segments": [
+                        ["114*(1-t)+56*t", "80*(1-t)-33*t"],
+                        ["56 - 77*t", "-33"]
+                    ],
+                    "is_closed": False,
+                    "is_round_trip": True,
+                    "speed": 5,
+                    "time_step": 1,
+                    "name": "node17",
+                    "source_code": "node.c"
+                },
+                {
+                    "path_segments": [
+                        ["-54+108*t", "-81"]
+                    ],
+                    "is_closed": False,
+                    "is_round_trip": True,
+                    "speed": 5,
+                    "time_step": 1,
+                    "name": "node18",
+                    "source_code": "node.c"
+                }
+            ],
+            "number_of_relays": 10
+        }
+    },
+    "data_conversion_config": {
+        "node_col": "node",
+        "time_col": "root_time_now",
+        "metrics": [
+            {"name": "latency", "kind": "mean", "column": "rtt_latency"},
+            {"name": "energy", "kind": "sum_all", "column": "total_energy_mj"},
+            {"name": "throughput", "kind": "sum_last_minus_first", "column": "server_received"},
+            {"name": "cpu_energy_mj", "kind": "sum_all", "column": "cpu_energy_mj"},
+            {"name": "lpm_energy_mj", "kind": "sum_all", "column": "lpm_energy_mj"},
+            {"name": "radio_tx_energy_mj", "kind": "sum_all", "column": "radio_tx_energy_mj"},
+            {"name": "radio_rx_energy_mj", "kind": "sum_all", "column": "radio_rx_energy_mj"},
+            {"name": "total_sent", "kind": "sum_last_minus_first", "column": "total_sent"},
+            {"name": "total_received", "kind": "sum_last_minus_first", "column": "total_received"},
+            {"name": "server_sent", "kind": "sum_last_minus_first", "column": "server_received"},
+            {"name": "bytes_tx", "kind": "sum_last_minus_first", "column": "bytes_tx"},
+            {"name": "bytes_rx", "kind": "sum_last_minus_first", "column": "bytes_rx"},
+            {"name": "server_bytes_rx", "kind": "sum_last_minus_first", "column": "server_bytes_rx"},
+            {"name": "r2n_latency", "kind": "mean", "column": "r2n_latency"},
+            {"name": "n2r_latency", "kind": "mean", "column": "n2r_latency"},
+            {"name": "hops", "kind": "mean", "column": "hops"},
+            {"name": "rtt_latency", "kind": "mean", "column": "rtt_latency"}
+        ]
+    },
+    "pareto_front": None
+}
+
+# ==========================================================
+# EXECUTION
+# ==========================================================
+
+response = requests.post(API_URL, headers=HEADERS, json=body)
+
+print("Status:", response.status_code)
+print("Response:", response.text)
+
+response.raise_for_status()
+
+print("\n✅ Experiment created successfully")

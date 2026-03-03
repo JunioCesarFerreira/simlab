@@ -8,8 +8,8 @@ from typing import List
 # CONFIG
 # ============================================================
 
-API_URL = "http://localhost:8198/api/v1/sources/"
-API_KEY = "api-password"  # set same value in .env of rest-api/ and here
+API_URL = "http://localhost:8000/api/v1/sources/"
+API_KEY = "simlab-api-key42"  # set same value in .env of rest-api/ and here
 FIRMWARE_DIR = Path(".")  # run in firmware/ directory containing rpl-udp-csma/ and rpl-udp-tsch/
 
 # ============================================================
