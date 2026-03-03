@@ -172,12 +172,7 @@ class SweepSeedStrategy(EngineStrategy):
             }
         
         # plot topology and upload to GridFS
-        topology_picture_id = self._plot_topology(
-            exp_oid=exp_oid,
-            gen_index=0,
-            ind_idx=0,
-            config=config
-        )        
+        topology_picture_id = self._plot_topology(exp_oid, config)        
             
         # build and insert simulation per seed, and collect simulation ids for this genome
         simulation_ids_for_genome: list[ObjectId] = []
@@ -236,10 +231,7 @@ class SweepSeedStrategy(EngineStrategy):
         return self.mongo.simulation_repo.insert(sim_doc)
 
 
-    def _plot_topology(self,
-            exp_oid: ObjectId,
-            config: SimulationConfig
-            )->ObjectId:
+    def _plot_topology(self, exp_oid: ObjectId, config: SimulationConfig)->ObjectId:
         tmp_dir = Path("./tmp")
         tmp_dir.mkdir(parents=True, exist_ok=True)
         image_tmp_path = tmp_dir / f"topology-{exp_oid}-sweep-seed.png"
