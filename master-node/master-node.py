@@ -213,7 +213,7 @@ def run_cooja_simulation(
         
             net_meas = statistics.evaluate_config(df, cfg, log)
             
-            print(f"[port={port}] Metrics calculated: {net_meas}")
+            log.info(f"[port={port}] Metrics calculated: {net_meas}")
             
             # Mark completed and record log and csv ids
             mongo.simulation_repo.mark_done(sim_oid, log_id, csv_id, net_meas)
@@ -260,7 +260,7 @@ def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostnam
                 return
             
             mode = os.getenv("ENABLE_DATA_SYNTHETIC", "False").lower() == "true"
-            log.info(f"mode: {"Synthetic Data" if mode else "Simulation"}")
+            log.info("mode: %s", "Synthetic Data" if mode else "Simulation")
             if mode: # Synthetic data for validation of MO-Engine
                 from lib.synthetic_data import run_synthetic_simulation
                 run_synthetic_simulation(sim, mongo)

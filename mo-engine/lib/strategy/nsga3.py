@@ -446,14 +446,14 @@ class NSGA3LoopStrategy(EngineStrategy):
         parents = self._parents
         parents_objectives = [self._map_genome_objectives[genome] for genome in parents]
         
-        print(f"objectives: {parents_objectives}")
+        logger.info(f"objectives: {parents_objectives}")
         
         children: list[Chromosome] = []    
         seen: set[Chromosome] = set()    
         
         fronts: list[list[int]] = fast_nondominated_sort(parents_objectives)
         
-        print(f"fronts: {fronts}")
+        logger.info(f"fronts: {fronts}")
         
         individual_ranks: dict[int, int] = compute_individual_ranks(fronts)
                     
