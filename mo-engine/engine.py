@@ -7,6 +7,7 @@ if project_path not in sys.path:
 
 from pylib import mongo_db
 from pylib.mongo_db import EnumStatus
+from pylib.service_settings import MongoServiceSettings
 from lib.strategy.base import EngineStrategy 
 from lib.strategy.generator_random import GeneratorRandomStrategy
 from lib.strategy.nsga3 import NSGA3LoopStrategy  
@@ -21,11 +22,12 @@ log = logging.getLogger("mo-engine")
 # --------------------------------------------------------------------
 
 SimStatus = mongo_db.EnumStatus
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/?replicaSet=rs0")
-IS_DOCKER = os.getenv("IS_DOCKER", False)
-DB_NAME = os.getenv("DB_NAME", "simlab")
+SETTINGS = MongoServiceSettings.from_env()
 
-mongo = mongo_db.create_mongo_repository_factory(MONGO_URI, DB_NAME)
+mongo = mongo_db.create_mongo_repository_factory(
+    SETTINGS.mongo_uri,
+    SETTINGS.db_name,
+)
 
 
 def select_strategy(exp_doc: dict) -> EngineStrategy:
@@ -82,7 +84,7 @@ def run_pending_experiment(change: dict):
        
 def main() -> None:
     log.info("service started.")
-    log.info(f"env:\n\tMONGO_URI: {MONGO_URI}\n\tDB_NAME: {DB_NAME}")
+    log.info("env:\n\tMONGO_URI: %s\n\tDB_NAME: %s", SETTINGS.mongo_uri, SETTINGS.db_name)
     exp_repo = mongo.experiment_repo
     exp_repo.connection.waiting_ping()
 

@@ -9,14 +9,11 @@ project_path = os.path.abspath(os.path.join(os.getcwd(), ".."))
 if project_path not in sys.path:
     sys.path.insert(0, project_path)
 
-from pylib import mongo_db
-
 from api.dto import SimulationDto
+from api.dependencies import get_mongo_factory
 from api.dto_conversor import simulation_to_mongo, simulation_from_mongo
 
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/?replicaSet=rs0")
-DB_NAME = os.getenv("DB_NAME", "simlab")
-factory = mongo_db.create_mongo_repository_factory(MONGO_URI, DB_NAME)
+factory = get_mongo_factory()
 
 router = APIRouter()
 

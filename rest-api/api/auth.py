@@ -1,9 +1,9 @@
 from fastapi import Security, HTTPException, Depends
 from fastapi.security.api_key import APIKeyHeader
 from starlette.status import HTTP_401_UNAUTHORIZED
-import os
+from pylib.service_settings import ApiAuthSettings
 
-API_KEY = os.getenv("SIMLAB_API_KEY", "api-password")
+API_KEY = ApiAuthSettings.from_env().api_key
 API_KEY_NAME = "X-API-Key"
 
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
