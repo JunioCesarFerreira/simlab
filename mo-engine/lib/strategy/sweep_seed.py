@@ -8,6 +8,7 @@ from pathlib import Path
 from bson import ObjectId
 
 from .base import EngineStrategy
+from .simulation_seeds import resolve_simulation_seeds
 
 from pylib.mongo_db import EnumStatus
 from pylib.dto.database import Batch, Simulation, SimulationConfig
@@ -45,6 +46,11 @@ class SweepSeedStrategy(EngineStrategy):
     
         ga_random_seed: int = int(algorithm_config.get("random_seed", 42))
         self._ga_rng = random.Random(ga_random_seed)                        
+        self._sim_rand_seeds = resolve_simulation_seeds(
+            simulation_config=simulation_config,
+            rng=self._ga_rng,
+            default_count=100,
+        )
         self._problem_adapter: ProblemAdapter = build_adapter(
             problem_config, 
             algorithm_config, 
@@ -176,7 +182,7 @@ class SweepSeedStrategy(EngineStrategy):
             
         # build and insert simulation per seed, and collect simulation ids for this genome
         simulation_ids_for_genome: list[ObjectId] = []
-        for seed in [random.randint(1, 999999) for _ in range(100)]:
+        for seed in self._sim_rand_seeds:
             config["randomSeed"] = seed
             sim_oid = self._insert_simulation_db(self._model, exp_oid, config, topology_picture_id)
             simulation_ids_for_genome.append(sim_oid)

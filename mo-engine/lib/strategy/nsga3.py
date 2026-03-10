@@ -10,6 +10,7 @@ from typing import Optional
 import numpy as np
 
 from .base import EngineStrategy
+from .simulation_seeds import resolve_simulation_seeds
 
 from pylib.mongo_db import EnumStatus
 from pylib.dto.database import Batch, Simulation, SimulationConfig, Generation
@@ -58,7 +59,6 @@ class NSGA3LoopStrategy(EngineStrategy):
         
         # --- simulation and algorithm parameters ---
         self._sim_duration: int = int(simulation_config.get("duration", 120))
-        self._sim_rand_seeds: list[int] = [int(x) for x in simulation_config.get("random_seeds", [123456])]
         self._pop_size: int = int(algorithm_config.get("population_size", 20))
         self._max_gen: int = int(algorithm_config.get("number_of_generations", 5))
         self._prob_cx = float(algorithm_config.get("prob_cx", 0.8))
@@ -66,6 +66,11 @@ class NSGA3LoopStrategy(EngineStrategy):
     
         ga_random_seed: int = int(algorithm_config.get("random_seed", 42))
         self._ga_rng = random.Random(ga_random_seed)
+        self._sim_rand_seeds = resolve_simulation_seeds(
+            simulation_config=simulation_config,
+            rng=self._ga_rng,
+            default_count=1,
+        )
                         
         self._problem_adapter: ProblemAdapter = build_adapter(
             problem_config, 
