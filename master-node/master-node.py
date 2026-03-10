@@ -24,6 +24,7 @@ from pylib import mongo_db
 from pylib import cooja_files
 from pylib import statistics
 from pylib.dto.database import Simulation, SourceRepository
+from pylib.service_settings import MongoServiceSettings, env_to_bool
 
 # --------------------------- Logging --------------------------------
 logging.basicConfig(
@@ -38,6 +39,8 @@ class Settings:
     is_docker: bool
     mongo_uri: str
     db_name: str
+    ssh_user: str
+    ssh_password: str
     local_dir: str
     remote_dir: str
     local_log_dir: str
@@ -47,14 +50,10 @@ class Settings:
 
     @staticmethod
     def from_env() -> "Settings":
-        def to_bool(s: str, default: bool = False) -> bool:
-            if s is None:
-                return default
-            return s.strip().lower() in {"1", "true", "yes", "y", "on"}
-
-        is_docker = to_bool(os.getenv("IS_DOCKER", "false"))
-        mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017/?replicaSet=rs0")
-        db_name = os.getenv("DB_NAME", "simlab")
+        mongo_settings = MongoServiceSettings.from_env()
+        is_docker = env_to_bool(os.getenv("IS_DOCKER"), False)
+        ssh_user = os.getenv("SIMLAB_SSH_USER", "root")
+        ssh_password = os.getenv("SIMLAB_SSH_PASSWORD", "root")
         local_dir = "."
         remote_dir = "/opt/contiki-ng/tools/cooja"
         local_log_dir = "logs"
@@ -73,8 +72,10 @@ class Settings:
 
         return Settings(
             is_docker=is_docker,
-            mongo_uri=mongo_uri,
-            db_name=db_name,
+            mongo_uri=mongo_settings.mongo_uri,
+            db_name=mongo_settings.db_name,
+            ssh_user=ssh_user,
+            ssh_password=ssh_password,
             local_dir=local_dir,
             remote_dir=remote_dir,
             local_log_dir=local_log_dir,
@@ -150,7 +151,7 @@ def run_cooja_simulation(
     Executa a simulação no container via SSH, acompanha logs e envia resultado ao GridFS.
     """
     sim_oid = ObjectId(sim["_id"]) if not isinstance(sim["_id"], ObjectId) else sim["_id"]
-    ssh: SSHClient = create_ssh_client(hostname, port, "root", "root")
+    ssh: SSHClient = create_ssh_client(hostname, port, SET.ssh_user, SET.ssh_password)
     try:
         log.info("[port=%s host=%s] Starting simulation %s", port, hostname, sim_oid)
         mongo.simulation_repo.mark_running(sim_oid)
@@ -276,8 +277,8 @@ def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostnam
                 continue
 
             # Send files
-            log.debug("[port=%s] Creating SSH client %s@%s:%s", port, "root", hostname, port)
-            ssh = create_ssh_client(hostname, port, "root", "root")
+            log.debug("[port=%s] Creating SSH client %s@%s:%s", port, SET.ssh_user, hostname, port)
+            ssh = create_ssh_client(hostname, port, SET.ssh_user, SET.ssh_password)
             try:
                 send_files_scp(ssh, SET.local_dir, SET.remote_dir, local_files, remote_files)
             finally:
