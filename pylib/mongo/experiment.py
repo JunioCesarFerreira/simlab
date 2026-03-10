@@ -40,7 +40,6 @@ class ExperimentRepository:
                         
 
     def update(self, experiment_id: str, updates: dict) -> bool:
-        updates["id"] = experiment_id
         with self.connection.connect() as db:
             result = db["experiments"].update_one({"_id": ObjectId(experiment_id)}, {"$set": updates})
             return result.modified_count > 0
@@ -51,11 +50,20 @@ class ExperimentRepository:
             
             
     def update_starting(self, experiment_id: str)->bool:
-        success = self.update(experiment_id, {
-        "status": EnumStatus.RUNNING,
-        "start_time": datetime.now()
-        })  
-        return success
+        with self.connection.connect() as db:
+            result = db["experiments"].update_one(
+                {
+                    "_id": ObjectId(experiment_id),
+                    "status": EnumStatus.WAITING,
+                },
+                {
+                    "$set": {
+                        "status": EnumStatus.RUNNING,
+                        "start_time": datetime.now(),
+                    }
+                },
+            )
+            return result.modified_count > 0
             
             
     def get(self, experiment_id: str)->Experiment:

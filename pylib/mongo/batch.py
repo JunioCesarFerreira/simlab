@@ -27,7 +27,6 @@ class BatchRepository:
 
 
     def update(self, batch_id: ObjectId, updates: dict) -> bool:
-        updates["id"] = batch_id
         with self.connection.connect() as db:
             result = db["batches"].update_one({"_id": batch_id}, {"$set": updates})
             return result.modified_count > 0
