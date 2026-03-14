@@ -39,7 +39,6 @@ services:
       - mongodb
     networks:
       - mongo-net
-      - proxy-net
 
   moengine:
     build:
