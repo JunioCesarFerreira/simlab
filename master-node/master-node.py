@@ -51,7 +51,7 @@ class Settings:
     @staticmethod
     def from_env() -> "Settings":
         mongo_settings = MongoServiceSettings.from_env()
-        is_docker = env_to_bool(os.getenv("IS_DOCKER"), False)
+        is_docker = env_to_bool(os.getenv("IS_DOCKER"), True) # turn False if not set, for local development
         ssh_user = os.getenv("SIMLAB_SSH_USER", "root")
         ssh_password = os.getenv("SIMLAB_SSH_PASSWORD", "root")
         local_dir = "."
