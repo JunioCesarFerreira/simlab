@@ -20,17 +20,6 @@ services:
     networks:
       - mongo-net
 
-  grafana:
-    image: grafana/grafana-oss
-    container_name: grafana
-    ports:
-      - "3000:3000"
-    volumes:
-      - grafana-storage:/var/lib/grafana
-    restart: unless-stopped
-    networks:
-      - proxy-net
-
   restapi:
     build:
       context: .
@@ -50,20 +39,6 @@ services:
       - mongodb
     networks:
       - mongo-net
-      - proxy-net
-
-  proxy:
-    image: nginx:latest
-    container_name: simlab_proxy
-    ports:
-      - "80:80"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-    depends_on:
-      - restapi
-      - grafana
-    networks:
-      - proxy-net
 
   moengine:
     build:
@@ -95,7 +70,7 @@ services:
       - DB_NAME=simlab
       - MONGO_URI=mongodb://mongodb:27017/?replicaSet=rs0
       - IS_DOCKER=True
-      - NUMBER_OF_CONTAINERS=6
+      - NUMBER_OF_CONTAINERS=16
     ports:
       - "2220:22"
     depends_on:
@@ -162,6 +137,96 @@ services:
     networks:
       - cooja-net
 
+  cooja7:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja7
+    restart: unless-stopped
+    ports:
+      - "2237:22"
+    networks:
+      - cooja-net
+
+  cooja8:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja8
+    restart: unless-stopped
+    ports:
+      - "2238:22"
+    networks:
+      - cooja-net
+      
+  cooja9:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja9  
+    restart: unless-stopped
+    ports:
+      - "2239:22"
+    networks:
+      - cooja-net
+      
+  cooja10:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja10
+    restart: unless-stopped
+    ports:
+      - "2240:22"
+    networks:
+      - cooja-net
+      
+  cooja11:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja11
+    restart: unless-stopped
+    ports:
+      - "2241:22"
+    networks:
+      - cooja-net
+      
+  cooja12:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja12
+    restart: unless-stopped
+    ports:
+      - "2242:22"
+    networks:
+      - cooja-net
+      
+  cooja13:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja13
+    restart: unless-stopped
+    ports:
+      - "2243:22"
+    networks:
+      - cooja-net
+      
+  cooja14:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja14
+    restart: unless-stopped
+    ports:
+      - "2244:22"
+    networks:
+      - cooja-net
+      
+  cooja15:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja15
+    restart: unless-stopped
+    ports:
+      - "2245:22"
+    networks:
+      - cooja-net
+      
+  cooja16:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja16
+    restart: unless-stopped
+    ports:
+      - "2246:22"
+    networks:
+      - cooja-net
+
 # Attention! When modifying the number of Cooja containers, 
 # remember to modify the masternode's NUMBER_OF_CONTAINERS environment variable.
 
@@ -171,9 +236,6 @@ volumes:
   grafana-storage:
 
 networks:
-  proxy-net:
-    name: proxy_net
-    driver: bridge
   mongo-net:
     name: mongo_net
     driver: bridge
