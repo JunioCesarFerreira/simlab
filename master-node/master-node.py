@@ -52,7 +52,7 @@ class Settings:
                 return default
             return s.strip().lower() in {"1", "true", "yes", "y", "on"}
 
-        is_docker = to_bool(os.getenv("IS_DOCKER", "false"))
+        is_docker = to_bool(os.getenv("IS_DOCKER", "true")) # to debug locally, set IS_DOCKER=false
         mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017/?replicaSet=rs0")
         db_name = os.getenv("DB_NAME", "simlab")
         local_dir = "."
