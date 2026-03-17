@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 from bson import ObjectId, errors
-from typing import Callable
+from typing import Callable, Optional
 
 from pylib.dto.database import Simulation
 from mongo.connection import MongoDBConnection, EnumStatus
@@ -55,6 +55,15 @@ class SimulationRepository:
     def find_pending(self) -> list[Simulation]:
         with self.connection.connect() as db:
             return list(db["simulations"].find({"status": EnumStatus.WAITING}))
+
+
+    def find_running_before(self, cutoff: datetime) -> list[Simulation]:
+        """Returns simulations stuck in RUNNING with start_time older than cutoff."""
+        with self.connection.connect() as db:
+            return list(db["simulations"].find({
+                "status": EnumStatus.RUNNING,
+                "start_time": {"$lt": cutoff}
+            }))
         
         
     def find_pending_by(self, parent: str, object_id: ObjectId) -> list[Simulation]:

@@ -55,6 +55,8 @@ class MongoDBConnection:
         ) -> None:
         """
         Observes changes in a specific collection using a given pipeline.
+        Automatically retries with exponential backoff on failure, resuming
+        from the last processed event token to avoid losing events.
 
         Args:
             collection_name (str): MongoDB collection name.
@@ -62,11 +64,24 @@ class MongoDBConnection:
             on_change (Callable): Callback function called on each event.
             full_document (str): Full document retrieval mode.
         """
-        with self.connect() as db:
-            collection: Collection = db[collection_name]
+        resume_token = None
+        backoff = 1
+        while True:
             try:
-                with collection.watch(pipeline, full_document=full_document) as stream:
-                    for change in stream:
-                        on_change(change)
+                with self.connect() as db:
+                    collection: Collection = db[collection_name]
+                    kwargs = {"full_document": full_document}
+                    if resume_token:
+                        kwargs["resume_after"] = resume_token
+                    with collection.watch(pipeline, **kwargs) as stream:
+                        backoff = 1
+                        for change in stream:
+                            resume_token = change.get("_id")
+                            on_change(change)
             except PyMongoError as e:
-                logger.error(f"[watch_collection] Erro ao observar coleção '{collection_name}': {e}")
+                logger.error(
+                    "[watch_collection] Error on '%s', retrying in %ss: %s",
+                    collection_name, backoff, e
+                )
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 60)

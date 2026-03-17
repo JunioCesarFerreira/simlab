@@ -1,4 +1,5 @@
 import os
+import time
 import random
 import logging
 import threading
@@ -123,56 +124,79 @@ class NSGA3LoopStrategy(EngineStrategy):
         # Enqueue Simulations to first (compute F_0=f(P_0))
         self._batch_enqueue()
 
-        # Starts watcher for receive results from this generation
+        # Starts Change Stream watcher and polling fallback
         self._start_watcher()
+        self._start_batch_poll()
 
     # EVENT_SIMULATION_DONE implementation
     def event_batch_done(self, result_doc: dict):
         """
-        On event Simulation Batch Result Done
-        Args: result_doc (dict): Batch dictionary
+        On event Simulation Batch Result Done (called from Change Stream thread).
+        Args: result_doc (dict): raw Change Stream event containing fullDocument.
         """
+        batch = result_doc.get("fullDocument")
+        if not batch:
+            return
         with self._lock:
-            self._handle_batch_done(result_doc)
+            self._handle_batch_done(ObjectId(batch.get("_id")))
 
-    def _handle_batch_done(self, result_doc: dict):
+    def _handle_batch_done(self, batch_oid: ObjectId):
+        """Core handler — must be called while holding self._lock."""
         if self._stop_flag or self._batch_id is None:
             return
 
-        logger.info("EVENT SIMULATION BATCH RESULT DONE")
-        batch = result_doc.get("fullDocument")
-
         # Ensures that this result is from the current batch
-        if ObjectId(batch.get("_id")) != self._batch_id:
+        if batch_oid != self._batch_id:
             return
 
-        logger.info(f"batch_id={self._batch_id} DONE")
+        logger.info("EVENT SIMULATION BATCH RESULT DONE batch_id=%s", self._batch_id)
         
         map_sim_metrics = self.mongo.batch_repo.get_simulations_metrics_map(
             batch_id=self._batch_id, 
             metrics=self._objective_keys
             )
         
+        n_obj = len(self._objective_keys)
+        worst_objectives = [float("inf")] * n_obj  # worst in minimization space for any goal
+
         for ind in self._current_population:
-            sims = self._map_genome_sim.get(ind, [])
             if self._map_genome_objectives.get(ind) is not None:
-                logger.info(f"Objectives already calculated for genome {ind.get_hash()}; skipping.")
+                logger.info("Objectives already calculated for genome %s; skipping.", ind.get_hash())
                 continue
-            if sims is None or len(sims) == 0:
-                logger.warning(f"No simulations found for genome {ind}; skipping in objectives calculation.")
+
+            sims = self._map_genome_sim.get(ind, [])
+            if not sims:
+                logger.warning("No simulations mapped for genome %s; assigning worst objectives.", ind.get_hash())
+                self._map_genome_objectives[ind] = worst_objectives
                 continue
-            accumulated_objectives: list[float] = [0.0] * len(self._objective_keys)
+
+            accumulated: list[float] = [0.0] * n_obj
+            valid_count = 0
             for sim_id in sims:
                 sim_metrics = map_sim_metrics.get(str(sim_id))
                 if sim_metrics is None:
-                    logger.warning(f"Missing metrics for simulation {sim_id}; skipping in objectives calculation.")
+                    logger.warning("Missing metrics for simulation %s; skipping.", sim_id)
                     continue
                 obj_vector = self._extract_objectives_to_minimization(sim_metrics)
                 if obj_vector is None:
-                    logger.warning(f"Could not extract objective vector for simulation {sim_id}; skipping.")
+                    logger.warning("Could not extract objective vector for simulation %s; skipping.", sim_id)
                     continue
-                accumulated_objectives = [sum(x) for x in zip(accumulated_objectives, obj_vector)]
-            self._map_genome_objectives[ind] = [obj / len(sims) for obj in accumulated_objectives]
+                accumulated = [a + v for a, v in zip(accumulated, obj_vector)]
+                valid_count += 1
+
+            if valid_count == 0:
+                logger.warning(
+                    "All %d simulation(s) failed for genome %s; assigning worst objectives.",
+                    len(sims), ind.get_hash()
+                )
+                self._map_genome_objectives[ind] = worst_objectives
+            else:
+                if valid_count < len(sims):
+                    logger.warning(
+                        "Genome %s: %d/%d simulation(s) failed; computing average over valid results.",
+                        ind.get_hash(), len(sims) - valid_count, len(sims)
+                    )
+                self._map_genome_objectives[ind] = [a / valid_count for a in accumulated]
                         
         self._evolution()
 
@@ -185,7 +209,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._watch_thread = None
 
 # ------------------------------
-# Watcher (Change Stream)
+# Watcher (Change Stream) + Polling fallback
 # ------------------------------
     def _start_watcher(self):
         # encerra watcher anterior, se houver
@@ -208,8 +232,35 @@ class NSGA3LoopStrategy(EngineStrategy):
             logger.info("[NSGA-III] Starting Batch watcher (DONE).")
             self.mongo.batch_repo.watch_status_done(_callback)
 
-        self._watch_thread = Thread(target=_run, daemon=True)
+        self._watch_thread = Thread(target=_run, daemon=True, name="nsga3-watcher")
         self._watch_thread.start()
+
+    def _start_batch_poll(self) -> None:
+        """
+        Polling fallback that checks the current batch status every 60 s.
+        Fires _handle_batch_done if the batch is DONE but the Change Stream
+        event was missed (e.g. after a reconnection gap).
+        """
+        poll_interval = int(os.getenv("BATCH_POLL_INTERVAL", "60"))
+
+        def _poll():
+            while not self._stop_flag:
+                time.sleep(poll_interval)
+                if self._stop_flag or self._batch_id is None:
+                    continue
+                try:
+                    batch = self.mongo.batch_repo.get(str(self._batch_id))
+                    if batch and batch.get("status") == EnumStatus.DONE:
+                        logger.warning(
+                            "[NSGA-III] Batch %s DONE detected by polling fallback (Change Stream may have missed the event).",
+                            self._batch_id
+                        )
+                        with self._lock:
+                            self._handle_batch_done(ObjectId(batch["_id"]))
+                except Exception:
+                    logger.exception("[NSGA-III] Polling fallback error.")
+
+        Thread(target=_poll, daemon=True, name="nsga3-poll").start()
 
 # ------------------------------
 # Generation / Queuing

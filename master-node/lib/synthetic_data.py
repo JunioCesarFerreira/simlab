@@ -127,9 +127,25 @@ def run_synthetic_simulation(sim: Simulation, mongo: mongo_db.MongoRepository) -
     objectives = {name: float(vals[i]) for i, name in enumerate(objective_names)}
 
     # marca como DONE (sem CSV/logs reais)
-    mongo.simulation_repo.mark_done(sim_oid, None, None, objectives)
+    try:
+        mongo.simulation_repo.mark_done(sim_oid, None, None, objectives)
+    except Exception as e:
+        log.exception("Failed to mark simulation %s as done; marking as error", sim_oid)
+        try:
+            mongo.simulation_repo.mark_error(sim_oid, str(e))
+        except Exception:
+            log.exception("Failed to mark simulation %s as error", sim_oid)
 
     # checa conclusão do batch
     batch_id = sim["batch_id"]
-    if mongo.batch_repo.all_simulations_by_status(batch_id, EnumStatus.DONE):
-        mongo.batch_repo.mark_done(batch_id)
+    br = mongo.batch_repo
+    try:
+        if br.all_simulations_by_status(batch_id, EnumStatus.DONE):
+            br.mark_done(batch_id)
+        elif (
+            not br.any_simulation_by_status(batch_id, EnumStatus.WAITING)
+            and not br.any_simulation_by_status(batch_id, EnumStatus.RUNNING)
+        ):
+            br.mark_error(batch_id)
+    except Exception:
+        log.exception("Failed to close batch %s", batch_id)

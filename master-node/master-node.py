@@ -5,6 +5,7 @@ import queue
 import logging
 import pandas as pd
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Thread
 from bson import ObjectId
@@ -72,7 +73,7 @@ class Settings:
             hostnames = ["localhost" for _ in range(default_n)]
             ports = [2231 + i for i in range(default_n)]
 
-        sim_timeout_sec = int(os.getenv("SIM_TIMEOUT_SEC", "0"))  # 0 = sem timeout
+        sim_timeout_sec = int(os.getenv("SIM_TIMEOUT_SEC", "1800"))  # default: 30 min
 
         return Settings(
             is_docker=is_docker,
@@ -95,6 +96,52 @@ def _assert_capacity(num_workers: int) -> None:
         raise ValueError(
             f"Workers({num_workers}) > hostnames({len(SET.hostnames)})/ports({len(SET.ports)})"
         )
+
+
+def _check_and_close_batch(batch_id: ObjectId, mongo: mongo_db.MongoRepository) -> None:
+    """
+    Evaluates whether a batch can be closed and marks it DONE or ERROR.
+    Must be called after any simulation status change.
+    - DONE  : all simulations finished successfully.
+    - ERROR : no simulations are still WAITING or RUNNING (all terminated,
+              but at least one ended in ERROR, since the DONE check failed).
+    """
+    br = mongo.batch_repo
+    try:
+        if br.all_simulations_by_status(batch_id, EnumStatus.DONE):
+            br.mark_done(batch_id)
+        elif (
+            not br.any_simulation_by_status(batch_id, EnumStatus.WAITING)
+            and not br.any_simulation_by_status(batch_id, EnumStatus.RUNNING)
+        ):
+            br.mark_error(batch_id)
+    except Exception:
+        log.exception("Failed to close batch %s", batch_id)
+
+
+def recover_stuck_simulations(mongo: mongo_db.MongoRepository) -> None:
+    """
+    On startup, marks as ERROR any simulation that was left in RUNNING state
+    (e.g. from a previous crash), then attempts to close affected batches.
+    Skipped when SIM_TIMEOUT_SEC == 0.
+    """
+    if SET.sim_timeout_sec <= 0:
+        return
+    cutoff = datetime.now() - timedelta(seconds=SET.sim_timeout_sec)
+    stuck = mongo.simulation_repo.find_running_before(cutoff)
+    if not stuck:
+        return
+    log.warning("Found %d stuck simulation(s) in RUNNING; recovering...", len(stuck))
+    for sim in stuck:
+        sim_id = ObjectId(sim["_id"])
+        log.warning("Recovering stuck simulation %s (start_time=%s)", sim_id, sim.get("start_time"))
+        try:
+            mongo.simulation_repo.mark_error(sim_id, "Recovered: stuck in RUNNING on master-node restart")
+        except Exception:
+            log.exception("Failed to recover simulation %s", sim_id)
+        batch_id = sim.get("batch_id")
+        if batch_id:
+            _check_and_close_batch(batch_id, mongo)
 
 
 def prepare_simulation_files(
@@ -233,17 +280,7 @@ def run_cooja_simulation(
         except Exception as ex:
             log.warning("Failed to remove temp csv file %s: %s", csv_path, ex)
 
-        # Batch completion
-        batch_id = sim["batch_id"]
-        br = mongo.batch_repo
-        if br.all_simulations_by_status(batch_id, EnumStatus.DONE):
-            br.mark_done(batch_id)
-        elif br.any_simulation_by_status(batch_id, EnumStatus.ERROR):
-            br.mark_error(batch_id)
-        elif not br.any_simulation_by_status(batch_id, EnumStatus.WAITING):
-            if not br.any_simulation_by_status(batch_id, EnumStatus.RUNNING):
-                log.info(f"Batch {batch_id} has no running simulations but no waiting ones. Marking as done.")
-                br.mark_done(batch_id)
+        _check_and_close_batch(sim["batch_id"], mongo)
 
     except Exception as e:
         log.exception("[port=%s host=%s] Simulation ERROR %s: %s", port, hostname, sim_oid, e)
@@ -251,6 +288,7 @@ def run_cooja_simulation(
             mongo.simulation_repo.mark_error(sim_oid, str(e))
         except Exception:
             log.exception("Failed to mark error on simulation %s", sim_oid)
+        _check_and_close_batch(sim["batch_id"], mongo)
     finally:
         ssh.close()
 
@@ -278,7 +316,11 @@ def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostnam
             success, local_files, remote_files = prepare_simulation_files(sim, worker_id, mongo)
             if not success:
                 log.warning("[port=%s] Skipping simulation %s (prepare failed)", port, sim_id_str)
-                mongo.simulation_repo.mark_error(ObjectId(sim["_id"]), "Failed to prepare simulation files")
+                try:
+                    mongo.simulation_repo.mark_error(ObjectId(sim["_id"]), "Failed to prepare simulation files")
+                except Exception:
+                    log.exception("Failed to mark error on simulation %s", sim_id_str)
+                _check_and_close_batch(sim["batch_id"], mongo)
                 continue
 
             # Send files
@@ -306,6 +348,8 @@ def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostnam
                     mongo.simulation_repo.mark_error(ObjectId(sim["_id"]), str(e))
             except Exception:
                 log.exception("Failed to mark error on simulation after general exception")
+            if sim and "batch_id" in sim:
+                _check_and_close_batch(sim["batch_id"], mongo)
         finally:
             sim_queue.task_done()
 
@@ -347,6 +391,7 @@ def main() -> None:
 
     mongo = mongo_db.create_mongo_repository_factory(SET.mongo_uri, SET.db_name)
 
+    recover_stuck_simulations(mongo)
     sim_queue = start_workers(number_of_containers)
     load_initial_waiting_jobs(mongo, sim_queue)
 
