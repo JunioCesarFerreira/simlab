@@ -18,9 +18,14 @@ class BatchRepository:
     def insert(self, gen: Batch) -> ObjectId:
         with self.connection.connect() as db:
             batch_id = db["batches"].insert_one(gen).inserted_id
-            for sim_id in gen["simulations_ids"]:
-                db["simulations"].update_one(
-                    {"_id": ObjectId(sim_id)},
+            # Back-fill batch_id on any simulations that don't have it yet
+            # (e.g. inserted before the batch was created in older code paths)
+            sim_ids_without_batch = []
+            for sim_id in gen.get("simulations_ids", []):
+                sim_ids_without_batch.append(ObjectId(sim_id))
+            if sim_ids_without_batch:
+                db["simulations"].update_many(
+                    {"_id": {"$in": sim_ids_without_batch}, "batch_id": {"$exists": False}},
                     {"$set": {"batch_id": batch_id}}
                 )
             return batch_id

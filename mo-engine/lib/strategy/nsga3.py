@@ -297,9 +297,13 @@ class NSGA3LoopStrategy(EngineStrategy):
         population = self._current_population
         
         batch_simulation_ids: list[ObjectId] = [] # collect simulation ids for this generation batch
-        
+
+        # Pre-generate batch ObjectId so simulations are inserted with batch_id already set,
+        # avoiding the race where master-node picks up a simulation before the batch is created.
+        batch_oid = ObjectId()
+
         first_seed = self._sim_rand_seeds[0] if self._sim_rand_seeds else 123456 # default seed for topology plotting (if no seeds provided)
-        
+
         for i, genome in enumerate(population):
             # convert genome to simulation config
             config = self._convert_genome_to_sim_config(
@@ -318,7 +322,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             simulation_ids_for_genome: list[ObjectId] = []
             for seed in self._sim_rand_seeds:
                 config["randomSeed"] = seed
-                sim_oid = self._insert_simulation_db(genome, exp_oid, config, None)
+                sim_oid = self._insert_simulation_db(genome, exp_oid, config, None, batch_oid)
                 simulation_ids_for_genome.append(sim_oid)
                 logger.info("SIM_OID=%s SEED=%s genome=%s", sim_oid, seed, genome.get_hash())
 
@@ -327,9 +331,10 @@ class NSGA3LoopStrategy(EngineStrategy):
 
             # upload topology image in the background (non-blocking)
             self._upload_topology_async(exp_oid, gen_index, i, dict(config), simulation_ids_for_genome)
-        
-        # create batch for this generation
+
+        # create batch for this generation using the pre-generated id
         batch_doc: Batch = {
+            "_id": batch_oid,
             "index": gen_index,
             "status": EnumStatus.WAITING,
             "start_time": datetime.now(),
@@ -586,17 +591,19 @@ class NSGA3LoopStrategy(EngineStrategy):
         return config
 
 
-    def _insert_simulation_db(self, 
+    def _insert_simulation_db(self,
             genome: Chromosome,
             exp_oid: ObjectId,
             config: SimulationConfig,
-            topology_picture_id: ObjectId
+            topology_picture_id: ObjectId,
+            batch_id: ObjectId = None
             )-> ObjectId:
-        files_ids = create_files(config, self.mongo.fs_handler)                     
+        files_ids = create_files(config, self.mongo.fs_handler)
         _, src_id = genome.get_source_by_mac_protocol(self.source_repository_options)
-             
+
         sim_doc: Simulation = {
             "experiment_id": exp_oid,
+            "batch_id": batch_id,
             "individual_id": genome.get_hash(),
             "status": EnumStatus.WAITING,
             "random_seed": config.get("randomSeed", 0),

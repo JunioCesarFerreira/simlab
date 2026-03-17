@@ -137,7 +137,10 @@ def run_synthetic_simulation(sim: Simulation, mongo: mongo_db.MongoRepository) -
             log.exception("Failed to mark simulation %s as error", sim_oid)
 
     # checa conclusão do batch
-    batch_id = sim["batch_id"]
+    batch_id = sim.get("batch_id")
+    if not batch_id:
+        log.warning("Simulation %s has no batch_id; skipping batch close check", sim_oid)
+        return
     br = mongo.batch_repo
     try:
         if br.all_simulations_by_status(batch_id, EnumStatus.DONE):

@@ -280,7 +280,8 @@ def run_cooja_simulation(
         except Exception as ex:
             log.warning("Failed to remove temp csv file %s: %s", csv_path, ex)
 
-        _check_and_close_batch(sim["batch_id"], mongo)
+        if sim.get("batch_id"):
+            _check_and_close_batch(sim["batch_id"], mongo)
 
     except Exception as e:
         log.exception("[port=%s host=%s] Simulation ERROR %s: %s", port, hostname, sim_oid, e)
@@ -288,7 +289,8 @@ def run_cooja_simulation(
             mongo.simulation_repo.mark_error(sim_oid, str(e))
         except Exception:
             log.exception("Failed to mark error on simulation %s", sim_oid)
-        _check_and_close_batch(sim["batch_id"], mongo)
+        if sim.get("batch_id"):
+            _check_and_close_batch(sim["batch_id"], mongo)
     finally:
         ssh.close()
 
@@ -321,7 +323,8 @@ def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostnam
                     mongo.simulation_repo.mark_error(ObjectId(sim["_id"]), "Failed to prepare simulation files")
                 except Exception:
                     log.exception("Failed to mark error on simulation %s", sim_id_str)
-                _check_and_close_batch(sim["batch_id"], mongo)
+                if sim.get("batch_id"):
+                    _check_and_close_batch(sim["batch_id"], mongo)
                 continue
 
             # Send files
