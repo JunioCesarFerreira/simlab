@@ -8,9 +8,7 @@ if project_path not in sys.path:
 from pylib import mongo_db
 from pylib.mongo_db import EnumStatus
 from lib.strategy.base import EngineStrategy 
-from lib.strategy.generator_random import GeneratorRandomStrategy
 from lib.strategy.nsga3 import NSGA3LoopStrategy  
-from lib.strategy.sweep_seed import SweepSeedStrategy
 
 # --------------------------- Logging --------------------------------
 logging.basicConfig(
@@ -32,12 +30,8 @@ def select_strategy(exp_doc: dict) -> EngineStrategy:
     log.info("select strategy")
     exp_type = exp_doc.get("parameters", {}).get("strategy", "simple")
     log.info(f"selected: {exp_type}")
-    if exp_type == "simple":
-        return GeneratorRandomStrategy(exp_doc, mongo)
-    elif exp_type == "nsga3":
+    if exp_type == "nsga3":
         return NSGA3LoopStrategy(exp_doc, mongo)
-    elif exp_type == "sweep_seed":
-        return SweepSeedStrategy(exp_doc, mongo)
     else:
         raise ValueError(f"[mo-engine] Experiment type unknown: {exp_type}")
 
