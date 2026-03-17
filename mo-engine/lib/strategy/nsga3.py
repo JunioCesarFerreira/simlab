@@ -95,11 +95,12 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._exp_id: ObjectId | None = None
         self._gen_index: int = 0
         self._batch_id: ObjectId | None = None
-                        
+        self._lock = threading.Lock()
+
         # --- nsga3 workflow ---
-        self._current_population: list[Chromosome] = [] # P_t       
-        self._parents: list[Chromosome] = [] # P_{t-1}               
-        self._map_genome_sim: dict[Chromosome, list[ObjectId]] = {}  
+        self._current_population: list[Chromosome] = [] # P_t
+        self._parents: list[Chromosome] = [] # P_{t-1}
+        self._map_genome_sim: dict[Chromosome, list[ObjectId]] = {}
         self._map_genome_objectives: dict[Chromosome, list[float]] = {}
         
         
@@ -127,10 +128,14 @@ class NSGA3LoopStrategy(EngineStrategy):
 
     # EVENT_SIMULATION_DONE implementation
     def event_batch_done(self, result_doc: dict):
-        """ 
+        """
         On event Simulation Batch Result Done
         Args: result_doc (dict): Batch dictionary
         """
+        with self._lock:
+            self._handle_batch_done(result_doc)
+
+    def _handle_batch_done(self, result_doc: dict):
         if self._stop_flag or self._batch_id is None:
             return
 
@@ -446,14 +451,14 @@ class NSGA3LoopStrategy(EngineStrategy):
         parents = self._parents
         parents_objectives = [self._map_genome_objectives[genome] for genome in parents]
         
-        print(f"objectives: {parents_objectives}")
-        
-        children: list[Chromosome] = []    
-        seen: set[Chromosome] = set()    
-        
+        logger.debug("objectives: %s", parents_objectives)
+
+        children: list[Chromosome] = []
+        seen: set[Chromosome] = set()
+
         fronts: list[list[int]] = fast_nondominated_sort(parents_objectives)
-        
-        print(f"fronts: {fronts}")
+
+        logger.debug("fronts: %s", fronts)
         
         individual_ranks: dict[int, int] = compute_individual_ranks(fronts)
                     
