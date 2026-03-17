@@ -31,7 +31,8 @@ class ExperimentRepository:
         try:
             oid = ObjectId(experiment_id)
         except errors.InvalidId:
-            log.error("Invalid ID")
+            log.error("Invalid ID: %s", experiment_id)
+            return None
         with self.connection.connect() as db:
             result = db["experiments"].find_one(
                 {"_id": oid},
@@ -62,7 +63,8 @@ class ExperimentRepository:
         try:
             oid = ObjectId(experiment_id)
         except errors.InvalidId:
-            log.error("Invalid ID")
+            log.error("Invalid ID: %s", experiment_id)
+            return None
         with self.connection.connect() as db:
             result = db["experiments"].find_one({"_id": oid})
             return result

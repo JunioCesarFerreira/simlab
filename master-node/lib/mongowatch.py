@@ -24,10 +24,11 @@ def _make_generation_event_handler(simRepo: SimulationRepository, sim_queue: que
         if not batch_doc:
             log.warning("[BatchRepository] Document missing from the event.")
             return
-        sims = list(batch_doc["simulations_ids"])
-        
-        simRepo.find_pending_by("batch_id", ObjectId(batch_doc["_id"]))
-        
+        sims = batch_doc.get("simulations_ids")
+        if not sims:
+            log.warning("[BatchRepository] Batch document has no simulations_ids.")
+            return
+
         list_sim = [ObjectId(sim_id) for sim_id in sims]
         log.info(f"[BatchRepository] len(list_sim)={len(list_sim)}")
         for sim_id in list_sim:

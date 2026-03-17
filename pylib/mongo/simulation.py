@@ -25,7 +25,8 @@ class SimulationRepository:
         try:
             oid = ObjectId(simulation_id)
         except errors.InvalidId:
-            log.error("Invalid ID")
+            log.error("Invalid ID: %s", simulation_id)
+            return None
         with self.connection.connect() as db:
             result = db["simulations"].find_one({"_id": oid})
             return result

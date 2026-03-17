@@ -37,7 +37,8 @@ class BatchRepository:
         try:
             oid = ObjectId(batch_id)
         except errors.InvalidId:
-            log.error("Invalid ID")
+            log.error("Invalid ID: %s", batch_id)
+            return None
         with self.connection.connect() as db:
             result = db["batches"].find_one({"_id": oid})
             return result

@@ -127,9 +127,9 @@ def run_synthetic_simulation(sim: Simulation, mongo: mongo_db.MongoRepository) -
     objectives = {name: float(vals[i]) for i, name in enumerate(objective_names)}
 
     # marca como DONE (sem CSV/logs reais)
-    mongo.simulation_repo.mark_done(sim_oid, sim_oid, sim_oid, objectives, {})
+    mongo.simulation_repo.mark_done(sim_oid, None, None, objectives)
 
-    # checa conclusão da geração
-    gen_id = sim["generation_id"]
-    if mongo.batch_repo.all_simulations_by_status(gen_id, EnumStatus.DONE):
-        mongo.batch_repo.mark_done(gen_id)
+    # checa conclusão do batch
+    batch_id = sim["batch_id"]
+    if mongo.batch_repo.all_simulations_by_status(batch_id, EnumStatus.DONE):
+        mongo.batch_repo.mark_done(batch_id)
