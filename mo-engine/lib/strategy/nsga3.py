@@ -237,11 +237,11 @@ class NSGA3LoopStrategy(EngineStrategy):
 
     def _start_batch_poll(self) -> None:
         """
-        Polling fallback that checks the current batch status every 60 s.
+        Polling fallback that checks the current batch status every 3600 s.
         Fires _handle_batch_done if the batch is DONE but the Change Stream
         event was missed (e.g. after a reconnection gap).
         """
-        poll_interval = int(os.getenv("BATCH_POLL_INTERVAL", "60"))
+        poll_interval = int(os.getenv("BATCH_POLL_INTERVAL", "3600"))  # default: 1 hour
 
         def _poll():
             while not self._stop_flag:
@@ -261,6 +261,31 @@ class NSGA3LoopStrategy(EngineStrategy):
                     logger.exception("[NSGA-III] Polling fallback error.")
 
         Thread(target=_poll, daemon=True, name="nsga3-poll").start()
+
+    def _upload_topology_async(
+        self,
+        exp_oid: ObjectId,
+        gen_index: int,
+        ind_idx: int,
+        config_snapshot: dict,
+        sim_ids: list[ObjectId],
+    ) -> None:
+        """
+        Generates and uploads the topology image for one individual in a background
+        thread, then back-fills topology_picture_id on each simulation document.
+        Running outside the lock keeps _batch_enqueue fast.
+        """
+        def _do():
+            try:
+                topo_id = self._plot_topology(exp_oid, gen_index, ind_idx, config_snapshot)
+                for sim_id in sim_ids:
+                    self.mongo.simulation_repo.update_topology_picture(sim_id, topo_id)
+            except Exception:
+                logger.exception(
+                    "[NSGA-III] Topology upload failed for gen=%s ind=%s", gen_index, ind_idx
+                )
+
+        Thread(target=_do, daemon=True, name=f"topo-g{gen_index}-{ind_idx}").start()
 
 # ------------------------------
 # Generation / Queuing
@@ -283,30 +308,25 @@ class NSGA3LoopStrategy(EngineStrategy):
                 ind_idx=i,
                 seed=first_seed
             )
-            
-            # plot topology and upload to GridFS
-            topology_picture_id = self._plot_topology(
-                exp_oid=exp_oid,
-                gen_index=gen_index,
-                ind_idx=i,
-                config=config
-            )
-            
+
             # check if genome was already evaluated (duplicate in population or previous generation)
-            if genome in self._map_genome_sim.keys():
-                logger.info(f"Genome {genome.get_hash()} already evaluated; skipping simulation creation and reusing previous simulation ids.")
-                continue        
-                
-            # build and insert simulation per seed, and collect simulation ids for this genome
+            if genome in self._map_genome_sim:
+                logger.info("Genome %s already evaluated; skipping simulation creation.", genome.get_hash())
+                continue
+
+            # build and insert simulations per seed (topology_picture_id filled in async)
             simulation_ids_for_genome: list[ObjectId] = []
             for seed in self._sim_rand_seeds:
                 config["randomSeed"] = seed
-                sim_oid = self._insert_simulation_db(genome, exp_oid, config, topology_picture_id)
+                sim_oid = self._insert_simulation_db(genome, exp_oid, config, None)
                 simulation_ids_for_genome.append(sim_oid)
-                logger.info(f"SIM_OID={sim_oid} SEED={seed} for genome {genome.get_hash()}")
-                
+                logger.info("SIM_OID=%s SEED=%s genome=%s", sim_oid, seed, genome.get_hash())
+
             self._map_genome_sim[genome] = simulation_ids_for_genome
             batch_simulation_ids.extend(simulation_ids_for_genome)
+
+            # upload topology image in the background (non-blocking)
+            self._upload_topology_async(exp_oid, gen_index, i, dict(config), simulation_ids_for_genome)
         
         # create batch for this generation
         batch_doc: Batch = {
@@ -335,37 +355,31 @@ class NSGA3LoopStrategy(EngineStrategy):
     def _generation_to_db(self) -> Generation:
         exp_oid = self._exp_id
         gen_idx = self._gen_index
-                
+
         generation: Generation = {
-            "index": gen_idx-1,
+            "index": gen_idx - 1,
             "population": []
         }
-        
-        for i, genome in enumerate(self._parents):
-            # convert genome to simulation config
-            config = self._convert_genome_to_sim_config(
-                genome=genome,
-                gen_index=gen_idx,
-                ind_idx=i,
-                seed=0
-            )
-            
-            # plot topology and upload to GridFS
-            topology_picture_id = self._plot_topology(
-                exp_oid=exp_oid,
-                gen_index=gen_idx,
-                ind_idx=i,
-                config=config
-            )
-            
+
+        for genome in self._parents:
+            sim_ids = self._map_genome_sim.get(genome, [])
+
+            # Reuse the topology_picture_id already stored in the first simulation document.
+            # This avoids a duplicate render+upload that would occur if we called _plot_topology here.
+            topology_picture_id = None
+            if sim_ids:
+                sim_doc = self.mongo.simulation_repo.get(str(sim_ids[0]))
+                if sim_doc:
+                    topology_picture_id = sim_doc.get("topology_picture_id")
+
             generation["population"].append({
                 "id": genome.get_hash(),
                 "chromosome": genome.to_dict(),
                 "objectives": self._map_genome_objectives[genome],
                 "topology_picture_id": topology_picture_id,
-                "simulations_ids": self._map_genome_sim[genome]
+                "simulations_ids": sim_ids,
             })
-            
+
         self.mongo.experiment_repo.add_generation(exp_oid, generation)
 
 
@@ -500,7 +514,8 @@ class NSGA3LoopStrategy(EngineStrategy):
 # ---------------------------------------   
     def _run_genetic_algorithm(self) -> list[list[float]]:
         parents = self._parents
-        parents_objectives = [self._map_genome_objectives[genome] for genome in parents]
+        worst = [float("inf")] * len(self._objective_keys)
+        parents_objectives = [self._map_genome_objectives.get(genome, worst) for genome in parents]
         
         logger.debug("objectives: %s", parents_objectives)
 

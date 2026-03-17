@@ -91,6 +91,14 @@ class SimulationRepository:
             )
     
     
+    def update_topology_picture(self, sim_id: ObjectId, topology_picture_id: ObjectId):
+        with self.connection.connect() as db:
+            db["simulations"].update_one(
+                {"_id": sim_id},
+                {"$set": {"topology_picture_id": topology_picture_id}}
+            )
+
+
     def mark_running(self, sim_id: ObjectId):
         with self.connection.connect() as db:
             db["simulations"].update_one(

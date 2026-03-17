@@ -73,7 +73,7 @@ class Settings:
             hostnames = ["localhost" for _ in range(default_n)]
             ports = [2231 + i for i in range(default_n)]
 
-        sim_timeout_sec = int(os.getenv("SIM_TIMEOUT_SEC", "1800"))  # default: 30 min
+        sim_timeout_sec = int(os.getenv("SIM_TIMEOUT_SEC", "3600"))  # default: 60 min
 
         return Settings(
             is_docker=is_docker,
@@ -305,7 +305,8 @@ def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostnam
                 return
             
             mode = os.getenv("ENABLE_DATA_SYNTHETIC", "False").lower() == "true"
-            log.info(f"mode: {"Synthetic Data" if mode else "Simulation"}")
+            mode_str = "Synthetic Data" if mode else "Simulation"
+            log.info("mode: %s", mode_str)
             if mode: # Synthetic data for validation of MO-Engine
                 run_synthetic_simulation(sim, mongo)
                 continue
