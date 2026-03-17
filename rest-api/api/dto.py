@@ -13,6 +13,7 @@ class SimulationDto(TypedDict):
     id: str
     experiment_id: str
     status: str
+    system_message: str
     random_seed: int
     start_time: datetime
     end_time: datetime

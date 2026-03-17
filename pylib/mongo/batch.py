@@ -92,12 +92,13 @@ class BatchRepository:
         self.watch_status(EnumStatus.DONE, on_change)
 
 
-    def all_simulations_done(self, batch_id: ObjectId) -> bool:
+
+    def all_simulations_by_status(self, batch_id: ObjectId, status: EnumStatus) -> bool:
         """
-        Checks if all simulations associated with the batch have been completed.
+        Checks if all simulations associated with the batch have the specified status.
 
         Criterion:
-            count(simulations where status != DONE) == 0
+            count(simulations where status == {status}) == count(simulations_ids)
         """
 
         if not isinstance(batch_id, ObjectId):
@@ -127,18 +128,18 @@ class BatchRepository:
 
             count_not_done = db["simulations"].count_documents({
                 "_id": {"$in": sim_ids},
-                "status": {"$ne": EnumStatus.DONE}
+                "status": {"$ne": status}
             })
 
             return count_not_done == 0
 
 
-    def any_simulation_error(self, batch_id: ObjectId) -> bool:
+    def any_simulation_by_status(self, batch_id: ObjectId, status: EnumStatus) -> bool:
         """
-        Checks whether any simulation associated with the batch ended with an error.
+        Checks whether any simulation associated with the batch has the specified status.
 
         Criterion:
-            exists(simulation where status == ERROR)
+            exists(simulation where status == {status})
         """
 
         if not isinstance(batch_id, ObjectId):
@@ -167,7 +168,7 @@ class BatchRepository:
 
             count_error = db["simulations"].count_documents({
                 "_id": {"$in": sim_ids},
-                "status": EnumStatus.ERROR
+                "status": status
             })
 
             return count_error > 0

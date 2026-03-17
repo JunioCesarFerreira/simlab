@@ -24,6 +24,7 @@ class Simulation(TypedDict):
     batch_id: ObjectId
     individual_id: int
     status: str
+    system_message: str
     random_seed: int
     start_time: datetime
     end_time: datetime

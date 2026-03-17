@@ -5,6 +5,7 @@ import logging
 from bson import ObjectId
 from pylib import mongo_db
 from pylib.dto.database import Simulation
+from pylib.mongo.connection import EnumStatus
 
 log = logging.getLogger(__name__)
 
@@ -130,5 +131,5 @@ def run_synthetic_simulation(sim: Simulation, mongo: mongo_db.MongoRepository) -
 
     # checa conclusão da geração
     gen_id = sim["generation_id"]
-    if mongo.batch_repo.all_simulations_done(gen_id):
+    if mongo.batch_repo.all_simulations_by_status(gen_id, EnumStatus.DONE):
         mongo.batch_repo.mark_done(gen_id)

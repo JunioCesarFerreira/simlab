@@ -11,18 +11,20 @@ from bson import ObjectId
 from paramiko import SSHClient
 from scp import SCPClient
 
-# lib master-node
-from lib.sshscp import create_ssh_client, send_files_scp
-from lib.mongowatch import watch_status_waiting_enqueue
-
 # SysPath for common modules
 project_path = os.path.abspath(os.path.join(os.getcwd(), ".."))
 if project_path not in sys.path:
     sys.path.insert(0, project_path)
+    
+# lib master-node
+from lib.sshscp import create_ssh_client, send_files_scp
+from lib.mongowatch import watch_status_waiting_enqueue
 
+# pylib
 from pylib import mongo_db
 from pylib import cooja_files
 from pylib import statistics
+from pylib.mongo.connection import EnumStatus
 from pylib.dto.database import Simulation, SourceRepository
 
 # --------------------------- Logging --------------------------------
@@ -52,7 +54,7 @@ class Settings:
                 return default
             return s.strip().lower() in {"1", "true", "yes", "y", "on"}
 
-        is_docker = to_bool(os.getenv("IS_DOCKER", "true")) # to debug locally, set IS_DOCKER=false
+        is_docker = to_bool(os.getenv("IS_DOCKER", "false"))
         mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017/?replicaSet=rs0")
         db_name = os.getenv("DB_NAME", "simlab")
         local_dir = "."
@@ -219,29 +221,33 @@ def run_cooja_simulation(
             mongo.simulation_repo.mark_done(sim_oid, log_id, csv_id, net_meas)
         else:
             log.warning("[port=%s] CSV file is missing or empty for simulation %s", port, sim_oid)
-            mongo.simulation_repo.mark_error(sim_oid)
+            mongo.simulation_repo.mark_error(sim_oid, "CSV file is missing or empty after conversion")
 
-        if SET.is_docker:
-            try:
-                Path(log_path).unlink(missing_ok=True)
-            except Exception as ex:
-                log.warning("Failed to remove temp log file %s: %s", log_path, ex)
-            try:
-                Path(csv_path).unlink(missing_ok=True)
-            except Exception as ex:
-                log.warning("Failed to remove temp csv file %s: %s", csv_path, ex)
+        try:
+            Path(log_path).unlink(missing_ok=True)
+        except Exception as ex:
+            log.warning("Failed to remove temp log file %s: %s", log_path, ex)
+        try:
+            Path(csv_path).unlink(missing_ok=True)
+        except Exception as ex:
+            log.warning("Failed to remove temp csv file %s: %s", csv_path, ex)
 
         # Batch completion
         batch_id = sim["batch_id"]
-        if mongo.batch_repo.all_simulations_done(batch_id):
-            mongo.batch_repo.mark_done(batch_id)
-        elif mongo.batch_repo.any_simulation_error(batch_id):
-            mongo.batch_repo.mark_error(batch_id)
+        br = mongo.batch_repo
+        if br.all_simulations_by_status(batch_id, EnumStatus.DONE):
+            br.mark_done(batch_id)
+        elif br.any_simulation_by_status(batch_id, EnumStatus.ERROR):
+            br.mark_error(batch_id)
+        elif not br.any_simulation_by_status(batch_id, EnumStatus.WAITING):
+            if not br.any_simulation_by_status(batch_id, EnumStatus.RUNNING):
+                log.info(f"Batch {batch_id} has no running simulations but no waiting ones. Marking as done.")
+                br.mark_done(batch_id)
 
     except Exception as e:
         log.exception("[port=%s host=%s] Simulation ERROR %s: %s", port, hostname, sim_oid, e)
         try:
-            mongo.simulation_repo.mark_error(sim_oid)
+            mongo.simulation_repo.mark_error(sim_oid, str(e))
         except Exception:
             log.exception("Failed to mark error on simulation %s", sim_oid)
     finally:
@@ -272,7 +278,7 @@ def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostnam
             success, local_files, remote_files = prepare_simulation_files(sim, worker_id, mongo)
             if not success:
                 log.warning("[port=%s] Skipping simulation %s (prepare failed)", port, sim_id_str)
-                mongo.simulation_repo.mark_error(ObjectId(sim["_id"]))
+                mongo.simulation_repo.mark_error(ObjectId(sim["_id"]), "Failed to prepare simulation files")
                 continue
 
             # Send files
@@ -286,19 +292,18 @@ def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostnam
             # run
             run_cooja_simulation(sim, port, hostname, mongo)
 
-            # clean
-            if SET.is_docker:
-                for f in local_files:
-                    try:
-                        Path(f).unlink(missing_ok=True)
-                    except Exception as ex:
-                        log.warning("Failed to remove temp file %s: %s", f, ex)
+            # cleanup local files
+            for f in local_files:
+                try:
+                    Path(f).unlink(missing_ok=True)
+                except Exception as ex:
+                    log.warning("Failed to remove temp file %s: %s", f, ex)
 
         except Exception as e:
             log.exception("[port=%s host=%s] General ERROR: %s", port, hostname, e)
             try:
                 if sim and "_id" in sim:
-                    mongo.simulation_repo.mark_error(ObjectId(sim["_id"]))
+                    mongo.simulation_repo.mark_error(ObjectId(sim["_id"]), str(e))
             except Exception:
                 log.exception("Failed to mark error on simulation after general exception")
         finally:
@@ -356,6 +361,7 @@ def main() -> None:
             time.sleep(1)
     except KeyboardInterrupt:
         log.info("closing...")
+
 
 if __name__ == "__main__":
     main()

@@ -126,7 +126,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._start_watcher()
 
     # EVENT_SIMULATION_DONE implementation
-    def event_simulation_done(self, result_doc: dict):
+    def event_batch_done(self, result_doc: dict):
         """ 
         On event Simulation Batch Result Done
         Args: result_doc (dict): Batch dictionary
@@ -196,7 +196,7 @@ class NSGA3LoopStrategy(EngineStrategy):
                 if self._stop_flag:
                     return
                 try:
-                    self.event_simulation_done(result_doc)
+                    self.event_batch_done(result_doc)
                 except Exception:
                     logger.exception(f"[NSGA-III] Watcher Callback Error.")
 

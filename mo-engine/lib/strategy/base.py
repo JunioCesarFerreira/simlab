@@ -16,10 +16,9 @@ class EngineStrategy(ABC):
         pass
 
     @abstractmethod
-    def event_simulation_done(self, sim_doc: dict):
+    def event_batch_done(self, sim_doc: dict):
         """
-        Receive a simulation result and decide the next step
-        Should be used to handle the simulation completion event
+        Receive a batch result and decide the next step
         """
         pass
     

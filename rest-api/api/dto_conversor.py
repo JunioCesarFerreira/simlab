@@ -165,6 +165,7 @@ def simulation_from_mongo(doc: dict) -> SimulationDto:
         "id": id_str,
         "experiment_id": _oid_to_str(d.get("experiment_id")),
         "status": d.get("status", ""),
+        "system_message": d.get("system_message", ""),
         "random_seed": d.get("random_seed", 0),
         "start_time": _ensure_datetime(d.get("start_time")),
         "end_time": _ensure_datetime(d.get("end_time")),
@@ -190,6 +191,7 @@ def simulation_to_mongo(dto: SimulationDto) -> Simulation:
         sim["_id"] = _str_to_oid(d["id"])
 
     sim["status"] = d.get("status", "")
+    sim["system_message"] = d.get("system_message", "")
     sim["random_seed"] = d.get("random_seed", 0)
     sim["start_time"] = _ensure_datetime(d.get("start_time"))
     sim["end_time"] = _ensure_datetime(d.get("end_time"))

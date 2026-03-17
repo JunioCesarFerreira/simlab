@@ -56,12 +56,15 @@ class SimulationRepository:
             return list(db["simulations"].find({"status": EnumStatus.WAITING}))
         
         
-    def find_pending_by_generation(self, gen_id: ObjectId) -> list[Simulation]:
+    def find_pending_by(self, parent: str, object_id: ObjectId) -> list[Simulation]:
+        if parent not in ["experiment_id", "batch_id"]:
+            log.error(f"Invalid parent field: {parent}")
+            return []
         with self.connection.connect() as db:
             return list(db["simulations"].find(
                 {
                     "status": EnumStatus.WAITING,
-                    "generation_id": gen_id
+                    parent: object_id
                 }))
             
             
@@ -109,13 +112,14 @@ class SimulationRepository:
                  }
             )
             
-    def mark_error(self, sim_id: ObjectId):
+    def mark_error(self, sim_id: ObjectId, system_message: str):
         with self.connection.connect() as db:
             db["simulations"].update_one(
                 {"_id": sim_id},
                 {"$set": {
                     "status": EnumStatus.ERROR, 
                     "end_time": datetime.now(),
+                    "system_message": system_message
                     }
                  }
             )
@@ -131,25 +135,3 @@ class SimulationRepository:
         with self.connection.connect() as db:
             result = db["simulations"].delete_one({"_id": oid})
             return result.deleted_count > 0
-
-    
-    def watch_status(self, status: EnumStatus, on_change: Callable[[dict], None]):
-        log.info("[SimulationRepository] Waiting changes...")
-        pipeline = [
-            {
-                "$match": {
-                    "operationType": {"$in": ["insert", "update", "replace"]},
-                    "fullDocument.status": status
-                }
-            }
-        ]
-        self.connection.watch_collection(
-            "simulations", 
-            pipeline, 
-            on_change, 
-            full_document="updateLookup"
-            )
-        
-        
-    def watch_status_done(self, on_change: Callable[[dict], None]):
-        self.watch_status(EnumStatus.DONE, on_change)
