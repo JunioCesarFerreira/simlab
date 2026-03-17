@@ -87,15 +87,34 @@ class BatchRepository:
             }
         ]
         self.connection.watch_collection(
-            "batches", 
-            pipeline, 
-            on_change, 
+            "batches",
+            pipeline,
+            on_change,
             full_document="updateLookup"
             )
 
 
     def watch_status_done(self, on_change: Callable[[dict], None]):
         self.watch_status(EnumStatus.DONE, on_change)
+
+
+    def watch_status_terminal(self, on_change: Callable[[dict], None]):
+        """Watches for batches reaching any terminal state (DONE or ERROR)."""
+        log.info("[BatchRepository] Waiting for terminal batch changes (DONE or ERROR)...")
+        pipeline = [
+            {
+                "$match": {
+                    "operationType": {"$in": ["insert", "update", "replace"]},
+                    "fullDocument.status": {"$in": [EnumStatus.DONE, EnumStatus.ERROR]}
+                }
+            }
+        ]
+        self.connection.watch_collection(
+            "batches",
+            pipeline,
+            on_change,
+            full_document="updateLookup"
+        )
 
 
 

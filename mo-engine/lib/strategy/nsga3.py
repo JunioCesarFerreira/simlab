@@ -229,8 +229,8 @@ class NSGA3LoopStrategy(EngineStrategy):
                 except Exception:
                     logger.exception(f"[NSGA-III] Watcher Callback Error.")
 
-            logger.info("[NSGA-III] Starting Batch watcher (DONE).")
-            self.mongo.batch_repo.watch_status_done(_callback)
+            logger.info("[NSGA-III] Starting Batch watcher (DONE or ERROR).")
+            self.mongo.batch_repo.watch_status_terminal(_callback)
 
         self._watch_thread = Thread(target=_run, daemon=True, name="nsga3-watcher")
         self._watch_thread.start()
@@ -250,10 +250,10 @@ class NSGA3LoopStrategy(EngineStrategy):
                     continue
                 try:
                     batch = self.mongo.batch_repo.get(str(self._batch_id))
-                    if batch and batch.get("status") == EnumStatus.DONE:
+                    if batch and batch.get("status") in (EnumStatus.DONE, EnumStatus.ERROR):
                         logger.warning(
-                            "[NSGA-III] Batch %s DONE detected by polling fallback (Change Stream may have missed the event).",
-                            self._batch_id
+                            "[NSGA-III] Batch %s %s detected by polling fallback (Change Stream may have missed the event).",
+                            self._batch_id, batch.get("status")
                         )
                         with self._lock:
                             self._handle_batch_done(ObjectId(batch["_id"]))
