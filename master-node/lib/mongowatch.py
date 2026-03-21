@@ -3,7 +3,8 @@ import queue
 from datetime import datetime
 from bson import ObjectId
 
-from mongo.connection import MongoDBConnection, EnumStatus
+from mongo.connection import MongoDBConnection
+from mongo.enums import EnumStatus
 from mongo.simulation import SimulationRepository
 
 log = logging.getLogger(__name__)

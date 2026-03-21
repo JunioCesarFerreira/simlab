@@ -2,23 +2,12 @@ import logging
 import time
 import pymongo
 from typing import Generator, Callable
-from enum import Enum
 from pymongo import MongoClient
 from contextlib import contextmanager
 from pymongo.collection import Collection
 from pymongo.errors import PyMongoError
 
-
-class EnumStatus(str, Enum):
-    BUILDING = "Building"
-    WAITING = "Waiting"
-    RUNNING = "Running"
-    DONE = "Done"
-    ERROR = "Error"
-
-
 logger = logging.getLogger(__name__)
-
 
 class MongoDBConnection:
     def __init__(self, uri: str, db_name: str):

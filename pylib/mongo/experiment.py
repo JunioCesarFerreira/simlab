@@ -4,7 +4,8 @@ from typing import Optional, Callable, Any
 from bson import ObjectId, errors
 
 from pylib.dto.database import Experiment, DataConversionConfig, Generation
-from mongo.connection import MongoDBConnection, EnumStatus
+from mongo.connection import MongoDBConnection
+from mongo.enums import EnumStatus
 from mongo.gridfs_handler import MongoGridFSHandler
 
 log = logging.getLogger(__name__)

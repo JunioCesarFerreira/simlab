@@ -5,7 +5,7 @@ import logging
 from bson import ObjectId
 from pylib import mongo_db
 from pylib.dto.database import Simulation
-from pylib.mongo.connection import EnumStatus
+from pylib.mongo.enums import EnumStatus
 
 log = logging.getLogger(__name__)
 

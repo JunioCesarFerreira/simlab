@@ -1,14 +1,13 @@
 from typing import NamedTuple
 
-from .mongo.connection import MongoDBConnection, EnumStatus
+from .mongo.connection import MongoDBConnection
+from .mongo.enums import EnumStatus
 from .mongo.experiment import ExperimentRepository
 from .mongo.simulation import SimulationRepository
 from .mongo.batch import BatchRepository
 from .mongo.source import SourceRepositoryAccess
 from .mongo.gridfs_handler import MongoGridFSHandler
 from .mongo.analytics import AnalyticsRepository
-
-EnumStatus = EnumStatus # Para uso externo
 
 # Fábrica de componentes
 

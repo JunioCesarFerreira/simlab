@@ -4,7 +4,8 @@ from bson import ObjectId, errors
 from typing import Callable, Optional
 
 from pylib.dto.database import Simulation
-from mongo.connection import MongoDBConnection, EnumStatus
+from mongo.connection import MongoDBConnection
+from mongo.enums import EnumStatus
 
 log = logging.getLogger(__name__)
 

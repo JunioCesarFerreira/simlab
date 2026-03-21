@@ -26,7 +26,7 @@ from lib.synthetic_data import run_synthetic_simulation
 from pylib import mongo_db
 from pylib import cooja_files
 from pylib import statistics
-from pylib.mongo.connection import EnumStatus
+from pylib.mongo.enums import EnumStatus
 from pylib.dto.database import Simulation, SourceRepository
 
 # --------------------------- Logging --------------------------------
