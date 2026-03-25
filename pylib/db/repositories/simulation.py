@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Callable
 from bson import ObjectId, errors
 
 from pylib.db.models.simulation import Simulation
@@ -118,3 +118,39 @@ class SimulationRepository:
         with self.connection.connect() as db:
             result = db["simulations"].delete_one({"_id": oid})
             return result.deleted_count > 0
+
+    def watch_status_waiting(self, on_change: Callable[[dict], None]) -> None:
+        """Watches the simulations collection for documents entering WAITING status."""
+        log.info("[SimulationRepository] Watching for WAITING simulations...")
+        pipeline = [
+            {
+                "$match": {
+                    "operationType": {"$in": ["insert", "update", "replace"]},
+                    "fullDocument.status": EnumStatus.WAITING
+                }
+            }
+        ]
+        self.connection.watch_collection(
+            "simulations",
+            pipeline,
+            on_change,
+            full_document="updateLookup"
+        )
+
+    def watch_status_terminal(self, on_change: Callable[[dict], None]) -> None:
+        """Watches the simulations collection for documents entering DONE or ERROR status."""
+        log.info("[SimulationRepository] Watching for terminal simulations (DONE or ERROR)...")
+        pipeline = [
+            {
+                "$match": {
+                    "operationType": {"$in": ["update", "replace"]},
+                    "fullDocument.status": {"$in": [EnumStatus.DONE, EnumStatus.ERROR]}
+                }
+            }
+        ]
+        self.connection.watch_collection(
+            "simulations",
+            pipeline,
+            on_change,
+            full_document="updateLookup"
+        )
