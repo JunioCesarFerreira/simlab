@@ -97,6 +97,8 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._gen_index: int = 0
         self._generation_id: ObjectId | None = None
         self._lock = threading.Lock()
+        self._sim_done_count: int = 0
+        self._sim_watch_thread: Thread | None = None
 
         # --- nsga3 workflow ---
         self._current_population: list[Chromosome] = []   # P_t
@@ -123,11 +125,28 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._start_watcher()
         self._start_generation_poll()
 
-    def event_batch_done(self, result_doc: dict):
+    def event_simulation_done(self, sim_doc: dict):
         """
-        On event Generation terminal (called from Change Stream thread).
+        Called for every simulation that reaches a terminal state (DONE or ERROR).
+        Accounts for progress only — does not control algorithm flow.
         """
-        gen = result_doc.get("fullDocument")
+        sim = sim_doc.get("fullDocument") or {}
+        if sim.get("generation_id") != self._generation_id:
+            return
+        sims_per_gen = self._pop_size * len(self._sim_rand_seeds)
+        with self._lock:
+            self._sim_done_count += 1
+            logger.info(
+                "[NSGA-III] Simulation terminal (%s): %d/%d for generation %s",
+                sim.get("status"), self._sim_done_count, sims_per_gen, self._generation_id
+            )
+
+    def event_generation_done(self, gen_doc: dict):
+        """
+        Called when a generation reaches a terminal state (DONE or ERROR).
+        Controls the algorithm flow: objective extraction, NSGA-III selection, next generation.
+        """
+        gen = gen_doc.get("fullDocument")
         if not gen:
             return
         with self._lock:
@@ -176,10 +195,11 @@ class NSGA3LoopStrategy(EngineStrategy):
 
     def stop(self):
         self._stop_flag = True
-        t = self._watch_thread
-        if t and t.is_alive() and t is not threading.current_thread():
-            t.join(timeout=1.0)
+        for t in (self._watch_thread, self._sim_watch_thread):
+            if t and t.is_alive() and t is not threading.current_thread():
+                t.join(timeout=1.0)
         self._watch_thread = None
+        self._sim_watch_thread = None
 
 
 # ------------------------------
@@ -187,25 +207,44 @@ class NSGA3LoopStrategy(EngineStrategy):
 # ------------------------------
     def _start_watcher(self):
         self._stop_flag = False
-        if self._watch_thread and self._watch_thread.is_alive():
-            self._stop_flag = True
-            self._watch_thread.join(timeout=1.0)
-            self._stop_flag = False
 
-        def _run():
-            def _callback(result_doc: dict):
+        # Stop any existing threads
+        for t in (self._watch_thread, self._sim_watch_thread):
+            if t and t.is_alive():
+                self._stop_flag = True
+                t.join(timeout=1.0)
+                self._stop_flag = False
+
+        # --- Generation watcher: controls flow ---
+        def _run_generation_watcher():
+            def _callback(gen_doc: dict):
                 if self._stop_flag:
                     return
                 try:
-                    self.event_batch_done(result_doc)
+                    self.event_generation_done(gen_doc)
                 except Exception:
-                    logger.exception("[NSGA-III] Watcher Callback Error.")
+                    logger.exception("[NSGA-III] Generation watcher callback error.")
 
             logger.info("[NSGA-III] Starting Generation watcher (DONE or ERROR).")
             self.mongo.generation_repo.watch_status_terminal(_callback)
 
-        self._watch_thread = Thread(target=_run, daemon=True, name="nsga3-watcher")
+        # --- Simulation watcher: accounting only ---
+        def _run_simulation_watcher():
+            def _callback(sim_doc: dict):
+                if self._stop_flag:
+                    return
+                try:
+                    self.event_simulation_done(sim_doc)
+                except Exception:
+                    logger.exception("[NSGA-III] Simulation watcher callback error.")
+
+            logger.info("[NSGA-III] Starting Simulation watcher (DONE or ERROR).")
+            self.mongo.simulation_repo.watch_status_terminal(_callback)
+
+        self._watch_thread = Thread(target=_run_generation_watcher, daemon=True, name="nsga3-gen-watcher")
+        self._sim_watch_thread = Thread(target=_run_simulation_watcher, daemon=True, name="nsga3-sim-watcher")
         self._watch_thread.start()
+        self._sim_watch_thread.start()
 
     def _start_generation_poll(self) -> None:
         """
@@ -267,6 +306,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         exp_oid = self._exp_id
         gen_index = self._gen_index
         population = self._current_population
+        self._sim_done_count = 0
 
         # Pre-generate generation ObjectId so simulations are inserted with generation_id set,
         # avoiding the race where master-node picks up a simulation before the generation exists.
