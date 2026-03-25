@@ -16,18 +16,17 @@ from scp import SCPClient
 project_path = os.path.abspath(os.path.join(os.getcwd(), ".."))
 if project_path not in sys.path:
     sys.path.insert(0, project_path)
-    
+
 # lib master-node
 from lib.sshscp import create_ssh_client, send_files_scp
 from lib.mongowatch import watch_status_waiting_enqueue
 from lib.synthetic_data import run_synthetic_simulation
 
 # pylib
-from pylib import mongo_db
+from pylib.db import create_mongo_repository_factory, MongoRepository
+from pylib.db.models import Simulation, SourceRepository
 from pylib import cooja_files
 from pylib import statistics
-from pylib.mongo.enums import EnumStatus
-from pylib.dto.database import Simulation, SourceRepository
 
 # --------------------------- Logging --------------------------------
 logging.basicConfig(
@@ -64,7 +63,6 @@ class Settings:
         local_log_dir = "logs"
         Path(local_log_dir).mkdir(exist_ok=True)
 
-        # Defaults
         default_n = int(os.getenv("NUMBER_OF_CONTAINERS", "3"))
         if is_docker:
             hostnames = [f"cooja{i+1}" for i in range(default_n)]
@@ -73,7 +71,7 @@ class Settings:
             hostnames = ["localhost" for _ in range(default_n)]
             ports = [2231 + i for i in range(default_n)]
 
-        sim_timeout_sec = int(os.getenv("SIM_TIMEOUT_SEC", "3600"))  # default: 60 min
+        sim_timeout_sec = int(os.getenv("SIM_TIMEOUT_SEC", "3600"))
 
         return Settings(
             is_docker=is_docker,
@@ -98,31 +96,28 @@ def _assert_capacity(num_workers: int) -> None:
         )
 
 
-def _check_and_close_batch(batch_id: ObjectId, mongo: mongo_db.MongoRepository) -> None:
+def _check_and_close_generation(generation_id: ObjectId, mongo: MongoRepository) -> None:
     """
-    Evaluates whether a batch can be closed and marks it DONE or ERROR.
+    Evaluates whether a generation can be closed and marks it DONE or ERROR.
     Must be called after any simulation status change.
     - DONE  : all simulations finished successfully.
     - ERROR : no simulations are still WAITING or RUNNING (all terminated,
-              but at least one ended in ERROR, since the DONE check failed).
+              but at least one ended in ERROR).
     """
-    br = mongo.batch_repo
+    gr = mongo.generation_repo
     try:
-        if br.all_simulations_by_status(batch_id, EnumStatus.DONE):
-            br.mark_done(batch_id)
-        elif (
-            not br.any_simulation_by_status(batch_id, EnumStatus.WAITING)
-            and not br.any_simulation_by_status(batch_id, EnumStatus.RUNNING)
-        ):
-            br.mark_error(batch_id)
+        if gr.all_simulations_done(generation_id):
+            gr.mark_done(generation_id)
+        elif not gr.any_simulation_active(generation_id):
+            gr.mark_error(generation_id)
     except Exception:
-        log.exception("Failed to close batch %s", batch_id)
+        log.exception("Failed to close generation %s", generation_id)
 
 
-def recover_stuck_simulations(mongo: mongo_db.MongoRepository) -> None:
+def recover_stuck_simulations(mongo: MongoRepository) -> None:
     """
     On startup, marks as ERROR any simulation that was left in RUNNING state
-    (e.g. from a previous crash), then attempts to close affected batches.
+    (e.g. from a previous crash), then attempts to close affected generations.
     Skipped when SIM_TIMEOUT_SEC == 0.
     """
     if SET.sim_timeout_sec <= 0:
@@ -139,19 +134,19 @@ def recover_stuck_simulations(mongo: mongo_db.MongoRepository) -> None:
             mongo.simulation_repo.mark_error(sim_id, "Recovered: stuck in RUNNING on master-node restart")
         except Exception:
             log.exception("Failed to recover simulation %s", sim_id)
-        batch_id = sim.get("batch_id")
-        if batch_id:
-            _check_and_close_batch(batch_id, mongo)
+        generation_id = sim.get("generation_id")
+        if generation_id:
+            _check_and_close_generation(generation_id, mongo)
 
 
 def prepare_simulation_files(
     sim: Simulation,
     worker_id: int,
-    mongo: mongo_db.MongoRepository,
+    mongo: MongoRepository,
 ) -> tuple[bool, list[str], list[str]]:
     """
-    Baixa XML/positions da simulação e os arquivos do SourceRepository.
-    Retorna (success, local_files, remote_files).
+    Downloads CSC/positions from the simulation and files from the SourceRepository.
+    Returns (success, local_files, remote_files).
     """
     sim_oid = ObjectId(sim["_id"]) if not isinstance(sim["_id"], ObjectId) else sim["_id"]
     tmp_dir = Path(f"tmp/worker_{worker_id}")
@@ -168,7 +163,7 @@ def prepare_simulation_files(
     local_files.append(str(local_xml))
     remote_files.append("simulation.csc")
 
-    # Positions (opcional)
+    # Positions (optional)
     if sim.get("pos_file_id"):
         mongo.fs_handler.download_file(sim["pos_file_id"], str(local_dat))
         local_files.append(str(local_dat))
@@ -194,10 +189,10 @@ def run_cooja_simulation(
     sim: Simulation,
     port: int,
     hostname: str,
-    mongo: mongo_db.MongoRepository,
+    mongo: MongoRepository,
 ) -> None:
     """
-    Executa a simulação no container via SSH, acompanha logs e envia resultado ao GridFS.
+    Executes the simulation in the container via SSH, monitors logs, and stores results in GridFS.
     """
     sim_oid = ObjectId(sim["_id"]) if not isinstance(sim["_id"], ObjectId) else sim["_id"]
     ssh: SSHClient = create_ssh_client(hostname, port, "root", "root")
@@ -205,83 +200,61 @@ def run_cooja_simulation(
         log.info("[port=%s host=%s] Starting simulation %s", port, hostname, sim_oid)
         mongo.simulation_repo.mark_running(sim_oid)
 
-        # Cooja command
         command = (
             f"cd {SET.remote_dir} && "
             f"/opt/java/openjdk/bin/java --enable-preview -Xms4g -Xmx4g "
             f"-jar build/libs/cooja.jar --no-gui simulation.csc"
         )
 
-        # Remote execution
         stdin, stdout, stderr = ssh.exec_command(command, get_pty=True, timeout=SET.sim_timeout_sec or None)
 
-        # Simple non-blocking read (polling)
         chan = stdout.channel
         chan.settimeout(5.0)
         while not chan.exit_status_ready():
             if chan.recv_ready():
                 out = chan.recv(4096).decode("utf-8", errors="ignore")
                 if out:
-                    log.info(
-                        "[ssh][%s][stdout] %s",
-                        hostname if SET.is_docker else port,
-                        out
-                    )
+                    log.info("[ssh][%s][stdout] %s", hostname if SET.is_docker else port, out)
             if chan.recv_stderr_ready():
                 err = chan.recv_stderr(4096).decode("utf-8", errors="ignore")
                 if err:
-                    log.error(
-                        "[ssh][%s][stderr] %s",
-                        hostname if SET.is_docker else port,
-                        err
-                    )
+                    log.error("[ssh][%s][stderr] %s", hostname if SET.is_docker else port, err)
             time.sleep(0.1)
 
-        # get cooja log
         log_path = f"{SET.local_log_dir}/sim_{sim_oid}.log"
         with SCPClient(ssh.get_transport()) as scp:
             remote_log = f"{SET.remote_dir}/COOJA.testlog"
             log.info("[port=%s] Copying log to %s", port, log_path)
             scp.get(remote_log, log_path)
 
-        # save full log
         log_id = mongo.fs_handler.upload_file(log_path, "sim_result.log")
         log.info("[port=%s] Log saved with ID: %s", port, log_id)
 
-        # Convert and save CSV file
         csv_path = f"{SET.local_log_dir}/sim_{sim_oid}.csv"
         cooja_files.convert_cooja_log_to_csv(log_path, csv_path)
         csv_id = mongo.fs_handler.upload_file(csv_path, "sim_result.csv")
         log.info("[port=%s] Log converted CSV and saved with ID: %s", port, csv_id)
-                
-        # Calculate objectives and metrics
+
         csv_file = Path(csv_path)
-        if csv_file.exists() and csv_file.stat().st_size != 0:            
+        if csv_file.exists() and csv_file.stat().st_size != 0:
             df = pd.read_csv(csv_path)
             exp_id = sim["experiment_id"]
             cfg = mongo.experiment_repo.get_metrics_data_conversion(str(exp_id))
-        
             net_meas = statistics.evaluate_config(df, cfg, log)
-            
             log.info("[port=%s] Metrics calculated: %s", port, net_meas)
-            
-            # Mark completed and record log and csv ids
             mongo.simulation_repo.mark_done(sim_oid, log_id, csv_id, net_meas)
         else:
             log.warning("[port=%s] CSV file is missing or empty for simulation %s", port, sim_oid)
             mongo.simulation_repo.mark_error(sim_oid, "CSV file is missing or empty after conversion")
 
-        try:
-            Path(log_path).unlink(missing_ok=True)
-        except Exception as ex:
-            log.warning("Failed to remove temp log file %s: %s", log_path, ex)
-        try:
-            Path(csv_path).unlink(missing_ok=True)
-        except Exception as ex:
-            log.warning("Failed to remove temp csv file %s: %s", csv_path, ex)
+        for path in (log_path, csv_path):
+            try:
+                Path(path).unlink(missing_ok=True)
+            except Exception as ex:
+                log.warning("Failed to remove temp file %s: %s", path, ex)
 
-        if sim.get("batch_id"):
-            _check_and_close_batch(sim["batch_id"], mongo)
+        if sim.get("generation_id"):
+            _check_and_close_generation(sim["generation_id"], mongo)
 
     except Exception as e:
         log.exception("[port=%s host=%s] Simulation ERROR %s: %s", port, hostname, sim_oid, e)
@@ -289,8 +262,8 @@ def run_cooja_simulation(
             mongo.simulation_repo.mark_error(sim_oid, str(e))
         except Exception:
             log.exception("Failed to mark error on simulation %s", sim_oid)
-        if sim.get("batch_id"):
-            _check_and_close_batch(sim["batch_id"], mongo)
+        if sim.get("generation_id"):
+            _check_and_close_generation(sim["generation_id"], mongo)
     finally:
         ssh.close()
 
@@ -299,17 +272,17 @@ def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostnam
     """
     Worker that consumes the queue and runs simulations on a host/port.
     """
-    mongo = mongo_db.create_mongo_repository_factory(SET.mongo_uri, SET.db_name)
+    mongo = create_mongo_repository_factory(SET.mongo_uri, SET.db_name)
     while True:
         sim = sim_queue.get()
         try:
             if sim is None:
                 return
-            
+
             mode = os.getenv("ENABLE_DATA_SYNTHETIC", "False").lower() == "true"
             mode_str = "Synthetic Data" if mode else "Simulation"
             log.info("mode: %s", mode_str)
-            if mode: # Synthetic data for validation of MO-Engine
+            if mode:
                 run_synthetic_simulation(sim, mongo)
                 continue
 
@@ -323,22 +296,18 @@ def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostnam
                     mongo.simulation_repo.mark_error(ObjectId(sim["_id"]), "Failed to prepare simulation files")
                 except Exception:
                     log.exception("Failed to mark error on simulation %s", sim_id_str)
-                if sim.get("batch_id"):
-                    _check_and_close_batch(sim["batch_id"], mongo)
+                if sim.get("generation_id"):
+                    _check_and_close_generation(sim["generation_id"], mongo)
                 continue
 
-            # Send files
-            log.debug("[port=%s] Creating SSH client %s@%s:%s", port, "root", hostname, port)
             ssh = create_ssh_client(hostname, port, "root", "root")
             try:
                 send_files_scp(ssh, SET.local_dir, SET.remote_dir, local_files, remote_files)
             finally:
                 ssh.close()
 
-            # run
             run_cooja_simulation(sim, port, hostname, mongo)
 
-            # cleanup local files
             for f in local_files:
                 try:
                     Path(f).unlink(missing_ok=True)
@@ -352,18 +321,14 @@ def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostnam
                     mongo.simulation_repo.mark_error(ObjectId(sim["_id"]), str(e))
             except Exception:
                 log.exception("Failed to mark error on simulation after general exception")
-            if sim and "batch_id" in sim:
-                _check_and_close_batch(sim["batch_id"], mongo)
+            if sim and "generation_id" in sim:
+                _check_and_close_generation(sim["generation_id"], mongo)
         finally:
             sim_queue.task_done()
 
 
 def start_workers(num_workers: int) -> queue.Queue:
-    """
-    Initializes worker threads according to capacity.
-    """
     _assert_capacity(num_workers)
-
     q: queue.Queue = queue.Queue()
     for i in range(num_workers):
         t = Thread(
@@ -376,10 +341,8 @@ def start_workers(num_workers: int) -> queue.Queue:
     return q
 
 
-def load_initial_waiting_jobs(mongo: mongo_db.MongoRepository, sim_queue: queue.Queue) -> None:
-    """
-    Enqueue pending simulations on load.
-    """
+def load_initial_waiting_jobs(mongo: MongoRepository, sim_queue: queue.Queue) -> None:
+    """Enqueue pending simulations on startup."""
     log.info("Searching for pending simulations...")
     pending = mongo.simulation_repo.find_pending()
     for sim in pending:
@@ -393,7 +356,7 @@ def main() -> None:
     log.info("number of containers: %s", number_of_containers)
     log.info("env: MONGO_URI=%s | DB_NAME=%s | IS_DOCKER=%s", SET.mongo_uri, SET.db_name, SET.is_docker)
 
-    mongo = mongo_db.create_mongo_repository_factory(SET.mongo_uri, SET.db_name)
+    mongo = create_mongo_repository_factory(SET.mongo_uri, SET.db_name)
 
     recover_stuck_simulations(mongo)
     sim_queue = start_workers(number_of_containers)
@@ -401,7 +364,7 @@ def main() -> None:
 
     Thread(
         target=watch_status_waiting_enqueue,
-        args=(mongo.simulation_repo, sim_queue,),
+        args=(mongo.simulation_repo, mongo.generation_repo, sim_queue,),
         daemon=True,
     ).start()
 
