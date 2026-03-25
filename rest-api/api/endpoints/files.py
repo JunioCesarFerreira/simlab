@@ -11,11 +11,11 @@ project_path = os.path.abspath(os.path.join(os.getcwd(), ".."))
 if project_path not in sys.path:
     sys.path.insert(0, project_path)
 
-from pylib import mongo_db
+from pylib.db import create_mongo_repository_factory
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/?replicaSet=rs0")
 DB_NAME = os.getenv("DB_NAME", "simlab")
-factory = mongo_db.create_mongo_repository_factory(MONGO_URI, DB_NAME)
+factory = create_mongo_repository_factory(MONGO_URI, DB_NAME)
 
 router = APIRouter()
 
@@ -293,83 +293,68 @@ def download_experiment_topologies_zip(
             detail="Experiment not found"
         )
     
-    # Get all generation IDs from experiment
-    generation_ids = experiment.get("generations", [])
-    
-    if not generation_ids or len(generation_ids) == 0:
+    # Get all generations for this experiment from the generations collection
+    generations = factory.generation_repo.find_by_experiment(exp_oid)
+
+    if not generations:
         raise HTTPException(
             status_code=404,
             detail="No generations found for this experiment"
         )
-    
+
     # Create temp working directory for files (separate from ZIP location)
     work_dir = tempfile.mkdtemp(prefix="simlab_exp_topologies_")
     files_dir = os.path.join(work_dir, "files")
     os.makedirs(files_dir, exist_ok=True)
     zip_path = os.path.join(work_dir, f"{experiment_id}_topologies.zip")
-    
+
     try:
         # Process each generation
-        for gen_index, generation_id in enumerate(generation_ids):
+        for generation in generations:
+            gen_id = generation["_id"]
+            gen_index = generation.get("index", 0)
+            gen_id_str = str(gen_id)
+
             try:
-                gen_id_str = str(generation_id) if isinstance(generation_id, ObjectId) else generation_id
-                
-                # Get generation document
-                generation = factory.batch_repo.get(gen_id_str)
-                
-                if not generation:
-                    print(f"Warning: Generation {gen_id_str} not found")
+                # Get individuals for this generation (topology is stored on Individual)
+                individuals = factory.individual_repo.find_by_generation(gen_id)
+
+                if not individuals:
+                    print(f"Warning: No individuals found for generation {gen_id_str}")
                     continue
-                
-                # Get simulations for this generation
-                simulations_ids = generation.get("simulations_ids", [])
-                
-                if not simulations_ids:
-                    print(f"Warning: No simulations found for generation {gen_id_str}")
-                    continue
-                
+
                 # Create subfolder for this generation: {gen_index}-{generation_id}
                 gen_subfolder = os.path.join(files_dir, f"{gen_index}-{gen_id_str}")
                 os.makedirs(gen_subfolder, exist_ok=True)
-                
-                # Download topologies for each simulation in this generation
-                for sim_index, simulation_id in enumerate(simulations_ids):
+
+                # Download topology for each individual in this generation
+                for ind_index, individual in enumerate(individuals):
                     try:
-                        sim_id_str = str(simulation_id) if isinstance(simulation_id, ObjectId) else simulation_id
-                        
-                        # Get simulation document
-                        simulation = factory.simulation_repo.get(sim_id_str)
-                        
-                        if not simulation:
-                            print(f"Warning: Simulation {sim_id_str} not found")
-                            continue
-                        
-                        topology_file_id = simulation.get("topology_picture_id")
-                        
+                        ind_id_str = individual.get("individual_id", str(ind_index))
+                        topology_file_id = individual.get("topology_picture_id")
+
                         if not topology_file_id:
-                            print(f"Warning: No topology found for simulation {sim_id_str}")
+                            print(f"Warning: No topology found for individual {ind_id_str}")
                             continue
-                        
+
                         try:
                             oid = ObjectId(topology_file_id)
                         except bson_errors.InvalidId:
-                            print(f"Warning: Invalid topology file ID for simulation {sim_id_str}")
+                            print(f"Warning: Invalid topology file ID for individual {ind_id_str}")
                             continue
-                        
-                        # Create filename inside subfolder: {sim_index}-{simulation_id}_topology.png
-                        safe_name = f"{sim_index}-{sim_id_str}_topology.png"
+
+                        # Create filename inside subfolder: {ind_index}-{individual_id}_topology.png
+                        safe_name = f"{ind_index}-{ind_id_str}_topology.png"
                         file_path = os.path.join(gen_subfolder, safe_name)
-                        
+
                         factory.fs_handler.download_file(oid, file_path)
-                        
+
                     except Exception as e:
-                        # Log and continue with next simulation
-                        print(f"Warning: Could not download topology for simulation {simulation_id}: {e}")
+                        print(f"Warning: Could not download topology for individual {ind_id_str}: {e}")
                         continue
-                        
+
             except Exception as e:
-                # Log and continue with next generation
-                print(f"Warning: Could not process generation {generation_id}: {e}")
+                print(f"Warning: Could not process generation {gen_id_str}: {e}")
                 continue
         
         # Verify that at least one topology was downloaded

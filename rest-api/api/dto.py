@@ -1,8 +1,8 @@
 from typing import TypedDict, Any, Optional, NotRequired
 from datetime import datetime
 
-from pylib.dto.simulator import SimulationConfig
-from pylib.dto.database import Parameters
+from pylib.config.simulator import SimulationConfig
+from pylib.db.models import Parameters
 
 # ---------------------------------------------------------------------------------------------------------
 # API DTO
@@ -12,6 +12,8 @@ from pylib.dto.database import Parameters
 class SimulationDto(TypedDict):
     id: str
     experiment_id: str
+    generation_id: str
+    individual_id: str
     status: str
     system_message: str
     random_seed: int
@@ -27,29 +29,27 @@ class SimulationDto(TypedDict):
     network_metrics: dict[str, float]
 
 class IndividualDto(TypedDict):
-    id: int
+    id: str
+    individual_id: str
     chromosome: dict[str, Any]
     objectives: list[float]
     topology_picture_id: str
-    simulations_ids: list[str]
 
 class GenerationDto(TypedDict):
-    index: int
-    population: list[IndividualDto]
-
-class BatchDto(TypedDict):
     id: str
+    experiment_id: str
+    index: int
     status: str
     start_time: datetime
     end_time: datetime
-    simulations_ids: list[str]
+    population: list[IndividualDto]
 
 class MetricItemDto(TypedDict):
     name: str
     kind: str
     column: str
-    q: NotRequired[float] = None
-    scale: NotRequired[float] = None
+    q: NotRequired[float]
+    scale: NotRequired[float]
 
 class DataConversionConfigDto(TypedDict):
     node_col: str
@@ -61,26 +61,24 @@ class ParetoFrontItemDto(TypedDict):
     objectives: dict[str, float]
 
 class ExperimentDto(TypedDict):
-    id: Optional[str] = None
+    id: Optional[str]
     name: str
-    status: Optional[str] = 'Building'
+    status: Optional[str]
     system_message: Optional[str]
     created_time: datetime | None
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
+    start_time: Optional[datetime]
+    end_time: Optional[datetime]
     parameters: Parameters
-    generations: list[GenerationDto]
     source_repository_options: dict[str, str]
     data_conversion_config: DataConversionConfigDto
-    pareto_front: Optional[list[ParetoFrontItemDto]] = None
-    analysis_files: NotRequired[dict[str, str]] = None
+    pareto_front: Optional[list[ParetoFrontItemDto]]
+    analysis_files: NotRequired[dict[str, str]]
 
 # ---------------------------------------------------------------------------------------------------------
 # Additional DTOs
 class ExperimentInfoDto(TypedDict):
-    id: Optional[str] = None
+    id: Optional[str]
     name: str
     system_message: Optional[str]
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
-
+    start_time: Optional[datetime]
+    end_time: Optional[datetime]
