@@ -19,12 +19,12 @@ if project_path not in sys.path:
 
 # lib master-node
 from lib.sshscp import create_ssh_client, send_files_scp
-from lib.mongowatch import watch_status_waiting_enqueue
 from lib.synthetic_data import run_synthetic_simulation
 
 # pylib
 from pylib.db import create_mongo_repository_factory, MongoRepository, EnumStatus
 from pylib.db.models import Simulation, SourceRepository
+from pylib.db.repositories.simulation import SimulationRepository
 from pylib import cooja_files
 from pylib import statistics
 
@@ -361,6 +361,28 @@ def load_initial_waiting_jobs(mongo: MongoRepository, sim_queue: queue.Queue) ->
         sim_id = str(sim["_id"])
         log.info("Pending simulation: %s", sim_id)
         sim_queue.put(sim_id)
+
+
+def watch_status_waiting_enqueue(
+    simRepo: SimulationRepository,
+    sim_queue: queue.Queue
+) -> None:
+    """
+    Subscribes to the simulations Change Stream and enqueues simulation IDs
+    as they enter WAITING status.
+    """
+    log.info("[mongowatch] Watching for WAITING simulations...")
+
+    def on_simulation_event(change: dict):
+        doc = change.get("fullDocument")
+        if not doc:
+            log.warning("[mongowatch] Event without fullDocument; skipping.")
+            return
+        sim_id = str(doc["_id"])
+        log.info("[mongowatch] Enqueuing simulation %s", sim_id)
+        sim_queue.put(sim_id)
+
+    simRepo.watch_status_waiting(on_simulation_event)
 
 
 def main() -> None:
