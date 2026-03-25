@@ -1,54 +1,31 @@
 import logging
 import queue
-from datetime import datetime
-from bson import ObjectId
 
-from pylib.db.connection import MongoDBConnection
-from pylib.db.models.enums import EnumStatus
 from pylib.db.repositories.simulation import SimulationRepository
-from pylib.db.repositories.generation import GenerationRepository
 
 log = logging.getLogger(__name__)
 
-# Watches the generations collection for WAITING status.
-# When a new WAITING generation is detected, fetches its simulations and enqueues them.
-# Marks the generation as RUNNING once the simulations are enqueued.
-
-
-def _make_generation_event_handler(
-    simRepo: SimulationRepository,
-    genRepo: GenerationRepository,
-    sim_queue: queue.Queue
-) -> callable:
-    def on_generation_event(change: dict):
-        log.info("[mongowatch] on generation event...")
-
-        gen_doc = change.get("fullDocument")
-        if not gen_doc:
-            log.warning("[mongowatch] Document missing from the event.")
-            return
-
-        gen_id = ObjectId(gen_doc.get("_id"))
-
-        sims = simRepo.find_pending_by("generation_id", gen_id)
-        if not sims:
-            log.warning("[mongowatch] Generation %s has no pending simulations.", gen_id)
-            return
-
-        log.info("[mongowatch] Enqueuing %d simulation(s) for generation %s", len(sims), gen_id)
-        for sim in sims:
-            sim_queue.put(sim)
-
-        genRepo.mark_running(gen_id)
-
-    return on_generation_event
+# Watches the simulations collection for WAITING status.
+# Each new WAITING simulation has its ID enqueued for a worker to process.
 
 
 def watch_status_waiting_enqueue(
     simRepo: SimulationRepository,
-    genRepo: GenerationRepository,
     sim_queue: queue.Queue
 ) -> None:
-    log.info("[mongowatch] Watching for WAITING generations...")
-    event_handler = _make_generation_event_handler(simRepo, genRepo, sim_queue)
-    genRepo.watch_status_waiting(event_handler)
+    """
+    Subscribes to the simulations Change Stream and enqueues simulation IDs
+    as they enter WAITING status.
+    """
+    log.info("[mongowatch] Watching for WAITING simulations...")
+
+    def on_simulation_event(change: dict):
+        doc = change.get("fullDocument")
+        if not doc:
+            log.warning("[mongowatch] Event without fullDocument; skipping.")
+            return
+        sim_id = str(doc["_id"])
+        log.info("[mongowatch] Enqueuing simulation %s", sim_id)
+        sim_queue.put(sim_id)
+
+    simRepo.watch_status_waiting(on_simulation_event)

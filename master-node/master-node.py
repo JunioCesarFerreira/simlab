@@ -23,7 +23,7 @@ from lib.mongowatch import watch_status_waiting_enqueue
 from lib.synthetic_data import run_synthetic_simulation
 
 # pylib
-from pylib.db import create_mongo_repository_factory, MongoRepository
+from pylib.db import create_mongo_repository_factory, MongoRepository, EnumStatus
 from pylib.db.models import Simulation, SourceRepository
 from pylib import cooja_files
 from pylib import statistics
@@ -98,17 +98,18 @@ def _assert_capacity(num_workers: int) -> None:
 
 def _check_and_close_generation(generation_id: ObjectId, mongo: MongoRepository) -> None:
     """
-    Evaluates whether a generation can be closed and marks it DONE or ERROR.
-    Must be called after any simulation status change.
-    - DONE  : all simulations finished successfully.
-    - ERROR : no simulations are still WAITING or RUNNING (all terminated,
-              but at least one ended in ERROR).
+    Called after every simulation status change.
+    If no simulation in this generation is still WAITING or RUNNING:
+      - DONE  : every simulation finished with DONE.
+      - ERROR : at least one simulation finished with ERROR.
     """
     gr = mongo.generation_repo
     try:
+        if gr.any_simulation_active(generation_id):
+            return  # still work in progress — do nothing
         if gr.all_simulations_done(generation_id):
             gr.mark_done(generation_id)
-        elif not gr.any_simulation_active(generation_id):
+        else:
             gr.mark_error(generation_id)
     except Exception:
         log.exception("Failed to close generation %s", generation_id)
@@ -270,32 +271,43 @@ def run_cooja_simulation(
 
 def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostname: str) -> None:
     """
-    Worker that consumes the queue and runs simulations on a host/port.
+    Worker that consumes simulation IDs from the queue and executes each one.
+    The full simulation document is fetched from MongoDB at execution time.
+    Simulations not in WAITING status are skipped (already claimed by another worker).
     """
     mongo = create_mongo_repository_factory(SET.mongo_uri, SET.db_name)
     while True:
-        sim = sim_queue.get()
+        sim_id = sim_queue.get()
+        sim = None
         try:
-            if sim is None:
+            if sim_id is None:
                 return
 
+            sim = mongo.simulation_repo.get(sim_id)
+            if sim is None:
+                log.warning("[port=%s] Simulation %s not found; skipping.", port, sim_id)
+                continue
+
+            if sim.get("status") != EnumStatus.WAITING:
+                log.info("[port=%s] Simulation %s already in status '%s'; skipping.",
+                         port, sim_id, sim.get("status"))
+                continue
+
             mode = os.getenv("ENABLE_DATA_SYNTHETIC", "False").lower() == "true"
-            mode_str = "Synthetic Data" if mode else "Simulation"
-            log.info("mode: %s", mode_str)
+            log.info("mode: %s", "Synthetic Data" if mode else "Simulation")
             if mode:
                 run_synthetic_simulation(sim, mongo)
                 continue
 
-            sim_id_str = str(sim.get("_id"))
-            log.info("[port=%s host=%s] Preparing simulation %s", port, hostname, sim_id_str)
+            log.info("[port=%s host=%s] Preparing simulation %s", port, hostname, sim_id)
 
             success, local_files, remote_files = prepare_simulation_files(sim, worker_id, mongo)
             if not success:
-                log.warning("[port=%s] Skipping simulation %s (prepare failed)", port, sim_id_str)
+                log.warning("[port=%s] Skipping simulation %s (prepare failed)", port, sim_id)
                 try:
                     mongo.simulation_repo.mark_error(ObjectId(sim["_id"]), "Failed to prepare simulation files")
                 except Exception:
-                    log.exception("Failed to mark error on simulation %s", sim_id_str)
+                    log.exception("Failed to mark error on simulation %s", sim_id)
                 if sim.get("generation_id"):
                     _check_and_close_generation(sim["generation_id"], mongo)
                 continue
@@ -321,7 +333,7 @@ def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostnam
                     mongo.simulation_repo.mark_error(ObjectId(sim["_id"]), str(e))
             except Exception:
                 log.exception("Failed to mark error on simulation after general exception")
-            if sim and "generation_id" in sim:
+            if sim and sim.get("generation_id"):
                 _check_and_close_generation(sim["generation_id"], mongo)
         finally:
             sim_queue.task_done()
@@ -342,12 +354,13 @@ def start_workers(num_workers: int) -> queue.Queue:
 
 
 def load_initial_waiting_jobs(mongo: MongoRepository, sim_queue: queue.Queue) -> None:
-    """Enqueue pending simulations on startup."""
+    """Enqueue IDs of all WAITING simulations found at startup."""
     log.info("Searching for pending simulations...")
     pending = mongo.simulation_repo.find_pending()
     for sim in pending:
-        log.info("Pending simulation: %s", sim.get("_id"))
-        sim_queue.put(sim)
+        sim_id = str(sim["_id"])
+        log.info("Pending simulation: %s", sim_id)
+        sim_queue.put(sim_id)
 
 
 def main() -> None:
@@ -364,7 +377,7 @@ def main() -> None:
 
     Thread(
         target=watch_status_waiting_enqueue,
-        args=(mongo.simulation_repo, mongo.generation_repo, sim_queue,),
+        args=(mongo.simulation_repo, sim_queue,),
         daemon=True,
     ).start()
 
