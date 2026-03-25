@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from matplotlib.pyplot import Figure
 import numpy as np
 from matplotlib.patches import Circle
-from pylib.dto.simulator import SimulationConfig
+from pylib.config.simulator import SimulationConfig
 
 log = logging.getLogger(__name__)
 

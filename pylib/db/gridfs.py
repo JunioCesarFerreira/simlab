@@ -1,9 +1,11 @@
 import logging
 import gridfs
 from bson import ObjectId
-from mongo.connection import MongoDBConnection
+
+from pylib.db.connection import MongoDBConnection
 
 logger = logging.getLogger(__name__)
+
 
 class MongoGridFSHandler:
     def __init__(self, connection: MongoDBConnection):
@@ -21,7 +23,7 @@ class MongoGridFSHandler:
             with self.connection.connect() as db:
                 fs = gridfs.GridFS(db)
                 grid_out = fs.get(ObjectId(file_id))
-                with open(local_path, 'wb') as f:
+                with open(local_path, "wb") as f:
                     f.write(grid_out.read())
                 logger.info(f"File {local_path} saved successfully.")
         except Exception as e:

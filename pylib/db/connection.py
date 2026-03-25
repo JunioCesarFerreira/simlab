@@ -9,12 +9,12 @@ from pymongo.errors import PyMongoError
 
 logger = logging.getLogger(__name__)
 
+
 class MongoDBConnection:
     def __init__(self, uri: str, db_name: str):
         logger.info(f"[MongoDBConnection] uri:{uri} db_name:{db_name}")
         self.uri = uri
         self.db_name = db_name
-
 
     @contextmanager
     def connect(self) -> Generator:
@@ -23,8 +23,7 @@ class MongoDBConnection:
             yield client[self.db_name]
         finally:
             client.close()
-    
-    
+
     def waiting_ping(self) -> None:
         while True:
             try:
@@ -34,14 +33,13 @@ class MongoDBConnection:
             except pymongo.errors.ConnectionFailure:
                 logger.error("[WorkGenerator] Aguardando conexão com MongoDB...")
                 time.sleep(3)
-    
-    
+
     def watch_collection(self,
         collection_name: str,
         pipeline: list[dict],
         on_change: Callable[[dict], None],
         full_document: str = "default"
-        ) -> None:
+    ) -> None:
         """
         Observes changes in a specific collection using a given pipeline.
         Automatically retries with exponential backoff on failure, resuming
