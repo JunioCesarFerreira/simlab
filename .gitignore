@@ -29,3 +29,7 @@ gui/simlab/node_modules
 pareto-analysis/lib/__pycache__
 .vscode
 master-node/tmp
+pylib/db/repositories/__pycache__
+pylib/db/__pycache__
+pylib/db/models/__pycache__
+pylib/config/__pycache__
