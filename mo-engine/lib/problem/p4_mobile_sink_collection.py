@@ -1,9 +1,9 @@
 from typing import Any, Mapping, Sequence
 import math
 
-from pylib.dto.simulator import FixedMote, MobileMote, SimulationElements
-from pylib.dto.problems import ProblemP4
-from pylib.dto.algorithm import GeneticAlgorithmConfigDto
+from pylib.config.simulator import FixedMote, MobileMote, SimulationElements
+from pylib.config.problems import ProblemP4
+from pylib.config.algorithm import GeneticAlgorithmConfigDto
 
 from .adapter import ProblemAdapter, ChromosomeP4, Random
 

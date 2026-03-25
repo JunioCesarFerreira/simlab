@@ -1,8 +1,8 @@
 import os, tempfile
 from pathlib import Path
 from pylib import cooja_files
-from pylib.dto.simulator import SimulationConfig
-from pylib.mongo_db import MongoGridFSHandler
+from pylib.config.simulator import SimulationConfig
+from pylib.db.gridfs import MongoGridFSHandler
 
 TEMPLATE_XML = os.getenv("TEMPLATE_XML", "./simulation_template.xml")
 IS_DOCKER = os.getenv("IS_DOCKER", False)

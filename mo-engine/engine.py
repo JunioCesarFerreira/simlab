@@ -5,10 +5,9 @@ project_path = os.path.abspath(os.path.join(os.getcwd(), ".."))
 if project_path not in sys.path:
     sys.path.insert(0, project_path)
 
-from pylib import mongo_db
-from pylib.mongo_db import EnumStatus
-from lib.strategy.base import EngineStrategy 
-from lib.strategy.nsga3 import NSGA3LoopStrategy  
+from pylib.db import create_mongo_repository_factory, EnumStatus
+from lib.strategy.base import EngineStrategy
+from lib.strategy.nsga3 import NSGA3LoopStrategy
 
 # --------------------------- Logging --------------------------------
 logging.basicConfig(
@@ -18,12 +17,12 @@ logging.basicConfig(
 log = logging.getLogger("mo-engine")
 # --------------------------------------------------------------------
 
-SimStatus = mongo_db.EnumStatus
+SimStatus = EnumStatus
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/?replicaSet=rs0")
 IS_DOCKER = os.getenv("IS_DOCKER", False)
 DB_NAME = os.getenv("DB_NAME", "simlab")
 
-mongo = mongo_db.create_mongo_repository_factory(MONGO_URI, DB_NAME)
+mongo = create_mongo_repository_factory(MONGO_URI, DB_NAME)
 
 
 def select_strategy(exp_doc: dict) -> EngineStrategy:

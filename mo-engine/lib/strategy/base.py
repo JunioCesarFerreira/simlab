@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
-from pylib.dto.database import Experiment
-from pylib.mongo_db import MongoRepository
+from pylib.db.models import Experiment
+from pylib.db import MongoRepository
 
 class EngineStrategy(ABC):
     def __init__(self, experiment: Experiment, mongo: MongoRepository):
