@@ -2,20 +2,21 @@ import logging
 from typing import Any
 from bson import ObjectId, errors
 
-from mongo.connection import MongoDBConnection
+from pylib.db.connection import MongoDBConnection
 
 log = logging.getLogger(__name__)
+
 
 class Pareto:
     @staticmethod
     def dominates(
-            a: dict[str, float], 
-            b: dict[str, float], 
+            a: dict[str, float],
+            b: dict[str, float],
             goals: dict[str, str]
     ) -> bool:
         """
         Returns True if a dominates b.
-        
+
         goals: {objective_name: "min" | "max"}
         """
         better_or_equal = True
@@ -34,7 +35,6 @@ class Pareto:
                     strictly_better = True
 
         return better_or_equal and strictly_better
-
 
     @staticmethod
     def pareto_front(
@@ -55,8 +55,7 @@ class Pareto:
                 front.append(a)
 
         return front
-    
-    
+
     @staticmethod
     def to_minimization(
         objectives: dict[str, float],
@@ -75,8 +74,7 @@ class Pareto:
             else:
                 out[k] = v
         return out
-    
-    
+
     @staticmethod
     def dominates_min(a: dict[str, float], b: dict[str, float]) -> bool:
         better_or_equal = True
@@ -89,7 +87,6 @@ class Pareto:
                 strictly_better = True
 
         return better_or_equal and strictly_better
-
 
     @staticmethod
     def pareto_front_min(
@@ -110,7 +107,8 @@ class Pareto:
 
         return front
 
-#------------------------------------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
 
 
 class AnalyticsRepository:
@@ -145,8 +143,7 @@ class AnalyticsRepository:
 
             pareto_front = Pareto.pareto_front(items, goals)
             return pareto_front
-        
-        
+
     def get_pareto_per_generation(
         self,
         experiment_id: str
@@ -158,23 +155,22 @@ class AnalyticsRepository:
             return []
         with self.connection.connect() as db:
             experiment = db.experiments.find_one({"_id": oid})
-                        
+
             if experiment is None:
                 raise ValueError("Experiment not found")
 
-            # Map objective -> goal (min/max)
             goals = {
                 obj["name"]: obj["goal"]
                 for obj in experiment["data_conversion_config"]["objectives"]
             }
-            
+
             pareto_by_generation = {}
 
             generations = db.generations.find(
                 {"_id": {"$in": experiment["generations"]}},
                 sort=[("index", 1)]
             )
-            
+
             gen_list = list(generations)
 
             for gen in gen_list:
@@ -184,13 +180,10 @@ class AnalyticsRepository:
                             "_id": {"$in": [ObjectId(oid) for oid in list(gen["simulations_ids"])]},
                             "status": "Done"
                         },
-                        {
-                            "_id": 1,
-                            "objectives": 1
-                        }
+                        {"_id": 1, "objectives": 1}
                     )
                 )
-                
+
                 candidates = []
                 for sim in simulations:
                     candidates.append({
@@ -199,12 +192,10 @@ class AnalyticsRepository:
                     })
 
                 pareto = Pareto.pareto_front(candidates, goals)
-
                 pareto_by_generation[gen["index"]] = pareto
 
             return pareto_by_generation
-        
-        
+
     def get_pareto_per_generation_only_min(
         self,
         experiment_id: str
@@ -216,23 +207,22 @@ class AnalyticsRepository:
             return []
         with self.connection.connect() as db:
             experiment = db.experiments.find_one({"_id": oid})
-                        
+
             if experiment is None:
                 raise ValueError("Experiment not found")
 
-            # Map objective -> goal (min/max)
             goals = {
                 obj["name"]: obj["goal"]
                 for obj in experiment["data_conversion_config"]["objectives"]
             }
-            
+
             pareto_by_generation = {}
 
             generations = db.generations.find(
                 {"_id": {"$in": experiment["generations"]}},
                 sort=[("index", 1)]
             )
-            
+
             gen_list = list(generations)
 
             for gen in gen_list:
@@ -242,13 +232,10 @@ class AnalyticsRepository:
                             "_id": {"$in": [ObjectId(oid) for oid in list(gen["simulations_ids"])]},
                             "status": "Done"
                         },
-                        {
-                            "_id": 1,
-                            "objectives": 1
-                        }
+                        {"_id": 1, "objectives": 1}
                     )
                 )
-                
+
                 candidates = []
                 for sim in simulations:
                     candidates.append({
@@ -257,12 +244,10 @@ class AnalyticsRepository:
                     })
 
                 pareto = Pareto.pareto_front_min(candidates)
-
                 pareto_by_generation[gen["index"]] = pareto
 
             return pareto_by_generation
-        
-        
+
     def get_individuals_per_generation(
         self,
         experiment_id: str
@@ -274,17 +259,17 @@ class AnalyticsRepository:
             return []
         with self.connection.connect() as db:
             experiment = db.experiments.find_one({"_id": oid})
-                        
+
             if experiment is None:
                 raise ValueError("Experiment not found")
-            
+
             individuals_per_gen = {}
 
             generations = db.generations.find(
                 {"_id": {"$in": experiment["generations"]}},
                 sort=[("index", 1)]
             )
-            
+
             gen_list = list(generations)
 
             for gen in gen_list:
@@ -303,7 +288,7 @@ class AnalyticsRepository:
                         }
                     )
                 )
-                
+
                 candidates = []
                 for sim in simulations:
                     candidates.append({

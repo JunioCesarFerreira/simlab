@@ -1,51 +1,77 @@
-# api/endpoints/experiment.py
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
-import os, sys
-from bson import errors
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from bson import errors as bson_errors
 from tempfile import NamedTemporaryFile
 
-project_path = os.path.abspath(os.path.join(os.getcwd(), ".."))
-import sys
-if project_path not in sys.path:
-    sys.path.insert(0, project_path)
+from bson import ObjectId
 
-from api.dto import ExperimentDto, ExperimentInfoDto
-from api.dependencies import get_mongo_factory
-from api.dto_conversor import experiment_to_mongo, experiment_from_mongo
-
-factory = get_mongo_factory()
+from pylib.db import MongoRepository
+from api.dependencies import get_factory
+from api.domain.experiment import ExperimentDto, ExperimentFullDto, ExperimentInfoDto
+from api.mappers.experiment import (
+    experiment_from_mongo,
+    experiment_full_from_mongo,
+    experiment_info_from_mongo,
+    experiment_to_mongo,
+)
+from api.mappers.generation import generation_from_mongo
 
 router = APIRouter()
 
 
 @router.post("/", response_model=str)
-def create_experiment(experiment: ExperimentDto) -> str:
-    """
-    Create a new experiment.
-    
-    - Receives a validated ExperimentDto
-    - Converts it to MongoDB-compatible format
-    - Persists it in the experiments collection
-    
-    Returns the generated experiment_id as string.
-    """
+def create_experiment(
+    experiment: ExperimentDto,
+    factory: MongoRepository = Depends(get_factory)
+) -> str:
+    """Create a new experiment. Returns the generated experiment_id."""
     try:
         doc = experiment_to_mongo(experiment)
-        exp_id = factory.experiment_repo.insert(doc)  # returns ObjectId
-        return str(exp_id)
+        return str(factory.experiment_repo.insert(doc))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/by-status/{status}", response_model=list[ExperimentInfoDto])
+def get_experiments_by_status(
+    status: str,
+    factory: MongoRepository = Depends(get_factory)
+) -> list[ExperimentInfoDto]:
+    """Retrieve all experiments with a given status."""
+    try:
+        docs = factory.experiment_repo.find_by_status(status)
+        return [experiment_info_from_mongo(d) for d in docs]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{experiment_id}/full", response_model=ExperimentFullDto)
+def get_experiment_full(
+    experiment_id: str,
+    factory: MongoRepository = Depends(get_factory)
+) -> ExperimentFullDto:
+    """Retrieve an experiment with all its generations and individuals fully embedded."""
+    try:
+        doc = factory.experiment_repo.get(experiment_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Experiment not found")
+        gens = factory.generation_repo.find_by_experiment(ObjectId(experiment_id))
+        generations = [
+            generation_from_mongo(g, factory.individual_repo.find_by_generation(g["_id"]))
+            for g in gens
+        ]
+        return experiment_full_from_mongo(doc, generations)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{experiment_id}", response_model=ExperimentDto)
-def get_experiment(experiment_id: str) -> ExperimentDto:
-    """
-    Retrieve a single experiment by its identifier.
-    
-    - experiment_id must be a valid ObjectId string
-    - Returns the experiment mapped to ExperimentDto
-    - Returns 404 if the experiment does not exist
-    """
+def get_experiment(
+    experiment_id: str,
+    factory: MongoRepository = Depends(get_factory)
+) -> ExperimentDto:
+    """Retrieve a single experiment by its ObjectId."""
     try:
         doc = factory.experiment_repo.get(experiment_id)
         if not doc:
@@ -57,33 +83,13 @@ def get_experiment(experiment_id: str) -> ExperimentDto:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/by-status/{status}", response_model=list[ExperimentInfoDto])
-def get_experiments_by_status(status: str) -> list[ExperimentInfoDto]:
-    """
-    Retrieve all experiments with a given status.
-    
-    - Status is matched exactly as stored in the database
-    - Returns a list of ExperimentDto objects
-    - Empty list is returned if no experiment matches
-    """
-    try:
-        docs = factory.experiment_repo.find_by_status(status)
-        return [experiment_from_mongo(d) for d in docs]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.put("/{experiment_id}", response_model=bool)
-def update_experiment(experiment_id: str, updates: dict) -> bool:
-    """
-    Update arbitrary fields of an experiment.
-    
-    - experiment_id must be a valid ObjectId string
-    - updates is a partial dictionary of fields to be updated
-    - Uses a $set-like semantic in the repository layer
-    
-    Returns True if the update operation succeeds.
-    """
+def update_experiment(
+    experiment_id: str,
+    updates: dict,
+    factory: MongoRepository = Depends(get_factory)
+) -> bool:
+    """Partially update an experiment using $set semantics."""
     try:
         return factory.experiment_repo.update(experiment_id, updates)
     except Exception as e:
@@ -91,39 +97,29 @@ def update_experiment(experiment_id: str, updates: dict) -> bool:
 
 
 @router.delete("/{experiment_id}", response_model=bool)
-def delete_experiment(experiment_id: str) -> bool:
-    """
-    Delete an experiment by its identifier.
-    
-    - experiment_id must be a valid ObjectId string
-    - Deletes only the experiment document
-    - Associated generations, simulations or GridFS data
-      must be handled explicitly elsewhere
-    
-    Returns True if exactly one experiment was deleted.
-    """
+def delete_experiment(
+    experiment_id: str,
+    factory: MongoRepository = Depends(get_factory)
+) -> bool:
+    """Delete an experiment and all its associated data (cascade)."""
     try:
         res = factory.experiment_repo.delete(experiment_id)
         if isinstance(res, dict):
             return res.get("deleted_experiments", 0) == 1
         return bool(res)
-    except errors.InvalidId:
+    except bson_errors.InvalidId:
         raise HTTPException(status_code=400, detail="Invalid experiment_id")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.patch("/{experiment_id}/status", response_model=bool)
-def update_experiment_status(experiment_id: str, new_status: str) -> bool:
-    """
-    Update only the status field of an experiment.
-    
-    - Designed for state-machine transitions (e.g., Waiting → Running)
-    - Avoids full document updates
-    - experiment_id must be a valid ObjectId string
-    
-    Returns True if the operation succeeds.
-    """
+def update_experiment_status(
+    experiment_id: str,
+    new_status: str,
+    factory: MongoRepository = Depends(get_factory)
+) -> bool:
+    """Update only the status field of an experiment."""
     try:
         factory.experiment_repo.update_status(experiment_id, new_status)
         return True
@@ -136,31 +132,20 @@ async def attach_analysis_file(
     experiment_id: str,
     name: str = Form(...),
     description: str = Form(""),
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    factory: MongoRepository = Depends(get_factory)
 ) -> str:
-    """
-    Attach an analysis file to an experiment.
-    
-    - File is stored in GridFS (or files collection)
-    - Experiment stores only metadata + file_id
-    
-    Returns the file_id as string.
-    """
+    """Upload and attach an analysis file to an experiment. Returns the GridFS file_id."""
     try:
         with NamedTemporaryFile(delete=False) as tmp:
-            content = await file.read()
-            tmp.write(content)
+            tmp.write(await file.read())
             tmp.flush()
             tmp_path = tmp.name
         oid = factory.experiment_repo.add_analysis_file_to_experiment(
-            experiment_id,
-            description,
-            tmp_path,
-            name
-            )
+            experiment_id, description, tmp_path, name
+        )
         return str(oid)
-
-    except errors.InvalidId:
+    except bson_errors.InvalidId:
         raise HTTPException(status_code=400, detail="Invalid experiment_id")
     except HTTPException:
         raise

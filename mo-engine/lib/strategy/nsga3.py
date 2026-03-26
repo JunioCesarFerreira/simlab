@@ -1,4 +1,5 @@
 import os
+import time
 import random
 import logging
 import threading
@@ -10,10 +11,10 @@ from typing import Optional
 import numpy as np
 
 from .base import EngineStrategy
-from .simulation_seeds import resolve_simulation_seeds
 
-from pylib.mongo_db import EnumStatus
-from pylib.dto.database import Batch, Simulation, SimulationConfig, Generation
+from pylib.db import EnumStatus
+from pylib.db.models import Generation, Individual, Simulation
+from pylib.config.simulator import SimulationConfig
 from pylib import plot_network
 
 from lib.util.build_input_sim_cooja import create_files
@@ -28,13 +29,14 @@ from lib.problem.resolve import build_adapter
 
 logger = logging.getLogger(__name__)
 
+
 class NSGA3LoopStrategy(EngineStrategy):
     """
     NSGA-III loop strategy integrated with SimLab.
 
     - Generates an initial population (fixed 2D mote positions).
     - Queues simulations in MongoDB (Change Streams trigger execution on the master node).
-    - Upon receiving the results (DONE status), calculates the objectives, 
+    - Upon receiving the results (DONE status on the Generation), calculates the objectives,
         performs NSGA-III selection with reference point niching,
         creates the next generation (offspring via SBX + Polynomial Mutation),
         and repeats until `number_of_generations` is reached.
@@ -49,293 +51,358 @@ class NSGA3LoopStrategy(EngineStrategy):
         algorithm_config = params.get("algorithm", {}) or {}
         problem_config = params.get("problem", {}) or {}
         simulation_config = params.get("simulation", {}) or {}
-        
+
         src_repo_opts = experiment.get("source_repository_options", {}) or {}
-        
+
         self.source_repository_options: dict[str, ObjectId] = {
             str(k): ObjectId(v) if isinstance(v, (str, bytes)) else v
             for k, v in src_repo_opts.items()
         }
-        
+
         # --- simulation and algorithm parameters ---
         self._sim_duration: int = int(simulation_config.get("duration", 120))
+        self._sim_rand_seeds: list[int] = [int(x) for x in simulation_config.get("random_seeds", [123456])]
         self._pop_size: int = int(algorithm_config.get("population_size", 20))
         self._max_gen: int = int(algorithm_config.get("number_of_generations", 5))
         self._prob_cx = float(algorithm_config.get("prob_cx", 0.8))
         self._prob_mt = float(algorithm_config.get("prob_mt", 0.2))
-    
+
         ga_random_seed: int = int(algorithm_config.get("random_seed", 42))
         self._ga_rng = random.Random(ga_random_seed)
-        self._sim_rand_seeds = resolve_simulation_seeds(
-            simulation_config=simulation_config,
-            rng=self._ga_rng,
-            default_count=1,
-        )
-                        
+
         self._problem_adapter: ProblemAdapter = build_adapter(
-            problem_config, 
-            algorithm_config, 
+            problem_config,
+            algorithm_config,
             self._ga_rng
-            )
-                
-        # prepare network metric conversor
+        )
+
         self._metric_conv_config = experiment.get("data_conversion_config", {}) or {}
-        
-        # prepare objective keys and goals
+
         obj = params.get("objectives", []) or []
         self._objective_keys: list[str] = [o["metric_name"] for o in obj]
-        self._objective_goals: list[int] = [1 if o["goal"]=='min' else -1 for o in obj]
+        self._objective_goals: list[int] = [1 if o["goal"] == 'min' else -1 for o in obj]
         if len(self._objective_keys) != len(self._objective_goals):
             raise ValueError(
                 f"objective_keys ({len(self._objective_keys)}) and "
                 f"objective_goals ({len(self._objective_goals)}) length mismatch"
             )
         logger.info(f"Objective keys: {self._objective_keys} with goals: {self._objective_goals}")
-            
+
         # --- nsga3 niching ---
-        self._divisions: int = int(algorithm_config.get("divisions", 10))      
+        self._divisions: int = int(algorithm_config.get("divisions", 10))
         self._ref_points = generate_reference_points(len(self._objective_keys), self._divisions)
-        
+
         # --- loop state ---
         self._exp_id: ObjectId | None = None
         self._gen_index: int = 0
-        self._batch_id: ObjectId | None = None
-                        
+        self._generation_id: ObjectId | None = None
+        self._lock = threading.Lock()
+        self._sim_done_count: int = 0
+        self._sim_watch_thread: Thread | None = None
+
         # --- nsga3 workflow ---
-        self._current_population: list[Chromosome] = [] # P_t       
-        self._parents: list[Chromosome] = [] # P_{t-1}               
-        self._map_genome_sim: dict[Chromosome, list[ObjectId]] = {}  
+        self._current_population: list[Chromosome] = []   # P_t
+        self._parents: list[Chromosome] = []              # P_{t-1}
+        self._inserted_genomes: set[str] = set()          # hashes already inserted to DB
         self._map_genome_objectives: dict[Chromosome, list[float]] = {}
-        
-        
+
+
 # ------------------------------
 # Interface EngineStrategy
 # ------------------------------
-    # START implementation
     def start(self):
         """
-        Initializes the population and creates Generation 1 with `population_size` simulations.
+        Initializes the population and creates Generation 0 with `population_size` simulations.
         """
         self._exp_id = ObjectId(self.experiment["_id"]) if isinstance(self.experiment.get("_id"), (str, bytes)) else self.experiment.get("_id")
         if not isinstance(self._exp_id, ObjectId):
             self._exp_id = ObjectId(str(self.experiment.get("_id")))
         self._gen_index = 0
 
-        # Initial Population P_0
         self._current_population = self._problem_adapter.random_individual_generator(self._pop_size)
 
-        # Enqueue Simulations to first (compute F_0=f(P_0))
-        self._batch_enqueue()
-
-        # Starts watcher for receive results from this generation
+        self._generation_enqueue()
         self._start_watcher()
+        self._start_generation_poll()
 
-    # EVENT_SIMULATION_DONE implementation
-    def event_simulation_done(self, result_doc: dict):
-        """ 
-        On event Simulation Batch Result Done
-        Args: result_doc (dict): Batch dictionary
+    def event_simulation_done(self, sim_doc: dict):
         """
-        if self._stop_flag or self._batch_id is None:
+        Called for every simulation that reaches a terminal state (DONE or ERROR).
+        Accounts for progress only — does not control algorithm flow.
+        """
+        sim = sim_doc.get("fullDocument") or {}
+        if sim.get("generation_id") != self._generation_id:
             return
-
-        logger.info("EVENT SIMULATION BATCH RESULT DONE")
-        batch = result_doc.get("fullDocument")
-
-        # Ensures that this result is from the current batch
-        if ObjectId(batch.get("_id")) != self._batch_id:
-            return
-
-        logger.info(f"batch_id={self._batch_id} DONE")
-        
-        map_sim_metrics = self.mongo.batch_repo.get_simulations_metrics_map(
-            batch_id=self._batch_id, 
-            metrics=self._objective_keys
+        sims_per_gen = self._pop_size * len(self._sim_rand_seeds)
+        with self._lock:
+            self._sim_done_count += 1
+            logger.info(
+                "[NSGA-III] Simulation terminal (%s): %d/%d for generation %s",
+                sim.get("status"), self._sim_done_count, sims_per_gen, self._generation_id
             )
-        
+
+    def event_generation_done(self, gen_doc: dict):
+        """
+        Called when a generation reaches a terminal state (DONE or ERROR).
+        Controls the algorithm flow: objective extraction, NSGA-III selection, next generation.
+        """
+        gen = gen_doc.get("fullDocument")
+        if not gen:
+            return
+        with self._lock:
+            self._handle_generation_done(ObjectId(gen.get("_id")))
+
+    def _handle_generation_done(self, gen_oid: ObjectId):
+        """Core handler — must be called while holding self._lock."""
+        if self._stop_flag or self._generation_id is None:
+            return
+
+        if gen_oid != self._generation_id:
+            return
+
+        logger.info("EVENT GENERATION TERMINAL gen_id=%s", self._generation_id)
+
+        map_ind_metrics = self.mongo.generation_repo.get_simulations_metrics_by_individual(
+            generation_id=self._generation_id,
+            metrics=self._objective_keys
+        )
+
+        n_obj = len(self._objective_keys)
+        worst_objectives = [float("inf")] * n_obj
+
         for ind in self._current_population:
-            sims = self._map_genome_sim.get(ind, [])
             if self._map_genome_objectives.get(ind) is not None:
-                logger.info(f"Objectives already calculated for genome {ind.get_hash()}; skipping.")
+                logger.info("Objectives already calculated for genome %s; skipping.", ind.get_hash())
                 continue
-            if sims is None or len(sims) == 0:
-                logger.warning(f"No simulations found for genome {ind}; skipping in objectives calculation.")
+
+            ind_metrics = map_ind_metrics.get(ind.get_hash())
+            if ind_metrics is None:
+                logger.warning("No metrics for genome %s; assigning worst objectives.", ind.get_hash())
+                self._map_genome_objectives[ind] = worst_objectives
                 continue
-            accumulated_objectives: list[float] = [0.0] * len(self._objective_keys)
-            for sim_id in sims:
-                sim_metrics = map_sim_metrics.get(str(sim_id))
-                if sim_metrics is None:
-                    logger.warning(f"Missing metrics for simulation {sim_id}; skipping in objectives calculation.")
-                    continue
-                obj_vector = self._extract_objectives_to_minimization(sim_metrics)
-                if obj_vector is None:
-                    logger.warning(f"Could not extract objective vector for simulation {sim_id}; skipping.")
-                    continue
-                accumulated_objectives = [sum(x) for x in zip(accumulated_objectives, obj_vector)]
-            self._map_genome_objectives[ind] = [obj / len(sims) for obj in accumulated_objectives]
-                        
+
+            obj_vector = self._extract_objectives_to_minimization(ind_metrics)
+            if obj_vector is None:
+                logger.warning("Could not extract objective vector for genome %s; assigning worst.", ind.get_hash())
+                self._map_genome_objectives[ind] = worst_objectives
+            else:
+                self._map_genome_objectives[ind] = obj_vector
+
+        # Persist objectives to individual documents before evolving
+        self._update_individual_objectives()
+
         self._evolution()
 
-    # STOP implementation
     def stop(self):
         self._stop_flag = True
-        t = self._watch_thread
-        if t and t.is_alive() and t is not threading.current_thread():
-            t.join(timeout=1.0)
+        for t in (self._watch_thread, self._sim_watch_thread):
+            if t and t.is_alive() and t is not threading.current_thread():
+                t.join(timeout=1.0)
         self._watch_thread = None
+        self._sim_watch_thread = None
+
 
 # ------------------------------
-# Watcher (Change Stream)
+# Watcher (Change Stream) + Polling fallback
 # ------------------------------
     def _start_watcher(self):
-        # encerra watcher anterior, se houver
         self._stop_flag = False
-        if self._watch_thread and self._watch_thread.is_alive():
-            self._stop_flag = True
-            self._watch_thread.join(timeout=1.0)
-            self._stop_flag = False
 
-        def _run():
-            # This method already opens the Change Stream with a fixed pipeline. (status == DONE)
-            def _callback(result_doc: dict):
+        # Stop any existing threads
+        for t in (self._watch_thread, self._sim_watch_thread):
+            if t and t.is_alive():
+                self._stop_flag = True
+                t.join(timeout=1.0)
+                self._stop_flag = False
+
+        # --- Generation watcher: controls flow ---
+        def _run_generation_watcher():
+            def _callback(gen_doc: dict):
                 if self._stop_flag:
                     return
                 try:
-                    self.event_simulation_done(result_doc)
+                    self.event_generation_done(gen_doc)
                 except Exception:
-                    logger.exception(f"[NSGA-III] Watcher Callback Error.")
+                    logger.exception("[NSGA-III] Generation watcher callback error.")
 
-            logger.info("[NSGA-III] Starting Batch watcher (DONE).")
-            self.mongo.batch_repo.watch_status_done(_callback)
+            logger.info("[NSGA-III] Starting Generation watcher (DONE or ERROR).")
+            self.mongo.generation_repo.watch_status_terminal(_callback)
 
-        self._watch_thread = Thread(target=_run, daemon=True)
+        # --- Simulation watcher: accounting only ---
+        def _run_simulation_watcher():
+            def _callback(sim_doc: dict):
+                if self._stop_flag:
+                    return
+                try:
+                    self.event_simulation_done(sim_doc)
+                except Exception:
+                    logger.exception("[NSGA-III] Simulation watcher callback error.")
+
+            logger.info("[NSGA-III] Starting Simulation watcher (DONE or ERROR).")
+            self.mongo.simulation_repo.watch_status_terminal(_callback)
+
+        self._watch_thread = Thread(target=_run_generation_watcher, daemon=True, name="nsga3-gen-watcher")
+        self._sim_watch_thread = Thread(target=_run_simulation_watcher, daemon=True, name="nsga3-sim-watcher")
         self._watch_thread.start()
+        self._sim_watch_thread.start()
+
+    def _start_generation_poll(self) -> None:
+        """
+        Polling fallback that checks the current generation status every poll_interval seconds.
+        Fires _handle_generation_done if the generation is terminal but the Change Stream
+        event was missed (e.g. after a reconnection gap).
+        """
+        poll_interval = int(os.getenv("BATCH_POLL_INTERVAL", "3600"))
+
+        def _poll():
+            while not self._stop_flag:
+                time.sleep(poll_interval)
+                if self._stop_flag or self._generation_id is None:
+                    continue
+                try:
+                    gen = self.mongo.generation_repo.get(str(self._generation_id))
+                    if gen and gen.get("status") in (EnumStatus.DONE, EnumStatus.ERROR):
+                        logger.warning(
+                            "[NSGA-III] Generation %s %s detected by polling fallback.",
+                            self._generation_id, gen.get("status")
+                        )
+                        with self._lock:
+                            self._handle_generation_done(ObjectId(gen["_id"]))
+                except Exception:
+                    logger.exception("[NSGA-III] Polling fallback error.")
+
+        Thread(target=_poll, daemon=True, name="nsga3-poll").start()
+
+    def _upload_topology_async(
+        self,
+        exp_oid: ObjectId,
+        gen_oid: ObjectId,
+        gen_index: int,
+        ind_idx: int,
+        individual_id: str,
+        config_snapshot: dict,
+    ) -> None:
+        """
+        Generates and uploads the topology image for one individual in a background thread,
+        then updates topology_picture_id on the Individual document.
+        """
+        def _do():
+            try:
+                topo_id = self._plot_topology(exp_oid, gen_index, ind_idx, config_snapshot)
+                self.mongo.individual_repo.update_topology_picture(individual_id, gen_oid, topo_id)
+            except Exception:
+                logger.exception(
+                    "[NSGA-III] Topology upload failed for gen=%s ind=%s", gen_index, ind_idx
+                )
+
+        Thread(target=_do, daemon=True, name=f"topo-g{gen_index}-{ind_idx}").start()
+
 
 # ------------------------------
 # Generation / Queuing
 # ------------------------------
-    def _batch_enqueue(self) -> None:
+    def _generation_enqueue(self) -> None:
         assert self._exp_id is not None
         exp_oid = self._exp_id
         gen_index = self._gen_index
         population = self._current_population
-        
-        batch_simulation_ids: list[ObjectId] = [] # collect simulation ids for this generation batch
-        
-        first_seed = self._sim_rand_seeds[0] if self._sim_rand_seeds else 123456 # default seed for topology plotting (if no seeds provided)
-        
+        self._sim_done_count = 0
+
+        # Pre-generate generation ObjectId so simulations are inserted with generation_id set,
+        # avoiding the race where master-node picks up a simulation before the generation exists.
+        gen_oid = ObjectId()
+
+        first_seed = self._sim_rand_seeds[0] if self._sim_rand_seeds else 123456
+
         for i, genome in enumerate(population):
-            # convert genome to simulation config
+            genome_hash = genome.get_hash()
+
+            # Skip genomes already inserted to DB in this session
+            if genome_hash in self._inserted_genomes:
+                logger.info("Genome %s already inserted; skipping.", genome_hash)
+                continue
+
             config = self._convert_genome_to_sim_config(
                 genome=genome,
                 gen_index=gen_index,
                 ind_idx=i,
                 seed=first_seed
             )
-            
-            # plot topology and upload to GridFS
-            topology_picture_id = self._plot_topology(
-                exp_oid=exp_oid,
-                gen_index=gen_index,
-                ind_idx=i,
-                config=config
-            )
-            
-            # check if genome was already evaluated (duplicate in population or previous generation)
-            if genome in self._map_genome_sim.keys():
-                logger.info(f"Genome {genome.get_hash()} already evaluated; skipping simulation creation and reusing previous simulation ids.")
-                continue        
-                
-            # build and insert simulation per seed, and collect simulation ids for this genome
-            simulation_ids_for_genome: list[ObjectId] = []
+
+            # Insert Individual document (objectives filled in after evaluation)
+            ind_doc: Individual = {
+                "experiment_id": exp_oid,
+                "generation_id": gen_oid,
+                "individual_id": genome_hash,
+                "chromosome": genome.to_dict(),
+                "objectives": [],
+                "topology_picture_id": None,
+            }
+            self.mongo.individual_repo.insert(ind_doc)
+            self._inserted_genomes.add(genome_hash)
+
+            # Insert one simulation per seed
             for seed in self._sim_rand_seeds:
                 config["randomSeed"] = seed
-                sim_oid = self._insert_simulation_db(genome, exp_oid, config, topology_picture_id)
-                simulation_ids_for_genome.append(sim_oid)
-                logger.info(f"SIM_OID={sim_oid} SEED={seed} for genome {genome.get_hash()}")
-                
-            self._map_genome_sim[genome] = simulation_ids_for_genome
-            batch_simulation_ids.extend(simulation_ids_for_genome)
-        
-        # create batch for this generation
-        batch_doc: Batch = {
+                self._insert_simulation_db(genome_hash, exp_oid, gen_oid, config)
+                logger.info("SIM inserted SEED=%s genome=%s", seed, genome_hash)
+
+            # Upload topology image in the background (non-blocking)
+            self._upload_topology_async(exp_oid, gen_oid, gen_index, i, genome_hash, dict(config))
+
+        # Create Generation document (WAITING → triggers master-node watcher)
+        gen_doc: Generation = {
+            "_id": gen_oid,
+            "experiment_id": exp_oid,
             "index": gen_index,
             "status": EnumStatus.WAITING,
             "start_time": datetime.now(),
             "end_time": None,
-            "simulations_ids": batch_simulation_ids
         }
-        self._batch_id: ObjectId = self.mongo.batch_repo.insert(batch_doc)
+        self._generation_id = self.mongo.generation_repo.insert(gen_doc)
 
-        # update experiment
         if gen_index == 0:
             self.mongo.experiment_repo.update(str(exp_oid), {
                 "status": EnumStatus.RUNNING,
                 "start_time": datetime.now()
             })
-        else:
-            self._generation_to_db() # register previous generation with objectives and topology pictures in experiment generations list
-            
-        self._gen_index += 1 # next generation index
-            
-        logger.info(f"[NSGA-III] Generation {gen_index} enqueued with {len(population)} Individuals.")
-                
-    
-    def _generation_to_db(self) -> Generation:
-        exp_oid = self._exp_id
-        gen_idx = self._gen_index
-                
-        generation: Generation = {
-            "index": gen_idx-1,
-            "population": []
-        }
-        
-        for i, genome in enumerate(self._parents):
-            # convert genome to simulation config
-            config = self._convert_genome_to_sim_config(
-                genome=genome,
-                gen_index=gen_idx,
-                ind_idx=i,
-                seed=0
-            )
-            
-            # plot topology and upload to GridFS
-            topology_picture_id = self._plot_topology(
-                exp_oid=exp_oid,
-                gen_index=gen_idx,
-                ind_idx=i,
-                config=config
-            )
-            
-            generation["population"].append({
-                "id": genome.get_hash(),
-                "chromosome": genome.to_dict(),
-                "objectives": self._map_genome_objectives[genome],
-                "topology_picture_id": topology_picture_id,
-                "simulations_ids": self._map_genome_sim[genome]
-            })
-            
-        self.mongo.experiment_repo.add_generation(exp_oid, generation)
 
+        self._gen_index += 1
+
+        logger.info("[NSGA-III] Generation %d enqueued with %d individuals.", gen_index, len(population))
+
+    def _update_individual_objectives(self) -> None:
+        """
+        Persists computed objectives to Individual documents in the DB.
+        Called right after objectives are computed, before evolution.
+        """
+        if self._generation_id is None:
+            return
+        for genome in self._current_population:
+            objectives = self._map_genome_objectives.get(genome)
+            if objectives is not None:
+                self.mongo.individual_repo.update_objectives(
+                    genome.get_hash(),
+                    self._generation_id,
+                    objectives
+                )
 
     def _objectives_to_original(self, vec: list[float]) -> dict[str, float]:
         return {
             k: float(v * s)
             for k, v, s in zip(self._objective_keys, vec, self._objective_goals)
-        }       
-
+        }
 
     def _extract_objectives_to_minimization(self, sim_metrics_map: dict[str, float]) -> Optional[list[float]]:
         obj_vector: list[float] = []
         for key, goal in zip(self._objective_keys, self._objective_goals):
             metric_value = sim_metrics_map.get(key)
             if metric_value is None:
-                logger.warning(f"Missing metric '{key}' for objectives; cannot compute objective vector.")
+                logger.warning(f"Missing metric '{key}'; cannot compute objective vector.")
                 return None
-            # Convert to minimization format if needed
-            obj_value = metric_value * goal  # if goal is -1 (max), this will invert it to be minimized
-            obj_vector.append(obj_value)
+            obj_vector.append(metric_value * goal)
         return obj_vector
+
 
 # ---------------------------------------
 # NSGA-III Evolution
@@ -345,36 +412,29 @@ class NSGA3LoopStrategy(EngineStrategy):
         Two-phase (μ+λ) loop:
         Phase P_1: parents (P_0) finished -> produce offspring P_1 and enqueue -> return.
         Phase P_{t+1}: offspring (P_t) finished -> environmental selection on R_t = P_t U P_{t-1} -> spawn P_{t+1}.
-        """        
+        """
         # ---------------- First PHASE P_1 ----------------
         if self._parents == []:
-            # Store P_0 (genomes + objectives) = newly assessed population
             self._parents = self._current_population.copy()
-
-            # Generate P_1 from P_0
             offspring = self._run_genetic_algorithm()
-            
-            # current population is P_1 and next generation
             self._current_population = offspring
-            self._batch_enqueue()
-            
+            self._generation_enqueue()
             logger.info("[NSGA-III] Enqueued P_{t+1}; waiting results.")
             return
-        
-        # stop condition?
+
+        # Stop condition?
         if self._gen_index > self._max_gen:
             try:
-                self._generation_to_db()
                 all_objectives: list[list[float]] = []
                 pareto_items: list[dict] = []
 
-                for genome, objetives in self._map_genome_objectives.items():
+                for genome, objectives in self._map_genome_objectives.items():
                     pareto_items.append({
                         "chromosome": genome.to_dict(),
-                        "objectives": self._objectives_to_original(objetives),
+                        "objectives": self._objectives_to_original(objectives),
                     })
-                    all_objectives.append(objetives)
-                        
+                    all_objectives.append(objectives)
+
                 pareto_fronts = fast_nondominated_sort(all_objectives)
                 first_pareto_front = [pareto_items[idx] for idx in pareto_fronts[0]]
 
@@ -383,15 +443,15 @@ class NSGA3LoopStrategy(EngineStrategy):
                 first_pareto_front = []
 
             self._finalize_experiment(pareto_front=first_pareto_front)
-            return        
-        
-        # ------- PHASE P_{t+1}: offspring done -> environmental selection on union -------       
+            return
+
+        # ------- PHASE P_{t+1}: environmental selection on union R_t = P_t ∪ P_{t-1} -------
         parents_objectives = [self._map_genome_objectives.get(genome) for genome in self._parents]
         current_objectives = [self._map_genome_objectives.get(genome) for genome in self._current_population]
-        # union R_t = P_t ∪ P_{t-1}
+
         p_previous = np.array(parents_objectives, dtype=float)
         p_current = np.array(current_objectives, dtype=float)
-        
+
         if p_previous.ndim != 2 or p_previous.shape[0] == 0:
             error_msg = "Invalid objective matrix P_{t-1}; aborting."
             logger.exception(f"[NSGA-III] {error_msg}")
@@ -403,19 +463,15 @@ class NSGA3LoopStrategy(EngineStrategy):
             self._finalize_experiment(system_msg=error_msg)
             return
 
-        # ------- PHASE Pareto front and environmental selection -------
-        # concatenate
         R_F_list = [list(row) for row in p_previous.tolist()] + [list(row) for row in p_current.tolist()]
-            
-        # fast non-dominated sort on union
+
         fronts = fast_nondominated_sort(R_F_list)
-        if not fronts:            
+        if not fronts:
             error_msg = "No fronts on union; aborting."
             logger.exception(f"[NSGA-III] {error_msg}")
             self._finalize_experiment(system_msg=error_msg)
             return
 
-        # environmental selection
         selected_idx: list[int] = []
         for front in fronts:
             if len(selected_idx) + len(front) <= self._pop_size:
@@ -427,58 +483,48 @@ class NSGA3LoopStrategy(EngineStrategy):
                     selected_idx.extend(partial)
                 break
 
-        # build next parents Q=E(R_t,α_t)
-        self._parents = [self._current_population[idx - len(p_previous)] 
-                         if idx >= len(p_previous) else self._parents[idx] 
+        self._parents = [self._current_population[idx - len(p_previous)]
+                         if idx >= len(p_previous) else self._parents[idx]
                          for idx in selected_idx]
-        
-        # ------- PHASE Q: parents done -> generate offspring and enqueue -------
-        # produce P_{t+1} from GA(Q,H) (variation on parents)            
+
         offspring = self._run_genetic_algorithm()
-
-        # enqueue P_{t+1} as next "generation" to be evaluated
         self._current_population = offspring
-        self._batch_enqueue()        
-        
-        logger.info("[NSGA-III] Offspring enqueued; waiting for P_t results to perform environmental selection.")
+        self._generation_enqueue()
 
+        logger.info("[NSGA-III] Offspring enqueued; waiting for P_t results.")
         return
-    
+
+
 # ---------------------------------------
 # Run Genetic Algorithm
-# ---------------------------------------   
+# ---------------------------------------
     def _run_genetic_algorithm(self) -> list[list[float]]:
         parents = self._parents
-        parents_objectives = [self._map_genome_objectives[genome] for genome in parents]
-        
-        logger.info(f"objectives: {parents_objectives}")
-        
-        children: list[Chromosome] = []    
-        seen: set[Chromosome] = set()    
-        
+        worst = [float("inf")] * len(self._objective_keys)
+        parents_objectives = [self._map_genome_objectives.get(genome, worst) for genome in parents]
+
+        logger.debug("objectives: %s", parents_objectives)
+
+        children: list[Chromosome] = []
+        seen: set[Chromosome] = set()
+
         fronts: list[list[int]] = fast_nondominated_sort(parents_objectives)
-        
-        logger.info(f"fronts: {fronts}")
-        
         individual_ranks: dict[int, int] = compute_individual_ranks(fronts)
-                    
+
         max_attempts = self._pop_size * 10
         attempts = 0
-        
+
         while len(children) < self._pop_size and attempts < max_attempts:
             attempts += 1
-            # Selection
             parent1: Chromosome = tournament_selection(parents, individual_ranks, self._ga_rng)
             parent2: Chromosome = tournament_selection(parents, individual_ranks, self._ga_rng)
-            # Crossover 
             if self._ga_rng.random() < self._prob_cx:
                 c1, c2 = self._problem_adapter.crossover([parent1, parent2])
             else:
                 c1, c2 = parent1, parent2
-            # Mutation
             if self._ga_rng.random() < self._prob_mt:
                 c1 = self._problem_adapter.mutate(c1)
-                
+
             if c1 not in seen:
                 children.append(c1)
                 seen.add(c1)
@@ -498,40 +544,38 @@ class NSGA3LoopStrategy(EngineStrategy):
 # ------------------------------
 # Encodes genome into simulation elements
 # ------------------------------
-    def _convert_genome_to_sim_config(self, 
+    def _convert_genome_to_sim_config(self,
             genome: Chromosome,
             gen_index: int,
             ind_idx: int,
             seed: int
-            )-> SimulationConfig:
-        
-        # Encodes genome into simulation elements
+            ) -> SimulationConfig:
         simulationElements = self._problem_adapter.encode_simulation_input(genome)
-        
         config: SimulationConfig = {
-                "name": f"nsga3-g{gen_index}-{ind_idx}-{seed}",
-                "duration": self._sim_duration,
-                "randomSeed": seed,
-                "radiusOfReach": self._problem_adapter.radius_of_reach,
-                "radiusOfInter": self._problem_adapter.radius_of_inter,
-                "region": self._problem_adapter.bounds,
-                "simulationElements": simulationElements
-            }
+            "name": f"nsga3-g{gen_index}-{ind_idx}-{seed}",
+            "duration": self._sim_duration,
+            "randomSeed": seed,
+            "radiusOfReach": self._problem_adapter.radius_of_reach,
+            "radiusOfInter": self._problem_adapter.radius_of_inter,
+            "region": self._problem_adapter.bounds,
+            "simulationElements": simulationElements
+        }
         return config
 
-
-    def _insert_simulation_db(self, 
-            genome: Chromosome,
+    def _insert_simulation_db(self,
+            genome_hash: str,
             exp_oid: ObjectId,
+            gen_oid: ObjectId,
             config: SimulationConfig,
-            topology_picture_id: ObjectId
-            )-> ObjectId:
-        files_ids = create_files(config, self.mongo.fs_handler)                     
-        _, src_id = genome.get_source_by_mac_protocol(self.source_repository_options)
-             
+            ) -> ObjectId:
+        files_ids = create_files(config, self.mongo.fs_handler)
+        # Resolve source repository for this genome
+        _, src_id = self._genome_hash_to_source(genome_hash)
+
         sim_doc: Simulation = {
             "experiment_id": exp_oid,
-            "individual_id": genome.get_hash(),
+            "generation_id": gen_oid,
+            "individual_id": genome_hash,
             "status": EnumStatus.WAITING,
             "random_seed": config.get("randomSeed", 0),
             "start_time": None,
@@ -540,41 +584,51 @@ class NSGA3LoopStrategy(EngineStrategy):
             "pos_file_id": files_ids.get("pos_file_id", ""),
             "csc_file_id": files_ids.get("csc_file_id", ""),
             "source_repository_id": src_id,
-            "topology_picture_id": topology_picture_id,
             "log_cooja_id": "",
             "runtime_log_id": "",
-            "csv_log_id": ""
+            "csv_log_id": "",
+            "network_metrics": {},
         }
         return self.mongo.simulation_repo.insert(sim_doc)
 
+    def _genome_hash_to_source(self, genome_hash: str):
+        """
+        Resolves source_repository_id for a given genome hash.
+        Finds the genome in current or parent population, then calls get_source_by_mac_protocol.
+        """
+        for genome in list(self._current_population) + list(self._parents):
+            if genome.get_hash() == genome_hash:
+                return genome.get_source_by_mac_protocol(self.source_repository_options)
+        raise ValueError(f"Genome hash {genome_hash} not found in populations")
 
     def _plot_topology(self,
             exp_oid: ObjectId,
             gen_index: int,
             ind_idx: int,
             config: SimulationConfig
-            )->ObjectId:
+            ) -> ObjectId:
         tmp_dir = Path("./tmp")
         tmp_dir.mkdir(parents=True, exist_ok=True)
         image_tmp_path = tmp_dir / f"topology-{exp_oid}-{gen_index}-{ind_idx}.png"
-        
+
         plot_network.plot_network_save_from_sim(str(image_tmp_path), config)
-        
+
         topology_picture_id = self.mongo.fs_handler.upload_file(
             str(image_tmp_path),
             f"topology-{exp_oid}-{gen_index}-{ind_idx}"
         )
-        
+
         if os.path.exists(image_tmp_path):
             os.remove(image_tmp_path)
-            
+
         return topology_picture_id
+
 
 # ---------------------------------------
 # Finalize Experiment
-# ---------------------------------------  
-    def _finalize_experiment(self, 
-        system_msg: Optional[str] = None, 
+# ---------------------------------------
+    def _finalize_experiment(self,
+        system_msg: Optional[str] = None,
         pareto_front: Optional[list[dict]] = None
     ) -> None:
         assert self._exp_id is not None
@@ -587,11 +641,10 @@ class NSGA3LoopStrategy(EngineStrategy):
                 "pareto_front": pareto_front
             })
         else:
-            logger.error(f"[NSGA-III] Experiment {self._exp_id} finished.")
+            logger.error(f"[NSGA-III] Experiment {self._exp_id} finished with error.")
             self.mongo.experiment_repo.update(str(self._exp_id), {
                 "status": EnumStatus.ERROR,
                 "system_message": system_msg if system_msg is not None else f"Experiment {self._exp_id} finished.",
                 "end_time": datetime.now()
             })
-        # finish watcher
         self.stop()

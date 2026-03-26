@@ -97,28 +97,44 @@ Below is a simplified diagram of the SimLab workflow:
 
 ```mermaid
 sequenceDiagram
-    API->>Database: Create source repository.
-    API->>Database: Create new experiment.
-    
-    Database->>+MO-Engine: Change stream event:<br/>New experiment created.
-    
-    loop Iterative optimization
-        MO-Engine->>MO-Engine: Generate Individuals.
-        MO-Engine->>-Database: Updates generation<br/>in experiment and<br/>creates simulations Batch.
-        
-        Database->>+MasterNode: Change stream event:<br/>New Batch created
-        
-        loop For each available worker container
-            MasterNode->>+SimulationWorker: Start and monitor<br/>simulation.
-            SimulationWorker-->>-MasterNode: Simulation completed.
-            MasterNode->>-Database: Persist simulation logs and results<br/>Update simulation status (DONE / ERROR)<br/>If all simulations completed, mark Batch as DONE.
-        end
-        
-        Database->>+MO-Engine: Change stream event:<br/>All simulations completed.
-    end
-    
-    MO-Engine->>-Database: Update experiment<br/>status to DONE<br/>If optimization is finished.
+    participant API
+    participant Database
+    participant MO-Engine
+    participant MasterNode
+    participant SimWorker as Simulation Worker
 
+    Note over MO-Engine: On startup: enqueue any<br/>pending WAITING experiments
+    Note over MasterNode: On startup: recover stuck RUNNING<br/>simulations + enqueue pending WAITING
+
+    API->>Database: Create source repository
+    API->>Database: Create experiment (status: WAITING)
+
+    Database->>+MO-Engine: Change stream:<br/>WAITING experiment detected
+
+    MO-Engine->>Database: Mark experiment as STARTING
+
+    loop Iterative optimization (e.g. NSGA-III strategy)
+        MO-Engine->>MO-Engine: Generate candidate solutions
+        MO-Engine->>Database: Insert generation, batch<br/>and simulations (status: WAITING)
+
+        Database->>MasterNode: Change stream:<br/>New WAITING simulation(s) detected
+        MasterNode->>MasterNode: Enqueue simulation(s)
+
+        loop For each available worker (parallel)
+            MasterNode->>Database: Download CSC, positions<br/>and source files from GridFS
+            MasterNode->>SimWorker: Transfer files via SCP
+            MasterNode->>Database: Mark simulation RUNNING
+            MasterNode->>SimWorker: Execute Cooja via SSH
+            SimWorker-->>MasterNode: Simulation finished<br/>(collect COOJA.testlog via SCP)
+            MasterNode->>MasterNode: Convert log to CSV<br/>Calculate objectives/metrics
+            MasterNode->>Database: Upload log + CSV to GridFS<br/>Mark simulation DONE or ERROR
+            MasterNode->>Database: If all batch simulations finished:<br/>mark batch DONE or ERROR
+        end
+
+        Database->>+MO-Engine: Change stream:<br/>Batch DONE detected
+    end
+
+    MO-Engine->>-Database: Mark experiment DONE
 ```
 
 ---

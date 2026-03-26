@@ -4,3 +4,11 @@ simlab-ui/node_modules
 simlab-ui/.vscode
 gui/simlab/node_modules
 .vscode
+master-node/tmp
+pylib/db/repositories/__pycache__
+pylib/db/__pycache__
+pylib/db/models/__pycache__
+pylib/config/__pycache__
+rest-api/api/mappers/__pycache__
+rest-api/api/domain/__pycache__
+rest-api/tests/__pycache__

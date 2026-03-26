@@ -3,8 +3,8 @@ import math
 import random
 import logging
 from bson import ObjectId
-from pylib import mongo_db
-from pylib.dto.database import Simulation
+from pylib.db import create_mongo_repository_factory, EnumStatus, MongoRepository
+from pylib.db.models import Simulation
 
 log = logging.getLogger(__name__)
 
@@ -24,7 +24,6 @@ def _scale_to_unit(genome: list[float], region: tuple[float,float,float,float]) 
     dx = max(1e-9, (x2 - x1))
     dy = max(1e-9, (y2 - y1))
     xs: list[float] = []
-    # pares (x,y) sequenciais
     for i in range(0, len(genome), 2):
         x = (genome[i]   - x1) / dx
         y = (genome[i+1] - y1) / dy
@@ -44,10 +43,8 @@ def _dtlz2(x: list[float], M: int) -> list[float]:
     f: list[float] = []
     for m in range(M):
         val = 1.0 + g
-        # produto de cos
         for i in range(0, M-1-m):
             val *= math.cos(0.5 * math.pi * x[i])
-        # um termo de sen a partir do “fim”
         if m > 0:
             val *= math.sin(0.5 * math.pi * x[M-1-m])
         f.append(float(val))
@@ -75,8 +72,8 @@ def _eval_benchmark(genome_xy: list[float], region: tuple[float,float,float,floa
     x01 = _scale_to_unit(genome_xy, region)
     if bench.upper() == "ZDT1":
         vals = _zdt1(x01)
-    elif bench.upper() == "SCH1": # Schaffer, 1984
-        x = genome_xy[0] 
+    elif bench.upper() == "SCH1":
+        x = genome_xy[0]
         vals = [x**2, (x - 2.0)**2]
     else:  # DTLZ2 default
         M = max(2, int(M))
@@ -85,7 +82,7 @@ def _eval_benchmark(genome_xy: list[float], region: tuple[float,float,float,floa
         vals = [v + random.gauss(0.0, noise_std) for v in vals]
     return vals
 
-def run_synthetic_simulation(sim: Simulation, mongo: mongo_db.MongoRepository) -> None:
+def run_synthetic_simulation(sim: Simulation, mongo: MongoRepository) -> None:
     """
     Emula execução usando um benchmark clássico (DTLZ2 ou ZDT1) e grava os
     objetivos conforme o data_conversion_config do experimento.
@@ -94,41 +91,49 @@ def run_synthetic_simulation(sim: Simulation, mongo: mongo_db.MongoRepository) -
     log.info("Starting benchmark simulation %s", sim_oid)
     mongo.simulation_repo.mark_running(sim_oid)
 
-    # config do experimento (objetivos e região)
     exp_id = sim["experiment_id"]
     cfg = mongo.experiment_repo.get_metrics_data_conversion(str(exp_id))
     obj_items = cfg.get("objectives", []) or []
     objective_names = [it["name"] for it in obj_items if "name" in it]
 
-    # parâmetros necessários para reescalar
     params = (mongo.experiment_repo.get(exp_id) or {}).get("parameters", {}) or {}
     region = tuple(params.get("region", (-100.0, -100.0, 100.0, 100.0)))
     M = len(cfg.get("objectives", []))
-    bench = os.getenv("BENCH", "DTLZ2").upper()  # "DTLZ2" | "ZDT1" | "SCH1"
+    bench = os.getenv("BENCH", "DTLZ2").upper()
     noise_std = float(os.getenv("NOISE_STD", "0.0"))
 
-    # extrai genoma e avalia
     genome_xy = _extract_genome_from_sim(sim)
     vals = _eval_benchmark(genome_xy, region, bench=bench, M=M, noise_std=noise_std)
 
-    # garante número correto de objetivos
     if bench == "ZDT1":
         if len(objective_names) != 2:
-            log.warning("ZDT1 requer 2 objetivos; data_conversion_config tem %d. Ajuste recomendado.", len(objective_names))
+            log.warning("ZDT1 requer 2 objetivos; data_conversion_config tem %d.", len(objective_names))
         vals = vals[:2]
     else:
         if len(vals) < len(objective_names):
-            # completa com grandes valores (pior) para evitar shape mismatch
             vals = vals + [1e9] * (len(objective_names) - len(vals))
         vals = vals[:len(objective_names)]
 
-    # monta dict na ordem correta
     objectives = {name: float(vals[i]) for i, name in enumerate(objective_names)}
 
-    # marca como DONE (sem CSV/logs reais)
-    mongo.simulation_repo.mark_done(sim_oid, sim_oid, sim_oid, objectives, {})
+    try:
+        mongo.simulation_repo.mark_done(sim_oid, None, None, objectives)
+    except Exception as e:
+        log.exception("Failed to mark simulation %s as done; marking as error", sim_oid)
+        try:
+            mongo.simulation_repo.mark_error(sim_oid, str(e))
+        except Exception:
+            log.exception("Failed to mark simulation %s as error", sim_oid)
 
-    # checa conclusão da geração
-    gen_id = sim["generation_id"]
-    if mongo.batch_repo.all_simulations_done(gen_id):
-        mongo.batch_repo.mark_done(gen_id)
+    generation_id = sim.get("generation_id")
+    if not generation_id:
+        log.warning("Simulation %s has no generation_id; skipping generation close check", sim_oid)
+        return
+    gr = mongo.generation_repo
+    try:
+        if gr.all_simulations_done(generation_id):
+            gr.mark_done(generation_id)
+        elif not gr.any_simulation_active(generation_id):
+            gr.mark_error(generation_id)
+    except Exception:
+        log.exception("Failed to close generation %s", generation_id)

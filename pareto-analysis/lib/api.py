@@ -17,13 +17,11 @@ def get_generations_from_experiment(
     experiment_id: str,
     label_objectives: list[str]
 ) -> dict[str, Any]:
-    url = f"{api_base}/experiments/{experiment_id}"
+    url = f"{api_base}/generations/by-experiment/{experiment_id}"
     resp = session.get(url, timeout=60)
     resp.raise_for_status()
-    data = resp.json()
+    generations: list[dict] = resp.json() or []
 
-    generations = data.get("generations")
-    
     gen_return: dict[int, list[dict]] = {}
     for gen in generations:
         pop: dict[str, Any] = {}

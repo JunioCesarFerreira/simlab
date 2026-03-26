@@ -5,13 +5,9 @@ project_path = os.path.abspath(os.path.join(os.getcwd(), ".."))
 if project_path not in sys.path:
     sys.path.insert(0, project_path)
 
-from pylib import mongo_db
-from pylib.mongo_db import EnumStatus
-from pylib.service_settings import MongoServiceSettings
-from lib.strategy.base import EngineStrategy 
-from lib.strategy.generator_random import GeneratorRandomStrategy
-from lib.strategy.nsga3 import NSGA3LoopStrategy  
-from lib.strategy.sweep_seed import SweepSeedStrategy
+from pylib.db import create_mongo_repository_factory, EnumStatus
+from lib.strategy.base import EngineStrategy
+from lib.strategy.nsga3 import NSGA3LoopStrategy
 
 # --------------------------- Logging --------------------------------
 logging.basicConfig(
@@ -21,25 +17,20 @@ logging.basicConfig(
 log = logging.getLogger("mo-engine")
 # --------------------------------------------------------------------
 
-SimStatus = mongo_db.EnumStatus
-SETTINGS = MongoServiceSettings.from_env()
+SimStatus = EnumStatus
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/?replicaSet=rs0")
+IS_DOCKER = os.getenv("IS_DOCKER", False)
+DB_NAME = os.getenv("DB_NAME", "simlab")
 
-mongo = mongo_db.create_mongo_repository_factory(
-    SETTINGS.mongo_uri,
-    SETTINGS.db_name,
-)
+mongo = create_mongo_repository_factory(MONGO_URI, DB_NAME)
 
 
 def select_strategy(exp_doc: dict) -> EngineStrategy:
     log.info("select strategy")
     exp_type = exp_doc.get("parameters", {}).get("strategy", "simple")
     log.info(f"selected: {exp_type}")
-    if exp_type == "simple":
-        return GeneratorRandomStrategy(exp_doc, mongo)
-    elif exp_type == "nsga3":
+    if exp_type == "nsga3":
         return NSGA3LoopStrategy(exp_doc, mongo)
-    elif exp_type == "sweep_seed":
-        return SweepSeedStrategy(exp_doc, mongo)
     else:
         raise ValueError(f"[mo-engine] Experiment type unknown: {exp_type}")
 
@@ -84,7 +75,7 @@ def run_pending_experiment(change: dict):
        
 def main() -> None:
     log.info("service started.")
-    log.info("env:\n\tMONGO_URI: %s\n\tDB_NAME: %s", SETTINGS.mongo_uri, SETTINGS.db_name)
+    log.info(f"env:\n\tMONGO_URI: {MONGO_URI}\n\tDB_NAME: {DB_NAME}")
     exp_repo = mongo.experiment_repo
     exp_repo.connection.waiting_ping()
 

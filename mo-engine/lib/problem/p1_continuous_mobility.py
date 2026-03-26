@@ -1,8 +1,8 @@
 from typing import Any, Mapping, Sequence
 
-from pylib.dto.simulator import FixedMote, MobileMote, SimulationElements
-from pylib.dto.problems import ProblemP1
-from pylib.dto.algorithm import GeneticAlgorithmConfigDto
+from pylib.config.simulator import FixedMote, MobileMote, SimulationElements
+from pylib.config.problems import ProblemP1
+from pylib.config.algorithm import GeneticAlgorithmConfigDto
 
 from lib.util.random_network import continuous_network_gen
 from lib.util.connectivity import make_graph_connected, is_connected

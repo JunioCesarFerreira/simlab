@@ -1,10 +1,12 @@
 from typing import Any
-#---------------------------------------------------------------------------------------------------------
-# Problems Definitions -----------------------------------------------------------------------------------
-#---------------------------------------------------------------------------------------------------------
 
-# Alias para coordenadas 2D (Ω ⊂ R²)
+# ---------------------------------------------------------------------------------------------------------
+# Problems Definitions -----------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------------------------------
+
+# Alias para coordenadas 2D (Ω ⊂ R²)
 Position = tuple[float, float]
+
 
 class MobileNode:
     # Trajetória parametrizada de forma simbólica
@@ -20,9 +22,10 @@ class MobileNode:
 class SojournLocation:
     id: int
     position: Position
-    
-    adjacency: list[int] # Adjacência no grafo (L, A): ids de outros sojourns alcançáveis diretamente
-    visibleNodes: list[int] # Nós visíveis a partir desta posição (|p_i - ℓ| ≤ R_com)
+
+    adjacency: list[int]    # Adjacência no grafo (L, A): ids de outros sojourns alcançáveis diretamente
+    visibleNodes: list[int]  # Nós visíveis a partir desta posição (|p_i - ℓ| ≤ R_com)
+
 
 # -------------------------------------------------------------------
 # Problemas Homogêneos
@@ -30,9 +33,10 @@ class SojournLocation:
 class HomogeneousProblem:
     name: str
 
-    radius_of_reach: float            # R_com
-    radius_of_inter: float            # R_inter
-    region: list[float]               # Ω ⊂ R²
+    radius_of_reach: float  # R_com
+    radius_of_inter: float  # R_inter
+    region: list[float]     # Ω ⊂ R²
+
 
 # --- P1: cobertura de comunicação com motes móveis -----
 class ProblemP1(HomogeneousProblem):
@@ -44,9 +48,8 @@ class ProblemP1(HomogeneousProblem):
     sink: Position                  # σ
     mobile_nodes: list[MobileNode]  # Γ
     number_of_relays: int           # n
-    
+
     def cast(map: dict[str, Any]) -> "ProblemP1":
-        # Conversão de dicionário genérico para DTO fortemente tipado
         obj = ProblemP1()
         obj.name = map["name"]
         obj.radius_of_reach = map["radius_of_reach"]
@@ -64,7 +67,8 @@ class ProblemP1(HomogeneousProblem):
             mobile_node.time_step = mn["time_step"]
             obj.mobile_nodes.append(mobile_node)
         return obj
-    
+
+
 # --- P2: cobertura de comunicação com motes móveis -----
 class ProblemP2(HomogeneousProblem):
     """
@@ -75,9 +79,8 @@ class ProblemP2(HomogeneousProblem):
     sink: Position                  # σ
     mobile_nodes: list[MobileNode]  # Γ
     candidates: list[Position]      # Q
-    
+
     def cast(map: dict[str, Any]) -> "ProblemP2":
-        # Conversão de dicionário genérico para DTO fortemente tipado
         obj = ProblemP2()
         obj.name = map["name"]
         obj.radius_of_reach = map["radius_of_reach"]
@@ -103,14 +106,13 @@ class ProblemP3(HomogeneousProblem):
     P3: k-cobertura + conectividade com motes fixos.
     """
     sink: Position                  # σ
-    targets: list[Position]         # Ξ 
+    targets: list[Position]         # Ξ
     candidates: list[Position]      # Q
     radius_of_cover: float          # R_cov
     k_required: int                 # k (min coverage degree)
     g_required: int                 # g (min connectivity degree)
-    
+
     def cast(map: dict[str, Any]) -> "ProblemP3":
-        # Conversão de dicionário genérico para DTO fortemente tipado
         obj = ProblemP3()
         obj.name = map["name"]
         obj.radius_of_reach = map["radius_of_reach"]
@@ -122,6 +124,7 @@ class ProblemP3(HomogeneousProblem):
         obj.candidates = [Position(cand) for cand in map["candidates"]]
         obj.targets = [Position(tgt) for tgt in map["targets"]]
         return obj
+
 
 # --- P4: mobilidade do sink para coleta ----------------
 class ProblemP4(HomogeneousProblem):
@@ -135,15 +138,14 @@ class ProblemP4(HomogeneousProblem):
     buffer_capacity: float           # W_i
     data_rate: float                 # δ_i
     sojourns: list[SojournLocation]  # Posições possíveis de parada (L) e grafo (L, A) via adjacency
-    
-    speed: float          # velocidade média ao longo da trajetória
-    time_step: float      # Δt da discretização temporal
-    
-    max_route_length: int        # comprimento máximo da rota do sink
-    tau_bounds: tuple[float, float]  # (τ_min, τ_max) tempos de sojourn
-    
+
+    speed: float      # velocidade média ao longo da trajetória
+    time_step: float  # Δt da discretização temporal
+
+    max_route_length: int             # comprimento máximo da rota do sink
+    tau_bounds: tuple[float, float]   # (τ_min, τ_max) tempos de sojourn
+
     def cast(map: dict[str, Any]) -> "ProblemP4":
-        # Conversão de dicionário genérico para DTO fortemente tipado
         obj = ProblemP4()
         obj.name = map["name"]
         obj.radius_of_reach = map["radius_of_reach"]

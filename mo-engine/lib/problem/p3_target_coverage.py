@@ -2,9 +2,9 @@ from typing import Any, Mapping, Sequence
 import math
 import logging
 
-from pylib.dto.simulator import FixedMote, SimulationElements
-from pylib.dto.problems import ProblemP3
-from pylib.dto.algorithm import GeneticAlgorithmConfigDto
+from pylib.config.simulator import FixedMote, SimulationElements
+from pylib.config.problems import ProblemP3
+from pylib.config.algorithm import GeneticAlgorithmConfigDto
 
 from lib.util.random_network import stochastic_reachability_mask
 from lib.util.connectivity import repair_connectivity_to_sink, repair_k_coverage
