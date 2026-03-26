@@ -1,51 +1,35 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
-from fastapi.responses import FileResponse
-from bson import ObjectId
-import os, sys, tempfile
+import os
 from tempfile import NamedTemporaryFile
 from zipfile import ZipFile
 
-project_path = os.path.abspath(os.path.join(os.getcwd(), ".."))
-if project_path not in sys.path:
-    sys.path.insert(0, project_path)
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi.responses import FileResponse
+from bson import ObjectId
 
-from pylib.db.models import SourceRepository, SourceFile
-from pylib.db import create_mongo_repository_factory
-
-from api.dto_conversor import source_repository_from_mongo
-
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/?replicaSet=rs0")
-DB_NAME = os.getenv("DB_NAME", "simlab")
-factory = create_mongo_repository_factory(MONGO_URI, DB_NAME)
+from pylib.db import MongoRepository
+from pylib.db.models import SourceFile
+from api.dependencies import get_factory
+from api.domain.source import SourceRepositoryDto
+from api.mappers.source import source_repository_from_mongo
 
 router = APIRouter()
 
 
-@router.get("/", response_model=list[SourceRepository])
-def list_sources() -> list[SourceRepository]:
-    """
-    List all registered source repositories.
-    
-    - Retrieves all source repository documents
-    - Maps each document to SourceRepository DTO
-    - Returns an empty list if no repository exists
-    """
+@router.get("/", response_model=list[SourceRepositoryDto])
+def list_sources(factory: MongoRepository = Depends(get_factory)) -> list[SourceRepositoryDto]:
+    """List all registered source repositories."""
     try:
-        docs = factory.source_repo.get_all()
-        return [source_repository_from_mongo(d) for d in docs]
+        return [source_repository_from_mongo(d) for d in factory.source_repo.get_all()]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{repository_id}", response_model=SourceRepository)
-def get_source_repository(repository_id: str) -> SourceRepository:
-    """
-    List all registered source repositories.
-    
-    - Retrieves all source repository documents
-    - Maps each document to SourceRepository DTO
-    - Returns an empty list if no repository exists
-    """
+@router.get("/{repository_id}", response_model=SourceRepositoryDto)
+def get_source_repository(
+    repository_id: str,
+    factory: MongoRepository = Depends(get_factory)
+) -> SourceRepositoryDto:
+    """Retrieve a single source repository by its ObjectId."""
     try:
         doc = factory.source_repo.get_by_id(repository_id)
         if not doc:
@@ -61,79 +45,57 @@ def get_source_repository(repository_id: str) -> SourceRepository:
 async def create_source_repository(
     name: str = Form(...),
     description: str = Form(""),
-    files: list[UploadFile] = File(...)
+    files: list[UploadFile] = File(...),
+    factory: MongoRepository = Depends(get_factory)
 ) -> str:
-    """
-    Create a new source repository with uploaded files.
-    
-    - Receives repository metadata (name, description)
-    - Receives one or more uploaded files
-    - Each file is stored in GridFS
-    - Only file metadata and file_id references are stored in the repository document
-    
-    Returns the generated repository_id as string.
-    """
+    """Create a source repository and upload its files to GridFS. Returns the repository_id."""
     source_files: list[SourceFile] = []
     try:
         for upload in files:
-            # Salva temporário apenas para subir via GridFS e depois apagar
             with NamedTemporaryFile(delete=False) as tmp:
-                content = await upload.read()
-                tmp.write(content)
+                tmp.write(await upload.read())
                 tmp.flush()
                 tmp_path = tmp.name
             file_id = factory.fs_handler.upload_file(tmp_path, name=upload.filename)
             source_files.append({"id": str(file_id), "file_name": upload.filename})
             os.remove(tmp_path)
 
-        source: SourceRepository = {
+        inserted_id = factory.source_repo.insert({
             "id": "",
             "name": name,
             "description": description,
             "source_files": source_files,
-        }
-        inserted_id = factory.source_repo.insert(source)
+        })
         return str(inserted_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{repository_id}/download")
-def download_source_repository(repository_id: str):
-    """
-    Download all files of a source repository as a ZIP archive.
-    
-    - repository_id must be a valid ObjectId string
-    - All files referenced by the repository are fetched from GridFS
-    - Files are packed into a temporary ZIP archive
-    - The ZIP file is returned as a download
-    
-    Returns a ZIP file containing all repository source files.
-    """
+def download_source_repository(
+    repository_id: str,
+    factory: MongoRepository = Depends(get_factory)
+):
+    """Download all files of a source repository as a ZIP archive."""
     try:
         repo = factory.source_repo.get_by_id(repository_id)
         if not repo:
-            raise HTTPException(status_code=404, detail="Repositório não encontrado")
+            raise HTTPException(status_code=404, detail="Source repository not found")
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp_zip_file:
-            with ZipFile(tmp_zip_file.name, 'w') as zipf:
+        with NamedTemporaryFile(delete=False, suffix=".zip") as tmp_zip:
+            with ZipFile(tmp_zip.name, "w") as zipf:
                 for file_info in (repo.get("source_files") or []):
                     file_id = file_info.get("id")
                     file_name = file_info.get("file_name", str(file_id))
-                    with NamedTemporaryFile(delete=False) as tmp_file:
-                        factory.fs_handler.download_file(ObjectId(file_id), tmp_file.name)
-                        zipf.write(tmp_file.name, arcname=file_name)
-                        tmp_file.close()
-                        os.remove(tmp_file.name)
+                    with NamedTemporaryFile(delete=False) as tmp:
+                        factory.fs_handler.download_file(ObjectId(file_id), tmp.name)
+                        zipf.write(tmp.name, arcname=file_name)
+                        tmp.close()
+                        os.remove(tmp.name)
+            zip_path = tmp_zip.name
 
-            tmp_zip_path = tmp_zip_file.name
-
-        return FileResponse(
-            tmp_zip_path,
-            filename=f"repository_{repository_id}.zip",
-            media_type="application/zip",
-        )
+        return FileResponse(zip_path, filename=f"repository_{repository_id}.zip", media_type="application/zip")
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao baixar arquivos do repositório: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
