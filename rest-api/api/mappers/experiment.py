@@ -3,7 +3,8 @@ from typing import Any, Optional
 from bson import ObjectId
 
 from pylib.db.models import Experiment
-from api.domain.experiment import ExperimentDto, ExperimentInfoDto, ParetoFrontItemDto
+from api.domain.experiment import ExperimentDto, ExperimentFullDto, ExperimentInfoDto, ParetoFrontItemDto
+from api.domain.generation import GenerationDto
 from api.mappers.helpers import oid_to_str, str_to_oid, pop_id, dict_oid_to_str, dict_str_to_oid
 
 
@@ -45,6 +46,11 @@ def experiment_from_mongo(doc: dict) -> ExperimentDto:
         "pareto_front": _pareto_from_mongo(d.get("pareto_front")),
         "analysis_files": _analysis_files_to_str(d.get("analysis_files", {})),
     }
+
+
+def experiment_full_from_mongo(doc: dict, generations: list[GenerationDto]) -> ExperimentFullDto:
+    base = experiment_from_mongo(doc)
+    return {**base, "generations": generations}
 
 
 def experiment_info_from_mongo(doc: dict) -> ExperimentInfoDto:

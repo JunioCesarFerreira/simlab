@@ -2,10 +2,18 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from bson import errors as bson_errors
 from tempfile import NamedTemporaryFile
 
+from bson import ObjectId
+
 from pylib.db import MongoRepository
 from api.dependencies import get_factory
-from api.domain.experiment import ExperimentDto, ExperimentInfoDto
-from api.mappers.experiment import experiment_from_mongo, experiment_info_from_mongo, experiment_to_mongo
+from api.domain.experiment import ExperimentDto, ExperimentFullDto, ExperimentInfoDto
+from api.mappers.experiment import (
+    experiment_from_mongo,
+    experiment_full_from_mongo,
+    experiment_info_from_mongo,
+    experiment_to_mongo,
+)
+from api.mappers.generation import generation_from_mongo
 
 router = APIRouter()
 
@@ -32,6 +40,28 @@ def get_experiments_by_status(
     try:
         docs = factory.experiment_repo.find_by_status(status)
         return [experiment_info_from_mongo(d) for d in docs]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{experiment_id}/full", response_model=ExperimentFullDto)
+def get_experiment_full(
+    experiment_id: str,
+    factory: MongoRepository = Depends(get_factory)
+) -> ExperimentFullDto:
+    """Retrieve an experiment with all its generations and individuals fully embedded."""
+    try:
+        doc = factory.experiment_repo.get(experiment_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Experiment not found")
+        gens = factory.generation_repo.find_by_experiment(ObjectId(experiment_id))
+        generations = [
+            generation_from_mongo(g, factory.individual_repo.find_by_generation(g["_id"]))
+            for g in gens
+        ]
+        return experiment_full_from_mongo(doc, generations)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -41,6 +41,23 @@ class ExperimentDto(TypedDict):
     analysis_files: NotRequired[dict[str, str]]
 
 
+class ExperimentFullDto(TypedDict):
+    """Experiment with all generations and individuals fully embedded."""
+    id: Optional[str]
+    name: str
+    status: Optional[str]
+    system_message: Optional[str]
+    created_time: Optional[datetime]
+    start_time: Optional[datetime]
+    end_time: Optional[datetime]
+    parameters: Parameters
+    source_repository_options: dict[str, str]
+    data_conversion_config: DataConversionConfigDto
+    pareto_front: Optional[list[ParetoFrontItemDto]]
+    analysis_files: NotRequired[dict[str, str]]
+    generations: list[GenerationDto]
+
+
 class ExperimentInfoDto(TypedDict):
     id: Optional[str]
     name: str
