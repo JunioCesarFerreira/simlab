@@ -35,3 +35,4 @@ pylib/db/models/__pycache__
 pylib/config/__pycache__
 rest-api/api/mappers/__pycache__
 rest-api/api/domain/__pycache__
+rest-api/tests/__pycache__
