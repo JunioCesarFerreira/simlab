@@ -27,6 +27,7 @@ from lib.genetic_operators.selection import tournament_selection, compute_indivi
 from lib.problem.adapter import ProblemAdapter, Chromosome
 from lib.problem.resolve import build_adapter
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -103,8 +104,13 @@ class NSGA3LoopStrategy(EngineStrategy):
         # --- nsga3 workflow ---
         self._current_population: list[Chromosome] = []   # P_t
         self._parents: list[Chromosome] = []              # P_{t-1}
-        self._inserted_genomes: set[str] = set()          # hashes already inserted to DB
+        self._inserted_genomes: set[str] = set()          # hashes already inserted to DB (this session)
         self._map_genome_objectives: dict[Chromosome, list[float]] = {}
+
+        # --- genome cache (persistent deduplication) ---
+        # hash -> objectives for genomes already evaluated in any prior session.
+        # Loaded from MongoDB on start() and kept in sync as objectives are computed.
+        self._genome_objectives_cache: dict[str, list[float]] = {}
 
 
 # ------------------------------
@@ -119,11 +125,17 @@ class NSGA3LoopStrategy(EngineStrategy):
             self._exp_id = ObjectId(str(self.experiment.get("_id")))
         self._gen_index = 0
 
+        # Restore genome cache from a previous run (if any).
+        # This populates _inserted_genomes and _genome_objectives_cache so that
+        # genomes already evaluated are never re-submitted to Cooja.
+        self._load_genome_cache_from_db()
+
         self._current_population = self._problem_adapter.random_individual_generator(self._pop_size)
 
         self._generation_enqueue()
         self._start_watcher()
         self._start_generation_poll()
+
 
     def event_simulation_done(self, sim_doc: dict):
         """
@@ -133,13 +145,14 @@ class NSGA3LoopStrategy(EngineStrategy):
         sim = sim_doc.get("fullDocument") or {}
         if sim.get("generation_id") != self._generation_id:
             return
-        sims_per_gen = self._pop_size * len(self._sim_rand_seeds)
+        
         with self._lock:
             self._sim_done_count += 1
             logger.info(
                 "[NSGA-III] Simulation terminal (%s): %d/%d for generation %s",
-                sim.get("status"), self._sim_done_count, sims_per_gen, self._generation_id
+                sim.get("status"), self._sim_done_count, self._count_sims_inserted, self._generation_id
             )
+
 
     def event_generation_done(self, gen_doc: dict):
         """
@@ -151,6 +164,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             return
         with self._lock:
             self._handle_generation_done(ObjectId(gen.get("_id")))
+
 
     def _handle_generation_done(self, gen_oid: ObjectId):
         """Core handler — must be called while holding self._lock."""
@@ -193,6 +207,7 @@ class NSGA3LoopStrategy(EngineStrategy):
 
         self._evolution()
 
+
     def stop(self):
         self._stop_flag = True
         for t in (self._watch_thread, self._sim_watch_thread):
@@ -200,6 +215,34 @@ class NSGA3LoopStrategy(EngineStrategy):
                 t.join(timeout=1.0)
         self._watch_thread = None
         self._sim_watch_thread = None
+
+
+# ------------------------------
+# Genome cache
+# ------------------------------
+    def _load_genome_cache_from_db(self) -> None:
+        """
+        Populate in-memory deduplication structures from the persisted genome cache.
+
+        After this call:
+        - _inserted_genomes contains every hash ever registered for this experiment,
+          preventing re-insertion of Individual documents and re-creation of simulations.
+        - _genome_objectives_cache maps hash -> objectives for every genome whose
+          evaluation has already completed, enabling immediate reuse without simulation.
+        """
+        assert self._exp_id is not None
+        entries = self.mongo.genome_cache_repo.get_all_by_experiment(self._exp_id)
+        for entry in entries:
+            h = entry["genome_hash"]
+            self._inserted_genomes.add(h)
+            if entry.get("objectives") is not None:
+                self._genome_objectives_cache[h] = entry["objectives"]
+        if entries:
+            logger.info(
+                "[NSGA-III] Genome cache loaded: %d registered, %d with objectives.",
+                len(entries),
+                len(self._genome_objectives_cache),
+            )
 
 
 # ------------------------------
@@ -246,6 +289,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._watch_thread.start()
         self._sim_watch_thread.start()
 
+
     def _start_generation_poll(self) -> None:
         """
         Polling fallback that checks the current generation status every poll_interval seconds.
@@ -272,6 +316,7 @@ class NSGA3LoopStrategy(EngineStrategy):
                     logger.exception("[NSGA-III] Polling fallback error.")
 
         Thread(target=_poll, daemon=True, name="nsga3-poll").start()
+
 
     def _upload_topology_async(
         self,
@@ -313,23 +358,50 @@ class NSGA3LoopStrategy(EngineStrategy):
         gen_oid = ObjectId()
 
         first_seed = self._sim_rand_seeds[0] if self._sim_rand_seeds else 123456
+        sims_inserted = 0
+        
+        self._count_sims_inserted = 0
 
         for i, genome in enumerate(population):
             genome_hash = genome.get_hash()
 
-            # Skip genomes already inserted to DB in this session
-            if genome_hash in self._inserted_genomes:
-                logger.info("Genome %s already inserted; skipping.", genome_hash)
+            # --- Case A: objectives already in persistent cache ---
+            # Pre-populate the objectives map so _handle_generation_done skips this genome.
+            # Insert the Individual with objectives already filled; no simulations needed.
+            if genome_hash in self._genome_objectives_cache:
+                cached_obj = self._genome_objectives_cache[genome_hash]
+                self._map_genome_objectives[genome] = cached_obj
+                ind_doc: Individual = {
+                    "experiment_id": exp_oid,
+                    "generation_id": gen_oid,
+                    "individual_id": genome_hash,
+                    "chromosome": genome.to_dict(),
+                    "objectives": cached_obj,
+                    "topology_picture_id": None,
+                }
+                self.mongo.individual_repo.insert(ind_doc)
+                config_topo = self._convert_genome_to_sim_config(
+                    genome=genome, gen_index=gen_index, ind_idx=i, seed=first_seed
+                )
+                self._upload_topology_async(exp_oid, gen_oid, gen_index, i, genome_hash, dict(config_topo))
+                logger.info("Genome %s has cached objectives; skipping simulation.", genome_hash)
                 continue
 
+            # --- Case B: genome registered in this session but results still pending ---
+            # (Rare: same genome produced twice by the GA in one generation.)
+            if genome_hash in self._inserted_genomes:
+                logger.info("Genome %s already inserted this SESSION; skipping.", genome_hash)
+                continue
+
+            # --- Case C: new genome — register in cache, insert Individual, queue simulations ---
             config = self._convert_genome_to_sim_config(
                 genome=genome,
                 gen_index=gen_index,
                 ind_idx=i,
                 seed=first_seed
             )
+            self._count_sims_inserted += len(self._sim_rand_seeds)
 
-            # Insert Individual document (objectives filled in after evaluation)
             ind_doc: Individual = {
                 "experiment_id": exp_oid,
                 "generation_id": gen_oid,
@@ -340,25 +412,32 @@ class NSGA3LoopStrategy(EngineStrategy):
             }
             self.mongo.individual_repo.insert(ind_doc)
             self._inserted_genomes.add(genome_hash)
+            self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
 
-            # Insert one simulation per seed
             for seed in self._sim_rand_seeds:
                 config["randomSeed"] = seed
                 self._insert_simulation_db(genome_hash, exp_oid, gen_oid, config)
+                sims_inserted += 1
                 logger.info("SIM inserted SEED=%s genome=%s", seed, genome_hash)
 
-            # Upload topology image in the background (non-blocking)
             self._upload_topology_async(exp_oid, gen_oid, gen_index, i, genome_hash, dict(config))
 
-        # Create Generation document (WAITING → triggers master-node watcher)
+        # When every genome already has cached objectives there are no simulations to
+        # wait for.  Insert the generation directly as DONE so the change-stream watcher
+        # fires immediately and the algorithm can advance to the next generation.
+        all_cached = sims_inserted == 0
         gen_doc: Generation = {
             "_id": gen_oid,
             "experiment_id": exp_oid,
             "index": gen_index,
-            "status": EnumStatus.WAITING,
+            "status": EnumStatus.DONE if all_cached else EnumStatus.WAITING,
             "start_time": datetime.now(),
-            "end_time": None,
+            "end_time": datetime.now() if all_cached else None,
         }
+
+        # Increment before inserting so the change-stream callback (which fires
+        # asynchronously) always sees the already-updated index.
+        self._gen_index += 1
         self._generation_id = self.mongo.generation_repo.insert(gen_doc)
 
         if gen_index == 0:
@@ -367,31 +446,51 @@ class NSGA3LoopStrategy(EngineStrategy):
                 "start_time": datetime.now()
             })
 
-        self._gen_index += 1
+        if all_cached:
+            logger.info(
+                "[NSGA-III] Generation %d: all %d genomes have cached objectives; inserted as DONE.",
+                gen_index, len(population),
+            )
+        else:
+            logger.info(
+                "[NSGA-III] Generation %d enqueued with %d individuals (%d new simulations).",
+                gen_index, len(population), sims_inserted,
+            )
 
-        logger.info("[NSGA-III] Generation %d enqueued with %d individuals.", gen_index, len(population))
 
     def _update_individual_objectives(self) -> None:
         """
-        Persists computed objectives to Individual documents in the DB.
+        Persists computed objectives to Individual documents in the DB and to the
+        genome cache so that future generations (and future engine restarts) can
+        reuse them without re-running simulations.
         Called right after objectives are computed, before evolution.
         """
         if self._generation_id is None:
             return
         for genome in self._current_population:
             objectives = self._map_genome_objectives.get(genome)
-            if objectives is not None:
-                self.mongo.individual_repo.update_objectives(
-                    genome.get_hash(),
-                    self._generation_id,
-                    objectives
+            if objectives is None:
+                continue
+            genome_hash = genome.get_hash()
+            self.mongo.individual_repo.update_objectives(
+                genome_hash,
+                self._generation_id,
+                objectives,
+            )
+            # Persist to genome cache only on first evaluation (avoids redundant writes).
+            if genome_hash not in self._genome_objectives_cache:
+                self.mongo.genome_cache_repo.set_objectives(
+                    self._exp_id, genome_hash, objectives
                 )
+                self._genome_objectives_cache[genome_hash] = objectives
+
 
     def _objectives_to_original(self, vec: list[float]) -> dict[str, float]:
         return {
             k: float(v * s)
             for k, v, s in zip(self._objective_keys, vec, self._objective_goals)
         }
+
 
     def _extract_objectives_to_minimization(self, sim_metrics_map: dict[str, float]) -> Optional[list[float]]:
         obj_vector: list[float] = []
@@ -562,6 +661,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         }
         return config
 
+
     def _insert_simulation_db(self,
             genome_hash: str,
             exp_oid: ObjectId,
@@ -591,6 +691,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         }
         return self.mongo.simulation_repo.insert(sim_doc)
 
+
     def _genome_hash_to_source(self, genome_hash: str):
         """
         Resolves source_repository_id for a given genome hash.
@@ -600,6 +701,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             if genome.get_hash() == genome_hash:
                 return genome.get_source_by_mac_protocol(self.source_repository_options)
         raise ValueError(f"Genome hash {genome_hash} not found in populations")
+
 
     def _plot_topology(self,
             exp_oid: ObjectId,

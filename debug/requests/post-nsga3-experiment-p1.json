@@ -8,14 +8,13 @@
     "end_time": null,    
     "generations": [],
     "source_repository_options": {
-        "csma": "698e62259cbacacef7f85f2d",
-        "tsch": "698e62569cbacacef7f85f3e"
+        "csma": "69b0a5e30a6e7a58e3654c67"
     },
     "parameters": {
         "strategy": "nsga3",
         "algorithm": {
-            "population_size": 60,
-            "number_of_generations": 60,
+            "population_size": 20,
+            "number_of_generations": 10,
             "random_seed": 42,
             "prob_cx": 0.8,
             "prob_mt": 0.15,
@@ -28,7 +27,18 @@
         },
         "simulation": {
             "duration": 180,
-            "random_seeds": [123456, 234567, 345678]
+            "random_seeds": [
+                336157, 
+                667370, 
+                35239, 
+                5881, 
+                83525, 
+                850238, 
+                933454, 
+                124448, 
+                524053, 
+                793193
+            ]
         },
         "objectives":[
             {

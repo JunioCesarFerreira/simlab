@@ -3,13 +3,12 @@
     "name": "Performing optimization with NSGA-III on problem P2",
     "status": "Waiting",
     "system_message": null,
-    "created_time": "2026-02-16T13:37:00Z",
+    "created_time": "2026-03-16T23:47:00Z",
     "start_time": null,
     "end_time": null,    
     "generations": [],
     "source_repository_options": {
-        "csma": "698e62259cbacacef7f85f2d",
-        "tsch": "698e62569cbacacef7f85f3e"
+        "csma": "69b97e20911986d1242e5a7c"
     },
     "parameters": {
         "strategy": "nsga3",
@@ -28,8 +27,8 @@
             }
         ],
         "algorithm": {
-            "population_size": 60,
-            "number_of_generations": 60,
+            "population_size": 50,
+            "number_of_generations": 10,
             "random_seed": 42,
             "prob_cx": 0.8,
             "prob_mt": 0.15,
@@ -40,12 +39,21 @@
         },
         "simulation": {
             "duration": 180,
-            "random_seed": 123456
+            "random_seeds": [
+                336157, 
+                667370, 
+                35239,
+                873465,
+                987654,
+                123456,
+                493499,
+                5343
+            ]
         },
         "problem":{
             "name": "problem2",
-            "radius_of_reach": 50,
-            "radius_of_inter": 90,
+            "radius_of_reach": 100,
+            "radius_of_inter": 200,
             "region": [
                 -150,
                 -150,

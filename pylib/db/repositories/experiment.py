@@ -99,6 +99,7 @@ class ExperimentRepository:
             sims_deleted = db["simulations"].delete_many({"experiment_id": exp_oid}).deleted_count
             inds_deleted = db["individuals"].delete_many({"experiment_id": exp_oid}).deleted_count
             gens_deleted = db["generations"].delete_many({"experiment_id": exp_oid}).deleted_count
+            cache_deleted = db["genome_cache"].delete_many({"experiment_id": exp_oid}).deleted_count
             exp_deleted = db["experiments"].delete_one({"_id": exp_oid}).deleted_count
 
             return {
@@ -106,6 +107,7 @@ class ExperimentRepository:
                 "deleted_generations": int(gens_deleted),
                 "deleted_individuals": int(inds_deleted),
                 "deleted_simulations": int(sims_deleted),
+                "deleted_genome_cache": int(cache_deleted),
             }
 
     def add_analysis_file_to_experiment(self,

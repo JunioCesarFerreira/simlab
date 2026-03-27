@@ -8,6 +8,7 @@ from pylib.db.repositories.generation import GenerationRepository
 from pylib.db.repositories.individual import IndividualRepository
 from pylib.db.repositories.source import SourceRepositoryAccess
 from pylib.db.repositories.analytics import AnalyticsRepository
+from pylib.db.repositories.genome_cache import GenomeCacheRepository
 
 
 class MongoRepository(NamedTuple):
@@ -18,6 +19,7 @@ class MongoRepository(NamedTuple):
     source_repo: SourceRepositoryAccess
     fs_handler: MongoGridFSHandler
     analytics_repo: AnalyticsRepository
+    genome_cache_repo: GenomeCacheRepository
 
 
 def create_mongo_repository_factory(mongo_uri: str, db_name: str) -> MongoRepository:
@@ -29,6 +31,7 @@ def create_mongo_repository_factory(mongo_uri: str, db_name: str) -> MongoReposi
     individual_repo = IndividualRepository(connection)
     source_repo = SourceRepositoryAccess(connection)
     analytics_repo = AnalyticsRepository(connection)
+    genome_cache_repo = GenomeCacheRepository(connection)
     return MongoRepository(
         experiment_repo=experiment_repo,
         simulation_repo=simulation_repo,
@@ -37,4 +40,5 @@ def create_mongo_repository_factory(mongo_uri: str, db_name: str) -> MongoReposi
         source_repo=source_repo,
         fs_handler=fs_handler,
         analytics_repo=analytics_repo,
+        genome_cache_repo=genome_cache_repo,
     )

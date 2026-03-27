@@ -1,3 +1,5 @@
+import hashlib
+import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, replace
 from typing import Literal, Self
@@ -50,8 +52,20 @@ class Chromosome(ABC):
     def __hash__(self) -> int:
         pass
 
-    def get_hash(self) -> int:
-        return self.__hash__()
+    def get_hash(self) -> str:
+        """
+        Deterministic content-based identifier, stable across Python restarts.
+
+        Unlike __hash__ (which is session-randomised by PYTHONHASHSEED), this
+        method produces the same string for equal chromosomes in any process,
+        making it safe to use as a persistent key in MongoDB.
+
+        Subclasses must override this when to_dict() alone is not a canonical
+        form consistent with __eq__ (e.g. when equality is order-independent).
+        """
+        canonical = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha1(canonical.encode()).hexdigest()
+
 
 class ChromosomeBase:
     mac_protocol: MacGene
@@ -115,7 +129,15 @@ class ChromosomeP1(ChromosomeBase, Chromosome):
             self.mac_protocol,
             frozenset(_qpos(p) for p in self.relays)
         ))
-        
+
+    def get_hash(self) -> str:
+        # Use sorted quantized positions so equal chromosomes (same set of
+        # relays regardless of list order) produce the same persistent key.
+        sorted_relays = sorted(_qpos(p) for p in self.relays)
+        d = {"mac_protocol": self.mac_protocol, "relays": sorted_relays}
+        canonical = json.dumps(d, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha1(canonical.encode()).hexdigest()
+
 
 @dataclass(frozen=True, slots=True)
 class ChromosomeP2(ChromosomeBase, Chromosome):
@@ -217,3 +239,14 @@ class ChromosomeP4(ChromosomeBase, Chromosome):
             tuple(self.route),
             tuple(_qt(t) for t in self.sojourn_times)
         ))
+
+    def get_hash(self) -> str:
+        # Quantise sojourn_times (same precision used in __eq__/__hash__) so
+        # chromosomes that compare equal produce the same persistent key.
+        d = {
+            "mac_protocol": self.mac_protocol,
+            "route": self.route,
+            "sojourn_times": [_qt(t) for t in self.sojourn_times],
+        }
+        canonical = json.dumps(d, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha1(canonical.encode()).hexdigest()

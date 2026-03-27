@@ -33,7 +33,7 @@ Objectives can be individually configured as minimisation or maximisation target
 **Localhost**
 
 ```bash
-py plot_pareto_results.py --expid 69c4096f8f366d49ef753a50 --api-key api-password --keep-the-files True
+py plot_pareto_results.py --expid 69c677b93b925d1dafcb4151 --api-key api-password --keep-the-files True
 ```
 
 **Server**
