@@ -1,0 +1,76 @@
+{
+  "title": "Cooja Containers Monitoring",
+  "uid": "cooja-monitoring",
+  "panels": [
+    {
+      "title": "CPU Usage - All Cooja Containers",
+      "type": "graph",
+      "datasource": "InfluxDB",
+      "targets": [
+        {
+          "query": "from(bucket: \"docker\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"docker_container_cpu\")\n  |> filter(fn: (r) => r[\"container_name\"] =~ /cooja.*/)\n  |> filter(fn: (r) => r[\"_field\"] == \"usage_percent\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean)\n  |> yield(name: \"mean\")",
+          "language": "flux"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        }
+      }
+    },
+    {
+      "title": "Memory Usage - All Cooja Containers",
+      "type": "graph",
+      "datasource": "InfluxDB",
+      "targets": [
+        {
+          "query": "from(bucket: \"docker\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"docker_container_mem\")\n  |> filter(fn: (r) => r[\"container_name\"] =~ /cooja.*/)\n  |> filter(fn: (r) => r[\"_field\"] == \"usage_percent\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean)\n  |> yield(name: \"mean\")",
+          "language": "flux"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        }
+      }
+    },
+    {
+      "title": "Network Traffic - Cooja Containers",
+      "type": "graph",
+      "datasource": "InfluxDB",
+      "targets": [
+        {
+          "query": "from(bucket: \"docker\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"docker_container_net\")\n  |> filter(fn: (r) => r[\"container_name\"] =~ /cooja.*/)\n  |> filter(fn: (r) => r[\"_field\"] == \"rx_bytes\" or r[\"_field\"] == \"tx_bytes\")\n  |> aggregateWindow(every: v.windowPeriod, fn: sum)\n  |> yield(name: \"sum\")",
+          "language": "flux"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        }
+      }
+    },
+    {
+      "title": "Container Status",
+      "type": "table",
+      "datasource": "InfluxDB",
+      "targets": [
+        {
+          "query": "from(bucket: \"docker\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"docker_container_status\")\n  |> filter(fn: (r) => r[\"container_name\"] =~ /cooja.*/)\n  |> last()\n  |> keep(columns: [\"container_name\", \"_value\", \"_time\"])\n  |> yield(name: \"last\")",
+          "language": "flux"
+        }
+      ]
+    },
+    {
+      "title": "CPU per Container (Heatmap)",
+      "type": "heatmap",
+      "datasource": "InfluxDB",
+      "targets": [
+        {
+          "query": "from(bucket: \"docker\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"docker_container_cpu\")\n  |> filter(fn: (r) => r[\"container_name\"] =~ /cooja.*/)\n  |> filter(fn: (r) => r[\"_field\"] == \"usage_percent\")\n  |> aggregateWindow(every: 1m, fn: mean)\n  |> yield(name: \"mean\")",
+          "language": "flux"
+        }
+      ]
+    }
+  ]
+}

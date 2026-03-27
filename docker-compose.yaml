@@ -8,6 +8,10 @@ services:
       - 27017:27017
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    labels:
+      - "simlab.type=database"
+      - "simlab.role=storage"
+      - "simlab.group=infrastructure"
     healthcheck:
       test: echo "try { rs.status() } catch (err) { rs.initiate({_id:'rs0',members:[{_id:0,host:'mongodb:27017'}]}) }" | mongosh --port 27017 --quiet
       interval: 5s
@@ -20,6 +24,47 @@ services:
     networks:
       - mongo-net
 
+  influxdb:
+    image: influxdb:2.0
+    container_name: influxdb
+    ports:
+      - "8086:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=admin123
+      - DOCKER_INFLUXDB_INIT_ORG=myorg
+      - DOCKER_INFLUXDB_INIT_BUCKET=docker
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-token
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    labels:
+      - "simlab.type=timeseries"
+      - "simlab.role=storage"
+      - "simlab.group=monitoring"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  telegraf:
+    image: telegraf:latest
+    container_name: telegraf
+    volumes:
+      - ./telegraf.conf:/etc/telegraf/telegraf.conf:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /sys:/sys:ro
+      - /proc:/proc:ro
+    labels:
+      - "simlab.type=collector"
+      - "simlab.role=metrics"
+      - "simlab.group=monitoring"
+    depends_on:
+      influxdb:
+        condition: service_healthy
+
   grafana:
     image: grafana/grafana-oss
     container_name: grafana
@@ -27,10 +72,25 @@ services:
       - "3000:3000"
     volumes:
       - grafana-storage:/var/lib/grafana
+      - ./grafana-provisioning:/etc/grafana/provisioning
     environment:
       - GF_SECURITY_ADMIN_USER=simlab
       - GF_SECURITY_ADMIN_PASSWORD=simlab123
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
     restart: unless-stopped
+    labels:
+      - "simlab.type=visualization"
+      - "simlab.role=dashboard"
+      - "simlab.group=monitoring"
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   restapi:
     build:
@@ -47,8 +107,19 @@ services:
       - IS_DOCKER=True
     ports:
       - "8000:8000"
+    labels:
+      - "simlab.type=api"
+      - "simlab.role=orchestrator"
+      - "simlab.group=backend"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     depends_on:
-      - mongodb
+      mongodb:
+        condition: service_healthy
     networks:
       - mongo-net
 
@@ -66,8 +137,19 @@ services:
       - IS_DOCKER=True
     ports:
       - "2219:22"
+    labels:
+      - "simlab.type=engine"
+      - "simlab.role=processor"
+      - "simlab.group=backend"
+    healthcheck:
+      test: ["CMD", "pgrep", "python"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     depends_on:
-      - mongodb
+      mongodb:
+        condition: service_healthy
     networks:
       - mongo-net
 
@@ -85,8 +167,19 @@ services:
       - NUMBER_OF_CONTAINERS=16
     ports:
       - "2220:22"
+    labels:
+      - "simlab.type=master"
+      - "simlab.role=controller"
+      - "simlab.group=backend"
+    healthcheck:
+      test: ["CMD", "pgrep", "python"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     depends_on:
-      - mongodb
+      mongodb:
+        condition: service_healthy
     networks:
       - mongo-net
       - cooja-net
@@ -103,6 +196,11 @@ services:
       - "2231:22"
     networks:
       - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=1"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
 
   cooja2:
     image: juniocesarferreira/simulation-cooja:v1.1
@@ -112,6 +210,11 @@ services:
       - "2232:22"
     networks:
       - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=2"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
 
   cooja3:
     image: juniocesarferreira/simulation-cooja:v1.1
@@ -121,6 +224,11 @@ services:
       - "2233:22"
     networks:
       - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=3"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
 
   cooja4:
     image: juniocesarferreira/simulation-cooja:v1.1
@@ -130,6 +238,11 @@ services:
       - "2234:22"
     networks:
       - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=4"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
 
   cooja5:
     image: juniocesarferreira/simulation-cooja:v1.1
@@ -139,6 +252,11 @@ services:
       - "2235:22"
     networks:
       - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=5"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
 
   cooja6:
     image: juniocesarferreira/simulation-cooja:v1.1
@@ -148,6 +266,11 @@ services:
       - "2236:22"
     networks:
       - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=6"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
 
   cooja7:
     image: juniocesarferreira/simulation-cooja:v1.1
@@ -157,6 +280,11 @@ services:
       - "2237:22"
     networks:
       - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=7"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
 
   cooja8:
     image: juniocesarferreira/simulation-cooja:v1.1
@@ -166,6 +294,11 @@ services:
       - "2238:22"
     networks:
       - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=8"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
       
   cooja9:
     image: juniocesarferreira/simulation-cooja:v1.1
@@ -175,6 +308,11 @@ services:
       - "2239:22"
     networks:
       - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=9"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
       
   cooja10:
     image: juniocesarferreira/simulation-cooja:v1.1
@@ -184,6 +322,11 @@ services:
       - "2240:22"
     networks:
       - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=10"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
       
   cooja11:
     image: juniocesarferreira/simulation-cooja:v1.1
@@ -193,6 +336,11 @@ services:
       - "2241:22"
     networks:
       - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=11"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
       
   cooja12:
     image: juniocesarferreira/simulation-cooja:v1.1
@@ -202,6 +350,11 @@ services:
       - "2242:22"
     networks:
       - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=12"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
       
   cooja13:
     image: juniocesarferreira/simulation-cooja:v1.1
@@ -211,6 +364,11 @@ services:
       - "2243:22"
     networks:
       - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=13"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
       
   cooja14:
     image: juniocesarferreira/simulation-cooja:v1.1
@@ -220,6 +378,11 @@ services:
       - "2244:22"
     networks:
       - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=14"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
       
   cooja15:
     image: juniocesarferreira/simulation-cooja:v1.1
@@ -229,6 +392,11 @@ services:
       - "2245:22"
     networks:
       - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=15"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
       
   cooja16:
     image: juniocesarferreira/simulation-cooja:v1.1
@@ -238,6 +406,11 @@ services:
       - "2246:22"
     networks:
       - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=16"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
 
 # Attention! When modifying the number of Cooja containers, 
 # remember to modify the masternode's NUMBER_OF_CONTAINERS environment variable.
@@ -245,6 +418,7 @@ services:
 volumes:
   mongo_data:
   mongo_config:
+  influxdb-data:
   grafana-storage:
 
 networks:
