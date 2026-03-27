@@ -95,6 +95,36 @@ class ChromosomeBase:
         return self, options[protocol_str]
 
 
+def chromosome_from_dict(problem_name: str, data: dict) -> "Chromosome":
+    if problem_name == "problem1":
+        relays = [(float(pos["x"]), float(pos["y"])) for pos in data.get("relays", [])]
+        return ChromosomeP1(
+            mac_protocol=int(data["mac_protocol"]),
+            relays=relays,
+        )
+
+    if problem_name == "problem2":
+        return ChromosomeP2(
+            mac_protocol=int(data["mac_protocol"]),
+            mask=[int(bit) for bit in data.get("mask", [])],
+        )
+
+    if problem_name == "problem3":
+        return ChromosomeP3(
+            mac_protocol=int(data["mac_protocol"]),
+            mask=[int(bit) for bit in data.get("mask", [])],
+        )
+
+    if problem_name == "problem4":
+        return ChromosomeP4(
+            mac_protocol=int(data["mac_protocol"]),
+            route=[int(node) for node in data.get("route", [])],
+            sojourn_times=[float(value) for value in data.get("sojourn_times", [])],
+        )
+
+    raise ValueError(f"Unsupported problem name for chromosome restore: {problem_name!r}")
+
+
 @dataclass(frozen=True, slots=True)
 class ChromosomeP1(ChromosomeBase, Chromosome):
     """

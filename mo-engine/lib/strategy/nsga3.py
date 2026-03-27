@@ -25,7 +25,7 @@ from lib.nsga import generate_reference_points, niching_selection
 from lib.genetic_operators.selection import tournament_selection, compute_individual_ranks
 # Problem Adapter
 from lib.problem.adapter import ProblemAdapter, Chromosome
-from lib.problem.chromosomes import ChromosomeP1, ChromosomeP2, ChromosomeP3, ChromosomeP4
+from lib.problem.chromosomes import chromosome_from_dict
 from lib.problem.resolve import build_adapter
 
 
@@ -53,6 +53,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         algorithm_config = params.get("algorithm", {}) or {}
         problem_config = params.get("problem", {}) or {}
         simulation_config = params.get("simulation", {}) or {}
+        self._problem_name: str = str(problem_config.get("name", ""))
 
         src_repo_opts = experiment.get("source_repository_options", {}) or {}
 
@@ -338,7 +339,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         pending_individuals = 0
 
         for ind in sorted(individuals, key=lambda item: item["individual_id"]):
-            chromosome = self._chromosome_from_dict(ind["chromosome"])
+            chromosome = chromosome_from_dict(self._problem_name, ind["chromosome"])
             population.append(chromosome)
 
             objectives = ind.get("objectives") or self._genome_objectives_cache.get(ind["individual_id"])
@@ -348,38 +349,6 @@ class NSGA3LoopStrategy(EngineStrategy):
                 pending_individuals += 1
 
         return population, objectives_map, pending_individuals
-
-    def _chromosome_from_dict(self, data: dict) -> Chromosome:
-        problem_name = str(self.experiment.get("parameters", {}).get("problem", {}).get("name", ""))
-
-        if problem_name == "problem1":
-            relays = [(float(pos["x"]), float(pos["y"])) for pos in data.get("relays", [])]
-            return ChromosomeP1(
-                mac_protocol=int(data["mac_protocol"]),
-                relays=relays,
-            )
-
-        if problem_name == "problem2":
-            return ChromosomeP2(
-                mac_protocol=int(data["mac_protocol"]),
-                mask=[int(bit) for bit in data.get("mask", [])],
-            )
-
-        if problem_name == "problem3":
-            return ChromosomeP3(
-                mac_protocol=int(data["mac_protocol"]),
-                mask=[int(bit) for bit in data.get("mask", [])],
-            )
-
-        if problem_name == "problem4":
-            return ChromosomeP4(
-                mac_protocol=int(data["mac_protocol"]),
-                route=[int(node) for node in data.get("route", [])],
-                sojourn_times=[float(value) for value in data.get("sojourn_times", [])],
-            )
-
-        raise ValueError(f"Unsupported problem name for chromosome restore: {problem_name!r}")
-
 
 # ------------------------------
 # Watcher (Change Stream) + Polling fallback
