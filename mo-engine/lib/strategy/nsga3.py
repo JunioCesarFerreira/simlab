@@ -25,6 +25,7 @@ from lib.nsga import generate_reference_points, niching_selection
 from lib.genetic_operators.selection import tournament_selection, compute_individual_ranks
 # Problem Adapter
 from lib.problem.adapter import ProblemAdapter, Chromosome
+from lib.problem.chromosomes import ChromosomeP1, ChromosomeP2, ChromosomeP3, ChromosomeP4
 from lib.problem.resolve import build_adapter
 
 
@@ -100,6 +101,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._lock = threading.Lock()
         self._sim_done_count: int = 0
         self._sim_watch_thread: Thread | None = None
+        self._count_sims_inserted: int = 0
 
         # --- nsga3 workflow ---
         self._current_population: list[Chromosome] = []   # P_t
@@ -129,6 +131,16 @@ class NSGA3LoopStrategy(EngineStrategy):
         # This populates _inserted_genomes and _genome_objectives_cache so that
         # genomes already evaluated are never re-submitted to Cooja.
         self._load_genome_cache_from_db()
+
+        existing_generations = self.mongo.generation_repo.find_by_experiment(self._exp_id)
+        if existing_generations:
+            should_process_terminal = self._resume_existing_generation(existing_generations)
+            self._start_watcher()
+            self._start_generation_poll()
+            if should_process_terminal:
+                with self._lock:
+                    self._handle_generation_done(self._generation_id)
+            return
 
         self._current_population = self._problem_adapter.random_individual_generator(self._pop_size)
 
@@ -243,6 +255,130 @@ class NSGA3LoopStrategy(EngineStrategy):
                 len(entries),
                 len(self._genome_objectives_cache),
             )
+
+    def _resume_existing_generation(self, generations: list[Generation]) -> bool:
+        """
+        Resume the latest persisted generation for the current experiment.
+
+        Returns True when the latest generation is already terminal and must be
+        processed immediately to continue the evolutionary loop.
+        """
+        last_generation = generations[-1]
+        self._generation_id = last_generation["_id"]
+        self._gen_index = int(last_generation["index"]) + 1
+        self._restore_population_state(generations, last_generation)
+
+        status = last_generation.get("status")
+        if status in (EnumStatus.WAITING, EnumStatus.RUNNING):
+            logger.info(
+                "[NSGA-III] Resuming experiment %s from existing generation %s (index=%d, status=%s).",
+                self._exp_id,
+                self._generation_id,
+                last_generation["index"],
+                status,
+            )
+            self.mongo.experiment_repo.update(str(self._exp_id), {
+                "status": EnumStatus.RUNNING,
+            })
+            return False
+
+        if status == EnumStatus.DONE:
+            logger.info(
+                "[NSGA-III] Replaying completed generation %s (index=%d) to continue the experiment.",
+                self._generation_id,
+                last_generation["index"],
+            )
+            self.mongo.experiment_repo.update(str(self._exp_id), {
+                "status": EnumStatus.RUNNING,
+            })
+            return True
+
+        raise RuntimeError(
+            f"Cannot resume NSGA-III from generation index={last_generation['index']} with status={status}."
+        )
+
+    def _restore_population_state(
+        self,
+        generations: list[Generation],
+        current_generation: Generation,
+    ) -> None:
+        current_index = int(current_generation["index"])
+        self._current_population, current_map, pending_individuals = self._load_generation_population(
+            current_generation["_id"]
+        )
+        self._map_genome_objectives.update(current_map)
+        self._count_sims_inserted = pending_individuals * len(self._sim_rand_seeds)
+
+        if current_index == 0:
+            self._parents = []
+            return
+
+        previous_generation = next(
+            (gen for gen in reversed(generations[:-1]) if int(gen["index"]) == current_index - 1),
+            None,
+        )
+        if previous_generation is None:
+            raise RuntimeError(
+                f"Cannot resume generation {current_index}: previous generation {current_index - 1} not found."
+            )
+
+        self._parents, parent_map, _ = self._load_generation_population(previous_generation["_id"])
+        self._map_genome_objectives.update(parent_map)
+
+    def _load_generation_population(
+        self,
+        generation_id: ObjectId,
+    ) -> tuple[list[Chromosome], dict[Chromosome, list[float]], int]:
+        individuals = self.mongo.individual_repo.find_by_generation(generation_id)
+        if not individuals:
+            raise RuntimeError(f"Cannot resume generation {generation_id}: no individuals were found.")
+
+        population: list[Chromosome] = []
+        objectives_map: dict[Chromosome, list[float]] = {}
+        pending_individuals = 0
+
+        for ind in sorted(individuals, key=lambda item: item["individual_id"]):
+            chromosome = self._chromosome_from_dict(ind["chromosome"])
+            population.append(chromosome)
+
+            objectives = ind.get("objectives") or self._genome_objectives_cache.get(ind["individual_id"])
+            if objectives:
+                objectives_map[chromosome] = [float(value) for value in objectives]
+            else:
+                pending_individuals += 1
+
+        return population, objectives_map, pending_individuals
+
+    def _chromosome_from_dict(self, data: dict) -> Chromosome:
+        problem_name = str(self.experiment.get("parameters", {}).get("problem", {}).get("name", ""))
+
+        if problem_name == "problem1":
+            relays = [(float(pos["x"]), float(pos["y"])) for pos in data.get("relays", [])]
+            return ChromosomeP1(
+                mac_protocol=int(data["mac_protocol"]),
+                relays=relays,
+            )
+
+        if problem_name == "problem2":
+            return ChromosomeP2(
+                mac_protocol=int(data["mac_protocol"]),
+                mask=[int(bit) for bit in data.get("mask", [])],
+            )
+
+        if problem_name == "problem3":
+            return ChromosomeP3(
+                mac_protocol=int(data["mac_protocol"]),
+                mask=[int(bit) for bit in data.get("mask", [])],
+            )
+
+        if problem_name == "problem4":
+            return ChromosomeP4(
+                mac_protocol=int(data["mac_protocol"]),
+                route=[int(node) for node in data.get("route", [])],
+                sojourn_times=[float(value) for value in data.get("sojourn_times", [])],
+            )
+
+        raise ValueError(f"Unsupported problem name for chromosome restore: {problem_name!r}")
 
 
 # ------------------------------
