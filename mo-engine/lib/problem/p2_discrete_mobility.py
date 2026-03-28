@@ -73,7 +73,7 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
         R = self.problem.radius_of_reach
         p1: ChromosomeP2 = parents[0]
         p2: ChromosomeP2 = parents[1]
-        c1, c2 = uniform_crossover_mask(p1.mask, p2.mask)
+        c1, c2 = uniform_crossover_mask(p1.mask, p2.mask, self._rng)
         
         err, c1 = repair_connectivity_to_sink(Q, c1, S, R)
         if err:
@@ -99,7 +99,7 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
         S = self.problem.sink
         R = self.problem.radius_of_reach
         mask: list[int] = chromosome.mask
-        bitflip_result = bitflip_mutation(mask, self._p_bit_mut)
+        bitflip_result = bitflip_mutation(mask, self._p_bit_mut, self._rng)
         
         err, out = repair_connectivity_to_sink(Q, bitflip_result, S, R)
         if err:
