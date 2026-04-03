@@ -53,6 +53,10 @@ class SimulationRepository:
                 parent: object_id
             }))
 
+    def find_by_individual(self, individual_id: str) -> list[Simulation]:
+        with self.connection.connect() as db:
+            return list(db["simulations"].find({"individual_id": individual_id}))
+
     def find_by_status(self, status: str) -> list[Simulation]:
         with self.connection.connect() as db:
             return list(db["simulations"].find({"status": status}))

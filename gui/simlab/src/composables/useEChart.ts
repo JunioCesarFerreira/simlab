@@ -25,5 +25,10 @@ export function useEChart(containerRef: Ref<HTMLElement | null>) {
     chart?.resize();
   }
 
-  return { ready, setOption, resize };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function on(event: string, handler: (params: any) => void) {
+    chart?.on(event, handler);
+  }
+
+  return { ready, setOption, resize, on };
 }

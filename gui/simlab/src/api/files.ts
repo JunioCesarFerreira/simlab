@@ -36,6 +36,11 @@ async function openBlob(blob: Blob): Promise<void> {
 // API pública
 // -------------------------------------------------------
 
+export async function fetchBlobUrl(path: string): Promise<string> {
+  const blob = await fetchBlob(`${baseUrl}${path}`);
+  return URL.createObjectURL(blob);
+}
+
 export async function openTopology(individualTopologyPictureId: ID): Promise<void> {
   const url = `${baseUrl}/files/${individualTopologyPictureId}/as/png`;
   const blob = await fetchBlob(url);

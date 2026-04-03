@@ -24,6 +24,19 @@ def create_simulation(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/by-individual/{individual_id}", response_model=list[SimulationDto])
+def get_simulations_by_individual(
+    individual_id: str,
+    factory: MongoRepository = Depends(get_factory)
+) -> list[SimulationDto]:
+    """Retrieve all simulations belonging to a given individual (by chromosome hash)."""
+    try:
+        docs = factory.simulation_repo.find_by_individual(individual_id)
+        return [simulation_from_mongo(d) for d in docs]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/by-status/{status}", response_model=list[SimulationDto])
 def get_simulations_by_status(
     status: str,

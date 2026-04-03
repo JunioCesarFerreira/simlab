@@ -39,8 +39,12 @@ const props = defineProps<{
   objectiveNames?: string[];
 }>();
 
+const emit = defineEmits<{
+  (e: "click-individual", individualId: string): void;
+}>();
+
 const chartEl = ref<HTMLElement | null>(null);
-const { setOption, ready } = useEChart(chartEl);
+const { setOption, ready, on } = useEChart(chartEl);
 
 const availableKeys = computed<string[]>(() => {
   if (props.objectiveNames && props.objectiveNames.length >= 2) return props.objectiveNames;
@@ -62,37 +66,38 @@ watch(availableKeys, (keys) => {
 const xIdx = computed(() => availableKeys.value.indexOf(xKey.value));
 const yIdx = computed(() => availableKeys.value.indexOf(yKey.value));
 
-// Fingerprint para cruzar individual.objectives (array) com pareto item
-function fingerprint(values: number[]): string {
-  return values.map((v) => (v ?? NaN).toFixed(10)).join("|");
+interface ChartPoint {
+  value: [number, number];
+  individualId: string;
+  allObjectives: number[] | Record<string, number>;
 }
 
-// Mapa fingerprint → individual_id (construído a partir da população)
-const individualIdMap = computed(() => {
+// Serialização estável de objetos para usar como chave de lookup
+function stableStringify(val: unknown): string {
+  if (Array.isArray(val)) return `[${(val as unknown[]).map(stableStringify).join(",")}]`;
+  if (val !== null && typeof val === "object") {
+    const entries = Object.keys(val as object)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stableStringify((val as Record<string, unknown>)[k])}`);
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(val);
+}
+
+// Mapa cromossomo → individual_id (construído a partir de todas as gerações)
+const chromosomeMap = computed(() => {
   const map = new Map<string, string>();
   for (const gen of props.generations ?? []) {
     for (const ind of gen.population) {
-      map.set(fingerprint(ind.objectives), ind.individual_id);
+      map.set(stableStringify(ind.chromosome), ind.individual_id);
     }
   }
   return map;
 });
 
-interface PopPoint {
-  value: [number, number];
-  individualId: string;
-  allObjectives: number[];
-}
-
-interface ParetoPoint {
-  value: [number, number];
-  individualId: string | null;
-  allObjectives: Record<string, number>;
-}
-
-const populationData = computed<PopPoint[]>(() => {
+const populationData = computed<ChartPoint[]>(() => {
   const seen = new Set<string>();
-  const pts: PopPoint[] = [];
+  const pts: ChartPoint[] = [];
   for (const gen of props.generations ?? []) {
     for (const ind of gen.population) {
       if (seen.has(ind.individual_id)) continue;
@@ -106,19 +111,18 @@ const populationData = computed<PopPoint[]>(() => {
   return pts;
 });
 
-const paretoData = computed<ParetoPoint[]>(() =>
+const paretoData = computed<ChartPoint[]>(() =>
   (props.paretoFront ?? []).flatMap((item) => {
     const x = item.objectives[xKey.value];
     const y = item.objectives[yKey.value];
     if (x === undefined || y === undefined || isNaN(x) || isNaN(y)) return [];
-    // Tenta encontrar o individual_id pelo fingerprint dos objetivos
-    const objArray = availableKeys.value.map((k) => item.objectives[k]);
-    const individualId = individualIdMap.value.get(fingerprint(objArray)) ?? null;
+    // Lookup pelo cromossomo — independe de precisão float ou nome de objetivos
+    const individualId = chromosomeMap.value.get(stableStringify(item.chromosome)) ?? "";
     return [{ value: [x, y], individualId, allObjectives: item.objectives }];
   }),
 );
 
-function formatTooltip(p: { data: PopPoint | ParetoPoint; seriesName: string }): string {
+function formatTooltip(p: { data: ChartPoint }): string {
   const d = p.data;
   const idHtml = d.individualId
     ? `<div style="font-family:monospace;font-size:11px;color:#6b7280;margin-bottom:4px">${d.individualId.slice(0, 16)}…</div>`
@@ -126,7 +130,6 @@ function formatTooltip(p: { data: PopPoint | ParetoPoint; seriesName: string }):
 
   let objRows: string;
   if (Array.isArray(d.allObjectives)) {
-    // PopPoint: array indexado
     objRows = (d.allObjectives as number[])
       .map((v, i) => {
         const name = availableKeys.value[i] ?? `obj${i}`;
@@ -134,7 +137,6 @@ function formatTooltip(p: { data: PopPoint | ParetoPoint; seriesName: string }):
       })
       .join("");
   } else {
-    // ParetoPoint: dict nomeado
     objRows = Object.entries(d.allObjectives as Record<string, number>)
       .map(([k, v]) => `<tr><td style="color:#6b7280;padding-right:12px">${k}</td><td style="font-weight:600">${v.toFixed(6)}</td></tr>`)
       .join("");
@@ -201,7 +203,13 @@ function buildOption() {
 }
 
 watch([ready, () => props.paretoFront, () => props.generations, xKey, yKey], buildOption);
-onMounted(buildOption);
+onMounted(() => {
+  buildOption();
+  on("click", (params: { data?: ChartPoint }) => {
+    const id = params.data?.individualId;
+    if (id) emit("click-individual", id);
+  });
+});
 </script>
 
 <style scoped>

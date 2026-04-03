@@ -8,6 +8,15 @@
       Erro: {{ store.error }}
     </div>
 
+    <!-- Individual detail panel -->
+    <IndividualDetailPanel
+      v-if="selectedIndividual"
+      :individual="selectedIndividual"
+      :objective-names="store.objectiveNames"
+      :metric-columns="metricColumns"
+      @close="selectedIndividual = null"
+    />
+
     <template v-else-if="store.experiment">
       <!-- Header -->
       <div class="header">
@@ -140,6 +149,7 @@
               :pareto-front="store.experiment.pareto_front"
               :generations="store.experiment.generations"
               :objective-names="store.objectiveNames"
+              @click-individual="openIndividual"
             />
           </div>
           <div class="card chart-card">
@@ -190,13 +200,15 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, computed, onMounted, onBeforeUnmount } from "vue";
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
 import { useExperimentDetailStore } from "../app/stores/experimentDetailStore";
 import StatusBadge from "../components/common/StatusBadge.vue";
 import GenerationRow from "../components/detail/GenerationRow.vue";
 import ParetoFrontChart from "../components/charts/ParetoFrontChart.vue";
 import ObjectivesEvolutionChart from "../components/charts/ObjectivesEvolutionChart.vue";
+import IndividualDetailPanel from "../components/detail/IndividualDetailPanel.vue";
 import { downloadAnalysisZip, downloadTopologiesZip } from "../api/files";
+import type { IndividualDto } from "../types/simlab";
 
 const props = defineProps<{ id: string }>();
 const store = useExperimentDetailStore();
@@ -225,6 +237,20 @@ const progressPct = computed(() => {
 const hasAnalysisFiles = computed(
   () => Object.keys(store.experiment?.analysis_files ?? {}).length > 0,
 );
+
+// Colunas de métricas usadas no cálculo de objetivos
+const metricColumns = computed(() =>
+  store.experiment?.data_conversion_config?.metrics?.map((m) => m.column) ?? [],
+);
+
+// Indivíduo selecionado pelo clique no gráfico
+const selectedIndividual = ref<IndividualDto | null>(null);
+
+function openIndividual(individualId: string) {
+  const all = store.experiment?.generations.flatMap((g) => g.population) ?? [];
+  const found = all.find((ind) => ind.individual_id === individualId);
+  if (found) selectedIndividual.value = found;
+}
 
 const downloading = reactive({ analysis: false, topologies: false });
 
