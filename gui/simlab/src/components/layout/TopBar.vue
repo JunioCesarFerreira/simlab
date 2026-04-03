@@ -1,6 +1,6 @@
 <template>
   <header class="topbar">
-    <div class="left">Gestão e análise de experimentos</div>
+    <div class="left">Experiment management &amp; analysis</div>
     <div class="right">
       <span class="pill">v0.1</span>
     </div>

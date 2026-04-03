@@ -20,10 +20,10 @@
         v-if="individual.topology_picture_id"
         class="link-btn"
         :disabled="opening"
-        title="Ver topologia"
+        title="View topology"
         @click="viewTopology"
       >
-        {{ opening ? "…" : "Topologia" }}
+        {{ opening ? "…" : "Topology" }}
       </button>
     </td>
   </tr>
@@ -47,7 +47,7 @@ async function viewTopology() {
   try {
     await openTopology(props.individual.topology_picture_id);
   } catch (e) {
-    console.error("Erro ao abrir topologia:", e);
+    console.error("Error opening topology:", e);
   } finally {
     opening.value = false;
   }

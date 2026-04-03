@@ -3,12 +3,12 @@
     <div class="page-header">
       <h1 class="page-title">Dashboard</h1>
       <button class="refresh-btn" :disabled="store.loading" @click="load">
-        {{ store.loading ? "Carregando…" : "Atualizar" }}
+        {{ store.loading ? "Loading…" : "Refresh" }}
       </button>
     </div>
 
     <div v-if="store.error" class="error-banner">
-      Erro ao carregar: {{ store.error }}
+      Failed to load: {{ store.error }}
     </div>
 
     <!-- Stat cards -->
@@ -19,25 +19,25 @@
       </div>
       <div class="stat-card stat-card--running">
         <div class="stat-value">{{ counts["Running"] ?? 0 }}</div>
-        <div class="stat-label">Em execução</div>
+        <div class="stat-label">Running</div>
       </div>
       <div class="stat-card stat-card--waiting">
         <div class="stat-value">{{ counts["Waiting"] ?? 0 }}</div>
-        <div class="stat-label">Na fila</div>
+        <div class="stat-label">Queued</div>
       </div>
       <div class="stat-card stat-card--done">
         <div class="stat-value">{{ counts["Done"] ?? 0 }}</div>
-        <div class="stat-label">Finalizados</div>
+        <div class="stat-label">Finished</div>
       </div>
       <div class="stat-card stat-card--error">
         <div class="stat-value">{{ counts["Error"] ?? 0 }}</div>
-        <div class="stat-label">Com erro</div>
+        <div class="stat-label">Errored</div>
       </div>
     </div>
 
     <!-- Running experiments -->
     <section v-if="running.length > 0">
-      <div class="section-title">Em execução</div>
+      <div class="section-title">Running</div>
       <div class="exp-list">
         <ExperimentCard
           v-for="e in running"
@@ -49,7 +49,7 @@
 
     <!-- Waiting experiments -->
     <section v-if="waiting.length > 0">
-      <div class="section-title">Na fila</div>
+      <div class="section-title">Queued</div>
       <div class="exp-list">
         <ExperimentCard
           v-for="e in waiting"
@@ -61,7 +61,7 @@
 
     <!-- Recent finished -->
     <section v-if="recentFinished.length > 0">
-      <div class="section-title">Recentes finalizados</div>
+      <div class="section-title">Recently finished</div>
       <div class="exp-list">
         <ExperimentCard
           v-for="e in recentFinished"
@@ -75,7 +75,7 @@
       v-if="!store.loading && store.experiments.length === 0 && !store.error"
       class="empty-state"
     >
-      Nenhum experimento encontrado.
+      No experiments found.
     </div>
   </div>
 </template>

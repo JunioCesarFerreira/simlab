@@ -9,19 +9,19 @@
         <span v-if="generation.end_time">{{ formatTime(generation.end_time) }}</span>
         <span v-if="duration" class="duration">({{ duration }})</span>
       </span>
-      <span class="pop-count">{{ generation.population.length }} indivíduos</span>
+      <span class="pop-count">{{ generation.population.length }} individuals</span>
       <span class="chevron" :class="{ rotated: open }">▾</span>
     </button>
 
     <div v-if="open" class="gen-body">
       <div v-if="generation.population.length === 0" class="empty">
-        Nenhum indivíduo registrado ainda.
+        No individuals registered yet.
       </div>
       <table v-else class="ind-table">
         <thead>
           <tr>
             <th>Hash</th>
-            <th>Objetivos</th>
+            <th>Objectives</th>
             <th></th>
           </tr>
         </thead>
@@ -53,7 +53,7 @@ const props = defineProps<{
 const open = ref(props.defaultOpen ?? false);
 
 function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString("pt-BR", {
+  return new Date(iso).toLocaleTimeString("en-US", {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",

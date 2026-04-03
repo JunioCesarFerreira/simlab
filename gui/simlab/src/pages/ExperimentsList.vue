@@ -1,14 +1,14 @@
 <template>
   <div class="list-page">
     <div class="page-header">
-      <h1 class="page-title">Experimentos</h1>
+      <h1 class="page-title">Experiments</h1>
       <button class="refresh-btn" :disabled="store.loading" @click="load">
-        {{ store.loading ? "Carregando…" : "Atualizar" }}
+        {{ store.loading ? "Loading…" : "Refresh" }}
       </button>
     </div>
 
     <div v-if="store.error" class="error-banner">
-      Erro ao carregar: {{ store.error }}
+      Failed to load: {{ store.error }}
     </div>
 
     <FilterBar
@@ -17,12 +17,12 @@
     />
 
     <div v-if="store.loading && store.experiments.length === 0" class="loading">
-      Carregando experimentos…
+      Loading experiments…
     </div>
 
     <div v-else-if="store.filtered.length === 0 && !store.loading" class="empty-state">
-      Nenhum experimento
-      <span v-if="store.selectedStatus"> com status "{{ store.selectedStatus }}"</span>.
+      No experiments
+      <span v-if="store.selectedStatus"> with status "{{ store.selectedStatus }}"</span>.
     </div>
 
     <div v-else class="exp-list">

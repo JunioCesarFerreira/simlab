@@ -28,12 +28,12 @@ function triggerDownload(blob: Blob, filename: string): void {
 async function openBlob(blob: Blob): Promise<void> {
   const url = URL.createObjectURL(blob);
   window.open(url, "_blank");
-  // Revoga após delay para dar tempo ao browser de abrir
+  // Revoke after a delay to give the browser time to open the URL
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
 // -------------------------------------------------------
-// API pública
+// Public API
 // -------------------------------------------------------
 
 export async function fetchBlobUrl(path: string): Promise<string> {

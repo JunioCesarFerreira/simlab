@@ -1,6 +1,6 @@
 <template>
   <div class="chart-wrap">
-    <div v-if="!hasData" class="empty">Sem dados de gerações para exibir</div>
+    <div v-if="!hasData" class="empty">No generation data to display</div>
     <div v-else ref="chartEl" class="chart" />
   </div>
 </template>
@@ -34,7 +34,7 @@ function buildOption() {
   const names = props.objectiveNames;
   const xData = finishedGens.value.map((g) => `Gen ${g.index}`);
 
-  // Para cada objetivo, coleta o melhor valor por geração (mínimo da população)
+  // For each objective, collect the best value per generation (minimum of the population)
   const rawBest: (number | null)[][] = names.map((_, idx) =>
     finishedGens.value.map((gen) => {
       const valid = gen.population
@@ -44,7 +44,7 @@ function buildOption() {
     }),
   );
 
-  // Min/max globais por objetivo para normalização [0, 1]
+  // Global min/max per objective for normalization [0, 1]
   const globalMin: number[] = names.map((_, idx) => {
     const vals = rawBest[idx].filter((v): v is number => v !== null);
     return vals.length > 0 ? Math.min(...vals) : 0;
@@ -67,7 +67,7 @@ function buildOption() {
     data: rawBest[idx].map((v) => {
       const norm = normalize(v, idx);
       if (norm === null) return null;
-      // Tooltip mostra valor original; nome inclui range para contexto
+      // Tooltip shows raw value; name includes range for context
       return {
         value: norm,
         raw: v,

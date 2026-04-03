@@ -9,14 +9,14 @@
     </div>
     <div class="meta">
       <span v-if="experiment.start_time">
-        Início: {{ formatDate(experiment.start_time) }}
+        Start: {{ formatDate(experiment.start_time) }}
       </span>
       <span v-if="experiment.end_time" class="sep">·</span>
       <span v-if="experiment.end_time">
-        Fim: {{ formatDate(experiment.end_time) }}
+        End: {{ formatDate(experiment.end_time) }}
       </span>
       <span v-if="!experiment.start_time && !experiment.end_time" class="muted">
-        Aguardando início
+        Waiting to start
       </span>
     </div>
   </RouterLink>
@@ -29,7 +29,7 @@ import type { ExperimentInfoDto } from "../../types/simlab";
 defineProps<{ experiment: ExperimentInfoDto }>();
 
 function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString("pt-BR", {
+  return new Date(iso).toLocaleString("en-US", {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",

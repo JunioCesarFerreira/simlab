@@ -2,10 +2,10 @@
   <div class="detail-page">
     <!-- Loading / error states -->
     <div v-if="store.loading && !store.experiment" class="loading">
-      Carregando experimento…
+      Loading experiment…
     </div>
     <div v-else-if="store.error" class="error-banner">
-      Erro: {{ store.error }}
+      Error: {{ store.error }}
     </div>
 
     <!-- Individual detail panel -->
@@ -20,15 +20,15 @@
     <template v-else-if="store.experiment">
       <!-- Header -->
       <div class="header">
-        <RouterLink to="/experiments" class="back-link">← Experimentos</RouterLink>
+        <RouterLink to="/experiments" class="back-link">← Experiments</RouterLink>
         <div class="header-main">
           <div class="header-left">
             <h1 class="exp-name">{{ store.experiment.name }}</h1>
             <div class="header-meta">
               <StatusBadge :status="store.experiment.status" />
-              <span v-if="store.isRunning" class="live-pill">● AO VIVO</span>
+              <span v-if="store.isRunning" class="live-pill">● LIVE</span>
               <span class="meta-date" v-if="store.experiment.created_time">
-                Criado em {{ formatDate(store.experiment.created_time) }}
+                Created {{ formatDate(store.experiment.created_time) }}
               </span>
             </div>
             <div v-if="store.experiment.system_message" class="sys-message">
@@ -42,14 +42,14 @@
               :disabled="downloading.analysis"
               @click="doDownloadAnalysis"
             >
-              {{ downloading.analysis ? "Baixando…" : "Baixar análises" }}
+              {{ downloading.analysis ? "Downloading…" : "Download analyses" }}
             </button>
             <button
               class="action-btn"
               :disabled="downloading.topologies"
               @click="doDownloadTopologies"
             >
-              {{ downloading.topologies ? "Baixando…" : "Baixar topologias" }}
+              {{ downloading.topologies ? "Downloading…" : "Download topologies" }}
             </button>
           </div>
         </div>
@@ -57,10 +57,10 @@
 
       <!-- Timeline row -->
       <div class="timeline-bar" v-if="store.experiment.start_time">
-        <span>Início: {{ formatDate(store.experiment.start_time) }}</span>
+        <span>Start: {{ formatDate(store.experiment.start_time) }}</span>
         <template v-if="store.experiment.end_time">
           <span class="sep">→</span>
-          <span>Fim: {{ formatDate(store.experiment.end_time) }}</span>
+          <span>End: {{ formatDate(store.experiment.end_time) }}</span>
           <span class="duration">({{ totalDuration }})</span>
         </template>
       </div>
@@ -69,15 +69,15 @@
       <div class="overview-grid">
         <!-- Parameters panel -->
         <div class="card params-panel">
-          <div class="section-title">Parâmetros</div>
+          <div class="section-title">Parameters</div>
 
           <div class="param-group">
-            <div class="param-label">Estratégia</div>
+            <div class="param-label">Strategy</div>
             <div class="param-value">{{ store.experiment.parameters.strategy }}</div>
           </div>
 
           <details class="collapsible" open>
-            <summary>Algoritmo</summary>
+            <summary>Algorithm</summary>
             <div class="param-table">
               <div
                 v-for="(val, key) in store.experiment.parameters.algorithm"
@@ -91,7 +91,7 @@
           </details>
 
           <details class="collapsible">
-            <summary>Objetivos</summary>
+            <summary>Objectives</summary>
             <div class="param-table">
               <div
                 v-for="(obj, i) in store.experiment.parameters.objectives"
@@ -105,7 +105,7 @@
           </details>
 
           <details class="collapsible">
-            <summary>Problema</summary>
+            <summary>Problem</summary>
             <div class="param-table">
               <div
                 v-for="(val, key) in store.experiment.parameters.problem"
@@ -119,7 +119,7 @@
           </details>
 
           <details class="collapsible">
-            <summary>Conversão de dados</summary>
+            <summary>Data conversion</summary>
             <div class="param-table">
               <div class="param-row">
                 <span class="pk">node_col</span>
@@ -144,7 +144,7 @@
         <!-- Charts panel -->
         <div class="charts-panel">
           <div class="card chart-card">
-            <div class="section-title">Frente de Pareto</div>
+            <div class="section-title">Pareto Front</div>
             <ParetoFrontChart
               :pareto-front="store.experiment.pareto_front"
               :generations="store.experiment.generations"
@@ -153,7 +153,7 @@
             />
           </div>
           <div class="card chart-card">
-            <div class="section-title">Evolução dos objetivos (melhor por geração)</div>
+            <div class="section-title">Objectives evolution (best per generation)</div>
             <ObjectivesEvolutionChart
               :generations="store.experiment.generations"
               :objective-names="store.objectiveNames"
@@ -165,8 +165,8 @@
       <!-- Progress bar for running experiments -->
       <div v-if="store.isRunning" class="progress-section card">
         <div class="progress-header">
-          <span>Gerações completas: {{ finishedCount }} / {{ totalGenerations }}</span>
-          <span class="live-pill">● Atualizando a cada 3s</span>
+          <span>Completed generations: {{ finishedCount }} / {{ totalGenerations }}</span>
+          <span class="live-pill">● Updating every 3s</span>
         </div>
         <div class="progress-track">
           <div class="progress-fill" :style="{ width: `${progressPct}%` }" />
@@ -176,14 +176,14 @@
       <!-- Generations -->
       <div class="generations-section">
         <div class="section-title">
-          Gerações
+          Generations
           <span class="gen-count">({{ store.experiment.generations.length }})</span>
         </div>
         <div
           v-if="store.experiment.generations.length === 0"
           class="empty-state"
         >
-          Nenhuma geração iniciada ainda.
+          No generations started yet.
         </div>
         <div v-else class="gen-list">
           <GenerationRow
@@ -238,12 +238,12 @@ const hasAnalysisFiles = computed(
   () => Object.keys(store.experiment?.analysis_files ?? {}).length > 0,
 );
 
-// Colunas de métricas usadas no cálculo de objetivos
+// Metric columns used in objective computation
 const metricColumns = computed(() =>
   store.experiment?.data_conversion_config?.metrics?.map((m) => m.column) ?? [],
 );
 
-// Indivíduo selecionado pelo clique no gráfico
+// Individual selected by chart click
 const selectedIndividual = ref<IndividualDto | null>(null);
 
 function openIndividual(individualId: string) {
@@ -257,14 +257,14 @@ const downloading = reactive({ analysis: false, topologies: false });
 async function doDownloadAnalysis() {
   downloading.analysis = true;
   try { await downloadAnalysisZip(props.id); }
-  catch (e) { console.error("Erro ao baixar análises:", e); }
+  catch (e) { console.error("Error downloading analyses:", e); }
   finally { downloading.analysis = false; }
 }
 
 async function doDownloadTopologies() {
   downloading.topologies = true;
   try { await downloadTopologiesZip(props.id); }
-  catch (e) { console.error("Erro ao baixar topologias:", e); }
+  catch (e) { console.error("Error downloading topologies:", e); }
   finally { downloading.topologies = false; }
 }
 
@@ -282,7 +282,7 @@ const totalDuration = computed(() => {
 });
 
 function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString("pt-BR", {
+  return new Date(iso).toLocaleString("en-US", {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",

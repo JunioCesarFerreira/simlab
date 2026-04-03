@@ -5,7 +5,7 @@
       :class="{ active: modelValue === null }"
       @click="$emit('update:modelValue', null)"
     >
-      Todos
+      All
       <span class="count">{{ total }}</span>
     </button>
     <button

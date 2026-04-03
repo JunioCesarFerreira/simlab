@@ -11,7 +11,7 @@
       </RouterLink>
       <RouterLink to="/experiments" class="nav-link">
         <span class="nav-icon">◈</span>
-        Experimentos
+        Experiments
       </RouterLink>
     </div>
   </nav>

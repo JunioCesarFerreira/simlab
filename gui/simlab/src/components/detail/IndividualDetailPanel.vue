@@ -5,7 +5,7 @@
       <!-- Header -->
       <div class="panel-header">
         <div class="panel-title">
-          <span class="label">Indivíduo</span>
+          <span class="label">Individual</span>
           <span class="hash mono">{{ individual.individual_id }}</span>
         </div>
         <button class="close-btn" @click="$emit('close')">✕</button>
@@ -14,7 +14,7 @@
       <div class="panel-body">
         <!-- Objetivos -->
         <section class="section">
-          <div class="section-title">Objetivos</div>
+          <div class="section-title">Objectives</div>
           <div class="objectives-grid">
             <div
               v-for="(val, i) in individual.objectives"
@@ -29,22 +29,22 @@
 
         <!-- Topologia -->
         <section v-if="individual.topology_picture_id" class="section">
-          <div class="section-title">Topologia</div>
+          <div class="section-title">Topology</div>
           <div class="topology-wrap">
-            <div v-if="loadingTopology" class="topology-placeholder">Carregando…</div>
+            <div v-if="loadingTopology" class="topology-placeholder">Loading…</div>
             <img
               v-else-if="topologyBlobUrl"
               :src="topologyBlobUrl"
               class="topology-img"
-              alt="Topologia da rede"
+              alt="Network topology"
             />
-            <div v-else class="topology-placeholder error">Não disponível</div>
+            <div v-else class="topology-placeholder error">Not available</div>
           </div>
         </section>
 
         <!-- Cromossomo -->
         <section class="section">
-          <div class="section-title">Cromossomo</div>
+          <div class="section-title">Chromosome</div>
           <div class="kv-table">
             <div
               v-for="(val, key) in individual.chromosome"
@@ -60,14 +60,14 @@
         <!-- Simulações -->
         <section class="section">
           <div class="section-title">
-            Simulações
+            Simulations
             <span v-if="!loadingSims" class="count">({{ simulations.length }})</span>
           </div>
 
-          <div v-if="loadingSims" class="loading-sims">Carregando simulações…</div>
+          <div v-if="loadingSims" class="loading-sims">Loading simulations…</div>
           <div v-else-if="simError" class="sim-error">{{ simError }}</div>
           <div v-else-if="simulations.length === 0" class="empty-sims">
-            Nenhuma simulação registrada.
+            No simulations registered.
           </div>
 
           <div v-else class="sim-list">
@@ -89,16 +89,16 @@
                 {{ sim.system_message }}
               </div>
 
-              <!-- Métricas brutas (network_metrics) -->
+              <!-- Raw metrics (network_metrics) -->
               <div v-if="Object.keys(sim.network_metrics).length > 0" class="metrics-wrap">
-                <div class="metrics-label">Métricas brutas (network_metrics)</div>
+                <div class="metrics-label">Raw metrics (network_metrics)</div>
                 <div class="metrics-grid">
                   <div
                     v-for="(val, key) in sim.network_metrics"
                     :key="key"
                     class="metric-item"
                     :class="{ 'metric-item--used': isUsedForObjective(String(key)) }"
-                    :title="isUsedForObjective(String(key)) ? 'Usada no cálculo de objetivos' : ''"
+                    :title="isUsedForObjective(String(key)) ? 'Used in objective calculation' : ''"
                   >
                     <span class="metric-key">{{ key }}</span>
                     <span class="metric-val mono">{{ val.toFixed(6) }}</span>
@@ -137,25 +137,25 @@ import { fetchBlobUrl, downloadFile } from "../../api/files";
 const props = defineProps<{
   individual: IndividualDto;
   objectiveNames: string[];
-  metricColumns: string[]; // colunas usadas na conversão de dados (data_conversion_config.metrics[].column)
+  metricColumns: string[]; // columns used in objective computation (data_conversion_config.metrics[].column)
 }>();
 
 defineEmits<{ (e: "close"): void }>();
 
-// Topologia
+// Topology
 const topologyBlobUrl = ref<string | null>(null);
 const loadingTopology = ref(false);
 
-// Simulações
+// Simulations
 const simulations = ref<SimulationDto[]>([]);
 const loadingSims = ref(false);
 const simError = ref<string | null>(null);
 
 const fileFields = [
-  { key: "log_cooja_id", label: "Log Cooja", ext: "log" },
-  { key: "csv_log_id",   label: "CSV",        ext: "csv" },
-  { key: "runtime_log_id", label: "Runtime log", ext: "log" },
-  { key: "csc_file_id", label: "CSC",         ext: "csc" },
+  { key: "log_cooja_id", label: "Cooja Log", ext: "log" },
+  { key: "csv_log_id",   label: "CSV",       ext: "csv" },
+  { key: "runtime_log_id", label: "Runtime Log", ext: "log" },
+  { key: "csc_file_id", label: "CSC",        ext: "csc" },
 ];
 
 function hasFiles(sim: SimulationDto): boolean {
@@ -167,22 +167,17 @@ function isUsedForObjective(column: string): boolean {
 }
 
 async function downloadSimFile(simId: string, fieldKey: string, ext: string) {
-  // GET /simulations/{sim_id}/file/{field_name}  → binary, but we need auth
-  // Reutiliza downloadFile que já usa fetch + header
-  // O field_name na URL é o campo que o endpoint usa
   try {
-    // O endpoint retorna o arquivo diretamente pelo field name
-    // Precisamos do file_id que está dentro do sim - já temos em sim[fieldKey]
     const sim = simulations.value.find((s) => s.id === simId);
     const fileId = sim?.[fieldKey as keyof SimulationDto] as string | undefined;
     if (fileId) await downloadFile(fileId, ext);
   } catch (e) {
-    console.error("Erro ao baixar arquivo:", e);
+    console.error("Error downloading file:", e);
   }
 }
 
 function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString("pt-BR", {
+  return new Date(iso).toLocaleString("en-US", {
     day: "2-digit", month: "2-digit",
     hour: "2-digit", minute: "2-digit", second: "2-digit",
   });
@@ -204,7 +199,7 @@ onMounted(async () => {
         `/files/${props.individual.topology_picture_id}/as/png`,
       );
     } catch {
-      // silencioso — mostra "Não disponível"
+      // silent — shows "Not available"
     } finally {
       loadingTopology.value = false;
     }
@@ -240,7 +235,7 @@ onBeforeUnmount(() => {
   top: 0;
   right: 0;
   bottom: 0;
-  width: 520px;
+  width: 720px;
   max-width: 100vw;
   background: var(--color-surface);
   border-left: 1px solid var(--color-border);

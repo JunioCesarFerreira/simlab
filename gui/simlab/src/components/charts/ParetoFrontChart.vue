@@ -2,22 +2,22 @@
   <div class="chart-wrap">
     <div v-if="!hasSufficientData" class="empty">
       <span v-if="!paretoFront || paretoFront.length === 0">
-        Frente de Pareto não disponível
+        Pareto front not available
       </span>
       <span v-else>
-        São necessários pelo menos 2 objetivos para visualização
+        At least 2 objectives are required for visualization
       </span>
     </div>
     <template v-else>
       <div class="axis-selectors" v-if="availableKeys.length > 2">
         <label>
-          Eixo X:
+          X Axis:
           <select v-model="xKey">
             <option v-for="k in availableKeys" :key="k" :value="k">{{ k }}</option>
           </select>
         </label>
         <label>
-          Eixo Y:
+          Y Axis:
           <select v-model="yKey">
             <option v-for="k in availableKeys" :key="k" :value="k">{{ k }}</option>
           </select>
@@ -72,7 +72,7 @@ interface ChartPoint {
   allObjectives: number[] | Record<string, number>;
 }
 
-// Serialização estável de objetos para usar como chave de lookup
+// Stable serialization of objects to use as lookup key
 function stableStringify(val: unknown): string {
   if (Array.isArray(val)) return `[${(val as unknown[]).map(stableStringify).join(",")}]`;
   if (val !== null && typeof val === "object") {
@@ -84,7 +84,7 @@ function stableStringify(val: unknown): string {
   return JSON.stringify(val);
 }
 
-// Mapa cromossomo → individual_id (construído a partir de todas as gerações)
+// Chromosome → individual_id map (built from all generations)
 const chromosomeMap = computed(() => {
   const map = new Map<string, string>();
   for (const gen of props.generations ?? []) {
@@ -116,7 +116,7 @@ const paretoData = computed<ChartPoint[]>(() =>
     const x = item.objectives[xKey.value];
     const y = item.objectives[yKey.value];
     if (x === undefined || y === undefined || isNaN(x) || isNaN(y)) return [];
-    // Lookup pelo cromossomo — independe de precisão float ou nome de objetivos
+    // Lookup by chromosome — independent of float precision or objective name differences
     const individualId = chromosomeMap.value.get(stableStringify(item.chromosome)) ?? "";
     return [{ value: [x, y], individualId, allObjectives: item.objectives }];
   }),
@@ -152,7 +152,7 @@ function buildOption() {
 
   if (populationData.value.length > 0) {
     series.push({
-      name: "População",
+      name: "Population",
       type: "scatter" as const,
       data: populationData.value,
       symbolSize: 7,
@@ -163,7 +163,7 @@ function buildOption() {
   }
 
   series.push({
-    name: "Frente de Pareto",
+    name: "Pareto Front",
     type: "scatter" as const,
     data: paretoData.value,
     symbolSize: 11,
@@ -181,13 +181,13 @@ function buildOption() {
     legend: {
       bottom: 0,
       textStyle: { fontSize: 12 },
-      data: populationData.value.length > 0 ? ["População", "Frente de Pareto"] : ["Frente de Pareto"],
+      data: populationData.value.length > 0 ? ["Population", "Pareto Front"] : ["Pareto Front"],
     },
-    grid: { left: 60, right: 24, top: 24, bottom: populationData.value.length > 0 ? 48 : 24 },
+    grid: { left: 60, right: 24, top: 24, bottom: 72 },
     xAxis: {
       name: xKey.value,
       nameLocation: "middle",
-      nameGap: 30,
+      nameGap: 36,
       type: "value",
       splitLine: { lineStyle: { color: "#f0f0f0" } },
     },
