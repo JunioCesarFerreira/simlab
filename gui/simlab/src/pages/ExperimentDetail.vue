@@ -131,7 +131,11 @@
         <div class="charts-panel">
           <div class="card chart-card">
             <div class="section-title">Frente de Pareto</div>
-            <ParetoFrontChart :pareto-front="store.experiment.pareto_front" />
+            <ParetoFrontChart
+              :pareto-front="store.experiment.pareto_front"
+              :generations="store.experiment.generations"
+              :objective-names="store.objectiveNames"
+            />
           </div>
           <div class="card chart-card">
             <div class="section-title">Evolução dos objetivos (melhor por geração)</div>

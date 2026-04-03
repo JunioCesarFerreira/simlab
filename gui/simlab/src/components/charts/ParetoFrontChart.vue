@@ -9,17 +9,17 @@
       </span>
     </div>
     <template v-else>
-      <div class="axis-selectors" v-if="allKeys.length > 2">
+      <div class="axis-selectors" v-if="availableKeys.length > 2">
         <label>
           Eixo X:
           <select v-model="xKey">
-            <option v-for="k in allKeys" :key="k" :value="k">{{ k }}</option>
+            <option v-for="k in availableKeys" :key="k" :value="k">{{ k }}</option>
           </select>
         </label>
         <label>
           Eixo Y:
           <select v-model="yKey">
-            <option v-for="k in allKeys" :key="k" :value="k">{{ k }}</option>
+            <option v-for="k in availableKeys" :key="k" :value="k">{{ k }}</option>
           </select>
         </label>
       </div>
@@ -31,49 +31,157 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from "vue";
 import { useEChart } from "../../composables/useEChart";
-import type { ParetoFrontItemDto } from "../../types/simlab";
+import type { ParetoFrontItemDto, GenerationDto } from "../../types/simlab";
 
 const props = defineProps<{
   paretoFront: ParetoFrontItemDto[] | null | undefined;
+  generations?: GenerationDto[];
+  objectiveNames?: string[];
 }>();
 
 const chartEl = ref<HTMLElement | null>(null);
 const { setOption, ready } = useEChart(chartEl);
 
-const allKeys = computed(() => {
+const availableKeys = computed<string[]>(() => {
+  if (props.objectiveNames && props.objectiveNames.length >= 2) return props.objectiveNames;
   const first = props.paretoFront?.[0];
-  if (!first) return [];
-  return Object.keys(first.objectives);
+  return first ? Object.keys(first.objectives) : [];
 });
 
 const hasSufficientData = computed(
-  () => (props.paretoFront?.length ?? 0) > 0 && allKeys.value.length >= 2,
+  () => (props.paretoFront?.length ?? 0) > 0 && availableKeys.value.length >= 2,
 );
 
 const xKey = ref<string>("");
 const yKey = ref<string>("");
 
-watch(allKeys, (keys) => {
-  if (keys.length >= 2) {
-    xKey.value = keys[0];
-    yKey.value = keys[1];
-  }
+watch(availableKeys, (keys) => {
+  if (keys.length >= 2) { xKey.value = keys[0]; yKey.value = keys[1]; }
 }, { immediate: true });
 
+const xIdx = computed(() => availableKeys.value.indexOf(xKey.value));
+const yIdx = computed(() => availableKeys.value.indexOf(yKey.value));
+
+// Fingerprint para cruzar individual.objectives (array) com pareto item
+function fingerprint(values: number[]): string {
+  return values.map((v) => (v ?? NaN).toFixed(10)).join("|");
+}
+
+// Mapa fingerprint → individual_id (construído a partir da população)
+const individualIdMap = computed(() => {
+  const map = new Map<string, string>();
+  for (const gen of props.generations ?? []) {
+    for (const ind of gen.population) {
+      map.set(fingerprint(ind.objectives), ind.individual_id);
+    }
+  }
+  return map;
+});
+
+interface PopPoint {
+  value: [number, number];
+  individualId: string;
+  allObjectives: number[];
+}
+
+interface ParetoPoint {
+  value: [number, number];
+  individualId: string | null;
+  allObjectives: Record<string, number>;
+}
+
+const populationData = computed<PopPoint[]>(() => {
+  const seen = new Set<string>();
+  const pts: PopPoint[] = [];
+  for (const gen of props.generations ?? []) {
+    for (const ind of gen.population) {
+      if (seen.has(ind.individual_id)) continue;
+      seen.add(ind.individual_id);
+      const x = ind.objectives[xIdx.value];
+      const y = ind.objectives[yIdx.value];
+      if (x === undefined || y === undefined || isNaN(x) || isNaN(y)) continue;
+      pts.push({ value: [x, y], individualId: ind.individual_id, allObjectives: ind.objectives });
+    }
+  }
+  return pts;
+});
+
+const paretoData = computed<ParetoPoint[]>(() =>
+  (props.paretoFront ?? []).flatMap((item) => {
+    const x = item.objectives[xKey.value];
+    const y = item.objectives[yKey.value];
+    if (x === undefined || y === undefined || isNaN(x) || isNaN(y)) return [];
+    // Tenta encontrar o individual_id pelo fingerprint dos objetivos
+    const objArray = availableKeys.value.map((k) => item.objectives[k]);
+    const individualId = individualIdMap.value.get(fingerprint(objArray)) ?? null;
+    return [{ value: [x, y], individualId, allObjectives: item.objectives }];
+  }),
+);
+
+function formatTooltip(p: { data: PopPoint | ParetoPoint; seriesName: string }): string {
+  const d = p.data;
+  const idHtml = d.individualId
+    ? `<div style="font-family:monospace;font-size:11px;color:#6b7280;margin-bottom:4px">${d.individualId.slice(0, 16)}…</div>`
+    : "";
+
+  let objRows: string;
+  if (Array.isArray(d.allObjectives)) {
+    // PopPoint: array indexado
+    objRows = (d.allObjectives as number[])
+      .map((v, i) => {
+        const name = availableKeys.value[i] ?? `obj${i}`;
+        return `<tr><td style="color:#6b7280;padding-right:12px">${name}</td><td style="font-weight:600">${v.toFixed(6)}</td></tr>`;
+      })
+      .join("");
+  } else {
+    // ParetoPoint: dict nomeado
+    objRows = Object.entries(d.allObjectives as Record<string, number>)
+      .map(([k, v]) => `<tr><td style="color:#6b7280;padding-right:12px">${k}</td><td style="font-weight:600">${v.toFixed(6)}</td></tr>`)
+      .join("");
+  }
+
+  return `${idHtml}<table style="font-size:12px;border-spacing:0">${objRows}</table>`;
+}
+
 function buildOption() {
-  if (!hasSufficientData.value) return;
-  const data = (props.paretoFront ?? []).map((item) => ({
-    value: [item.objectives[xKey.value], item.objectives[yKey.value]],
-    itemStyle: { opacity: 0.85 },
-  }));
+  if (!hasSufficientData.value || !ready.value) return;
+
+  const series = [];
+
+  if (populationData.value.length > 0) {
+    series.push({
+      name: "População",
+      type: "scatter" as const,
+      data: populationData.value,
+      symbolSize: 7,
+      itemStyle: { color: "#94a3b8", borderColor: "rgba(255,255,255,0.6)", borderWidth: 1, opacity: 0.55 },
+      emphasis: { itemStyle: { color: "#64748b", opacity: 1 } },
+      z: 1,
+    });
+  }
+
+  series.push({
+    name: "Frente de Pareto",
+    type: "scatter" as const,
+    data: paretoData.value,
+    symbolSize: 11,
+    itemStyle: { color: "#3b82f6", borderColor: "#fff", borderWidth: 1.5 },
+    emphasis: { itemStyle: { color: "#1d4ed8", borderColor: "#fff", borderWidth: 2 } },
+    z: 2,
+  });
 
   setOption({
     tooltip: {
       trigger: "item",
-      formatter: (p: { value: number[] }) =>
-        `${xKey.value}: <b>${p.value[0].toFixed(4)}</b><br>${yKey.value}: <b>${p.value[1].toFixed(4)}</b>`,
+      formatter: formatTooltip,
+      padding: [8, 12],
     },
-    grid: { left: 60, right: 24, top: 24, bottom: 48 },
+    legend: {
+      bottom: 0,
+      textStyle: { fontSize: 12 },
+      data: populationData.value.length > 0 ? ["População", "Frente de Pareto"] : ["Frente de Pareto"],
+    },
+    grid: { left: 60, right: 24, top: 24, bottom: populationData.value.length > 0 ? 48 : 24 },
     xAxis: {
       name: xKey.value,
       nameLocation: "middle",
@@ -84,23 +192,15 @@ function buildOption() {
     yAxis: {
       name: yKey.value,
       nameLocation: "middle",
-      nameGap: 40,
+      nameGap: 44,
       type: "value",
       splitLine: { lineStyle: { color: "#f0f0f0" } },
     },
-    series: [
-      {
-        type: "scatter",
-        data,
-        symbolSize: 9,
-        itemStyle: { color: "#3b82f6", borderColor: "#fff", borderWidth: 1 },
-        emphasis: { itemStyle: { color: "#1d4ed8", borderColor: "#fff", borderWidth: 2 } },
-      },
-    ],
+    series,
   });
 }
 
-watch([ready, () => props.paretoFront, xKey, yKey], buildOption);
+watch([ready, () => props.paretoFront, () => props.generations, xKey, yKey], buildOption);
 onMounted(buildOption);
 </script>
 
@@ -115,7 +215,7 @@ onMounted(buildOption);
 
 .chart {
   flex: 1;
-  min-height: 280px;
+  min-height: 300px;
 }
 
 .empty {
