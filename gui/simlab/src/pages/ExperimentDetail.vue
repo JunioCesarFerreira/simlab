@@ -27,16 +27,21 @@
             </div>
           </div>
           <div class="header-actions">
-            <a
+            <button
               v-if="hasAnalysisFiles"
-              :href="analysisZipUrl"
               class="action-btn"
+              :disabled="downloading.analysis"
+              @click="doDownloadAnalysis"
             >
-              Baixar análises
-            </a>
-            <a :href="topologiesZipUrl" class="action-btn">
-              Baixar topologias
-            </a>
+              {{ downloading.analysis ? "Baixando…" : "Baixar análises" }}
+            </button>
+            <button
+              class="action-btn"
+              :disabled="downloading.topologies"
+              @click="doDownloadTopologies"
+            >
+              {{ downloading.topologies ? "Baixando…" : "Baixar topologias" }}
+            </button>
           </div>
         </div>
       </div>
@@ -185,16 +190,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount } from "vue";
+import { reactive, computed, onMounted, onBeforeUnmount } from "vue";
 import { useExperimentDetailStore } from "../app/stores/experimentDetailStore";
 import StatusBadge from "../components/common/StatusBadge.vue";
 import GenerationRow from "../components/detail/GenerationRow.vue";
 import ParetoFrontChart from "../components/charts/ParetoFrontChart.vue";
 import ObjectivesEvolutionChart from "../components/charts/ObjectivesEvolutionChart.vue";
-import {
-  experimentAnalysisZipUrl,
-  experimentTopologiesZipUrl,
-} from "../api/files";
+import { downloadAnalysisZip, downloadTopologiesZip } from "../api/files";
 
 const props = defineProps<{ id: string }>();
 const store = useExperimentDetailStore();
@@ -221,17 +223,24 @@ const progressPct = computed(() => {
 });
 
 const hasAnalysisFiles = computed(
-  () =>
-    Object.keys(store.experiment?.analysis_files ?? {}).length > 0,
+  () => Object.keys(store.experiment?.analysis_files ?? {}).length > 0,
 );
 
-const analysisZipUrl = computed(() =>
-  experimentAnalysisZipUrl(props.id),
-);
+const downloading = reactive({ analysis: false, topologies: false });
 
-const topologiesZipUrl = computed(() =>
-  experimentTopologiesZipUrl(props.id),
-);
+async function doDownloadAnalysis() {
+  downloading.analysis = true;
+  try { await downloadAnalysisZip(props.id); }
+  catch (e) { console.error("Erro ao baixar análises:", e); }
+  finally { downloading.analysis = false; }
+}
+
+async function doDownloadTopologies() {
+  downloading.topologies = true;
+  try { await downloadTopologiesZip(props.id); }
+  catch (e) { console.error("Erro ao baixar topologias:", e); }
+  finally { downloading.topologies = false; }
+}
 
 const totalDuration = computed(() => {
   const exp = store.experiment;

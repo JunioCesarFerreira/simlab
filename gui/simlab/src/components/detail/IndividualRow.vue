@@ -16,30 +16,41 @@
       <span v-if="individual.objectives.length === 0" class="muted">—</span>
     </td>
     <td class="actions">
-      <a
+      <button
         v-if="individual.topology_picture_id"
-        :href="topologyUrl(individual.topology_picture_id)"
-        target="_blank"
         class="link-btn"
+        :disabled="opening"
         title="Ver topologia"
+        @click="viewTopology"
       >
-        Topologia
-      </a>
+        {{ opening ? "…" : "Topologia" }}
+      </button>
     </td>
   </tr>
 </template>
 
 <script setup lang="ts">
+import { ref } from "vue";
 import type { IndividualDto } from "../../types/simlab";
-import { topologyUrl as buildTopologyUrl } from "../../api/files";
+import { openTopology } from "../../api/files";
 
 const props = defineProps<{
   individual: IndividualDto;
   objectiveNames: string[];
 }>();
 
-function topologyUrl(pictureId: string): string {
-  return buildTopologyUrl(pictureId);
+const opening = ref(false);
+
+async function viewTopology() {
+  if (!props.individual.topology_picture_id) return;
+  opening.value = true;
+  try {
+    await openTopology(props.individual.topology_picture_id);
+  } catch (e) {
+    console.error("Erro ao abrir topologia:", e);
+  } finally {
+    opening.value = false;
+  }
 }
 
 function formatVal(v: number): string {
