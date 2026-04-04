@@ -105,7 +105,16 @@
           </details>
 
           <details class="collapsible">
-            <summary>Problem</summary>
+            <summary class="summary-with-btn">
+              Problem
+              <button
+                class="viz-btn"
+                @click.prevent="showProblemViz = true"
+                title="Visualize problem"
+              >
+                ⬡ Visualize
+              </button>
+            </summary>
             <div class="param-table">
               <div
                 v-for="(val, key) in store.experiment.parameters.problem"
@@ -196,6 +205,13 @@
           />
         </div>
       </div>
+
+      <!-- Problem visualization modal (Teleport renders to body) -->
+      <ProblemVizModal
+        v-if="showProblemViz"
+        :problem="store.experiment.parameters.problem as JsonObject"
+        @close="showProblemViz = false"
+      />
     </template>
   </div>
 </template>
@@ -208,8 +224,9 @@ import GenerationRow from "../components/detail/GenerationRow.vue";
 import ParetoFrontChart from "../components/charts/ParetoFrontChart.vue";
 import ObjectivesEvolutionChart from "../components/charts/ObjectivesEvolutionChart.vue";
 import IndividualDetailPanel from "../components/detail/IndividualDetailPanel.vue";
+import ProblemVizModal from "../components/detail/ProblemVizModal.vue";
 import { downloadAnalysisZip, downloadTopologiesZip } from "../api/files";
-import type { IndividualDto } from "../types/simlab";
+import type { IndividualDto, JsonObject } from "../types/simlab";
 
 const props = defineProps<{ id: string }>();
 const store = useExperimentDetailStore();
@@ -246,6 +263,9 @@ const metricColumns = computed(() =>
 
 // Individual selected by chart click
 const selectedIndividual = ref<IndividualDto | null>(null);
+
+// Problem visualization modal
+const showProblemViz = ref(false);
 
 function openIndividual(individualId: string) {
   const all = store.experiment?.generations.flatMap((g) => g.population) ?? [];
@@ -475,6 +495,29 @@ onBeforeUnmount(() => {
   cursor: pointer;
   background: var(--color-bg);
   user-select: none;
+}
+
+.summary-with-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.viz-btn {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 9px;
+  border: 1px solid #bfdbfe;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  transition: background 0.15s;
+  flex-shrink: 0;
+}
+
+.viz-btn:hover {
+  background: #dbeafe;
 }
 
 .collapsible summary:hover {
