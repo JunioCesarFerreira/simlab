@@ -9,20 +9,37 @@
       </span>
     </div>
     <template v-else>
-      <div v-if="availableKeys.length > 2" class="axis-selectors">
-        <label>
-          X Axis:
-          <select v-model="xKey">
-            <option v-for="k in availableKeys" :key="k" :value="k">{{ k }}</option>
-          </select>
-        </label>
-        <label>
-          Y Axis:
-          <select v-model="yKey">
-            <option v-for="k in availableKeys" :key="k" :value="k">{{ k }}</option>
-          </select>
-        </label>
+      <div class="controls-bar">
+        <div v-if="availableKeys.length > 2" class="axis-selectors">
+          <label>
+            X Axis:
+            <select v-model="xKey">
+              <option v-for="k in availableKeys" :key="k" :value="k">{{ k }}</option>
+            </select>
+          </label>
+          <label>
+            Y Axis:
+            <select v-model="yKey">
+              <option v-for="k in availableKeys" :key="k" :value="k">{{ k }}</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="pin-controls">
+          <button
+            :class="['pin-btn', { active: markMode }]"
+            :title="markMode ? 'Exit pin mode' : 'Enter pin mode — click a Pareto point to pin it'"
+            @click="markMode = !markMode"
+          >
+            📌 {{ markMode ? 'Pinning…' : 'Pin' }}
+          </button>
+          <div v-if="markedId" class="marked-badge">
+            <span class="marked-id" :title="markedId">📍 {{ markedId.slice(0, 14) }}…</span>
+            <button class="clear-pin" title="Clear pin" @click="markedId = ''">✕</button>
+          </div>
+        </div>
       </div>
+
       <div ref="chartEl" class="chart" />
     </template>
   </div>
@@ -53,6 +70,10 @@ interface ChartPoint {
 const chartEl = ref<HTMLElement | null>(null);
 const { setOption, ready, on } = useEChart(chartEl);
 
+// Pin state
+const markMode = ref(false);
+const markedId = ref("");
+
 const availableKeys = computed<string[]>(() => {
   if (props.objectiveNames && props.objectiveNames.length >= 2) return props.objectiveNames;
   const first = props.paretoFront?.[0];
@@ -76,6 +97,7 @@ watch(availableKeys, (keys) => {
 const xIdx = computed(() => availableKeys.value.indexOf(xKey.value));
 const yIdx = computed(() => availableKeys.value.indexOf(yKey.value));
 
+// Stable serialization of objects to use as lookup key
 function stableStringify(val: unknown): string {
   if (Array.isArray(val)) return `[${val.map(stableStringify).join(",")}]`;
 
@@ -89,6 +111,7 @@ function stableStringify(val: unknown): string {
   return JSON.stringify(val);
 }
 
+// Chromosome → individual_id map (built from all generations)
 const chromosomeMap = computed(() => {
   const map = new Map<string, string>();
   for (const gen of props.generations ?? []) {
@@ -129,6 +152,7 @@ const paretoData = computed<ChartPoint[]>(() =>
     const y = item.objectives[yKey.value];
     if (x === undefined || y === undefined || isNaN(x) || isNaN(y)) return [];
 
+    // Lookup by chromosome — independent of float precision or objective name differences
     const individualId = chromosomeMap.value.get(stableStringify(item.chromosome)) ?? "";
 
     return [{
@@ -138,6 +162,12 @@ const paretoData = computed<ChartPoint[]>(() =>
     }];
   }),
 );
+
+// The currently pinned point re-projected onto the current axes
+const markedPoint = computed<ChartPoint | null>(() => {
+  if (!markedId.value) return null;
+  return paretoData.value.find((p) => p.individualId === markedId.value) ?? null;
+});
 
 function formatTooltip(params: TopLevelFormatterParams): string {
   const point = (Array.isArray(params) ? params[0] : params) as { data?: ChartPoint };
@@ -162,7 +192,11 @@ function formatTooltip(params: TopLevelFormatterParams): string {
       .join("");
   }
 
-  return `${idHtml}<table style="font-size:12px;border-spacing:0">${objRows}</table>`;
+  const hint = markMode.value
+    ? `<div style="margin-top:6px;font-size:10px;color:#9ca3af;border-top:1px solid #f3f4f6;padding-top:4px">${markedId.value === d.individualId ? "Click to unpin" : "Click to pin"}</div>`
+    : "";
+
+  return `${idHtml}<table style="font-size:12px;border-spacing:0">${objRows}</table>${hint}`;
 }
 
 function buildOption() {
@@ -190,12 +224,34 @@ function buildOption() {
   series.push({
     name: "Pareto Front",
     type: "scatter" as const,
-    data: paretoData.value,
+    // Exclude the marked point from this series so the pin renders cleanly on top
+    data: paretoData.value.filter((p) => p.individualId !== markedId.value),
     symbolSize: 11,
     itemStyle: { color: "#3b82f6", borderColor: "#fff", borderWidth: 1.5 },
     emphasis: { itemStyle: { color: "#1d4ed8", borderColor: "#fff", borderWidth: 2 } },
     z: 2,
   });
+
+  // Pinned point — rendered on top as a gold pin symbol
+  if (markedPoint.value) {
+    series.push({
+      name: "Pinned",
+      type: "scatter" as const,
+      data: [markedPoint.value],
+      symbol: "pin",
+      symbolSize: 28,
+      symbolOffset: [0, "-50%"],
+      itemStyle: { color: "#f59e0b", borderColor: "#fff", borderWidth: 2 },
+      emphasis: { itemStyle: { color: "#d97706", borderColor: "#fff", borderWidth: 2 } },
+      z: 10,
+    });
+  }
+
+  const legendData = [
+    ...(populationData.value.length > 0 ? ["Population"] : []),
+    "Pareto Front",
+    ...(markedPoint.value ? ["Pinned"] : []),
+  ];
 
   setOption({
     tooltip: {
@@ -206,7 +262,7 @@ function buildOption() {
     legend: {
       bottom: 0,
       textStyle: { fontSize: 12 },
-      data: populationData.value.length > 0 ? ["Population", "Pareto Front"] : ["Pareto Front"],
+      data: legendData,
     },
     grid: { left: 60, right: 24, top: 24, bottom: 72 },
     xAxis: {
@@ -227,13 +283,18 @@ function buildOption() {
   });
 }
 
-watch([ready, () => props.paretoFront, () => props.generations, xKey, yKey], buildOption);
+watch([ready, () => props.paretoFront, () => props.generations, xKey, yKey, markedPoint], buildOption);
 
 onMounted(() => {
   buildOption();
   on("click", (params: { data?: ChartPoint }) => {
     const id = params.data?.individualId;
-    if (id) emit("click-individual", id);
+    if (!id) return;
+    if (markMode.value) {
+      markedId.value = markedId.value === id ? "" : id;
+    } else {
+      emit("click-individual", id);
+    }
   });
 });
 </script>
@@ -263,6 +324,14 @@ onMounted(() => {
   min-height: 200px;
 }
 
+.controls-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .axis-selectors {
   display: flex;
   gap: 16px;
@@ -276,5 +345,68 @@ onMounted(() => {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   padding: 2px 6px;
+}
+
+.pin-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.pin-btn {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  cursor: pointer;
+}
+
+.pin-btn:hover {
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.pin-btn.active {
+  background: #fef3c7;
+  border-color: #fcd34d;
+  color: #92400e;
+}
+
+.marked-badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px 2px 10px;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: #92400e;
+}
+
+.marked-id {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+}
+
+.clear-pin {
+  font-size: 11px;
+  color: #b45309;
+  line-height: 1;
+  padding: 0 2px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.1s;
+}
+
+.clear-pin:hover {
+  opacity: 1;
 }
 </style>
