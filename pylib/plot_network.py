@@ -51,7 +51,8 @@ def _build_plot_network(
     if interference_radius < radius:
         raise ValueError("interference_radius must be greater than or equal to radius")
 
-    fig, ax = plt.subplots(figsize=(10, 8))
+    fig = Figure(figsize=(10, 8))
+    ax = fig.subplots()
 
     # ~~~ Plot configuration ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     ax.set_xlim(region[0], region[2])
@@ -194,5 +195,5 @@ def plot_network_save_from_sim(
     paths = [list[str](mote["functionPath"]) for mote in mobile_motes]
 
     fig = _build_plot_network(points, region, radius, interference_radius, paths)
-    plt.savefig(file_path)
+    fig.savefig(file_path)
     plt.close(fig)
