@@ -157,6 +157,7 @@
             <ObjectivesEvolutionChart
               :generations="store.experiment.generations"
               :objective-names="store.objectiveNames"
+              :objective-goals="store.objectiveGoals"
             />
           </div>
         </div>

@@ -19,6 +19,10 @@ export const useExperimentDetailStore = defineStore("experimentDetail", () => {
     () => experiment.value?.parameters?.objectives?.map((o) => o.metric_name) ?? [],
   );
 
+  const objectiveGoals = computed(
+    () => experiment.value?.parameters?.objectives?.map((o) => o.goal) ?? [],
+  );
+
   async function fetch(id: string) {
     loading.value = true;
     error.value = null;
@@ -70,6 +74,7 @@ export const useExperimentDetailStore = defineStore("experimentDetail", () => {
     error,
     isRunning,
     objectiveNames,
+    objectiveGoals,
     fetch,
     refresh,
     startPolling,

@@ -9,7 +9,7 @@
       </span>
     </div>
     <template v-else>
-      <div class="axis-selectors" v-if="availableKeys.length > 2">
+      <div v-if="availableKeys.length > 2" class="axis-selectors">
         <label>
           X Axis:
           <select v-model="xKey">
@@ -30,6 +30,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from "vue";
+import type { TopLevelFormatterParams } from "echarts/types/dist/shared";
 import { useEChart } from "../../composables/useEChart";
 import type { ParetoFrontItemDto, GenerationDto } from "../../types/simlab";
 
@@ -42,6 +43,12 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: "click-individual", individualId: string): void;
 }>();
+
+interface ChartPoint {
+  value: [number, number];
+  individualId: string;
+  allObjectives: number[] | Record<string, number>;
+}
 
 const chartEl = ref<HTMLElement | null>(null);
 const { setOption, ready, on } = useEChart(chartEl);
@@ -56,35 +63,32 @@ const hasSufficientData = computed(
   () => (props.paretoFront?.length ?? 0) > 0 && availableKeys.value.length >= 2,
 );
 
-const xKey = ref<string>("");
-const yKey = ref<string>("");
+const xKey = ref("");
+const yKey = ref("");
 
 watch(availableKeys, (keys) => {
-  if (keys.length >= 2) { xKey.value = keys[0]; yKey.value = keys[1]; }
+  if (keys.length >= 2) {
+    xKey.value = keys[0] ?? "";
+    yKey.value = keys[1] ?? "";
+  }
 }, { immediate: true });
 
 const xIdx = computed(() => availableKeys.value.indexOf(xKey.value));
 const yIdx = computed(() => availableKeys.value.indexOf(yKey.value));
 
-interface ChartPoint {
-  value: [number, number];
-  individualId: string;
-  allObjectives: number[] | Record<string, number>;
-}
-
-// Stable serialization of objects to use as lookup key
 function stableStringify(val: unknown): string {
-  if (Array.isArray(val)) return `[${(val as unknown[]).map(stableStringify).join(",")}]`;
+  if (Array.isArray(val)) return `[${val.map(stableStringify).join(",")}]`;
+
   if (val !== null && typeof val === "object") {
     const entries = Object.keys(val as object)
       .sort()
       .map((k) => `${JSON.stringify(k)}:${stableStringify((val as Record<string, unknown>)[k])}`);
     return `{${entries.join(",")}}`;
   }
+
   return JSON.stringify(val);
 }
 
-// Chromosome → individual_id map (built from all generations)
 const chromosomeMap = computed(() => {
   const map = new Map<string, string>();
   for (const gen of props.generations ?? []) {
@@ -98,16 +102,24 @@ const chromosomeMap = computed(() => {
 const populationData = computed<ChartPoint[]>(() => {
   const seen = new Set<string>();
   const pts: ChartPoint[] = [];
+
   for (const gen of props.generations ?? []) {
     for (const ind of gen.population) {
       if (seen.has(ind.individual_id)) continue;
       seen.add(ind.individual_id);
+
       const x = ind.objectives[xIdx.value];
       const y = ind.objectives[yIdx.value];
       if (x === undefined || y === undefined || isNaN(x) || isNaN(y)) continue;
-      pts.push({ value: [x, y], individualId: ind.individual_id, allObjectives: ind.objectives });
+
+      pts.push({
+        value: [x, y],
+        individualId: ind.individual_id,
+        allObjectives: ind.objectives,
+      });
     }
   }
+
   return pts;
 });
 
@@ -116,28 +128,36 @@ const paretoData = computed<ChartPoint[]>(() =>
     const x = item.objectives[xKey.value];
     const y = item.objectives[yKey.value];
     if (x === undefined || y === undefined || isNaN(x) || isNaN(y)) return [];
-    // Lookup by chromosome — independent of float precision or objective name differences
+
     const individualId = chromosomeMap.value.get(stableStringify(item.chromosome)) ?? "";
-    return [{ value: [x, y], individualId, allObjectives: item.objectives }];
+
+    return [{
+      value: [x, y],
+      individualId,
+      allObjectives: item.objectives,
+    }];
   }),
 );
 
-function formatTooltip(p: { data: ChartPoint }): string {
-  const d = p.data;
+function formatTooltip(params: TopLevelFormatterParams): string {
+  const point = (Array.isArray(params) ? params[0] : params) as { data?: ChartPoint };
+  const d = point.data;
+  if (!d) return "";
+
   const idHtml = d.individualId
     ? `<div style="font-family:monospace;font-size:11px;color:#6b7280;margin-bottom:4px">${d.individualId.slice(0, 16)}…</div>`
     : "";
 
-  let objRows: string;
+  let objRows = "";
   if (Array.isArray(d.allObjectives)) {
-    objRows = (d.allObjectives as number[])
+    objRows = d.allObjectives
       .map((v, i) => {
         const name = availableKeys.value[i] ?? `obj${i}`;
         return `<tr><td style="color:#6b7280;padding-right:12px">${name}</td><td style="font-weight:600">${v.toFixed(6)}</td></tr>`;
       })
       .join("");
   } else {
-    objRows = Object.entries(d.allObjectives as Record<string, number>)
+    objRows = Object.entries(d.allObjectives)
       .map(([k, v]) => `<tr><td style="color:#6b7280;padding-right:12px">${k}</td><td style="font-weight:600">${v.toFixed(6)}</td></tr>`)
       .join("");
   }
@@ -156,7 +176,12 @@ function buildOption() {
       type: "scatter" as const,
       data: populationData.value,
       symbolSize: 7,
-      itemStyle: { color: "#94a3b8", borderColor: "rgba(255,255,255,0.6)", borderWidth: 1, opacity: 0.55 },
+      itemStyle: {
+        color: "#94a3b8",
+        borderColor: "rgba(255,255,255,0.6)",
+        borderWidth: 1,
+        opacity: 0.55,
+      },
       emphasis: { itemStyle: { color: "#64748b", opacity: 1 } },
       z: 1,
     });
@@ -203,6 +228,7 @@ function buildOption() {
 }
 
 watch([ready, () => props.paretoFront, () => props.generations, xKey, yKey], buildOption);
+
 onMounted(() => {
   buildOption();
   on("click", (params: { data?: ChartPoint }) => {

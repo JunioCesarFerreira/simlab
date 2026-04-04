@@ -7,13 +7,22 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from "vue";
+import type { TopLevelFormatterParams } from "echarts/types/dist/shared";
 import { useEChart } from "../../composables/useEChart";
 import type { GenerationDto } from "../../types/simlab";
 
 const props = defineProps<{
   generations: GenerationDto[];
   objectiveNames: string[];
+  objectiveGoals: string[];
 }>();
+
+interface TooltipPoint {
+  seriesName?: string;
+  value?: number;
+  axisValue?: string;
+  data?: { raw?: number } | null;
+}
 
 const chartEl = ref<HTMLElement | null>(null);
 const { setOption, ready } = useEChart(chartEl);
@@ -28,46 +37,79 @@ const hasData = computed(() => finishedGens.value.length > 0);
 
 const PALETTE = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"];
 
+function isMaximizationGoal(goal: string | undefined): boolean {
+  return goal?.toLowerCase() === "max";
+}
+
+function formatTooltip(params: TopLevelFormatterParams): string {
+  const points = (Array.isArray(params) ? params : [params]) as TooltipPoint[];
+  const header = `<b>${points[0]?.axisValue ?? ""}</b><br>`;
+  const rows = points
+    .map((p) => {
+      const raw = p.data?.raw;
+      const rawStr = raw !== undefined ? raw.toFixed(4) : "—";
+      const normStr = p.value !== undefined ? `${(p.value * 100).toFixed(1)}%` : "—";
+      return `${p.seriesName ?? ""}: <b>${rawStr}</b> <span style="color:#9ca3af">(${normStr})</span>`;
+    })
+    .join("<br>");
+
+  return header + rows;
+}
+
 function buildOption() {
   if (!hasData.value || !ready.value) return;
 
   const names = props.objectiveNames;
+  const goals = props.objectiveGoals;
   const xData = finishedGens.value.map((g) => `Gen ${g.index}`);
 
-  // For each objective, collect the best value per generation (minimum of the population)
   const rawBest: (number | null)[][] = names.map((_, idx) =>
     finishedGens.value.map((gen) => {
       const valid = gen.population
         .map((ind) => ind.objectives[idx])
-        .filter((v) => v !== undefined && !isNaN(v));
-      return valid.length > 0 ? Math.min(...valid) : null;
+        .filter((v): v is number => v !== undefined && !isNaN(v));
+
+      if (valid.length === 0) return null;
+
+      return isMaximizationGoal(goals[idx])
+        ? Math.max(...valid)
+        : Math.min(...valid);
     }),
   );
 
-  // Global min/max per objective for normalization [0, 1]
-  const globalMin: number[] = names.map((_, idx) => {
-    const vals = rawBest[idx].filter((v): v is number => v !== null);
-    return vals.length > 0 ? Math.min(...vals) : 0;
+  const globalMin = names.map((_, idx) => {
+    const values = (rawBest[idx] ?? []).filter((v): v is number => v !== null);
+    return values.length > 0 ? Math.min(...values) : 0;
   });
-  const globalMax: number[] = names.map((_, idx) => {
-    const vals = rawBest[idx].filter((v): v is number => v !== null);
-    return vals.length > 0 ? Math.max(...vals) : 1;
+
+  const globalMax = names.map((_, idx) => {
+    const values = (rawBest[idx] ?? []).filter((v): v is number => v !== null);
+    return values.length > 0 ? Math.max(...values) : 1;
   });
 
   function normalize(v: number | null, idx: number): number | null {
     if (v === null) return null;
-    const range = globalMax[idx] - globalMin[idx];
-    if (range === 0) return 0;
-    return (v - globalMin[idx]) / range;
+
+    const min = globalMin[idx] ?? 0;
+    const max = globalMax[idx] ?? 1;
+    const range = max - min;
+
+    if (range === 0) return 1;
+
+    if (isMaximizationGoal(goals[idx])) {
+      return (v - min) / range;
+    }
+
+    return (max - v) / range;
   }
 
   const series = names.map((name, idx) => ({
     name,
     type: "line" as const,
-    data: rawBest[idx].map((v) => {
+    data: (rawBest[idx] ?? []).map((v) => {
       const norm = normalize(v, idx);
       if (norm === null) return null;
-      // Tooltip shows raw value; name includes range for context
+
       return {
         value: norm,
         raw: v,
@@ -83,18 +125,7 @@ function buildOption() {
   setOption({
     tooltip: {
       trigger: "axis",
-      formatter: (params: { seriesName: string; value: number; data: { raw: number } | null; axisValue: string }[]) => {
-        const header = `<b>${params[0]?.axisValue}</b><br>`;
-        const rows = params
-          .map((p) => {
-            const raw = p.data?.raw;
-            const rawStr = raw !== undefined ? raw.toFixed(4) : "—";
-            const normStr = p.value !== undefined ? (p.value * 100).toFixed(1) + "%" : "—";
-            return `${p.seriesName}: <b>${rawStr}</b> <span style="color:#9ca3af">(${normStr})</span>`;
-          })
-          .join("<br>");
-        return header + rows;
-      },
+      formatter: formatTooltip,
     },
     legend: {
       bottom: 0,
@@ -120,7 +151,11 @@ function buildOption() {
   });
 }
 
-watch([ready, () => props.generations, () => props.objectiveNames], buildOption);
+watch(
+  [ready, () => props.generations, () => props.objectiveNames, () => props.objectiveGoals],
+  buildOption,
+);
+
 onMounted(buildOption);
 </script>
 
