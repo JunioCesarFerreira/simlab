@@ -111,8 +111,10 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._map_genome_objectives: dict[Chromosome, list[float]] = {}
 
         # --- genome cache (persistent deduplication) ---
-        # hash -> objectives for genomes already evaluated in any prior session.
-        # Loaded from MongoDB on start() and kept in sync as objectives are computed.
+        # hash -> minimization-space objectives for genomes already evaluated in any
+        # prior session. Individuals persisted per generation keep original objective
+        # values for UX/analytics, but the cache stays in minimization space so the
+        # evolutionary loop can reuse it directly without extra metadata in pylib.
         self._genome_objectives_cache: dict[str, list[float]] = {}
 
 
@@ -342,9 +344,16 @@ class NSGA3LoopStrategy(EngineStrategy):
             chromosome = chromosome_from_dict(self._problem_name, ind["chromosome"])
             population.append(chromosome)
 
-            objectives = ind.get("objectives") or self._genome_objectives_cache.get(ind["individual_id"])
-            if objectives:
-                objectives_map[chromosome] = [float(value) for value in objectives]
+            individual_objectives = ind.get("objectives")
+            if individual_objectives:
+                objectives_map[chromosome] = self._objectives_list_to_minimization(
+                    [float(value) for value in individual_objectives]
+                )
+                continue
+
+            cache_objectives = self._genome_objectives_cache.get(ind["individual_id"])
+            if cache_objectives:
+                objectives_map[chromosome] = [float(value) for value in cache_objectives]
             else:
                 pending_individuals += 1
 
@@ -481,7 +490,7 @@ class NSGA3LoopStrategy(EngineStrategy):
                     "generation_id": gen_oid,
                     "individual_id": genome_hash,
                     "chromosome": genome.to_dict(),
-                    "objectives": cached_obj,
+                    "objectives": self._objectives_list_to_original(cached_obj),
                     "topology_picture_id": None,
                 }
                 self.mongo.individual_repo.insert(ind_doc)
@@ -576,18 +585,31 @@ class NSGA3LoopStrategy(EngineStrategy):
             objectives = self._map_genome_objectives.get(genome)
             if objectives is None:
                 continue
+            original_objectives = self._objectives_list_to_original(objectives)
             genome_hash = genome.get_hash()
             self.mongo.individual_repo.update_objectives(
                 genome_hash,
                 self._generation_id,
-                objectives,
+                original_objectives,
             )
             # Persist to genome cache only on first evaluation (avoids redundant writes).
+            # Cache values remain in minimization space because pylib does not store
+            # metadata describing the objective representation.
             if genome_hash not in self._genome_objectives_cache:
                 self.mongo.genome_cache_repo.set_objectives(
-                    self._exp_id, genome_hash, objectives
+                    self._exp_id,
+                    genome_hash,
+                    objectives,
                 )
                 self._genome_objectives_cache[genome_hash] = objectives
+
+
+    def _objectives_list_to_original(self, vec: list[float]) -> list[float]:
+        return [float(v * s) for v, s in zip(vec, self._objective_goals)]
+
+
+    def _objectives_list_to_minimization(self, vec: list[float]) -> list[float]:
+        return [float(v * s) for v, s in zip(vec, self._objective_goals)]
 
 
     def _objectives_to_original(self, vec: list[float]) -> dict[str, float]:
