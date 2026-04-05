@@ -24,74 +24,6 @@ services:
     networks:
       - mongo-net
 
-  influxdb:
-    image: influxdb:2.0
-    container_name: influxdb
-    ports:
-      - "8086:8086"
-    environment:
-      - DOCKER_INFLUXDB_INIT_MODE=setup
-      - DOCKER_INFLUXDB_INIT_USERNAME=admin
-      - DOCKER_INFLUXDB_INIT_PASSWORD=admin123
-      - DOCKER_INFLUXDB_INIT_ORG=myorg
-      - DOCKER_INFLUXDB_INIT_BUCKET=docker
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-token
-    volumes:
-      - influxdb-data:/var/lib/influxdb2
-    labels:
-      - "simlab.type=timeseries"
-      - "simlab.role=storage"
-      - "simlab.group=monitoring"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8086/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
-  telegraf:
-    image: telegraf:latest
-    container_name: telegraf
-    volumes:
-      - ./telegraf.conf:/etc/telegraf/telegraf.conf:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /sys:/sys:ro
-      - /proc:/proc:ro
-    labels:
-      - "simlab.type=collector"
-      - "simlab.role=metrics"
-      - "simlab.group=monitoring"
-    depends_on:
-      influxdb:
-        condition: service_healthy
-
-  grafana:
-    image: grafana/grafana-oss
-    container_name: grafana
-    ports:
-      - "3000:3000"
-    volumes:
-      - grafana-storage:/var/lib/grafana
-      - ./grafana-provisioning:/etc/grafana/provisioning
-    environment:
-      - GF_SECURITY_ADMIN_USER=simlab
-      - GF_SECURITY_ADMIN_PASSWORD=simlab123
-      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
-    restart: unless-stopped
-    labels:
-      - "simlab.type=visualization"
-      - "simlab.role=dashboard"
-      - "simlab.group=monitoring"
-    depends_on:
-      influxdb:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
   restapi:
     build:
       context: .
@@ -122,6 +54,34 @@ services:
         condition: service_healthy
     networks:
       - mongo-net
+      - proxy-net
+
+  gui:
+    build:
+      context: .
+      dockerfile: Dockerfile.gui
+      args:
+        VITE_API_BASE_URL: /api/v1
+        VITE_API_KEY: simlab-api-key42
+    container_name: simlab_gui
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    labels:
+      - "simlab.type=frontend"
+      - "simlab.role=ui"
+      - "simlab.group=frontend"
+    depends_on:
+      restapi:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - proxy-net
 
   moengine:
     build:
@@ -164,7 +124,7 @@ services:
       - DB_NAME=simlab
       - MONGO_URI=mongodb://mongodb:27017/?replicaSet=rs0
       - IS_DOCKER=True
-      - NUMBER_OF_CONTAINERS=16
+      - NUMBER_OF_CONTAINERS=6
     ports:
       - "2220:22"
     labels:
@@ -272,146 +232,6 @@ services:
       - "simlab.role=worker"
       - "simlab.group=simulation"
 
-  cooja7:
-    image: juniocesarferreira/simulation-cooja:v1.1
-    container_name: cooja7
-    restart: unless-stopped
-    ports:
-      - "2237:22"
-    networks:
-      - cooja-net
-    labels:
-      - "simlab.type=cooja"
-      - "simlab.id=7"
-      - "simlab.role=worker"
-      - "simlab.group=simulation"
-
-  cooja8:
-    image: juniocesarferreira/simulation-cooja:v1.1
-    container_name: cooja8
-    restart: unless-stopped
-    ports:
-      - "2238:22"
-    networks:
-      - cooja-net
-    labels:
-      - "simlab.type=cooja"
-      - "simlab.id=8"
-      - "simlab.role=worker"
-      - "simlab.group=simulation"
-      
-  cooja9:
-    image: juniocesarferreira/simulation-cooja:v1.1
-    container_name: cooja9  
-    restart: unless-stopped
-    ports:
-      - "2239:22"
-    networks:
-      - cooja-net
-    labels:
-      - "simlab.type=cooja"
-      - "simlab.id=9"
-      - "simlab.role=worker"
-      - "simlab.group=simulation"
-      
-  cooja10:
-    image: juniocesarferreira/simulation-cooja:v1.1
-    container_name: cooja10
-    restart: unless-stopped
-    ports:
-      - "2240:22"
-    networks:
-      - cooja-net
-    labels:
-      - "simlab.type=cooja"
-      - "simlab.id=10"
-      - "simlab.role=worker"
-      - "simlab.group=simulation"
-      
-  cooja11:
-    image: juniocesarferreira/simulation-cooja:v1.1
-    container_name: cooja11
-    restart: unless-stopped
-    ports:
-      - "2241:22"
-    networks:
-      - cooja-net
-    labels:
-      - "simlab.type=cooja"
-      - "simlab.id=11"
-      - "simlab.role=worker"
-      - "simlab.group=simulation"
-      
-  cooja12:
-    image: juniocesarferreira/simulation-cooja:v1.1
-    container_name: cooja12
-    restart: unless-stopped
-    ports:
-      - "2242:22"
-    networks:
-      - cooja-net
-    labels:
-      - "simlab.type=cooja"
-      - "simlab.id=12"
-      - "simlab.role=worker"
-      - "simlab.group=simulation"
-      
-  cooja13:
-    image: juniocesarferreira/simulation-cooja:v1.1
-    container_name: cooja13
-    restart: unless-stopped
-    ports:
-      - "2243:22"
-    networks:
-      - cooja-net
-    labels:
-      - "simlab.type=cooja"
-      - "simlab.id=13"
-      - "simlab.role=worker"
-      - "simlab.group=simulation"
-      
-  cooja14:
-    image: juniocesarferreira/simulation-cooja:v1.1
-    container_name: cooja14
-    restart: unless-stopped
-    ports:
-      - "2244:22"
-    networks:
-      - cooja-net
-    labels:
-      - "simlab.type=cooja"
-      - "simlab.id=14"
-      - "simlab.role=worker"
-      - "simlab.group=simulation"
-      
-  cooja15:
-    image: juniocesarferreira/simulation-cooja:v1.1
-    container_name: cooja15
-    restart: unless-stopped
-    ports:
-      - "2245:22"
-    networks:
-      - cooja-net
-    labels:
-      - "simlab.type=cooja"
-      - "simlab.id=15"
-      - "simlab.role=worker"
-      - "simlab.group=simulation"
-      
-  cooja16:
-    image: juniocesarferreira/simulation-cooja:v1.1
-    container_name: cooja16
-    restart: unless-stopped
-    ports:
-      - "2246:22"
-    networks:
-      - cooja-net
-    labels:
-      - "simlab.type=cooja"
-      - "simlab.id=16"
-      - "simlab.role=worker"
-      - "simlab.group=simulation"
-
 # Attention! When modifying the number of Cooja containers, 
 # remember to modify the masternode's NUMBER_OF_CONTAINERS environment variable.
 
@@ -427,4 +247,7 @@ networks:
     driver: bridge
   cooja-net:
     name: cooja_net
+    driver: bridge
+  proxy-net:
+    name: proxy_net
     driver: bridge
