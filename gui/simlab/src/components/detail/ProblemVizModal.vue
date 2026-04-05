@@ -22,6 +22,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from "vue";
+import type { TopLevelFormatterParams } from "echarts/types/dist/shared";
 import { useEChart } from "../../composables/useEChart";
 import type { JsonObject } from "../../types/simlab";
 
@@ -43,6 +44,11 @@ interface MobileNode {
   path_segments: [string, string][];
   is_closed: boolean;
   is_round_trip: boolean;
+}
+
+interface TooltipPoint {
+  seriesName?: string;
+  data?: { value?: [number, number] } | [number, number];
 }
 
 const problemName = computed(() => String(props.problem.name ?? ""));
@@ -95,9 +101,21 @@ function buildNodePath(node: MobileNode): [number, number][] {
     pts = pts.concat(seg);
   }
   if (node.is_closed) {
-    if (pts.length > 0) pts.push([pts[0][0], pts[0][1]]);
+    const first = pts[0];
+    if (first) pts.push([first[0], first[1]]);
   }
   return pts;
+}
+
+function formatTooltip(params: TopLevelFormatterParams): string {
+  const point = (Array.isArray(params) ? params[0] : params) as TooltipPoint;
+  const raw = Array.isArray(point.data)
+    ? point.data
+    : point.data?.value;
+
+  if (!raw) return "";
+
+  return `${point.seriesName ?? ""}<br>(${raw[0].toFixed(2)}, ${raw[1].toFixed(2)})`;
 }
 
 // -------------------------------------------------------
@@ -179,11 +197,14 @@ function buildOption() {
   }
 
   // Mobile node paths
-  for (let i = 0; i < mobileNodes.value.length; i++) {
-    const node = mobileNodes.value[i];
+  for (const [i, node] of mobileNodes.value.entries()) {
     const color = MOBILE_COLORS[i % MOBILE_COLORS.length];
+    if (!node) continue;
+
     const path = buildNodePath(node);
     if (path.length === 0) continue;
+    const startPoint = path[0];
+    if (!startPoint) continue;
 
     // Dashed path line
     series.push({
@@ -200,7 +221,7 @@ function buildOption() {
     series.push({
       name: `${node.name} pos`,
       type: "scatter",
-      data: [{ value: path[0], label: { show: true, formatter: node.name, position: "top", fontSize: 10, color, fontWeight: "bold" } }],
+      data: [{ value: startPoint, label: { show: true, formatter: node.name, position: "top", fontSize: 10, color, fontWeight: "bold" } }],
       symbolSize: 10,
       itemStyle: { color, borderColor: "#fff", borderWidth: 1.5 },
       z: 3,
@@ -212,8 +233,12 @@ function buildOption() {
     // Direction arrow: place a small arrowhead at ~25% of the path
     const arrowIdx = Math.floor(path.length * 0.25);
     if (arrowIdx > 0 && arrowIdx < path.length) {
-      const [ax, ay] = path[arrowIdx];
-      const [px, py] = path[arrowIdx - 1];
+      const arrowPoint = path[arrowIdx];
+      const previousPoint = path[arrowIdx - 1];
+      if (!arrowPoint || !previousPoint) continue;
+
+      const [ax, ay] = arrowPoint;
+      const [px, py] = previousPoint;
       const angle = (Math.atan2(ay - py, ax - px) * 180) / Math.PI;
       series.push({
         name: `${node.name} arrow`,
@@ -251,11 +276,7 @@ function buildOption() {
   setOption({
     tooltip: {
       trigger: "item",
-      formatter: (params: { seriesName: string; data: { value?: [number, number] } | [number, number] }) => {
-        const raw = (params.data as { value?: [number, number] }).value ?? (params.data as [number, number]);
-        if (!Array.isArray(raw)) return "";
-        return `${params.seriesName}<br>(${(raw[0] as number).toFixed(2)}, ${(raw[1] as number).toFixed(2)})`;
-      },
+      formatter: formatTooltip,
     },
     legend: {
       bottom: 4,
