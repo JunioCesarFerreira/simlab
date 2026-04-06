@@ -1,76 +1,133 @@
 {
-  "title": "Cooja Containers Monitoring",
-  "uid": "cooja-monitoring",
+  "title": "Simlab - Container Monitoring",
+  "uid": "simlab-monitoring",
+  "schemaVersion": 38,
+  "refresh": "15s",
+  "time": { "from": "now-30m", "to": "now" },
   "panels": [
     {
-      "title": "CPU Usage - All Cooja Containers",
-      "type": "graph",
-      "datasource": "InfluxDB",
+      "id": 1,
+      "title": "CPU Usage % - Cooja Workers",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
       "targets": [
         {
-          "query": "from(bucket: \"docker\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"docker_container_cpu\")\n  |> filter(fn: (r) => r[\"container_name\"] =~ /cooja.*/)\n  |> filter(fn: (r) => r[\"_field\"] == \"usage_percent\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean)\n  |> yield(name: \"mean\")",
-          "language": "flux"
+          "expr": "rate(container_cpu_usage_seconds_total{name=~\"cooja.*\"}[1m]) * 100",
+          "legendFormat": "{{ name }}",
+          "refId": "A"
         }
       ],
       "fieldConfig": {
-        "defaults": {
-          "unit": "percent"
-        }
+        "defaults": { "unit": "percent", "min": 0 }
       }
     },
     {
-      "title": "Memory Usage - All Cooja Containers",
-      "type": "graph",
-      "datasource": "InfluxDB",
+      "id": 2,
+      "title": "Memory Usage - Cooja Workers",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
       "targets": [
         {
-          "query": "from(bucket: \"docker\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"docker_container_mem\")\n  |> filter(fn: (r) => r[\"container_name\"] =~ /cooja.*/)\n  |> filter(fn: (r) => r[\"_field\"] == \"usage_percent\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean)\n  |> yield(name: \"mean\")",
-          "language": "flux"
+          "expr": "container_memory_usage_bytes{name=~\"cooja.*\"}",
+          "legendFormat": "{{ name }}",
+          "refId": "A"
         }
       ],
       "fieldConfig": {
-        "defaults": {
-          "unit": "percent"
-        }
+        "defaults": { "unit": "bytes", "min": 0 }
       }
     },
     {
-      "title": "Network Traffic - Cooja Containers",
-      "type": "graph",
-      "datasource": "InfluxDB",
+      "id": 3,
+      "title": "CPU Usage % - Backend Services",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
       "targets": [
         {
-          "query": "from(bucket: \"docker\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"docker_container_net\")\n  |> filter(fn: (r) => r[\"container_name\"] =~ /cooja.*/)\n  |> filter(fn: (r) => r[\"_field\"] == \"rx_bytes\" or r[\"_field\"] == \"tx_bytes\")\n  |> aggregateWindow(every: v.windowPeriod, fn: sum)\n  |> yield(name: \"sum\")",
-          "language": "flux"
+          "expr": "rate(container_cpu_usage_seconds_total{name=~\"mo_engine|master_node|rest_api|mongodb\"}[1m]) * 100",
+          "legendFormat": "{{ name }}",
+          "refId": "A"
         }
       ],
       "fieldConfig": {
-        "defaults": {
-          "unit": "bytes"
-        }
+        "defaults": { "unit": "percent", "min": 0 }
       }
     },
     {
-      "title": "Container Status",
-      "type": "table",
-      "datasource": "InfluxDB",
+      "id": 4,
+      "title": "Memory Usage - Backend Services",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
       "targets": [
         {
-          "query": "from(bucket: \"docker\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"docker_container_status\")\n  |> filter(fn: (r) => r[\"container_name\"] =~ /cooja.*/)\n  |> last()\n  |> keep(columns: [\"container_name\", \"_value\", \"_time\"])\n  |> yield(name: \"last\")",
-          "language": "flux"
+          "expr": "container_memory_usage_bytes{name=~\"mo_engine|master_node|rest_api|mongodb\"}",
+          "legendFormat": "{{ name }}",
+          "refId": "A"
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "bytes", "min": 0 }
+      }
     },
     {
-      "title": "CPU per Container (Heatmap)",
-      "type": "heatmap",
-      "datasource": "InfluxDB",
+      "id": 5,
+      "title": "Network Receive (bytes/s) - All Containers",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
       "targets": [
         {
-          "query": "from(bucket: \"docker\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"docker_container_cpu\")\n  |> filter(fn: (r) => r[\"container_name\"] =~ /cooja.*/)\n  |> filter(fn: (r) => r[\"_field\"] == \"usage_percent\")\n  |> aggregateWindow(every: 1m, fn: mean)\n  |> yield(name: \"mean\")",
-          "language": "flux"
+          "expr": "rate(container_network_receive_bytes_total{name!=\"\"}[1m])",
+          "legendFormat": "{{ name }}",
+          "refId": "A"
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "Bps", "min": 0 }
+      }
+    },
+    {
+      "id": 6,
+      "title": "Network Transmit (bytes/s) - All Containers",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "rate(container_network_transmit_bytes_total{name!=\"\"}[1m])",
+          "legendFormat": "{{ name }}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "Bps", "min": 0 }
+      }
+    },
+    {
+      "id": 7,
+      "title": "CPU Summary - All Containers (last 1m avg)",
+      "type": "bargauge",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 24, "w": 24, "h": 8 },
+      "targets": [
+        {
+          "expr": "rate(container_cpu_usage_seconds_total{name!=\"\"}[1m]) * 100",
+          "legendFormat": "{{ name }}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "percent", "min": 0, "max": 100 }
+      },
+      "options": {
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      }
     }
   ]
 }

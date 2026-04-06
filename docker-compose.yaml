@@ -1,4 +1,64 @@
 services:
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: cadvisor
+    privileged: true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "8080:8080"
+    labels:
+      - "simlab.type=collector"
+      - "simlab.role=metrics"
+      - "simlab.group=monitoring"
+    networks:
+      - monitoring-net
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    labels:
+      - "simlab.type=timeseries"
+      - "simlab.role=storage"
+      - "simlab.group=monitoring"
+    depends_on:
+      - cadvisor
+    networks:
+      - monitoring-net
+
+  grafana:
+    image: grafana/grafana-oss
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-storage:/var/lib/grafana
+      - ./grafana-provisioning:/etc/grafana/provisioning
+    environment:
+      - GF_SECURITY_ADMIN_USER=simlab
+      - GF_SECURITY_ADMIN_PASSWORD=simlab123
+    restart: unless-stopped
+    labels:
+      - "simlab.type=visualization"
+      - "simlab.role=dashboard"
+      - "simlab.group=monitoring"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      - prometheus
+    networks:
+      - monitoring-net
+
   mongodb:
     image: mongo:latest
     container_name: mongodb
@@ -238,7 +298,7 @@ services:
 volumes:
   mongo_data:
   mongo_config:
-  influxdb-data:
+  prometheus-data:
   grafana-storage:
 
 networks:
@@ -250,4 +310,7 @@ networks:
     driver: bridge
   proxy-net:
     name: proxy_net
+    driver: bridge
+  monitoring-net:
+    name: monitoring_net
     driver: bridge
