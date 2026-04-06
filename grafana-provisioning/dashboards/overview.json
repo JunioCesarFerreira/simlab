@@ -1,0 +1,66 @@
+{
+  "title": "Simlab - Overview",
+  "uid": "simlab-overview",
+  "schemaVersion": 38,
+  "refresh": "15s",
+  "time": { "from": "now-30m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "CPU % - All Containers",
+      "type": "bargauge",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 8 },
+      "targets": [
+        {
+          "expr": "rate(container_cpu_usage_seconds_total{name=~\"/?cooja.*|/?mo_engine|/?master_node|/?rest_api|/?mongodb|/?simlab_gui\"}[1m]) * 100",
+          "legendFormat": "{{ name }}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 } },
+      "options": {
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "displayMode": "gradient"
+      }
+    },
+    {
+      "id": 2,
+      "title": "Memory - All Containers",
+      "type": "bargauge",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 8, "w": 24, "h": 8 },
+      "targets": [
+        {
+          "expr": "container_memory_usage_bytes{name=~\"/?cooja.*|/?mo_engine|/?master_node|/?rest_api|/?mongodb|/?simlab_gui\"}",
+          "legendFormat": "{{ name }}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes", "min": 0 } },
+      "options": {
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "displayMode": "gradient"
+      }
+    },
+    {
+      "id": 3,
+      "title": "CPU % Over Time - All Containers",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 16, "w": 24, "h": 10 },
+      "targets": [
+        {
+          "expr": "rate(container_cpu_usage_seconds_total{name=~\"/?cooja.*|/?mo_engine|/?master_node|/?rest_api|/?mongodb|/?simlab_gui\"}[1m]) * 100",
+          "legendFormat": "{{ name }}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0 } }
+    }
+  ]
+}

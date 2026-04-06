@@ -1,0 +1,104 @@
+{
+  "title": "Simlab - MongoDB",
+  "uid": "simlab-mongodb",
+  "schemaVersion": 38,
+  "refresh": "15s",
+  "time": { "from": "now-30m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "CPU Usage %",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "rate(container_cpu_usage_seconds_total{name=~\"/?mongodb\"}[1m]) * 100",
+          "legendFormat": "mongodb",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0 } }
+    },
+    {
+      "id": 2,
+      "title": "Memory Usage",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "container_memory_usage_bytes{name=~\"/?mongodb\"}",
+          "legendFormat": "used",
+          "refId": "A"
+        },
+        {
+          "expr": "container_spec_memory_limit_bytes{name=~\"/?mongodb\"}",
+          "legendFormat": "limit",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes", "min": 0 } }
+    },
+    {
+      "id": 3,
+      "title": "Disk I/O - Reads (bytes/s)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "rate(container_fs_reads_bytes_total{name=~\"/?mongodb\"}[1m])",
+          "legendFormat": "read",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps", "min": 0 } }
+    },
+    {
+      "id": 4,
+      "title": "Disk I/O - Writes (bytes/s)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "rate(container_fs_writes_bytes_total{name=~\"/?mongodb\"}[1m])",
+          "legendFormat": "write",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps", "min": 0 } }
+    },
+    {
+      "id": 5,
+      "title": "Network Receive (bytes/s)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "rate(container_network_receive_bytes_total{name=~\"/?mongodb\"}[1m])",
+          "legendFormat": "rx",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps", "min": 0 } }
+    },
+    {
+      "id": 6,
+      "title": "Network Transmit (bytes/s)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "rate(container_network_transmit_bytes_total{name=~\"/?mongodb\"}[1m])",
+          "legendFormat": "tx",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps", "min": 0 } }
+    }
+  ]
+}

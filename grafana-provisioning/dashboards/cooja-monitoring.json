@@ -1,133 +1,111 @@
 {
-  "title": "Simlab - Container Monitoring",
-  "uid": "simlab-monitoring",
+  "title": "Simlab - Cooja Workers",
+  "uid": "simlab-cooja",
   "schemaVersion": 38,
   "refresh": "15s",
-  "time": { "from": "now-30m", "to": "now" },
+  "time": { "from": "now-1h", "to": "now" },
   "panels": [
     {
       "id": 1,
-      "title": "CPU Usage % - Cooja Workers",
+      "title": "CPU % - All Workers",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 8 },
       "targets": [
         {
-          "expr": "rate(container_cpu_usage_seconds_total{name=~\"cooja.*\"}[1m]) * 100",
+          "expr": "rate(container_cpu_usage_seconds_total{name=~\"/?cooja.*\"}[1m]) * 100",
           "legendFormat": "{{ name }}",
           "refId": "A"
         }
       ],
-      "fieldConfig": {
-        "defaults": { "unit": "percent", "min": 0 }
-      }
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0 } }
     },
     {
       "id": 2,
-      "title": "Memory Usage - Cooja Workers",
+      "title": "Memory Usage - All Workers",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 8, "w": 24, "h": 8 },
       "targets": [
         {
-          "expr": "container_memory_usage_bytes{name=~\"cooja.*\"}",
+          "expr": "container_memory_usage_bytes{name=~\"/?cooja.*\"}",
           "legendFormat": "{{ name }}",
           "refId": "A"
         }
       ],
-      "fieldConfig": {
-        "defaults": { "unit": "bytes", "min": 0 }
-      }
+      "fieldConfig": { "defaults": { "unit": "bytes", "min": 0 } }
     },
     {
       "id": 3,
-      "title": "CPU Usage % - Backend Services",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
-      "targets": [
-        {
-          "expr": "rate(container_cpu_usage_seconds_total{name=~\"mo_engine|master_node|rest_api|mongodb\"}[1m]) * 100",
-          "legendFormat": "{{ name }}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": { "unit": "percent", "min": 0 }
-      }
-    },
-    {
-      "id": 4,
-      "title": "Memory Usage - Backend Services",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
-      "targets": [
-        {
-          "expr": "container_memory_usage_bytes{name=~\"mo_engine|master_node|rest_api|mongodb\"}",
-          "legendFormat": "{{ name }}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": { "unit": "bytes", "min": 0 }
-      }
-    },
-    {
-      "id": 5,
-      "title": "Network Receive (bytes/s) - All Containers",
-      "type": "timeseries",
+      "title": "CPU % Summary (current)",
+      "type": "bargauge",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
       "targets": [
         {
-          "expr": "rate(container_network_receive_bytes_total{name!=\"\"}[1m])",
-          "legendFormat": "{{ name }}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": { "unit": "Bps", "min": 0 }
-      }
-    },
-    {
-      "id": 6,
-      "title": "Network Transmit (bytes/s) - All Containers",
-      "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
-      "targets": [
-        {
-          "expr": "rate(container_network_transmit_bytes_total{name!=\"\"}[1m])",
-          "legendFormat": "{{ name }}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": { "unit": "Bps", "min": 0 }
-      }
-    },
-    {
-      "id": 7,
-      "title": "CPU Summary - All Containers (last 1m avg)",
-      "type": "bargauge",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "x": 0, "y": 24, "w": 24, "h": 8 },
-      "targets": [
-        {
-          "expr": "rate(container_cpu_usage_seconds_total{name!=\"\"}[1m]) * 100",
+          "expr": "rate(container_cpu_usage_seconds_total{name=~\"/?cooja.*\"}[1m]) * 100",
           "legendFormat": "{{ name }}",
           "refId": "A",
           "instant": true
         }
       ],
-      "fieldConfig": {
-        "defaults": { "unit": "percent", "min": 0, "max": 100 }
-      },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 } },
       "options": {
         "orientation": "horizontal",
-        "reduceOptions": { "calcs": ["lastNotNull"] }
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "displayMode": "gradient"
       }
+    },
+    {
+      "id": 4,
+      "title": "Memory Summary (current)",
+      "type": "bargauge",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "container_memory_usage_bytes{name=~\"/?cooja.*\"}",
+          "legendFormat": "{{ name }}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes", "min": 0 } },
+      "options": {
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "displayMode": "gradient"
+      }
+    },
+    {
+      "id": 5,
+      "title": "Network Receive (bytes/s)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "rate(container_network_receive_bytes_total{name=~\"/?cooja.*\"}[1m])",
+          "legendFormat": "{{ name }}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps", "min": 0 } }
+    },
+    {
+      "id": 6,
+      "title": "Network Transmit (bytes/s)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 24, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "rate(container_network_transmit_bytes_total{name=~\"/?cooja.*\"}[1m])",
+          "legendFormat": "{{ name }}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps", "min": 0 } }
     }
   ]
 }
