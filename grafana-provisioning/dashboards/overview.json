@@ -13,7 +13,7 @@
       "gridPos": { "x": 0, "y": 0, "w": 24, "h": 8 },
       "targets": [
         {
-          "expr": "rate(container_cpu_usage_seconds_total{name=~\"/?cooja.*|/?mo_engine|/?master_node|/?rest_api|/?mongodb|/?simlab_gui\"}[1m]) * 100",
+          "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name=~\"/?cooja.*|/?mo_engine|/?master_node|/?rest_api|/?mongodb|/?simlab_gui\"}[1m])) * 100",
           "legendFormat": "{{ name }}",
           "refId": "A",
           "instant": true
@@ -55,7 +55,7 @@
       "gridPos": { "x": 0, "y": 16, "w": 24, "h": 10 },
       "targets": [
         {
-          "expr": "rate(container_cpu_usage_seconds_total{name=~\"/?cooja.*|/?mo_engine|/?master_node|/?rest_api|/?mongodb|/?simlab_gui\"}[1m]) * 100",
+          "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name=~\"/?cooja.*|/?mo_engine|/?master_node|/?rest_api|/?mongodb|/?simlab_gui\"}[1m])) * 100",
           "legendFormat": "{{ name }}",
           "refId": "A"
         }
