@@ -9,7 +9,7 @@
       "id": 1,
       "title": "CPU Usage %",
       "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
       "targets": [
         {
@@ -24,7 +24,7 @@
       "id": 2,
       "title": "Memory Usage",
       "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
       "targets": [
         {
@@ -44,7 +44,7 @@
       "id": 3,
       "title": "CPU % - MO Engine vs Cooja Workers",
       "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "gridPos": { "x": 0, "y": 8, "w": 24, "h": 8 },
       "targets": [
         {
@@ -59,7 +59,7 @@
       "id": 4,
       "title": "Network Receive (bytes/s)",
       "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
       "targets": [
         {
@@ -74,7 +74,7 @@
       "id": 5,
       "title": "Network Transmit (bytes/s)",
       "type": "timeseries",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": "Prometheus",
       "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
       "targets": [
         {
