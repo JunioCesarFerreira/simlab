@@ -12,6 +12,10 @@ _ARC_REF_SAMPLES points before the actual sampling is performed.
 import math
 from pylib.config.problems import MobileNode
 
+# Each row is a bitset encoded as a plain Python int (arbitrary precision).
+# Bit j of row i is set iff candidate j is within radius R of sample point i.
+CoverageMatrix = list[int]
+
 Point2D = tuple[float, float]
 
 # Number of points used for the internal arc-length estimate.
@@ -90,3 +94,91 @@ def sample_trajectories(mobile_nodes: list[MobileNode], step: float) -> list[Poi
                 points.append((x, y))
 
     return points
+
+
+def build_coverage_matrix(
+    sampled_points: list[Point2D],
+    candidates: list[Point2D],
+    radius: float,
+) -> CoverageMatrix:
+    """
+    Build a bitset coverage matrix M of shape (N, m).
+
+    M[i] is a Python int whose j-th bit is 1 iff candidate j is within
+    ``radius`` of sampled point i:
+
+        bit_j( M[i] ) = 1  <==>  dist(sampled_points[i], candidates[j]) <= radius
+
+    Using Python's arbitrary-precision integers as bitsets keeps memory compact
+    and makes row-wise OR/AND operations fast without external dependencies.
+
+    Parameters
+    ----------
+    sampled_points : list[Point2D]
+        Output of ``sample_trajectories`` — the N trajectory sample points.
+    candidates : list[Point2D]
+        The m candidate relay positions Q.
+    radius : float
+        Communication radius R.
+
+    Returns
+    -------
+    CoverageMatrix
+        List of N integers; the j-th bit of element i encodes coverage of
+        sample point i by candidate j.
+    """
+    radius_sq = radius * radius
+    matrix: CoverageMatrix = []
+
+    for (sx, sy) in sampled_points:
+        row = 0
+        for j, (cx, cy) in enumerate(candidates):
+            dx = sx - cx
+            dy = sy - cy
+            if dx * dx + dy * dy <= radius_sq:
+                row |= 1 << j
+        matrix.append(row)
+
+    return matrix
+
+
+def check_coverage(matrix: CoverageMatrix, mask: list[int]) -> int:
+    """
+    Score how well a P2 chromosome covers the sampled trajectory points.
+
+    Performs a boolean matrix-vector product (OR-semiring, where 1+1=1):
+
+        covered[i] = OR_j ( matrix[i][j] AND mask[j] )
+
+    and returns an integer in [0, 1000] proportional to the fraction of
+    covered points:
+
+        score = round( covered_count / N * 1000 )
+
+    So 1000 means full coverage, 0 means no point is covered, and
+    intermediate values scale linearly with the coverage ratio.
+    Returns 1000 for an empty matrix (vacuously fully covered).
+
+    Parameters
+    ----------
+    matrix : CoverageMatrix
+        Output of ``build_coverage_matrix`` — N bitset rows, one per
+        sampled trajectory point.
+    mask : list[int]
+        Binary chromosome of the P2 problem — m bits, one per candidate.
+
+    Returns
+    -------
+    int
+        Coverage score in [0, 1000].
+    """
+    if not matrix:
+        return 1000
+
+    mask_bits = 0
+    for j, bit in enumerate(mask):
+        if bit:
+            mask_bits |= 1 << j
+
+    covered = sum(1 for row in matrix if row & mask_bits)
+    return round(covered / len(matrix) * 1000)
