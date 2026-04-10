@@ -142,7 +142,7 @@ def build_coverage_matrix(
     return matrix
 
 
-def check_coverage(matrix: CoverageMatrix, mask: list[int]) -> int:
+def check_coverage(matrix: CoverageMatrix, mask: list[int]) -> float:
     """
     Score how well a P2 chromosome covers the sampled trajectory points.
 
@@ -150,14 +150,14 @@ def check_coverage(matrix: CoverageMatrix, mask: list[int]) -> int:
 
         covered[i] = OR_j ( matrix[i][j] AND mask[j] )
 
-    and returns an integer in [0, 1000] proportional to the fraction of
+    and returns an integer in [0, 100] proportional to the fraction of
     covered points:
 
-        score = round( covered_count / N * 1000 )
+        score = round( covered_count / N * 100 )
 
-    So 1000 means full coverage, 0 means no point is covered, and
+    So 100 means full coverage, 0 means no point is covered, and
     intermediate values scale linearly with the coverage ratio.
-    Returns 1000 for an empty matrix (vacuously fully covered).
+    Returns 100 for an empty matrix (vacuously fully covered).
 
     Parameters
     ----------
@@ -170,10 +170,10 @@ def check_coverage(matrix: CoverageMatrix, mask: list[int]) -> int:
     Returns
     -------
     int
-        Coverage score in [0, 1000].
+        Coverage score in [0, 100].
     """
     if not matrix:
-        return 1000
+        return 100
 
     mask_bits = 0
     for j, bit in enumerate(mask):
@@ -181,4 +181,4 @@ def check_coverage(matrix: CoverageMatrix, mask: list[int]) -> int:
             mask_bits |= 1 << j
 
     covered = sum(1 for row in matrix if row & mask_bits)
-    return round(covered / len(matrix) * 1000)
+    return covered / len(matrix) * 100.0

@@ -48,6 +48,7 @@ class ProblemP1(HomogeneousProblem):
     sink: Position                  # σ
     mobile_nodes: list[MobileNode]  # Γ
     number_of_relays: int           # n
+    min_coverage_percentage: float = 100.0  # p (opcional, default 100%)
 
     def cast(map: dict[str, Any]) -> "ProblemP1":
         obj = ProblemP1()
@@ -79,6 +80,7 @@ class ProblemP2(HomogeneousProblem):
     sink: Position                  # σ
     mobile_nodes: list[MobileNode]  # Γ
     candidates: list[Position]      # Q
+    min_coverage_percentage: float = 100.0  # p (opcional, default 100%)
 
     def cast(map: dict[str, Any]) -> "ProblemP2":
         obj = ProblemP2()

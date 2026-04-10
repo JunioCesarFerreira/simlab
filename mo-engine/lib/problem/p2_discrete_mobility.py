@@ -7,6 +7,7 @@ from pylib.config.algorithm import GeneticAlgorithmConfigDto
 
 from lib.util.random_network import stochastic_reachability_mask
 from lib.util.connectivity import repair_connectivity_to_sink
+from lib.util.trajectory_sampling import CoverageMatrix, sample_trajectories, build_coverage_matrix, check_coverage
 
 from lib.genetic_operators.crossover.uniform_crossover_mask import uniform_crossover_mask
 from lib.genetic_operators.mutation.bitflip_mutation import bitflip_mutation
@@ -44,6 +45,20 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
             raise KeyError("Missing 'candidates' in P2 problem.")
                 
         self.problem: ProblemP2 = ProblemP2.cast(problem)
+
+        # Build the trajectory coverage cache once for this problem instance.
+        # sample_trajectories uses step = R/2 so no gap larger than R can be missed.
+        R = self.problem.radius_of_reach
+        sampled = sample_trajectories(self.problem.mobile_nodes, step=R / 2)
+        self._coverage_matrix: CoverageMatrix = build_coverage_matrix(
+            sampled, self.problem.candidates, R
+        )
+        log.info(f"[P2] Coverage matrix built: {len(sampled)} sampled points x {len(self.problem.candidates)} candidates.")
+
+
+    def coverage_score(self, mask: list[int]) -> int:
+        """Return the trajectory coverage score in [0, 1000] for a given mask."""
+        return check_coverage(self._coverage_matrix, mask)
 
 
     def set_ga_operator_configs(self, rng: Random, parameters: GeneticAlgorithmConfigDto):    
