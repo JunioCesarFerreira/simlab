@@ -1,4 +1,20 @@
 /* -------------------------------------------------------
+ * Penalty (infeasible individuals)
+ * Objectives above this threshold are penalty values injected
+ * by the engine when a chromosome violates a hard constraint
+ * (e.g. trajectory coverage in P2).  These individuals must
+ * never appear on the Pareto front and should be visually
+ * distinguished from feasible ones in the UI.
+ * ----------------------------------------------------- */
+
+export const PENALTY_THRESHOLD = 1e8;
+
+/** Returns true when at least one objective is a penalty value. */
+export function isPenalized(objectives: number[]): boolean {
+  return objectives.some((v) => v >= PENALTY_THRESHOLD);
+}
+
+/* -------------------------------------------------------
  * Primitivos
  * ----------------------------------------------------- */
 

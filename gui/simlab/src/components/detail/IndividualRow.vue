@@ -1,19 +1,24 @@
 <template>
-  <tr class="individual-row">
+  <tr class="individual-row" :class="{ penalized: penalized }">
     <td class="mono hash" :title="individual.individual_id">
       {{ individual.individual_id.slice(0, 10) }}…
     </td>
     <td class="objectives">
-      <span
-        v-for="(val, i) in individual.objectives"
-        :key="i"
-        class="obj-pill"
-        :title="objectiveNames[i]"
-      >
-        <span class="obj-name">{{ objectiveNames[i] ?? `obj${i}` }}</span>
-        <span class="obj-val">{{ formatVal(val) }}</span>
+      <span v-if="penalized" class="penalty-badge" title="Infeasible — trajectory coverage below minimum threshold">
+        ⚠ Infeasible
       </span>
-      <span v-if="individual.objectives.length === 0" class="muted">—</span>
+      <template v-else>
+        <span
+          v-for="(val, i) in individual.objectives"
+          :key="i"
+          class="obj-pill"
+          :title="objectiveNames[i]"
+        >
+          <span class="obj-name">{{ objectiveNames[i] ?? `obj${i}` }}</span>
+          <span class="obj-val">{{ formatVal(val) }}</span>
+        </span>
+        <span v-if="individual.objectives.length === 0" class="muted">—</span>
+      </template>
     </td>
     <td class="actions">
       <button
@@ -30,8 +35,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, computed } from "vue";
 import type { IndividualDto } from "../../types/simlab";
+import { isPenalized } from "../../types/simlab";
 import { openTopology } from "../../api/files";
 
 const props = defineProps<{
@@ -40,6 +46,7 @@ const props = defineProps<{
 }>();
 
 const opening = ref(false);
+const penalized = computed(() => isPenalized(props.individual.objectives));
 
 async function viewTopology() {
   if (!props.individual.topology_picture_id) return;
@@ -102,6 +109,23 @@ function formatVal(v: number): string {
 .muted {
   color: var(--color-text-muted);
   font-size: 12px;
+}
+
+.penalized td {
+  opacity: 0.55;
+}
+
+.penalty-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #92400e;
 }
 
 .actions {

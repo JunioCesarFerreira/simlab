@@ -50,6 +50,7 @@ import { ref, computed, watch, onMounted } from "vue";
 import type { TopLevelFormatterParams } from "echarts/types/dist/shared";
 import { useEChart } from "../../composables/useEChart";
 import type { ParetoFrontItemDto, GenerationDto } from "../../types/simlab";
+import { isPenalized } from "../../types/simlab";
 
 const props = defineProps<{
   paretoFront: ParetoFrontItemDto[] | null | undefined;
@@ -130,6 +131,8 @@ const populationData = computed<ChartPoint[]>(() => {
     for (const ind of gen.population) {
       if (seen.has(ind.individual_id)) continue;
       seen.add(ind.individual_id);
+
+      if (isPenalized(ind.objectives)) continue;
 
       const x = ind.objectives[xIdx.value];
       const y = ind.objectives[yIdx.value];

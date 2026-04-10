@@ -9,7 +9,12 @@
         <span v-if="generation.end_time">{{ formatTime(generation.end_time) }}</span>
         <span v-if="duration" class="duration">({{ duration }})</span>
       </span>
-      <span class="pop-count">{{ generation.population.length }} individuals</span>
+      <span class="pop-count">
+        {{ generation.population.length }} individuals
+        <span v-if="penalizedCount > 0" class="penalized-count" :title="`${penalizedCount} infeasible (penalized)`">
+          · {{ penalizedCount }} infeasible
+        </span>
+      </span>
       <span class="chevron" :class="{ rotated: open }">▾</span>
     </button>
 
@@ -43,6 +48,7 @@ import { ref, computed } from "vue";
 import StatusBadge from "../common/StatusBadge.vue";
 import IndividualRow from "./IndividualRow.vue";
 import type { GenerationDto } from "../../types/simlab";
+import { isPenalized } from "../../types/simlab";
 
 const props = defineProps<{
   generation: GenerationDto;
@@ -51,6 +57,10 @@ const props = defineProps<{
 }>();
 
 const open = ref(props.defaultOpen ?? false);
+
+const penalizedCount = computed(
+  () => props.generation.population.filter((ind) => isPenalized(ind.objectives)).length,
+);
 
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString("en-US", {
@@ -117,6 +127,11 @@ const duration = computed(() => {
   font-size: 12px;
   color: var(--color-text-muted);
   white-space: nowrap;
+}
+
+.penalized-count {
+  color: #b45309;
+  font-weight: 600;
 }
 
 .chevron {
