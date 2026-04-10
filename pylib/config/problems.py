@@ -90,6 +90,7 @@ class ProblemP2(HomogeneousProblem):
         obj.region = map["region"]
         obj.sink = Position(map["sink"])
         obj.candidates = [Position(cand) for cand in map["candidates"]]
+        obj.min_coverage_percentage = float(map.get("min_coverage_percentage", 100.0))
         obj.mobile_nodes = []
         for mn in map["mobile_nodes"]:
             mobile_node = MobileNode()

@@ -10,6 +10,7 @@ Arc length is estimated numerically using a fine reference grid of
 _ARC_REF_SAMPLES points before the actual sampling is performed.
 """
 import math
+import numpy as np
 from pylib.config.problems import MobileNode
 
 # Each row is a bitset encoded as a plain Python int (arbitrary precision).
@@ -28,14 +29,14 @@ def _arc_length(x_expr: str, y_expr: str) -> float:
     Estimate the arc length of a parametric segment (x(t), y(t)), t in [0, 1],
     by summing chord lengths over _ARC_REF_SAMPLES uniformly spaced t values.
     """
-    prev_x = float(eval(x_expr, {"t": 0.0}))
-    prev_y = float(eval(y_expr, {"t": 0.0}))
+    prev_x = float(eval(x_expr, {"np": np, "t":0.0}))
+    prev_y = float(eval(y_expr, {"np": np, "t":0.0}))
     length = 0.0
 
     for k in range(1, _ARC_REF_SAMPLES):
         t = k / (_ARC_REF_SAMPLES - 1)
-        cx = float(eval(x_expr, {"t": t}))
-        cy = float(eval(y_expr, {"t": t}))
+        cx = float(eval(x_expr, {"np": np, "t":t}))
+        cy = float(eval(y_expr, {"np": np, "t":t}))
         length += math.hypot(cx - prev_x, cy - prev_y)
         prev_x, prev_y = cx, cy
 
@@ -89,8 +90,8 @@ def sample_trajectories(mobile_nodes: list[MobileNode], step: float) -> list[Poi
             t_values = [i / (n_points - 1) for i in range(n_points)]
 
             for t in t_values:
-                x = float(eval(x_expr, {"t": t}))  # noqa: S307
-                y = float(eval(y_expr, {"t": t}))
+                x = float(eval(x_expr, {"np": np, "t":t}))  # noqa: S307
+                y = float(eval(y_expr, {"np": np, "t":t}))
                 points.append((x, y))
 
     return points

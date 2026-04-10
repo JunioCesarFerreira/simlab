@@ -507,7 +507,37 @@ class NSGA3LoopStrategy(EngineStrategy):
                 logger.info("Genome %s already inserted this SESSION; skipping.", genome_hash)
                 continue
 
-            # --- Case C: new genome — register in cache, insert Individual, queue simulations ---
+            # --- Case C: infeasible genome — assign gradient penalty, skip simulation ---
+            # Adapters that define hard constraints (e.g. trajectory coverage in P2)
+            # return a penalty vector instead of None.  The penalty is larger the more
+            # infeasible the chromosome is, so the evolutionary pressure still favours
+            # less-infeasible solutions.  Penalised individuals never reach front 0.
+            penalty = self._problem_adapter.penalty_objectives(genome, len(self._objective_keys))
+            if penalty is not None:
+                self._map_genome_objectives[genome] = penalty
+                ind_doc: Individual = {
+                    "experiment_id": exp_oid,
+                    "generation_id": gen_oid,
+                    "individual_id": genome_hash,
+                    "chromosome": genome.to_dict(),
+                    "objectives": self._objectives_list_to_original(penalty),
+                    "topology_picture_id": None,
+                }
+                self.mongo.individual_repo.insert(ind_doc)
+                self._inserted_genomes.add(genome_hash)
+                self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
+                self.mongo.genome_cache_repo.set_objectives(self._exp_id, genome_hash, penalty)
+                self._genome_objectives_cache[genome_hash] = penalty
+                config_topo = self._convert_genome_to_sim_config(
+                    genome=genome, gen_index=gen_index, ind_idx=i, seed=first_seed
+                )
+                self._upload_topology_async(exp_oid, gen_oid, gen_index, i, genome_hash, dict(config_topo))
+                logger.info(
+                    "Genome %s is infeasible (penalty=%.2e); skipping simulation.", genome_hash, penalty[0]
+                )
+                continue
+
+            # --- Case D: new genome — register in cache, insert Individual, queue simulations ---
             config = self._convert_genome_to_sim_config(
                 genome=genome,
                 gen_index=gen_index,

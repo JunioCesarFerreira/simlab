@@ -138,6 +138,24 @@ class ProblemAdapter(ABC):
     # ------------------------------------------------------------------
     # Integration with SimLab / MongoDB / Cooja
     # ------------------------------------------------------------------
+    def penalty_objectives(self, chromosome: Chromosome, n_objectives: int) -> list[float] | None:
+        """
+        Return a penalty objective vector (in minimization space) if ``chromosome``
+        violates a hard constraint that makes simulation pointless, or ``None`` if
+        the chromosome is feasible and should be simulated normally.
+
+        The returned vector must have length ``n_objectives``.  Its values must be
+        large enough to guarantee that the penalised individual is dominated by every
+        feasible individual in the population, so it can never reach Pareto front 0.
+        Larger penalties correspond to more severely infeasible chromosomes, allowing
+        the evolutionary pressure to prefer less-infeasible solutions.
+
+        Default implementation: always returns ``None`` (no penalty — all chromosomes
+        are treated as feasible by default).  Override in problem-specific adapters
+        that define hard feasibility constraints.
+        """
+        return None
+
     @abstractmethod
     def encode_simulation_input(self, ind: Chromosome) -> SimulationElements:
         """

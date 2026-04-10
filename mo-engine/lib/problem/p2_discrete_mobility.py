@@ -56,9 +56,38 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
         log.info(f"[P2] Coverage matrix built: {len(sampled)} sampled points x {len(self.problem.candidates)} candidates.")
 
 
-    def coverage_score(self, mask: list[int]) -> int:
-        """Return the trajectory coverage score in [0, 1000] for a given mask."""
+    def coverage_score(self, mask: list[int]) -> float:
+        """Return the trajectory coverage score in [0, 100] for a given mask."""
         return check_coverage(self._coverage_matrix, mask)
+
+    def penalty_objectives(self, chromosome: ChromosomeP2, n_objectives: int) -> list[float] | None:
+        """
+        Return a minimization-space penalty vector when the chromosome's trajectory
+        coverage falls below ``min_coverage_percentage``, or ``None`` if feasible.
+
+        Penalty design:
+          - All feasible objectives are assumed << PENALTY_BASE (1e9).
+          - The penalty scales with the coverage deficit so that less-covered
+            chromosomes are strictly dominated by more-covered ones:
+
+              penalty = PENALTY_BASE × (1 + deficit)
+
+            where  deficit = (min_pct − score) / 100  ∈ (0, 1].
+
+          - Every infeasible individual therefore has penalty > PENALTY_BASE,
+            guaranteeing it is dominated by any feasible individual and can
+            never appear on Pareto front 0.
+        """
+        score = self.coverage_score(chromosome.mask)
+        min_pct = self.problem.min_coverage_percentage
+
+        if score >= min_pct:
+            return None  # feasible — simulate normally
+
+        _PENALTY_BASE = 1e9
+        deficit = (min_pct - score) / 100.0
+        penalty = _PENALTY_BASE * (1.0 + deficit)
+        return [penalty] * n_objectives
 
 
     def set_ga_operator_configs(self, rng: Random, parameters: GeneticAlgorithmConfigDto):    
