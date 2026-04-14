@@ -217,6 +217,10 @@ services:
   cooja1:
     image: juniocesarferreira/simulation-cooja:v1.1
     container_name: cooja1
+    deploy:
+      resources:
+        limits:
+          memory: 6g
     restart: unless-stopped
     ports:
       - "2231:22"
@@ -231,6 +235,10 @@ services:
   cooja2:
     image: juniocesarferreira/simulation-cooja:v1.1
     container_name: cooja2
+    deploy:
+      resources:
+        limits:
+          memory: 6g
     restart: unless-stopped
     ports:
       - "2232:22"
@@ -245,6 +253,10 @@ services:
   cooja3:
     image: juniocesarferreira/simulation-cooja:v1.1
     container_name: cooja3
+    deploy:
+      resources:
+        limits:
+          memory: 6g
     restart: unless-stopped
     ports:
       - "2233:22"
@@ -259,6 +271,10 @@ services:
   cooja4:
     image: juniocesarferreira/simulation-cooja:v1.1
     container_name: cooja4
+    deploy:
+      resources:
+        limits:
+          memory: 6g
     restart: unless-stopped
     ports:
       - "2234:22"
@@ -273,6 +289,10 @@ services:
   cooja5:
     image: juniocesarferreira/simulation-cooja:v1.1
     container_name: cooja5
+    deploy:
+      resources:
+        limits:
+          memory: 6g
     restart: unless-stopped
     ports:
       - "2235:22"
@@ -287,6 +307,10 @@ services:
   cooja6:
     image: juniocesarferreira/simulation-cooja:v1.1
     container_name: cooja6
+    deploy:
+      resources:
+        limits:
+          memory: 6g
     restart: unless-stopped
     ports:
       - "2236:22"
