@@ -203,7 +203,7 @@ def run_cooja_simulation(
 
         command = (
             f"cd {SET.remote_dir} && "
-            f"/opt/java/openjdk/bin/java --enable-preview -Xms2g -Xmx4g "
+            f"/opt/java/openjdk/bin/java --enable-preview -Xms1g -Xmx4g "
             f"-jar build/libs/cooja.jar --no-gui simulation.csc"
         )
 
