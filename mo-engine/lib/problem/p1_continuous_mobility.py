@@ -6,11 +6,15 @@ from pylib.config.algorithm import GeneticAlgorithmConfigDto
 
 from lib.util.random_network import continuous_network_gen
 from lib.util.connectivity import make_graph_connected, is_connected
+from lib.util.region_partition import TrajectoryConstraintP1
 from lib.genetic_operators.crossover.simulated_binary_crossover import sbx
 from lib.genetic_operators.mutation.polynomial_mutation import poly_mut
 
 from .chromosomes import ChromosomeP1, Position
 from .adapter import ProblemAdapter, Random
+
+import logging
+log = logging.getLogger(__name__)
 
 # ============================================================
 # Problem 1: Continuous coverage with mobility
@@ -46,8 +50,51 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
             raise KeyError("Missing 'number_of_relays' in P1 problem.")
                 
         self.problem: ProblemP1 = ProblemP1.cast(problem)
-    
-    
+
+        # Build trajectory coverage constraint once for this problem instance.
+        # Uses the region-partition algorithm (W1..W8) for spatial pruning;
+        # the sampled points W and their reachable regions are cached here.
+        R = self.problem.radius_of_reach
+        self._trajectory_constraint = TrajectoryConstraintP1(
+            sink=self.problem.sink,
+            mobile_nodes=self.problem.mobile_nodes,
+            R=R,
+            region=self.problem.region,
+        )
+        log.info(
+            "[P1] Trajectory coverage constraint built: %d sampled points, R=%.2f",
+            self._trajectory_constraint.n_points, R,
+        )
+
+    def coverage_score(self, relays: list[Position]) -> float:
+        """Return the trajectory coverage score in [0, 100] (percent) for given relay positions."""
+        return self._trajectory_constraint.check_coverage(relays)
+
+    def penalty_objectives(self, chromosome: ChromosomeP1, n_objectives: int) -> list[float] | None:
+        """
+        Return a minimization-space penalty vector when trajectory coverage
+        falls below min_coverage_percentage, or None if feasible.
+
+        The penalty scales with the coverage deficit so that less-covered
+        chromosomes are strictly dominated by more-covered ones:
+
+            score    ∈ [0, 100]  (percent)
+            min_pct  ∈ [0, 100]  (percent)
+
+            deficit  = (min_pct − score) / 100  ∈ (0, 1]
+            penalty  = 1e9 × (1 + deficit)
+        """
+        score = self.coverage_score(chromosome.relays)
+        threshold = self.problem.min_coverage_percentage
+
+        if score >= threshold:
+            return None  # feasible — simulate normally
+
+        _PENALTY_BASE = 1e9
+        deficit = (threshold - score) / 100.0
+        penalty = _PENALTY_BASE * (1.0 + deficit)
+        return [penalty] * n_objectives
+
     def set_ga_operator_configs(self, rng: Random, parameters: GeneticAlgorithmConfigDto):
         N = 2 * self.problem.number_of_relays # x and y for each relay  
         self._eta_cx = float(parameters.get("eta_cx", 20.0))

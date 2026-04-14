@@ -595,11 +595,34 @@ class NSGA3LoopStrategy(EngineStrategy):
                 "[NSGA-III] Generation %d: all %d genomes have cached objectives; inserted as DONE.",
                 gen_index, len(population),
             )
+            # Change-stream event for this insert may be lost: the watcher may not
+            # have subscribed yet (first generation) or may be mid-reconnect. Fire
+            # the handler directly in a worker thread so the evolution loop always
+            # advances, even when every genome is cached or infeasible.
+            Thread(
+                target=self._fire_generation_done,
+                args=(gen_oid,),
+                daemon=True,
+                name=f"nsga3-gen-done-{gen_index}",
+            ).start()
         else:
             logger.info(
                 "[NSGA-III] Generation %d enqueued with %d individuals (%d new simulations).",
                 gen_index, len(population), sims_inserted,
             )
+
+    def _fire_generation_done(self, gen_oid: ObjectId) -> None:
+        """
+        Trigger generation-done handling from a worker thread without going
+        through the MongoDB change stream. Safe against races: if the change
+        stream also delivers the same event, the second call is a no-op
+        because `_handle_generation_done` guards on `gen_oid == self._generation_id`.
+        """
+        try:
+            with self._lock:
+                self._handle_generation_done(gen_oid)
+        except Exception:
+            logger.exception("[NSGA-III] Direct generation-done trigger failed.")
 
 
     def _update_individual_objectives(self) -> None:

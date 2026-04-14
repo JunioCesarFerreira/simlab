@@ -58,6 +58,7 @@ class ProblemP1(HomogeneousProblem):
         obj.region = map["region"]
         obj.sink = tuple(map["sink"])
         obj.number_of_relays = map["number_of_relays"]
+        obj.min_coverage_percentage = float(map.get("min_coverage_percentage", 100.0))
         obj.mobile_nodes = []
         for mn in map["mobile_nodes"]:
             mobile_node = MobileNode()

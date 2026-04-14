@@ -5,7 +5,7 @@ from lib.problem.chromosomes import ChromosomeP1
 def test_p1_encode_basic():
     problem: ProblemP1 = {
         "name": "problem1",
-        "region": [-100.0, 100.0, -100.0, 100.0],
+        "region": [-100.0, -100.0, 100.0, 100.0],
         "sink":(0.0, 0.0),
         "mobile_nodes":[
             {
