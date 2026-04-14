@@ -220,7 +220,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 6g
+          memory: 4g
     restart: unless-stopped
     ports:
       - "2231:22"
@@ -238,7 +238,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 6g
+          memory: 4g
     restart: unless-stopped
     ports:
       - "2232:22"
@@ -256,7 +256,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 6g
+          memory: 4g
     restart: unless-stopped
     ports:
       - "2233:22"
@@ -274,7 +274,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 6g
+          memory: 4g
     restart: unless-stopped
     ports:
       - "2234:22"
@@ -292,7 +292,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 6g
+          memory: 4g
     restart: unless-stopped
     ports:
       - "2235:22"
@@ -310,7 +310,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 6g
+          memory: 4g
     restart: unless-stopped
     ports:
       - "2236:22"
