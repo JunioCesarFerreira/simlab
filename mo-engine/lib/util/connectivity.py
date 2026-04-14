@@ -350,6 +350,26 @@ def make_graph_connected(
     return points
 
 
+def make_graph_connected_to_sink(
+    relays: list[Point2D],
+    sink: Point2D,
+    radius: float,
+    step: float = 0.1,
+) -> list[Point2D]:
+    """
+    Repair relay connectivity with the sink as the fixed root.
+
+    The repair preserves the number of relays: it temporarily prepends the
+    sink, applies the same radial component translation used by
+    ``make_graph_connected``, then removes the sink from the returned list.
+    """
+    if not relays:
+        return []
+
+    repaired = make_graph_connected([sink, *relays], radius, step)
+    return repaired[1:]
+
+
 def repair_connectivity_to_sink(
     candidates: list[tuple[float, float]],
     mask: list[int],

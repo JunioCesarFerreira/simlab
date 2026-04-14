@@ -1,11 +1,12 @@
 from typing import Any, Mapping, Sequence
+import math
 
 from pylib.config.simulator import FixedMote, MobileMote, SimulationElements
 from pylib.config.problems import ProblemP1
 from pylib.config.algorithm import GeneticAlgorithmConfigDto
 
 from lib.util.random_network import continuous_network_gen
-from lib.util.connectivity import make_graph_connected, is_connected
+from lib.util.connectivity import make_graph_connected_to_sink, is_connected
 from lib.util.region_partition import TrajectoryConstraintP1
 from lib.genetic_operators.crossover.simulated_binary_crossover import sbx
 from lib.genetic_operators.mutation.polynomial_mutation import poly_mut
@@ -102,6 +103,11 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         self._per_gene_prob = float(parameters.get("per_gene_prob", 1.0 / N))
         self._crossover_method = str(parameters.get("crossover_method"))
         self._mutation_method = str(parameters.get("mutation_method"))
+        self._coverage_repair_budget = int(parameters.get("repair_coverage_budget", parameters.get("coverage_repair_budget", 2)))
+        self._coverage_repair_candidates = int(parameters.get("repair_coverage_candidates", parameters.get("coverage_repair_candidates", 4)))
+        self._coverage_repair_relay_candidates = int(parameters.get("repair_coverage_relay_candidates", parameters.get("coverage_repair_relay_candidates", 3)))
+        self._connectivity_repair_step_ratio = float(parameters.get("connectivity_repair_step_ratio", 0.1))
+        self._connectivity_repair_retries = int(parameters.get("connectivity_repair_retries", 2))
         self._rng = rng
                 
                 
@@ -113,15 +119,154 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         for i in range(size):
             chrm = ChromosomeP1(
                 mac_protocol = self._rng.randint(0, 1),
-                relays = continuous_network_gen(
+                relays = self._repair_relays(continuous_network_gen(
                     amount=N, 
                     region=box, 
                     radius=R, 
                     sink=self.problem.sink, 
-                    rng=self._rng)
+                    rng=self._rng))
             )
             pop.append(chrm)
         return pop
+
+
+    def _clip_position(self, pos: Position) -> Position:
+        xmin, ymin, xmax, ymax = map(float, self.problem.region)
+        x, y = pos
+        return (
+            min(max(float(x), xmin), xmax),
+            min(max(float(y), ymin), ymax),
+        )
+
+
+    def _is_connected_to_sink(self, relays: list[Position]) -> bool:
+        return is_connected([self.problem.sink, *relays], self.radius_of_reach)
+
+
+    def _repair_connectivity_to_sink(self, relays: list[Position]) -> list[Position]:
+        if not relays:
+            return []
+
+        radius = self.radius_of_reach
+        step = max(radius * self._connectivity_repair_step_ratio, radius * 1e-6)
+        repaired = [self._clip_position(pos) for pos in relays]
+
+        for _ in range(max(1, self._connectivity_repair_retries)):
+            repaired = make_graph_connected_to_sink(repaired, self.problem.sink, radius, step)
+            repaired = [self._clip_position(pos) for pos in repaired]
+            if self._is_connected_to_sink(repaired):
+                return repaired
+
+        log.warning("[P1] Sink-aware connectivity repair failed; regenerating relay network.")
+        box = tuple(self.problem.region)
+        regenerated = continuous_network_gen(len(relays), box, radius, self.problem.sink, self._rng)
+        if len(regenerated) > len(relays):
+            regenerated = regenerated[:len(relays)]
+        elif len(regenerated) < len(relays):
+            regenerated = regenerated + repaired[len(regenerated):]
+        regenerated = [self._clip_position(pos) for pos in regenerated]
+        if not self._is_connected_to_sink(regenerated):
+            regenerated = make_graph_connected_to_sink(regenerated, self.problem.sink, radius, step)
+        return [self._clip_position(pos) for pos in regenerated]
+
+
+    def _top_uncovered_targets(self, relays: list[Position]) -> list[Position]:
+        uncovered = self._trajectory_constraint.uncovered_points(relays)
+        if not uncovered:
+            return []
+
+        radius_sq = self.radius_of_reach * self.radius_of_reach
+        scored: list[tuple[int, float, Position]] = []
+
+        for candidate in uncovered:
+            cx, cy = candidate
+            gain = 0
+            for ux, uy in uncovered:
+                dx, dy = ux - cx, uy - cy
+                if dx * dx + dy * dy <= radius_sq:
+                    gain += 1
+            scored.append((gain, math.dist(candidate, self.problem.sink), candidate))
+
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        limit = max(1, self._coverage_repair_candidates)
+        return [candidate for _, _, candidate in scored[:limit]]
+
+
+    def _project_towards_network(self, target: Position, anchors: list[Position]) -> Position:
+        radius = self.radius_of_reach
+        anchor = min(anchors, key=lambda pos: math.dist(pos, target))
+        distance = math.dist(anchor, target)
+        if distance <= radius or distance == 0.0:
+            return self._clip_position(target)
+
+        ratio = (radius * 0.98) / distance
+        ax, ay = anchor
+        tx, ty = target
+        return self._clip_position((ax + (tx - ax) * ratio, ay + (ty - ay) * ratio))
+
+
+    def _greedy_coverage_repair(self, relays: list[Position]) -> list[Position]:
+        budget = max(0, self._coverage_repair_budget)
+        if budget == 0 or not relays:
+            return relays
+
+        threshold = self.problem.min_coverage_percentage
+        repaired = relays[:]
+
+        for _ in range(budget):
+            current_score = self.coverage_score(repaired)
+            if current_score >= threshold:
+                break
+
+            targets = self._top_uncovered_targets(repaired)
+            if not targets:
+                break
+
+            exclusive_counts = self._trajectory_constraint.relay_exclusive_cover_counts(repaired)
+            relay_limit = max(1, min(self._coverage_repair_relay_candidates, len(repaired)))
+            relay_indices = sorted(
+                range(len(repaired)),
+                key=lambda idx: (exclusive_counts[idx], -math.dist(repaired[idx], self.problem.sink)),
+            )[:relay_limit]
+
+            best_relays: list[Position] | None = None
+            best_score = current_score
+            best_movement = math.inf
+
+            for idx in relay_indices:
+                anchors = [self.problem.sink, *[pos for j, pos in enumerate(repaired) if j != idx]]
+                for target in targets:
+                    candidates = [
+                        self._clip_position(target),
+                        self._project_towards_network(target, anchors),
+                    ]
+
+                    for candidate in candidates:
+                        trial = repaired[:]
+                        trial[idx] = candidate
+                        trial = self._repair_connectivity_to_sink(trial)
+                        score = self.coverage_score(trial)
+                        movement = math.dist(repaired[idx], trial[idx])
+
+                        if score > best_score + 1e-9 or (
+                            abs(score - best_score) <= 1e-9 and movement < best_movement
+                        ):
+                            best_relays = trial
+                            best_score = score
+                            best_movement = movement
+
+            if best_relays is None:
+                break
+
+            repaired = best_relays
+
+        return repaired
+
+
+    def _repair_relays(self, relays: list[Position]) -> list[Position]:
+        repaired = self._repair_connectivity_to_sink(relays)
+        repaired = self._greedy_coverage_repair(repaired)
+        return self._repair_connectivity_to_sink(repaired)
 
     
     def _sbx_with_radial_translate(
@@ -142,27 +287,8 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
             c1.append((cx1, cy1))
             c2.append((cx2, cy2))
         
-        # makes graph connected by radial contraction
-        radius = self.radius_of_reach
-        step = radius * 0.1
-        c1_rep = make_graph_connected(c1, radius, step)
-        c2_rep = make_graph_connected(c2, radius, step)
-        
-        if not is_connected(c1_rep, radius):
-            c1_rep = make_graph_connected(c1_rep, radius, step)
-            if not is_connected(c1_rep, radius):
-                box = tuple(self.problem.region)
-                N = self.problem.number_of_relays
-                R = self.problem.radius_of_reach
-                c1_rep = continuous_network_gen(N, box, R, self.problem.sink, self._rng)
-        
-        if not is_connected(c2_rep, radius):
-            c2_rep = make_graph_connected(c2_rep, radius, step)
-            if not is_connected(c2_rep, radius):
-                box = tuple(self.problem.region)
-                N = self.problem.number_of_relays
-                R = self.problem.radius_of_reach
-                c2_rep = continuous_network_gen(N, box, R, self.problem.sink, self._rng)
+        c1_rep = self._repair_relays(c1)
+        c2_rep = self._repair_relays(c2)
         
         return c1_rep, c2_rep
 
@@ -172,8 +298,8 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         N = self.problem.number_of_relays
         R = self.problem.radius_of_reach
         
-        c1: list[Position] = continuous_network_gen(N, box, R, self.problem.sink, self._rng)
-        c2: list[Position] = continuous_network_gen(N, box, R, self.problem.sink, self._rng)
+        c1: list[Position] = self._repair_relays(continuous_network_gen(N, box, R, self.problem.sink, self._rng))
+        c2: list[Position] = self._repair_relays(continuous_network_gen(N, box, R, self.problem.sink, self._rng))
         return c1, c2
 
 
@@ -234,18 +360,7 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
 
             new_relays.append((x_new, y_new))
 
-        # makes graph connected by radial contraction
-        radius = self.radius_of_reach
-        step = radius * 0.1
-        new_relays_rep = make_graph_connected(new_relays, radius, step)
-        
-        if not is_connected(new_relays_rep, radius):
-            new_relays_rep = make_graph_connected(new_relays_rep, radius, step)
-            if not is_connected(new_relays_rep, radius):
-                box = tuple(self.problem.region)
-                N = self.problem.number_of_relays
-                R = self.problem.radius_of_reach
-                new_relays_rep = continuous_network_gen(N, box, R, self.problem.sink, self._rng)
+        new_relays_rep = self._repair_relays(new_relays)
         
         # MAC mutation (bit-flip)
         mac = chromosome.mac_protocol

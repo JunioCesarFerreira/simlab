@@ -259,6 +259,75 @@ class TrajectoryConstraintP1:
         """Number of sampled trajectory points."""
         return self._N
 
+    @property
+    def sampled_points(self) -> tuple[Point2D, ...]:
+        """Sampled trajectory points used by the discrete coverage check."""
+        return tuple(self._W)
+
+    # ------------------------------------------------------------------
+    def coverage_flags(self, relay_positions: Sequence[Point2D]) -> list[bool]:
+        """
+        Return one boolean per sampled point indicating current coverage.
+
+        This deliberately uses a direct distance scan. It is intended for
+        low-budget repair heuristics that need point-level feedback, while
+        ``check_coverage`` remains the optimized scoring path.
+        """
+        if not self.has_points:
+            return []
+
+        active_positions = [self._sink, *relay_positions]
+        R_sq = self._R_sq
+        flags: list[bool] = []
+
+        for wx, wy in self._W:
+            covered = False
+            for px, py in active_positions:
+                dx, dy = wx - px, wy - py
+                if dx * dx + dy * dy <= R_sq:
+                    covered = True
+                    break
+            flags.append(covered)
+
+        return flags
+
+    def uncovered_points(self, relay_positions: Sequence[Point2D]) -> list[Point2D]:
+        """Return sampled trajectory points not covered by sink + relays."""
+        flags = self.coverage_flags(relay_positions)
+        return [point for point, covered in zip(self._W, flags) if not covered]
+
+    def relay_exclusive_cover_counts(self, relay_positions: Sequence[Point2D]) -> list[int]:
+        """
+        Count sampled points covered by exactly one relay and not by the sink.
+
+        A low count marks a relay as a good candidate for repositioning during
+        coverage repair, because fewer currently covered points depend only on it.
+        """
+        counts = [0] * len(relay_positions)
+        if not self.has_points or not relay_positions:
+            return counts
+
+        sx, sy = self._sink
+        R_sq = self._R_sq
+
+        for wx, wy in self._W:
+            dx, dy = wx - sx, wy - sy
+            if dx * dx + dy * dy <= R_sq:
+                continue
+
+            covering_relays: list[int] = []
+            for i, (px, py) in enumerate(relay_positions):
+                dx, dy = wx - px, wy - py
+                if dx * dx + dy * dy <= R_sq:
+                    covering_relays.append(i)
+                    if len(covering_relays) > 1:
+                        break
+
+            if len(covering_relays) == 1:
+                counts[covering_relays[0]] += 1
+
+        return counts
+
     # ------------------------------------------------------------------
     def check_coverage(self, relay_positions: Sequence[Point2D]) -> float:
         """

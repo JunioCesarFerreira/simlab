@@ -13,10 +13,12 @@ P2 uses a pre-built bitset coverage matrix over a fixed candidate set.
 For an equivalent geometric setup both must yield the same score.
 """
 import pytest
+import random
 
 from lib.problem.resolve import build_test_adapter
 from lib.problem.chromosomes import ChromosomeP1, ChromosomeP2
 from lib.util.region_partition import TrajectoryConstraintP1
+from lib.util.connectivity import make_graph_connected_to_sink, is_connected
 from lib.util.trajectory_sampling import (
     sample_trajectories,
     build_coverage_matrix,
@@ -64,6 +66,28 @@ def test_p1_score_zero_when_nothing_reaches():
     c = TrajectoryConstraintP1((1000.0, 1000.0), _mobile_nodes(), _R, _REGION)
     # Sink is far away; no relays → 0% coverage
     assert c.check_coverage([]) == 0.0
+
+
+def test_p1_coverage_feedback_identifies_uncovered_and_exclusive_counts():
+    c = TrajectoryConstraintP1(_SINK, _mobile_nodes(), _R, _REGION)
+    relays = [(20.0, 0.0), (40.0, 0.0)]
+
+    flags = c.coverage_flags(relays)
+    uncovered = c.uncovered_points(relays)
+    exclusive_counts = c.relay_exclusive_cover_counts(relays)
+
+    assert len(flags) == c.n_points
+    assert len(uncovered) == flags.count(False)
+    assert len(exclusive_counts) == len(relays)
+    assert sum(exclusive_counts) > 0
+
+
+def test_p1_sink_aware_connectivity_repair_roots_at_sink():
+    relays = [(200.0, 0.0), (260.0, 0.0)]
+    repaired = make_graph_connected_to_sink(relays, _SINK, _R, step=5.0)
+
+    assert len(repaired) == len(relays)
+    assert is_connected([_SINK, *repaired], _R)
 
 
 def test_p2_score_range_and_full_coverage():
@@ -160,6 +184,28 @@ def test_p1_penalty_none_when_feasible():
     relays = [(x, 0.0) for x in range(10, 101, 10)]
     chrm = ChromosomeP1(mac_protocol=0, relays=relays)
     assert adapter.penalty_objectives(chrm, n_objectives=2) is None
+
+
+def test_p1_low_budget_repair_improves_coverage_and_keeps_sink_connected():
+    adapter = build_test_adapter(_p1_problem(min_pct=100.0))
+    adapter.set_ga_operator_configs(
+        random.Random(7),
+        {
+            "crossover_method": "sbx_with_radial_translate",
+            "mutation_method": "polynomial",
+            "repair_coverage_budget": 2,
+            "repair_coverage_candidates": 4,
+            "repair_coverage_relay_candidates": 3,
+        },
+    )
+
+    relays = [(10.0, 0.0), (10.0, 0.0), (10.0, 0.0)]
+    before = adapter.coverage_score(relays)
+    repaired = adapter._repair_relays(relays)
+    after = adapter.coverage_score(repaired)
+
+    assert after > before
+    assert is_connected([adapter.problem.sink, *repaired], adapter.problem.radius_of_reach)
 
 
 def test_p1_penalty_monotonic_with_deficit():
