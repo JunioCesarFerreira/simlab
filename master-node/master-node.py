@@ -47,6 +47,8 @@ class Settings:
     hostnames: list[str]
     ports: list[int]
     sim_timeout_sec: int
+    jvm_xms: str
+    jvm_xmx: str
 
     @staticmethod
     def from_env() -> "Settings":
@@ -72,6 +74,8 @@ class Settings:
             ports = [2231 + i for i in range(default_n)]
 
         sim_timeout_sec = int(os.getenv("SIM_TIMEOUT_SEC", "3600"))
+        jvm_xms = os.getenv("COOJA_JVM_XMS", "1g")
+        jvm_xmx = os.getenv("COOJA_JVM_XMX", "2g")
 
         return Settings(
             is_docker=is_docker,
@@ -83,6 +87,8 @@ class Settings:
             hostnames=hostnames,
             ports=ports,
             sim_timeout_sec=sim_timeout_sec,
+            jvm_xms=jvm_xms,
+            jvm_xmx=jvm_xmx,
         )
 
 
@@ -203,7 +209,7 @@ def run_cooja_simulation(
 
         command = (
             f"cd {SET.remote_dir} && "
-            f"/opt/java/openjdk/bin/java --enable-preview -Xms1g -Xmx4g "
+            f"/opt/java/openjdk/bin/java --enable-preview -Xms{SET.jvm_xms} -Xmx{SET.jvm_xmx} "
             f"-jar build/libs/cooja.jar --no-gui simulation.csc"
         )
 
