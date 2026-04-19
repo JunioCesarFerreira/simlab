@@ -190,8 +190,8 @@ services:
       - DB_NAME=simlab
       - MONGO_URI=mongodb://mongodb:27017/?replicaSet=rs0
       - IS_DOCKER=True
-      - NUMBER_OF_CONTAINERS=6
-      - COOJA_JVM_XMS=1g
+      - NUMBER_OF_CONTAINERS=16
+      - COOJA_JVM_XMS=4g
       - COOJA_JVM_XMX=4g
     ports:
       - "2220:22"
@@ -297,6 +297,146 @@ services:
     labels:
       - "simlab.type=cooja"
       - "simlab.id=6"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
+
+  cooja7:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja7
+    restart: unless-stopped
+    ports:
+      - "2237:22"
+    networks:
+      - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=7"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
+
+  cooja8:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja8
+    restart: unless-stopped
+    ports:
+      - "2238:22"
+    networks:
+      - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=8"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
+
+  cooja9:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja9
+    restart: unless-stopped
+    ports:
+      - "2239:22"
+    networks:
+      - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=9"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
+      
+  cooja10:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja10
+    restart: unless-stopped
+    ports:
+      - "2240:22"
+    networks:
+      - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=10"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
+
+  cooja11:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja11
+    restart: unless-stopped
+    ports:
+      - "2241:22"
+    networks:
+      - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=11"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
+
+  cooja12:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja12
+    restart: unless-stopped
+    ports:
+      - "2242:22"
+    networks:
+      - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=12"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
+
+  cooja13:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja13
+    restart: unless-stopped
+    ports:
+      - "2243:22"
+    networks:
+      - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=13"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
+      
+  cooja14:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja14
+    restart: unless-stopped
+    ports:
+      - "2244:22"
+    networks:
+      - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=14"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
+
+  cooja15:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja15
+    restart: unless-stopped
+    ports:
+      - "2245:22"
+    networks:
+      - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=15"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
+
+  cooja16:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja16
+    restart: unless-stopped
+    ports:
+      - "2246:22"
+    networks:
+      - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=16"
       - "simlab.role=worker"
       - "simlab.group=simulation"
 
