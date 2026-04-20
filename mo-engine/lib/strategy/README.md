@@ -57,3 +57,33 @@ Let us define the following elements:
   where $\mathcal{P}$ computes the final Pareto front.
 
 This formulation explicitly separates evaluation, selection, variation, and Pareto extraction, and matches the iterative flow depicted in the diagram.
+
+## Batch
+
+The `batch` strategy runs a fixed list of pre-defined chromosomes as a single
+generation. It performs **no** reproduction, selection or variation: the input
+chromosomes are inserted as individuals of `generation_0` and their simulations
+are queued immediately. When every simulation reaches a terminal state the
+strategy consolidates per-individual objectives, computes the (non-dominated)
+Pareto front over the batch and finalises the experiment.
+
+Input shape (subset relevant to this strategy):
+
+```jsonc
+{
+  "parameters": {
+    "strategy": "batch",
+    "problem":   { "name": "problem2", ... },
+    "simulation":{ "duration": 180, "random_seeds": [336157, 35239] },
+    "objectives":[ { "metric_name": "latency", "goal": "min" }, ... ],
+    "chromosomes": [
+      { "mac_protocol": 0, "mask": [1,0,1,...] },
+      { "mac_protocol": 1, "mask": [0,1,1,...] }
+    ]
+  }
+}
+```
+
+Use cases: reproducible benchmarks, validating a specific Pareto set found by
+another strategy, or executing a user-curated candidate list without any
+evolutionary search.
