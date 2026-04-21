@@ -1,0 +1,69 @@
+{
+    "id": null,
+    "name": "Batch execution of pre-defined chromosomes on problem P2",
+    "status": "Waiting",
+    "system_message": null,
+    "created_time": "2026-04-15T10:00:00Z",
+    "start_time": null,
+    "end_time": null,
+    "generations": [],
+    "source_repository_options": {
+        "csma": "69d1e19a248e5c0a37710b9c"
+    },
+    "parameters": {
+        "strategy": "batch",
+        "random_seed": 42,
+        "objectives": [
+            { "metric_name": "latency",    "goal": "min" },
+            { "metric_name": "energy",     "goal": "min" },
+            { "metric_name": "throughput", "goal": "max" }
+        ],
+        "simulation": {
+            "duration": 180,
+            "random_seeds": [336157, 35239, 5343]
+        },
+        "problem": {
+            "name": "problem2",
+            "radius_of_reach": 50,
+            "radius_of_inter": 100,
+            "region": [-150, -150, 150, 150],
+            "sink": [0, 0],
+            "candidates": [
+                [-29, 32], [-102, -21], [-91, -59], [-11, -45.5],
+                [27, 39], [74, 29], [102, -12], [114, -33],
+                [87, 44], [-74.47, 32.41], [24.14, -56.03], [-49.03, -69.70],
+                [-124.73, -55.78], [-108.42, 9.73], [-54.21, -12.63], [38.68, -23.68],
+                [88.15, -54.73], [0.26, 63.42], [-88.68, 71.31], [-126.31, 68.42],
+                [-108.15, 38.68], [-33.94, 66.31], [81.31, 71.05], [131.84, 54.21],
+                [67.10, -42.89], [70.52, -82.89], [-11.31, -88.94], [-141.05, -86.31],
+                [-143.15, 5.52], [138.94, 7.36]
+            ],
+            "mobile_nodes": [],
+            "number_of_relays": 10
+        },
+        "chromosomes": [
+            {
+                "mac_protocol": 0,
+                "mask": [1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+            },
+            {
+                "mac_protocol": 0,
+                "mask": [0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0]
+            },
+            {
+                "mac_protocol": 0,
+                "mask": [1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0]
+            }
+        ]
+    },
+    "data_conversion_config": {
+        "node_col": "node",
+        "time_col": "root_time_now",
+        "metrics": [
+            { "name": "latency",    "kind": "mean",                 "column": "rtt_latency" },
+            { "name": "energy",     "kind": "sum_all",              "column": "total_energy_mj" },
+            { "name": "throughput", "kind": "sum_last_minus_first", "column": "server_received" }
+        ]
+    },
+    "pareto_front": null
+}
