@@ -3,6 +3,7 @@ services:
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:latest
     container_name: cadvisor
+    restart: unless-stopped
     privileged: true
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -24,6 +25,7 @@ services:
   prometheus:
     image: prom/prometheus:latest
     container_name: prometheus
+    restart: unless-stopped
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
@@ -154,6 +156,7 @@ services:
       context: .
       dockerfile: Dockerfile.mo-engine
     container_name: mo_engine
+    restart: unless-stopped
     working_dir: /app
     environment:
       - PYTHONPATH=/app:/app/pylib
@@ -184,6 +187,7 @@ services:
       context: .
       dockerfile: Dockerfile.master-node
     container_name: master_node
+    restart: unless-stopped
     working_dir: /app
     environment:
       - PYTHONPATH=/app:/app/pylib
