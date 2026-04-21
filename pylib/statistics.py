@@ -3,43 +3,6 @@ import pandas as pd
 from logging import Logger
 from typing import Callable, Any
 
-def james_stein(means: np.ndarray, variances: np.ndarray) -> float:
-    """
-    Applies the James-Stein estimator to combine multiple estimates.
-    
-    The James-Stein estimator "shrinks" individual means toward the global mean,
-    resulting in an estimate with lower mean squared error when k >= 3.
-    
-    Args:
-        means: Array of individual means for each group
-        variances: Array of variances for each group
-        
-    Returns:
-        Combined mean using the James-Stein estimator
-    """
-    k = means.size
-    if k < 3:
-        # James-Stein requires at least 3 groups to be effective
-        return float(means.mean())
-    
-    mu_bar = means.mean()  # Global mean of all means
-    diff2 = np.sum((means - mu_bar) ** 2)  # Sum of squared differences
-    sigma2 = np.mean(variances)  # Average variance
-    
-    if diff2 <= 0 or sigma2 <= 0:
-        # Degenerate cases: return simple mean
-        return float(mu_bar)
-    
-    # Calculate shrinkage weights: (1 - (k-2)*variance/sum_of_squares)
-    weights = (1.0 - ((k - 2) * variances) / max(diff2, 1e-9)).clip(0, 1)
-    wsum = weights.sum()
-    
-    if wsum <= 0:
-        return float(mu_bar)
-    
-    # Return weighted mean using James-Stein weights
-    return float(np.sum(weights * means) / wsum)
-
 def quantile(series: pd.Series, q: float) -> float:
     """
     Calculates the quantile of a pandas series, handling missing values.
@@ -152,39 +115,6 @@ def inverse_of(value: float, scale: float = 1.0) -> float:
     """
     return float(scale / (value + 1e-9))
 
-def js_node_mean(df: pd.DataFrame, value_col: str, node_col="node") -> float:
-    """
-    Applies the James-Stein estimator to node/group means.
-    
-    Combines means from different nodes using James-Stein shrinkage,
-    resulting in a more robust estimate of the global mean.
-    
-    Args:
-        df: DataFrame with data grouped by node
-        value_col: Column with values to aggregate
-        node_col: Column identifying groups/nodes
-        
-    Returns:
-        Combined mean using James-Stein
-    """
-    # Group by node and calculate statistics
-    groups = df[[node_col, value_col]].dropna().groupby(node_col)[value_col]
-    node_means = groups.mean().astype(float).values  # Means by node
-    node_vars = groups.var(ddof=1).astype(float).values  # Variances by node
-    node_counts = groups.count().astype(float).values  # Counts by node
-    
-    # Calculate variance of the mean (variance / n)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        var_of_mean = np.where(node_counts > 0, node_vars / node_counts, np.nan)
-    
-    # Fill NaNs with variance mean (if available)
-    var_of_mean = np.nan_to_num(
-        var_of_mean, 
-        nan=np.nanmean(var_of_mean) if np.isfinite(np.nanmean(var_of_mean)) else 0.0
-    )
-    
-    return james_stein(node_means, var_of_mean)
-
 def sum_all(df: pd.DataFrame, value_col: str) -> float:
     """
     Sum the whole column (treating non-numeric as NaN).
@@ -225,11 +155,6 @@ STAT_DISPATCH: dict[str, StatFn] = {
     "inverse_median": lambda df, item, ctx: inverse_of(
         median(df[item["column"]]),
         item.get("scale", 1.0),
-    ),
-    "js_node_mean": lambda df, item, ctx: js_node_mean(
-        df,
-        item["column"],
-        ctx["node_col"],
     ),
 }
 
