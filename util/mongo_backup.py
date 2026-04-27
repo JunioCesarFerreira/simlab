@@ -16,12 +16,11 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from bson import ObjectId
 from pymongo import MongoClient
 
 
 def bson_default(obj):
-    if isinstance(obj, ObjectId):
+    if type(obj).__name__ in ("ObjectId", "Decimal128", "Int64", "Int32"):
         return str(obj)
     if isinstance(obj, datetime):
         return obj.isoformat()
