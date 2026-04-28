@@ -22,6 +22,14 @@
     </td>
     <td class="actions">
       <button
+        class="link-btn"
+        title="View simulations and details"
+        @click="$emit('select', individual)"
+      >
+        Simulations
+        <span v-if="simCount !== null" class="sim-count">{{ simCount }}</span>
+      </button>
+      <button
         v-if="individual.topology_picture_id"
         class="link-btn"
         :disabled="opening"
@@ -45,8 +53,13 @@ const props = defineProps<{
   objectiveNames: string[];
 }>();
 
+defineEmits<{ (e: "select", individual: IndividualDto): void }>();
+
 const opening = ref(false);
 const penalized = computed(() => isPenalized(props.individual.objectives));
+const simCount = computed(() =>
+  props.individual.simulations_ids ? props.individual.simulations_ids.length : null,
+);
 
 async function viewTopology() {
   if (!props.individual.topology_picture_id) return;
@@ -129,8 +142,9 @@ function formatVal(v: number): string {
 }
 
 .actions {
-  width: 90px;
+  width: auto;
   text-align: right;
+  white-space: nowrap;
 }
 
 .link-btn {
@@ -142,9 +156,27 @@ function formatVal(v: number): string {
   border-radius: var(--radius-sm);
   background: var(--color-primary-light);
   transition: background 0.15s;
+  margin-left: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.link-btn:first-child {
+  margin-left: 0;
 }
 
 .link-btn:hover {
   background: #dbeafe;
+}
+
+.sim-count {
+  font-size: 10px;
+  font-weight: 700;
+  background: var(--color-primary);
+  color: #fff;
+  padding: 1px 6px;
+  border-radius: 999px;
+  line-height: 1.4;
 }
 </style>

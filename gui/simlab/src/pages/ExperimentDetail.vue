@@ -202,6 +202,7 @@
             :generation="gen"
             :objective-names="store.objectiveNames"
             :default-open="gen.index === 0"
+            @select="selectedIndividual = $event"
           />
         </div>
       </div>

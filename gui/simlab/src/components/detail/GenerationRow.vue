@@ -36,6 +36,7 @@
             :key="ind.id"
             :individual="ind"
             :objective-names="objectiveNames"
+            @select="$emit('select', $event)"
           />
         </tbody>
       </table>
@@ -47,7 +48,7 @@
 import { ref, computed } from "vue";
 import StatusBadge from "../common/StatusBadge.vue";
 import IndividualRow from "./IndividualRow.vue";
-import type { GenerationDto } from "../../types/simlab";
+import type { GenerationDto, IndividualDto } from "../../types/simlab";
 import { isPenalized } from "../../types/simlab";
 
 const props = defineProps<{
@@ -55,6 +56,8 @@ const props = defineProps<{
   objectiveNames: string[];
   defaultOpen?: boolean;
 }>();
+
+defineEmits<{ (e: "select", individual: IndividualDto): void }>();
 
 const open = ref(props.defaultOpen ?? false);
 
