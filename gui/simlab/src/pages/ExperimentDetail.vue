@@ -105,6 +105,43 @@
           </details>
 
           <details class="collapsible">
+            <summary>Simulation</summary>
+            <div class="param-table">
+              <div class="param-row">
+                <span class="pk">total simulations</span>
+                <span class="pv">
+                  {{ totalSimulations }}
+                  <span v-if="expectedSimulations !== null" class="muted-inline">
+                    / expected {{ expectedSimulations }}
+                  </span>
+                </span>
+              </div>
+              <div class="param-row">
+                <span class="pk">seeds count</span>
+                <span class="pv">{{ simulationSeeds.length }}</span>
+              </div>
+              <div v-if="simulationSeeds.length > 0" class="param-row seeds-row">
+                <span class="pk">seeds</span>
+                <span class="pv seeds-list mono">
+                  <span
+                    v-for="seed in simulationSeeds"
+                    :key="seed"
+                    class="seed-pill"
+                  >{{ seed }}</span>
+                </span>
+              </div>
+              <div
+                v-for="(val, key) in simulationOtherParams"
+                :key="key"
+                class="param-row"
+              >
+                <span class="pk">{{ key }}</span>
+                <span class="pv mono">{{ formatParamVal(val) }}</span>
+              </div>
+            </div>
+          </details>
+
+          <details class="collapsible">
             <summary class="summary-with-btn">
               Problem
               <button
@@ -261,6 +298,45 @@ const hasAnalysisFiles = computed(
 const metricColumns = computed(() =>
   store.experiment?.data_conversion_config?.metrics?.map((m) => m.column) ?? [],
 );
+
+// Simulation parameters derived view
+const simulationSeeds = computed<number[]>(() => {
+  const raw = store.experiment?.parameters?.simulation?.["random_seeds"];
+  return Array.isArray(raw) ? raw.map((v) => Number(v)) : [];
+});
+
+const simulationOtherParams = computed(() => {
+  const sim = store.experiment?.parameters?.simulation ?? {};
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(sim)) {
+    if (k !== "random_seeds") out[k] = v;
+  }
+  return out;
+});
+
+const totalSimulations = computed(() => {
+  const gens = store.experiment?.generations ?? [];
+  let total = 0;
+  for (const g of gens) {
+    for (const ind of g.population) {
+      total += ind.simulations_ids?.length ?? 0;
+    }
+  }
+  return total;
+});
+
+const expectedSimulations = computed<number | null>(() => {
+  const exp = store.experiment;
+  if (!exp) return null;
+  const popSize = Number(exp.parameters.algorithm?.["population_size"]);
+  const numGens = Number(exp.parameters.algorithm?.["number_of_generations"]);
+  const seedsCount =
+    simulationSeeds.value.length ||
+    Number(exp.parameters.simulation?.["random_seeds_count"]) ||
+    0;
+  if (!popSize || !numGens || !seedsCount) return null;
+  return popSize * numGens * seedsCount;
+});
 
 // Individual selected by chart click
 const selectedIndividual = ref<IndividualDto | null>(null);
@@ -562,6 +638,36 @@ onBeforeUnmount(() => {
 
 .goal--min { color: var(--status-running); }
 .goal--max { color: var(--status-done); }
+
+.muted-inline {
+  color: var(--color-text-muted);
+  font-weight: 400;
+  font-size: 11px;
+  margin-left: 4px;
+}
+
+.seeds-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.seeds-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  text-align: left;
+}
+
+.seed-pill {
+  display: inline-block;
+  padding: 1px 7px;
+  font-size: 11px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
 
 /* Charts */
 .charts-panel {
