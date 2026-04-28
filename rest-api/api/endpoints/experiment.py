@@ -55,8 +55,15 @@ def get_experiment_full(
         if not doc:
             raise HTTPException(status_code=404, detail="Experiment not found")
         gens = factory.generation_repo.find_by_experiment(ObjectId(experiment_id))
+        sims_by_individual = factory.simulation_repo.find_ids_grouped_by_individual(
+            ObjectId(experiment_id)
+        )
         generations = [
-            generation_from_mongo(g, factory.individual_repo.find_by_generation(g["_id"]))
+            generation_from_mongo(
+                g,
+                factory.individual_repo.find_by_generation(g["_id"]),
+                sims_by_individual,
+            )
             for g in gens
         ]
         return experiment_full_from_mongo(doc, generations)

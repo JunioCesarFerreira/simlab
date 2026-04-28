@@ -57,6 +57,23 @@ class SimulationRepository:
         with self.connection.connect() as db:
             return list(db["simulations"].find({"individual_id": individual_id}))
 
+    def find_ids_grouped_by_individual(
+        self, experiment_id: ObjectId
+    ) -> dict[str, list[str]]:
+        """Map individual_id (chromosome hash) -> list of simulation _id strings."""
+        with self.connection.connect() as db:
+            cursor = db["simulations"].find(
+                {"experiment_id": experiment_id},
+                {"_id": 1, "individual_id": 1},
+            )
+            out: dict[str, list[str]] = {}
+            for doc in cursor:
+                ind_id = doc.get("individual_id")
+                if not ind_id:
+                    continue
+                out.setdefault(ind_id, []).append(str(doc["_id"]))
+            return out
+
     def find_by_status(self, status: str) -> list[Simulation]:
         with self.connection.connect() as db:
             return list(db["simulations"].find({"status": status}))
