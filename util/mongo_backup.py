@@ -11,6 +11,7 @@ Output structure:
 """
 
 import argparse
+import base64
 import json
 import os
 from datetime import datetime, timezone
@@ -24,6 +25,8 @@ def bson_default(obj):
         return str(obj)
     if isinstance(obj, datetime):
         return obj.isoformat()
+    if isinstance(obj, bytes):
+        return {"$binary": base64.b64encode(obj).decode("ascii")}
     raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 
