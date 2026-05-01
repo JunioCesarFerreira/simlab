@@ -246,8 +246,7 @@ def compute_worst_point(
             
     all_points = to_minimization_array(np.array(all_points), objectives=objective_names, minimize=minimize)
 
-    arr = np.array(all_points)
-    return arr.max(axis=0).tolist()
+    return all_points.max(axis=0).tolist()
 
 # ------------------------------------------------------------
 # Generational Distance computation
@@ -868,7 +867,7 @@ def plot_individual_lifetime_per_generation(
         for ind in front:
             rank_map[ind["id"]] = rank
 
-    unique_ranks = sorted(rank_map.values())
+    unique_ranks = sorted(set(rank_map.values()))
     cmap = plt.cm.coolwarm(
         np.linspace(0.1, 0.9, len(unique_ranks))
     )
@@ -1264,7 +1263,7 @@ def main():
     parser.add_argument("--api-base", default="http://localhost:8000/api/v1")
     parser.add_argument("--api-key", default=os.getenv("SIMLAB_API_KEY", "api-password"))
     parser.add_argument("--expid", required=True)
-    parser.add_argument("--keep-the-files", default=False)
+    parser.add_argument("--keep-the-files", action="store_true", default=False)
 
     parser.add_argument(
         "--objectives",
@@ -1295,8 +1294,6 @@ def main():
         experiment_id=args.expid,
         label_objectives=args.objectives
     )
-    
-    print(individuals_per_gen)
     
     population = build_population_from_api(individuals_per_gen)
     fronts = fast_nondominated_sort(population, args.objectives, args.minimize)
@@ -1438,13 +1435,22 @@ def main():
     
     # ------------------------------------------------------------
     # Pareto front per generation
-    # ------------------------------------------------------------    
-            
+    # ------------------------------------------------------------
+
+    pareto_per_gen = {}
+    for gen, inds in individuals_per_gen.items():
+        local_pop = [
+            {"id": ind["id"], "generation": gen, "objectives": ind["objectives"]}
+            for ind in inds
+        ]
+        local_fronts = fast_nondominated_sort(local_pop, args.objectives, args.minimize)
+        pareto_per_gen[gen] = local_fronts[0] if local_fronts else []
+
     last_front_plot = Path(
         f"pareto_last_generation_{args.expid}.png"
     )
     plot_last_generation_pareto_front(
-        pareto_per_generation=individuals_per_gen,
+        pareto_per_generation=pareto_per_gen,
         objective_names=tuple(args.objectives),
         output_path=last_front_plot
     )
@@ -1468,8 +1474,7 @@ def main():
         tuple(args.objectives),
         minimize=args.minimize
     )
-    for coord in worst_point:
-        coord += 1.0
+    worst_point = [coord + 1.0 for coord in worst_point]
 
     final_front = np.array([
         [p["objectives"][o] for o in args.objectives]
@@ -1565,7 +1570,7 @@ def main():
         "pareto_parallel",
         "Pareto front 0 — parallel coordinates"
     )
-    print("[OK] Pareto parallel coordenates analysis completed")
+    print("[OK] Pareto parallel coordinates analysis completed")
 
     radar_plot = Path(f"pareto_radar_{args.expid}.png")
     plot_radar_pareto0(
@@ -1582,12 +1587,12 @@ def main():
         "pareto_radar",
         "Pareto front 0 — radar plot"
     )
-    print("[OK] Pareto radar coordenates analysis completed")
+    print("[OK] Pareto radar coordinates analysis completed")
 
     # ------------------------------------------------------------    
     # Cleanup
     # ------------------------------------------------------------
-    if args.keep_the_files == False:
+    if not args.keep_the_files:
         try:
             pareto_plot.unlink(missing_ok=True)
             dist_plot.unlink(missing_ok=True)
