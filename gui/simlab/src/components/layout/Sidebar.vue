@@ -9,6 +9,10 @@
         <span class="nav-icon">▦</span>
         Dashboard
       </RouterLink>
+      <RouterLink to="/campaigns" class="nav-link">
+        <span class="nav-icon">⊞</span>
+        Campaigns
+      </RouterLink>
       <RouterLink to="/experiments" class="nav-link">
         <span class="nav-icon">◈</span>
         Experiments

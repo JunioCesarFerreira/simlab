@@ -12,6 +12,7 @@ from pylib.db.models.experiment import (
     ParetoFrontItem,
     Experiment,
 )
+from pylib.db.models.campaign import Campaign
 
 __all__ = [
     "EnumStatus",
@@ -27,4 +28,5 @@ __all__ = [
     "Parameters",
     "ParetoFrontItem",
     "Experiment",
+    "Campaign",
 ]

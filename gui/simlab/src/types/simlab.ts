@@ -156,6 +156,34 @@ export interface SimulationDto {
 }
 
 /* -------------------------------------------------------
+ * Campaign
+ * ----------------------------------------------------- */
+
+export interface CampaignInfoDto {
+  id: ID;
+  name: string;
+  description: string;
+  created_time?: ISODateTime | null;
+  experiment_count: number;
+}
+
+export interface CampaignDto {
+  id: ID;
+  name: string;
+  description: string;
+  created_time?: ISODateTime | null;
+  experiment_ids: ID[];
+}
+
+export interface CampaignFullDto {
+  id: ID;
+  name: string;
+  description: string;
+  created_time?: ISODateTime | null;
+  experiments: ExperimentDto[];
+}
+
+/* -------------------------------------------------------
  * Source repository
  * ----------------------------------------------------- */
 

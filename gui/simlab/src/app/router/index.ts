@@ -3,6 +3,12 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from "vue-router"
 const routes: RouteRecordRaw[] = [
   { path: "/", redirect: "/dashboard" },
   { path: "/dashboard", component: () => import("../../pages/Dashboard.vue") },
+  { path: "/campaigns", component: () => import("../../pages/CampaignsList.vue") },
+  {
+    path: "/campaigns/:id",
+    component: () => import("../../pages/CampaignDetail.vue"),
+    props: true,
+  },
   { path: "/experiments", component: () => import("../../pages/ExperimentsList.vue") },
   {
     path: "/experiments/:id",

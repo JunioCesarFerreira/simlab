@@ -473,11 +473,20 @@ class NSGA3LoopStrategy(EngineStrategy):
 
         first_seed = self._sim_rand_seeds[0] if self._sim_rand_seeds else 123456
         sims_inserted = 0
+        seen_generation_hashes: set[str] = set()
         
         self._count_sims_inserted = 0
 
         for i, genome in enumerate(population):
             genome_hash = genome.get_hash()
+            if genome_hash in seen_generation_hashes:
+                logger.info(
+                    "Genome %s already present in generation %d; skipping duplicate individual.",
+                    genome_hash,
+                    gen_index,
+                )
+                continue
+            seen_generation_hashes.add(genome_hash)
 
             # --- Case A: objectives already in persistent cache ---
             # Pre-populate the objectives map so _handle_generation_done skips this genome.
