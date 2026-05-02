@@ -17,7 +17,6 @@ Examples:
 import argparse
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 from pymongo import MongoClient
@@ -43,6 +42,7 @@ def run_analysis(
     objectives: list[dict],
     api_base: str,
     api_key: str,
+    python: str,
 ) -> str:
     """
     Invoke plot_pareto_results.py for one experiment.
@@ -56,7 +56,7 @@ def run_analysis(
     minimize   = ["True" if o["goal"] == "min" else "False" for o in objectives]
 
     cmd = [
-        sys.executable, str(PARETO_SCRIPT),
+        python, str(PARETO_SCRIPT),
         "--expid",      exp_id,
         "--api-base",   api_base,
         "--api-key",    api_key,
@@ -97,6 +97,11 @@ def main():
         default=os.getenv("SIMLAB_API_KEY", "api-password"),
         help="SimLab API key  [env: SIMLAB_API_KEY]",
     )
+    parser.add_argument(
+        "--python",
+        default=os.getenv("SIMLAB_PYTHON", "python3"),
+        help="Python interpreter used to run plot_pareto_results.py  [env: SIMLAB_PYTHON]",
+    )
     args = parser.parse_args()
 
     print(f"Connecting to {args.uri} / {args.db} ...")
@@ -118,7 +123,7 @@ def main():
 
         print(f"[{i}/{total}] {name}  ({exp_id})")
 
-        outcome = run_analysis(exp_id, objs, args.api_base, args.api_key)
+        outcome = run_analysis(exp_id, objs, args.api_base, args.api_key, args.python)
         counts[outcome] += 1
 
     print(
