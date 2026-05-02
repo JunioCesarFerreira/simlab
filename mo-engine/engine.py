@@ -8,6 +8,7 @@ if project_path not in sys.path:
 from pylib.db import create_mongo_repository_factory, EnumStatus
 from lib.strategy.base import EngineStrategy
 from lib.strategy.nsga3 import NSGA3LoopStrategy
+from lib.strategy.nsga2 import NSGA2LoopStrategy
 from lib.strategy.batch import BatchStrategy
 
 # --------------------------- Logging --------------------------------
@@ -32,6 +33,8 @@ def select_strategy(exp_doc: dict) -> EngineStrategy:
     log.info(f"selected: {exp_type}")
     if exp_type == "nsga3":
         return NSGA3LoopStrategy(exp_doc, mongo)
+    if exp_type == "nsga2":
+        return NSGA2LoopStrategy(exp_doc, mongo)
     if exp_type == "batch":
         return BatchStrategy(exp_doc, mongo)
     raise ValueError(f"[mo-engine] Experiment type unknown: {exp_type}")
