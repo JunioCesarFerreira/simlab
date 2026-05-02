@@ -40,6 +40,14 @@ export async function getExperimentFull(
   return data;
 }
 
+export async function updateExperiment(
+  id: string,
+  updates: { name?: string },
+): Promise<boolean> {
+  const { data } = await client.put<boolean>(`/experiments/${id}`, updates);
+  return data;
+}
+
 export async function deleteExperiment(id: string): Promise<boolean> {
   const { data } = await client.delete<boolean>(`/experiments/${id}`);
   return data;

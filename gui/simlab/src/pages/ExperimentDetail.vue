@@ -23,7 +23,23 @@
         <RouterLink to="/experiments" class="back-link">← Experiments</RouterLink>
         <div class="header-main">
           <div class="header-left">
-            <h1 class="exp-name">{{ store.experiment.name }}</h1>
+            <div class="name-row">
+              <template v-if="!editing">
+                <h1 class="exp-name">{{ store.experiment.name }}</h1>
+                <button class="edit-name-btn" title="Edit name" @click="startEdit">✎</button>
+              </template>
+              <template v-else>
+                <input
+                  ref="editInput"
+                  v-model="draftName"
+                  class="name-input"
+                  @keydown.enter="saveEdit"
+                  @keydown.escape="cancelEdit"
+                />
+                <button class="edit-confirm-btn" :disabled="savingName || !draftName.trim()" @click="saveEdit">✓</button>
+                <button class="edit-cancel-btn" :disabled="savingName" @click="cancelEdit">✕</button>
+              </template>
+            </div>
             <div class="header-meta">
               <StatusBadge :status="store.experiment.status" />
               <span v-if="store.isRunning" class="live-pill">● LIVE</span>
@@ -255,7 +271,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
+import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount } from "vue";
 import { useExperimentDetailStore } from "../app/stores/experimentDetailStore";
 import StatusBadge from "../components/common/StatusBadge.vue";
 import GenerationRow from "../components/detail/GenerationRow.vue";
@@ -264,6 +280,7 @@ import ObjectivesEvolutionChart from "../components/charts/ObjectivesEvolutionCh
 import IndividualDetailPanel from "../components/detail/IndividualDetailPanel.vue";
 import ProblemVizModal from "../components/detail/ProblemVizModal.vue";
 import { downloadAnalysisZip, downloadTopologiesZip } from "../api/files";
+import { updateExperiment } from "../api/experiments";
 import type { IndividualDto, JsonObject } from "../types/simlab";
 
 const props = defineProps<{ id: string }>();
@@ -337,6 +354,36 @@ const expectedSimulations = computed<number | null>(() => {
   if (!popSize || !numGens || !seedsCount) return null;
   return popSize * numGens * seedsCount;
 });
+
+// Inline name editing
+const editing = ref(false);
+const draftName = ref("");
+const savingName = ref(false);
+const editInput = ref<HTMLInputElement | null>(null);
+
+function startEdit() {
+  draftName.value = store.experiment!.name;
+  editing.value = true;
+  nextTick(() => editInput.value?.focus());
+}
+
+function cancelEdit() {
+  editing.value = false;
+}
+
+async function saveEdit() {
+  if (!draftName.value.trim() || savingName.value) return;
+  savingName.value = true;
+  try {
+    await updateExperiment(props.id, { name: draftName.value.trim() });
+    store.experiment!.name = draftName.value.trim();
+    editing.value = false;
+  } catch (e) {
+    console.error("Failed to update experiment name:", e);
+  } finally {
+    savingName.value = false;
+  }
+}
 
 // Individual selected by chart click
 const selectedIndividual = ref<IndividualDto | null>(null);
@@ -437,12 +484,72 @@ onBeforeUnmount(() => {
   gap: 16px;
 }
 
+.name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
 .exp-name {
   font-size: 24px;
   font-weight: 800;
   line-height: 1.2;
-  margin-bottom: 6px;
+  margin: 0;
 }
+
+.edit-name-btn {
+  font-size: 16px;
+  color: var(--color-text-muted);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.name-row:hover .edit-name-btn {
+  opacity: 1;
+}
+
+.edit-name-btn:hover {
+  background: var(--color-border);
+  color: var(--color-text);
+}
+
+.name-input {
+  font-size: 22px;
+  font-weight: 800;
+  padding: 2px 8px;
+  border: 2px solid var(--color-primary);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  color: var(--color-text);
+  outline: none;
+  min-width: 240px;
+}
+
+.edit-confirm-btn {
+  font-size: 14px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary);
+  color: #fff;
+  border: none;
+}
+
+.edit-confirm-btn:disabled { opacity: 0.5; cursor: default; }
+
+.edit-cancel-btn {
+  font-size: 13px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+}
+
+.edit-cancel-btn:hover:not(:disabled) { background: var(--color-border); }
+.edit-cancel-btn:disabled { opacity: 0.5; cursor: default; }
 
 .header-meta {
   display: flex;

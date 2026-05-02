@@ -92,15 +92,23 @@ const total = computed(() =>
   Object.values(counts.value).reduce((a, b) => a + b, 0),
 );
 
+function byStartDesc(
+  a: { start_time?: string | null },
+  b: { start_time?: string | null },
+): number {
+  return (b.start_time ?? "").localeCompare(a.start_time ?? "");
+}
+
 const running = computed(() =>
-  store.experiments.filter((e) => e.status === "Running"),
+  store.experiments.filter((e) => e.status === "Running").sort(byStartDesc),
 );
 const waiting = computed(() =>
-  store.experiments.filter((e) => e.status === "Waiting"),
+  store.experiments.filter((e) => e.status === "Waiting").sort(byStartDesc),
 );
 const recentFinished = computed(() =>
   store.experiments
     .filter((e) => e.status === "Done")
+    .sort((a, b) => (b.end_time ?? "").localeCompare(a.end_time ?? ""))
     .slice(0, 8),
 );
 
