@@ -84,7 +84,7 @@ def main() -> None:
     exp_repo = mongo.experiment_repo
     exp_repo.connection.waiting_ping()
 
-    pending = exp_repo.find_by_status(EnumStatus.WAITING)
+    pending = exp_repo.find_startable_by_status(EnumStatus.WAITING)
 
     while (len(pending) > 0):
         run_pending_experiment(pending.pop())

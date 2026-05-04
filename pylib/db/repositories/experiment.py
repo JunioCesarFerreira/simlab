@@ -25,6 +25,10 @@ class ExperimentRepository:
                 {"_id": 1, "name": 1, "system_message": 1, "start_time": 1, "end_time": 1}
             ))
 
+    def find_startable_by_status(self, status: EnumStatus) -> list[dict[str, Any]]:
+        with self.connection.connect() as db:
+            return list(db["experiments"].find({"status": status}))
+
     def find_analysis_files(self, experiment_id: str) -> dict[str, Any]:
         try:
             oid = ObjectId(experiment_id)
@@ -47,10 +51,16 @@ class ExperimentRepository:
         return self.update(experiment_id, {"status": status})
 
     def update_starting(self, experiment_id: str) -> bool:
-        return self.update(experiment_id, {
-            "status": EnumStatus.RUNNING,
-            "start_time": datetime.now()
-        })
+        with self.connection.connect() as db:
+            result = db["experiments"].update_one(
+                {"_id": ObjectId(experiment_id), "status": EnumStatus.WAITING},
+                {"$set": {
+                    "id": experiment_id,
+                    "status": EnumStatus.RUNNING,
+                    "start_time": datetime.now()
+                }}
+            )
+            return result.modified_count > 0
 
     def get(self, experiment_id: str) -> Experiment:
         try:
