@@ -10,6 +10,7 @@ from lib.strategy.base import EngineStrategy
 from lib.strategy.nsga3 import NSGA3LoopStrategy
 from lib.strategy.nsga2 import NSGA2LoopStrategy
 from lib.strategy.batch import BatchStrategy
+from lib.strategy.random_search import RandomSearchStrategy
 
 # --------------------------- Logging --------------------------------
 logging.basicConfig(
@@ -37,6 +38,8 @@ def select_strategy(exp_doc: dict) -> EngineStrategy:
         return NSGA2LoopStrategy(exp_doc, mongo)
     if exp_type == "batch":
         return BatchStrategy(exp_doc, mongo)
+    if exp_type == "random_search":
+        return RandomSearchStrategy(exp_doc, mongo)
     raise ValueError(f"[mo-engine] Experiment type unknown: {exp_type}")
 
 

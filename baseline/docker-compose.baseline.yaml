@@ -1,0 +1,128 @@
+# Script-based baseline orchestrator (§5.6 of the SimLab paper).
+#
+# Launches a fixed number of Cooja worker containers in parallel, exposing
+# SSH on incremental host ports.  There is intentionally NO mo-engine,
+# NO master-node, NO REST API, NO MongoDB, and NO Change Streams.
+#
+# Inputs are pushed via scp/docker cp by run_baseline.sh; outputs are
+# pulled the same way.  No state machine, no persistence, no resume.
+#
+# Adjust the number of cooja* services and the C_MAX env in run_baseline.sh
+# to match the experiment described in §5.2 of the paper.
+
+services:
+
+  cooja1:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: baseline_cooja1
+    restart: "no"
+    ports:
+      - "12231:22"
+    networks: [ baseline-net ]
+    labels:
+      - "baseline.role=worker"
+      - "baseline.id=1"
+
+  cooja2:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: baseline_cooja2
+    restart: "no"
+    ports:
+      - "12232:22"
+    networks: [ baseline-net ]
+    labels:
+      - "baseline.role=worker"
+      - "baseline.id=2"
+
+  cooja3:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: baseline_cooja3
+    restart: "no"
+    ports:
+      - "12233:22"
+    networks: [ baseline-net ]
+    labels:
+      - "baseline.role=worker"
+      - "baseline.id=3"
+
+  cooja4:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: baseline_cooja4
+    restart: "no"
+    ports:
+      - "12234:22"
+    networks: [ baseline-net ]
+    labels:
+      - "baseline.role=worker"
+      - "baseline.id=4"
+
+  cooja5:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: baseline_cooja5
+    restart: "no"
+    ports:
+      - "12235:22"
+    networks: [ baseline-net ]
+    labels:
+      - "baseline.role=worker"
+      - "baseline.id=5"
+
+  cooja6:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: baseline_cooja6
+    restart: "no"
+    ports:
+      - "12236:22"
+    networks: [ baseline-net ]
+    labels:
+      - "baseline.role=worker"
+      - "baseline.id=6"
+
+  cooja7:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: baseline_cooja7
+    restart: "no"
+    ports:
+      - "12237:22"
+    networks: [ baseline-net ]
+    labels:
+      - "baseline.role=worker"
+      - "baseline.id=7"
+
+  cooja8:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: baseline_cooja8
+    restart: "no"
+    ports:
+      - "12238:22"
+    networks: [ baseline-net ]
+    labels:
+      - "baseline.role=worker"
+      - "baseline.id=8"
+
+  cooja9:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: baseline_cooja9
+    restart: "no"
+    ports:
+      - "12239:22"
+    networks: [ baseline-net ]
+    labels:
+      - "baseline.role=worker"
+      - "baseline.id=9"
+
+  cooja10:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: baseline_cooja10
+    restart: "no"
+    ports:
+      - "12240:22"
+    networks: [ baseline-net ]
+    labels:
+      - "baseline.role=worker"
+      - "baseline.id=10"
+
+networks:
+  baseline-net:
+    name: baseline_net
+    driver: bridge
