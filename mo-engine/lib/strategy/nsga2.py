@@ -65,6 +65,7 @@ class NSGA2LoopStrategy(EngineStrategy):
         # --- simulation and algorithm parameters ---
         self._sim_duration: int = int(simulation_config.get("duration", 120))
         self._sim_rand_seeds: list[int] = [int(x) for x in simulation_config.get("random_seeds", [123456])]
+        self._aggregator: "str | dict" = simulation_config.get("aggregator", "mean")
         self._pop_size: int = int(algorithm_config.get("population_size", 20))
         self._max_gen: int = int(algorithm_config.get("number_of_generations", 5))
         self._prob_cx = float(algorithm_config.get("prob_cx", 0.8))
@@ -189,7 +190,8 @@ class NSGA2LoopStrategy(EngineStrategy):
 
         map_ind_metrics = self.mongo.generation_repo.get_simulations_metrics_by_individual(
             generation_id=self._generation_id,
-            metrics=self._objective_keys
+            metrics=self._objective_keys,
+            aggregator=self._aggregator,
         )
 
         n_obj = len(self._objective_keys)

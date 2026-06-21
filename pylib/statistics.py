@@ -158,6 +158,90 @@ STAT_DISPATCH: dict[str, StatFn] = {
     ),
 }
 
+# ---------------------------------------------------------------------------
+# Seed aggregator (Ψa) — used by generation repository to collapse per-seed
+# simulation results into a single objective value per individual.
+# ---------------------------------------------------------------------------
+
+AggregatorFn = Callable[[list[float], dict[str, Any]], float]
+
+
+def _agg_mean(values: list[float], params: dict[str, Any]) -> float:
+    if not values:
+        raise ValueError("Cannot aggregate empty list")
+    return sum(values) / len(values)
+
+
+def _agg_median(values: list[float], params: dict[str, Any]) -> float:
+    if not values:
+        raise ValueError("Cannot aggregate empty list")
+    s = sorted(values)
+    n = len(s)
+    mid = n // 2
+    return s[mid] if n % 2 else (s[mid - 1] + s[mid]) / 2.0
+
+
+def _agg_trimmed_mean(values: list[float], params: dict[str, Any]) -> float:
+    if not values:
+        raise ValueError("Cannot aggregate empty list")
+    trim = float(params.get("trim", 0.0))
+    if not (0.0 <= trim < 0.5):
+        raise ValueError(f"trim must be in [0, 0.5), got {trim}")
+    n = len(values)
+    k = int(np.floor(trim * n))
+    s = sorted(values)
+    trimmed = s[k: n - k] if k > 0 else s
+    if not trimmed:
+        return _agg_mean(values, {})
+    return sum(trimmed) / len(trimmed)
+
+
+def _agg_min(values: list[float], params: dict[str, Any]) -> float:
+    if not values:
+        raise ValueError("Cannot aggregate empty list")
+    return min(values)
+
+
+def _agg_max(values: list[float], params: dict[str, Any]) -> float:
+    if not values:
+        raise ValueError("Cannot aggregate empty list")
+    return max(values)
+
+
+AGGREGATOR_DISPATCH: dict[str, AggregatorFn] = {
+    "mean": _agg_mean,
+    "median": _agg_median,
+    "trimmed_mean": _agg_trimmed_mean,
+    "min": _agg_min,
+    "max": _agg_max,
+}
+
+
+def resolve_aggregator(spec: "str | dict[str, Any]") -> "tuple[str, dict[str, Any]]":
+    """Normalize aggregator spec to (kind, params).
+
+    'mean' → ('mean', {})
+    {'kind': 'trimmed_mean', 'trim': 0.1} → ('trimmed_mean', {'trim': 0.1})
+    Raises ValueError for unknown kinds.
+    """
+    if isinstance(spec, str):
+        kind, extra = spec, {}
+    elif isinstance(spec, dict):
+        kind = spec.get("kind", "mean")
+        extra = {k: v for k, v in spec.items() if k != "kind"}
+    else:
+        raise TypeError(f"aggregator spec must be str or dict, got {type(spec)}")
+    if kind not in AGGREGATOR_DISPATCH:
+        raise ValueError(f"Unknown aggregator '{kind}'. Valid: {list(AGGREGATOR_DISPATCH)}")
+    return kind, extra
+
+
+def aggregate_seed_values(values: list[float], aggregator: "str | dict[str, Any]" = "mean") -> float:
+    """Collapse a list of per-seed values into a single float using the given aggregator."""
+    kind, params = resolve_aggregator(aggregator)
+    return AGGREGATOR_DISPATCH[kind](values, params)
+
+
 def _evaluate_items(
     df: pd.DataFrame,
     items: list[dict[str, Any]],

@@ -69,6 +69,7 @@ class BatchStrategy(EngineStrategy):
         self._sim_rand_seeds: list[int] = resolve_simulation_seeds(
             simulation_config, self._rng, default_count=1
         )
+        self._aggregator: "str | dict" = simulation_config.get("aggregator", "mean")
 
         self._problem_adapter: ProblemAdapter = build_adapter(
             problem_config,
@@ -370,6 +371,7 @@ class BatchStrategy(EngineStrategy):
         map_ind_metrics = self.mongo.generation_repo.get_simulations_metrics_by_individual(
             generation_id=self._generation_id,
             metrics=self._objective_keys,
+            aggregator=self._aggregator,
         )
 
         n_obj = len(self._objective_keys)

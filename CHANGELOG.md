@@ -5,6 +5,32 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Phase 1 of the implementation plan
+
+### Added — alignment with the SimLab paper (article reproducibility)
+
+- **Random Search strategy** (`mo-engine/lib/strategy/random_search.py`):
+  baseline algorithm-agnostic generator referenced in §3.4 / Table 2 of the
+  paper, registered in `engine.py` under `parameters.strategy = "random_search"`.
+  Reuses the same genome cache and penalty-objectives mechanisms as NSGA-III.
+- **Example experiment payload** for the new strategy:
+  `debug/requests/post-random-search-experiment-p2.json`.
+- **Script-based baseline orchestrator** (`baseline/`): minimal shell + Docker
+  Compose pipeline that mirrors what §5.6 / Table 6 of the paper compares
+  against. Includes `run_baseline.sh` (SSH/SCP orchestration without state
+  machine, persistence, or resume), `docker-compose.baseline.yaml`
+  (10 standalone Cooja workers), and `prepare_workload.py` (generates the
+  30 × 50-mote workload from §5.2 using the same Cooja template the mo-engine
+  uses).
+- **External NSGA-III benchmark** (`experiments/external-nsga3-benchmark/`):
+  reproduction infrastructure for Table 3 of the paper, comparing the native
+  SimLab NSGA-III against DEAP and pymoo implementations on DTLZ2. Scripts
+  share a common DTLZ2 definition and HV / GD / IGD / Coverage metrics. DEAP
+  and pymoo remain **off-path dependencies** (in `experiments/.../requirements.txt`)
+  and are not pulled into the production Docker image.
+
+---
+
 ## [v1.0.0] – Initial Release (2025-10-12)
 
 ### Overview

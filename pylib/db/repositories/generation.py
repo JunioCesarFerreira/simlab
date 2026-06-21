@@ -96,12 +96,16 @@ class GenerationRepository:
     def get_simulations_metrics_by_individual(
         self,
         generation_id: ObjectId | str,
-        metrics: list[str]
+        metrics: list[str],
+        aggregator: "str | dict" = "mean",
     ) -> dict[str, dict[str, float]]:
         """
-        Returns a map: individual_id_hash → {metric_name → averaged value}
-        Averages over all DONE simulations belonging to the same individual
+        Returns a map: individual_id_hash → {metric_name → aggregated value}
+        Aggregates over all DONE simulations belonging to the same individual
         (multiple seeds per individual).
+
+        aggregator: str or dict following resolve_aggregator() convention.
+        Default "mean" preserves historical behaviour.
         """
         if isinstance(generation_id, str):
             try:
@@ -126,10 +130,18 @@ class GenerationRepository:
                 if m in metrics_map:
                     accumulated[ind_id].setdefault(m, []).append(float(metrics_map[m]))
 
-        # Average
+        # Aggregate per seed using Ψa
+        from pylib.statistics import resolve_aggregator, AGGREGATOR_DISPATCH
+        kind, params = resolve_aggregator(aggregator)
+        agg_fn = AGGREGATOR_DISPATCH[kind]
+
         result: dict[str, dict[str, float]] = {}
         for ind_id, metrics_vals in accumulated.items():
-            result[ind_id] = {m: sum(v) / len(v) for m, v in metrics_vals.items() if v}
+            if kind == "mean" and not params:
+                # Preserve original literal expression for bit-identical results.
+                result[ind_id] = {m: sum(v) / len(v) for m, v in metrics_vals.items() if v}
+            else:
+                result[ind_id] = {m: agg_fn(v, params) for m, v in metrics_vals.items() if v}
         return result
 
     def watch_status_waiting(self, on_change: Callable[[dict], None]):
