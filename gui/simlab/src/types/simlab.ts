@@ -184,6 +184,17 @@ export interface CampaignFullDto {
 }
 
 /* -------------------------------------------------------
+ * Experiment creation
+ * ----------------------------------------------------- */
+
+export interface ExperimentCreateDto {
+  name: string;
+  parameters: ParametersDto;
+  source_repository_options: Record<string, ID>;
+  data_conversion_config: DataConversionConfigDto;
+}
+
+/* -------------------------------------------------------
  * Source repository
  * ----------------------------------------------------- */
 

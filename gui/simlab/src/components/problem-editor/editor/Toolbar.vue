@@ -21,6 +21,8 @@
     <button :class="{ active: showConnectivity }" title="Connectivity Graph  [G] — sink + all candidates within reach" @click="editorStore.toggleConnectivity()">⬡</button>
     <button :class="{ active: showChromosomeConnectivity }" class="chrom" title="Chromosome Connectivity  [H] — sink + nodes active in current chromosome" @click="editorStore.toggleChromosomeConnectivity()">⬢</button>
     <button :class="{ active: showJson }" title="JSON Preview  [{ }]" @click="editorStore.toggleJsonPreview()">{ }</button>
+    <div class="separator" />
+    <button class="launch-btn" :disabled="!hasSink" :title="hasSink ? 'Lançar experimento' : 'Lançar experimento — posicione o sink primeiro'" @click="$emit('launch')">🚀</button>
   </div>
 </template>
 
@@ -30,7 +32,7 @@ import { useEditorStore, type EditorTool } from '../../../app/stores/editorStore
 import { useProblemStore } from '../../../app/stores/problemStore'
 import { hasCandidates, hasTargets } from '../../../types/problem'
 
-defineEmits<{ import: [] }>()
+defineEmits<{ import: []; launch: [] }>()
 
 const editorStore = useEditorStore()
 const problemStore = useProblemStore()
@@ -42,6 +44,7 @@ const candidatesEnabled = computed(() => hasCandidates(problemStore.draft.name))
 const targetsEnabled = computed(() => hasTargets(problemStore.draft.name))
 const relaysEnabled = computed(() => problemStore.draft.name === 'problem1')
 const chromosomePickEnabled = computed(() => ['problem2', 'problem3', 'problem4'].includes(problemStore.draft.name))
+const hasSink = computed(() => !!problemStore.draft.sink)
 
 const allTools: { id: EditorTool; icon: string; label: string; visibleWhen?: () => boolean }[] = [
   { id: 'select',           icon: '↖',  label: 'Select / Move  [S]' },
@@ -75,4 +78,8 @@ button.chrom.active { background: #8b5cf6; border-color: #8b5cf6; }
 button:disabled { opacity: 0.35; cursor: not-allowed; }
 .icon-btn { cursor: pointer; }
 .spacer { flex: 1; }
+.separator { width: 1px; height: 24px; background: var(--color-border); margin: 0 4px; }
+.launch-btn { width: auto; padding: 0 12px; gap: 6px; font-size: 13px; font-weight: 600; background: #16a34a; color: #fff; border-color: #16a34a; }
+.launch-btn:hover:not(:disabled) { background: #15803d; border-color: #15803d; }
+.launch-btn:disabled { background: var(--color-border); color: #94a3b8; border-color: #94a3b8; opacity: 0.5; }
 </style>

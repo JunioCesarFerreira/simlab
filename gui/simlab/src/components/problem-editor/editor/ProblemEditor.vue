@@ -1,6 +1,6 @@
 <template>
   <div class="problem-editor">
-    <Toolbar @import="showImport = true" />
+    <Toolbar @import="showImport = true" @launch="showLaunch = true" />
     <div class="editor-body">
       <PropertiesPanel class="sidebar" />
       <div class="canvas-area">
@@ -9,6 +9,16 @@
       </div>
     </div>
     <ImportPanel v-if="showImport" @close="showImport = false" />
+    <LaunchWizard
+      v-if="showLaunch"
+      @close="showLaunch = false"
+      @created="onExperimentCreated"
+    />
+    <PostLaunchDialog
+      v-if="createdExperimentId"
+      :experiment-id="createdExperimentId"
+      @close="createdExperimentId = null"
+    />
   </div>
 </template>
 
@@ -20,10 +30,19 @@ import PropertiesPanel from './PropertiesPanel.vue'
 import CanvasView from './CanvasView.vue'
 import JsonPreviewPanel from './JsonPreviewPanel.vue'
 import ImportPanel from './ImportPanel.vue'
+import LaunchWizard from '../launch/LaunchWizard.vue'
+import PostLaunchDialog from '../launch/PostLaunchDialog.vue'
 
 const editorStore = useEditorStore()
 const showImport = ref(false)
+const showLaunch = ref(false)
+const createdExperimentId = ref<string | null>(null)
 const showJson = computed(() => editorStore.showJsonPreview)
+
+function onExperimentCreated(experimentId: string) {
+  showLaunch.value = false
+  createdExperimentId.value = experimentId
+}
 </script>
 
 <style scoped>
