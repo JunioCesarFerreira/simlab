@@ -54,14 +54,14 @@ function setAll(value: 0 | 1) {
 
 <style scoped>
 .chrom-panel { display: flex; flex-direction: column; gap: 6px; }
-.list-header { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: #89b4fa; }
+.list-header { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--color-primary); }
 .bulk { display: flex; gap: 4px; }
-.bulk button.ghost { background: none; border: 1px dashed #45475a; color: #a6adc8; padding: 1px 6px; border-radius: 4px; cursor: pointer; font-size: 10px; }
+.bulk button.ghost { background: none; border: 1px dashed #d1d5db; color: var(--color-text-muted); padding: 1px 6px; border-radius: 4px; cursor: pointer; font-size: 10px; }
 .bulk button.ghost:disabled { opacity: 0.4; cursor: not-allowed; }
-.empty { font-size: 11px; color: #6c7086; text-align: center; padding: 6px 0; }
+.empty { font-size: 11px; color: #9ca3af; text-align: center; padding: 6px 0; }
 .row { display: grid; grid-template-columns: 16px 24px 1fr; gap: 5px; align-items: center; font-size: 11px; }
-.idx { color: #6c7086; }
-.coord { color: #a6adc8; font-family: monospace; }
-input[type="checkbox"] { accent-color: #89b4fa; }
-.err-msg { font-size: 10px; color: #f38ba8; }
+.idx { color: #9ca3af; }
+.coord { color: var(--color-text-muted); font-family: monospace; }
+input[type="checkbox"] { accent-color: var(--color-primary); }
+.err-msg { font-size: 10px; color: #ef4444; }
 </style>

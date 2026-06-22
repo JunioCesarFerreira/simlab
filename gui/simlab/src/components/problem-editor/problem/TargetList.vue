@@ -44,20 +44,20 @@ function update(id: string, axis: 'x' | 'y', value: number) {
 
 <style scoped>
 .target-list { display: flex; flex-direction: column; gap: 3px; }
-.list-header { font-size: 12px; color: #f9e2af; margin-bottom: 2px; }
-.empty { font-size: 11px; color: #6c7086; text-align: center; padding: 6px 0; }
+.list-header { font-size: 12px; color: #f59e0b; margin-bottom: 2px; }
+.empty { font-size: 11px; color: #9ca3af; text-align: center; padding: 6px 0; }
 .target-row {
   display: grid;
   grid-template-columns: 20px 1fr 1fr 18px;
   gap: 3px;
   align-items: center;
 }
-.idx { font-size: 10px; color: #6c7086; text-align: right; }
+.idx { font-size: 10px; color: #9ca3af; text-align: right; }
 input {
   padding: 2px 4px;
-  border: 1px solid #444;
-  background: #1e1e2e;
-  color: #cdd6f4;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
   border-radius: 4px;
   font-size: 11px;
   width: 100%;
@@ -66,7 +66,7 @@ input {
 button {
   background: none;
   border: none;
-  color: #f38ba8;
+  color: #ef4444;
   cursor: pointer;
   font-size: 11px;
   padding: 0;

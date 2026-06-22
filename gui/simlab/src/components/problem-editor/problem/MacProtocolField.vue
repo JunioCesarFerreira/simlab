@@ -29,8 +29,8 @@ function set(m: MacProtocol) {
 
 <style scoped>
 .mac-field { display: flex; flex-direction: column; gap: 3px; }
-.label { font-size: 12px; color: #a6adc8; }
-.options { display: flex; gap: 10px; font-size: 11px; color: #cdd6f4; }
+.label { font-size: 12px; color: var(--color-text-muted); }
+.options { display: flex; gap: 10px; font-size: 11px; color: var(--color-text); }
 .options label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
-input[type="radio"] { accent-color: #89b4fa; }
+input[type="radio"] { accent-color: var(--color-primary); }
 </style>

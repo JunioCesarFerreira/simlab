@@ -54,16 +54,16 @@ function describeSegment(seg: DraftSegment): string {
 .mobile-node-editor { display: flex; flex-direction: column; gap: 6px; }
 label { display: flex; flex-direction: column; font-size: 12px; gap: 2px; }
 label.inline { flex-direction: row; align-items: center; gap: 4px; }
-input:not([type=checkbox]) { padding: 3px 4px; border: 1px solid #444; background: #1e1e2e; color: #cdd6f4; border-radius: 4px; font-size: 11px; width: 100%; min-width: 0; }
+input:not([type=checkbox]) { padding: 3px 4px; border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); border-radius: 4px; font-size: 11px; width: 100%; min-width: 0; }
 .coord-row { display: grid; grid-template-columns: 28px 60px 60px; gap: 4px; align-items: center; }
-.axis-label { font-size: 10px; color: #6c7086; text-align: right; }
+.axis-label { font-size: 10px; color: #9ca3af; text-align: right; }
 .checkboxes { display: flex; gap: 12px; font-size: 12px; }
 .segments-section { margin-top: 4px; }
-.seg-header { font-size: 11px; color: #a6adc8; margin-bottom: 4px; }
-.segment-item { display: flex; align-items: center; gap: 6px; padding: 3px 6px; background: #313244; border-radius: 4px; font-size: 11px; margin-bottom: 3px; }
-.seg-type { color: #89b4fa; min-width: 44px; }
-.seg-desc { flex: 1; color: #a6adc8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.segment-item button { background: none; border: none; color: #f38ba8; cursor: pointer; font-size: 12px; padding: 0; }
-.empty { font-size: 11px; color: #6c7086; text-align: center; padding: 6px; }
-.no-selection { font-size: 12px; color: #6c7086; text-align: center; padding: 16px; }
+.seg-header { font-size: 11px; color: var(--color-text-muted); margin-bottom: 4px; }
+.segment-item { display: flex; align-items: center; gap: 6px; padding: 3px 6px; background: var(--color-border); border-radius: 4px; font-size: 11px; margin-bottom: 3px; }
+.seg-type { color: var(--color-primary); min-width: 44px; }
+.seg-desc { flex: 1; color: var(--color-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.segment-item button { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 12px; padding: 0; }
+.empty { font-size: 11px; color: #9ca3af; text-align: center; padding: 6px; }
+.no-selection { font-size: 12px; color: #9ca3af; text-align: center; padding: 16px; }
 </style>

@@ -132,14 +132,14 @@ function updateSink(axis: 'x' | 'y', value: number) {
 <style scoped>
 .problem-form { display: flex; flex-direction: column; gap: 6px; }
 label { display: flex; flex-direction: column; font-size: 12px; gap: 2px; }
-label.error > input { border-color: #f38ba8; }
-input, select { padding: 3px 4px; border: 1px solid #444; background: #1e1e2e; color: #cdd6f4; border-radius: 4px; font-size: 11px; width: 100%; min-width: 0; }
-fieldset { border: 1px solid #444; border-radius: 4px; padding: 6px; display: flex; flex-direction: column; gap: 4px; }
-fieldset.error { border-color: #f38ba8; }
-legend { font-size: 11px; color: #a6adc8; }
+label.error > input { border-color: #ef4444; }
+input, select { padding: 3px 4px; border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); border-radius: 4px; font-size: 11px; width: 100%; min-width: 0; }
+fieldset { border: 1px solid var(--color-border); border-radius: 4px; padding: 6px; display: flex; flex-direction: column; gap: 4px; }
+fieldset.error { border-color: #ef4444; }
+legend { font-size: 11px; color: var(--color-text-muted); }
 .region-row { display: grid; grid-template-columns: 14px 60px 60px; gap: 4px; align-items: center; }
-.axis-label { font-size: 10px; color: #6c7086; text-align: center; }
-.err-msg { font-size: 10px; color: #f38ba8; }
-.sink-warn { font-size: 11px; color: #fab387; background: #1e1e2e; border: 1px solid #fab38766; border-radius: 4px; padding: 3px 6px; }
-.danger { background: #f38ba8; color: #1e1e2e; border: none; padding: 5px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; margin-top: 4px; }
+.axis-label { font-size: 10px; color: #9ca3af; text-align: center; }
+.err-msg { font-size: 10px; color: #ef4444; }
+.sink-warn { font-size: 11px; color: #f97316; background: var(--color-surface); border: 1px solid #f9731666; border-radius: 4px; padding: 3px 6px; }
+.danger { background: #ef4444; color: var(--color-surface); border: none; padding: 5px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; margin-top: 4px; }
 </style>

@@ -61,28 +61,28 @@ function onFile(e: Event) {
 <style scoped>
 .import-panel {
   position: absolute; inset: 0;
-  background: #1e1e2e;
+  background: var(--color-surface);
   display: flex; flex-direction: column;
   z-index: 10;
 }
 .header {
   display: flex; align-items: center; padding: 10px 12px;
-  border-bottom: 1px solid #313244; flex-shrink: 0;
+  border-bottom: 1px solid var(--color-border); flex-shrink: 0;
 }
-.header span { flex: 1; font-size: 13px; font-weight: 600; color: #cdd6f4; }
-.close-btn { background: none; border: none; color: #f38ba8; cursor: pointer; font-size: 14px; }
+.header span { flex: 1; font-size: 13px; font-weight: 600; color: var(--color-text); }
+.close-btn { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 14px; }
 .body { flex: 1; display: flex; flex-direction: column; gap: 8px; padding: 12px; overflow: hidden; }
-.hint { font-size: 11px; color: #6c7086; }
-code { color: #a6adc8; }
+.hint { font-size: 11px; color: #9ca3af; }
+code { color: var(--color-text-muted); }
 textarea {
-  flex: 1; resize: none; background: #181825; color: #a6e3a1;
-  border: 1px solid #313244; border-radius: 4px;
+  flex: 1; resize: none; background: #f0f9ff; color: #1e40af;
+  border: 1px solid var(--color-border); border-radius: 4px;
   padding: 8px; font-size: 11px; font-family: 'Cascadia Code', monospace;
 }
-.error { font-size: 11px; color: #f38ba8; background: #1e1e2e; border: 1px solid #f38ba866; border-radius: 4px; padding: 4px 8px; }
-.success { font-size: 11px; color: #a6e3a1; }
+.error { font-size: 11px; color: #ef4444; background: var(--color-surface); border: 1px solid #ef444466; border-radius: 4px; padding: 4px 8px; }
+.success { font-size: 11px; color: #10b981; }
 .actions { display: flex; gap: 8px; flex-shrink: 0; }
-.actions button { flex: 1; padding: 5px; font-size: 12px; background: #313244; color: #cdd6f4; border: 1px solid #45475a; border-radius: 4px; cursor: pointer; }
-.actions button.primary { background: #89b4fa; color: #1e1e2e; border-color: #89b4fa; font-weight: 600; }
+.actions button { flex: 1; padding: 5px; font-size: 12px; background: var(--color-border); color: var(--color-text); border: 1px solid #d1d5db; border-radius: 4px; cursor: pointer; }
+.actions button.primary { background: var(--color-primary); color: var(--color-surface); border-color: var(--color-primary); font-weight: 600; }
 .actions button:disabled { opacity: 0.4; cursor: not-allowed; }
 </style>

@@ -51,13 +51,13 @@ function downloadJson() {
 </script>
 
 <style scoped>
-.json-preview { display: flex; flex-direction: column; height: 100%; background: #181825; }
-.header { display: flex; align-items: center; gap: 6px; padding: 8px 12px; background: #1e1e2e; border-bottom: 1px solid #313244; }
+.json-preview { display: flex; flex-direction: column; height: 100%; background: var(--color-bg); }
+.header { display: flex; align-items: center; gap: 6px; padding: 8px 12px; background: var(--color-surface); border-bottom: 1px solid var(--color-border); }
 .header span { flex: 1; font-size: 13px; font-weight: 600; }
-.header button { font-size: 11px; background: #313244; color: #cdd6f4; border: 1px solid #45475a; border-radius: 4px; padding: 3px 8px; cursor: pointer; }
+.header button { font-size: 11px; background: var(--color-border); color: var(--color-text); border: 1px solid #d1d5db; border-radius: 4px; padding: 3px 8px; cursor: pointer; }
 .header button:disabled { opacity: 0.4; cursor: not-allowed; }
-.close-btn { color: #f38ba8 !important; }
-.code { flex: 1; overflow: auto; padding: 12px; font-size: 11px; color: #a6e3a1; margin: 0; white-space: pre; font-family: 'Cascadia Code', 'Fira Code', monospace; }
+.close-btn { color: #ef4444 !important; }
+.code { flex: 1; overflow: auto; padding: 12px; font-size: 11px; color: #1e40af; margin: 0; white-space: pre; font-family: 'Cascadia Code', 'Fira Code', monospace; background: #f0f9ff; }
 .errors { padding: 12px; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
-.error-item { color: #fab387; font-size: 12px; padding: 4px 0; border-bottom: 1px solid #313244; }
+.error-item { color: #f97316; font-size: 12px; padding: 4px 0; border-bottom: 1px solid var(--color-border); }
 </style>

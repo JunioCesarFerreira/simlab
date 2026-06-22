@@ -31,7 +31,7 @@ const showJson = computed(() => editorStore.showJsonPreview)
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: #181825;
+  background: var(--color-bg);
   overflow: hidden;
 }
 .editor-body {
@@ -44,7 +44,7 @@ const showJson = computed(() => editorStore.showJsonPreview)
   min-width: 220px;
   max-width: 340px;
   flex-shrink: 0;
-  border-right: 1px solid #313244;
+  border-right: 1px solid var(--color-border);
   overflow: hidden;
 }
 .canvas-area {
@@ -60,7 +60,7 @@ const showJson = computed(() => editorStore.showJsonPreview)
   right: 0;
   bottom: 0;
   width: 420px;
-  border-left: 1px solid #313244;
+  border-left: 1px solid var(--color-border);
   z-index: 5;
 }
 </style>

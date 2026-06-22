@@ -38,11 +38,11 @@ function addNode() {
 <style scoped>
 .mobile-node-list { display: flex; flex-direction: column; gap: 4px; }
 .list-header { display: flex; justify-content: space-between; align-items: center; font-size: 12px; margin-bottom: 2px; }
-.list-header button { font-size: 11px; background: #a6e3a1; color: #1e1e2e; border: none; border-radius: 4px; padding: 2px 8px; cursor: pointer; }
-.node-item { display: flex; align-items: center; gap: 6px; padding: 5px 8px; background: #313244; border-radius: 4px; cursor: pointer; font-size: 12px; border: 1px solid transparent; }
-.node-item.active { background: #45475a; border-color: #89b4fa; }
+.list-header button { font-size: 11px; background: #10b981; color: var(--color-surface); border: none; border-radius: 4px; padding: 2px 8px; cursor: pointer; }
+.node-item { display: flex; align-items: center; gap: 6px; padding: 5px 8px; background: var(--color-border); border-radius: 4px; cursor: pointer; font-size: 12px; border: 1px solid transparent; }
+.node-item.active { background: #d1d5db; border-color: var(--color-primary); }
 .node-name { flex: 1; }
-.seg-count { color: #a6adc8; font-size: 11px; }
-.remove-btn { background: none; border: none; color: #f38ba8; cursor: pointer; font-size: 12px; padding: 0; }
-.empty { font-size: 12px; color: #6c7086; text-align: center; padding: 8px; }
+.seg-count { color: var(--color-text-muted); font-size: 11px; }
+.remove-btn { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 12px; padding: 0; }
+.empty { font-size: 12px; color: #9ca3af; text-align: center; padding: 8px; }
 </style>

@@ -82,31 +82,31 @@ function clear() {
 </script>
 
 <style scoped>
-.calibration-panel { border-top: 1px solid #313244; margin-top: 8px; padding-top: 6px; }
+.calibration-panel { border-top: 1px solid var(--color-border); margin-top: 8px; padding-top: 6px; }
 .section-title {
   display: flex; justify-content: space-between; align-items: center;
-  cursor: pointer; font-size: 12px; color: #89b4fa; padding: 2px 0;
+  cursor: pointer; font-size: 12px; color: var(--color-primary); padding: 2px 0;
   user-select: none;
 }
 .chevron { font-size: 10px; }
 .body { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
-.hint { font-size: 11px; color: #6c7086; line-height: 1.4; }
+.hint { font-size: 11px; color: #9ca3af; line-height: 1.4; }
 .row-label {
   display: grid; grid-template-columns: 60px 1fr; align-items: center; gap: 6px;
-  font-size: 11px; color: #a6adc8;
+  font-size: 11px; color: var(--color-text-muted);
 }
 input {
-  padding: 3px 6px; border: 1px solid #444;
-  background: #1e1e2e; color: #cdd6f4;
+  padding: 3px 6px; border: 1px solid var(--color-border);
+  background: var(--color-surface); color: var(--color-text);
   border-radius: 4px; font-size: 11px; width: 100%;
 }
 .actions { display: flex; gap: 6px; margin-top: 2px; }
 .actions button {
   flex: 1; font-size: 11px; padding: 4px;
-  background: #313244; color: #cdd6f4;
-  border: 1px solid #45475a; border-radius: 4px; cursor: pointer;
+  background: var(--color-border); color: var(--color-text);
+  border: 1px solid #d1d5db; border-radius: 4px; cursor: pointer;
 }
-.actions button.danger { color: #f38ba8; border-color: #f38ba8; }
-.status { font-size: 10px; color: #6c7086; margin-top: 2px; }
-.status.ok { color: #a6e3a1; }
+.actions button.danger { color: #ef4444; border-color: #ef4444; }
+.status { font-size: 10px; color: #9ca3af; margin-top: 2px; }
+.status.ok { color: #10b981; }
 </style>

@@ -49,10 +49,10 @@ const showTargets = computed(() => hasTargets(problemStore.draft.name))
 </script>
 
 <style scoped>
-.properties-panel { display: flex; flex-direction: column; height: 100%; background: #1e1e2e; overflow: hidden; }
-.tabs { display: flex; border-bottom: 1px solid #313244; flex-shrink: 0; }
-.tabs button { flex: 1; padding: 8px; font-size: 12px; background: none; border: none; color: #a6adc8; cursor: pointer; border-bottom: 2px solid transparent; }
-.tabs button.active { color: #89b4fa; border-bottom-color: #89b4fa; }
+.properties-panel { display: flex; flex-direction: column; height: 100%; background: var(--color-surface); overflow: hidden; }
+.tabs { display: flex; border-bottom: 1px solid var(--color-border); flex-shrink: 0; }
+.tabs button { flex: 1; padding: 8px; font-size: 12px; background: none; border: none; color: var(--color-text-muted); cursor: pointer; border-bottom: 2px solid transparent; }
+.tabs button.active { color: var(--color-primary); border-bottom-color: var(--color-primary); }
 .tab-content { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
-.divider { height: 1px; background: #313244; flex-shrink: 0; }
+.divider { height: 1px; background: var(--color-border); flex-shrink: 0; }
 </style>

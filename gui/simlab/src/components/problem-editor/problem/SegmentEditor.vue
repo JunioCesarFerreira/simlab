@@ -98,20 +98,20 @@ function addSegment() {
 </script>
 
 <style scoped>
-.segment-editor { border-top: 1px solid #313244; padding-top: 8px; margin-top: 4px; }
-.seg-title { font-size: 11px; color: #a6adc8; margin-bottom: 6px; }
+.segment-editor { border-top: 1px solid var(--color-border); padding-top: 8px; margin-top: 4px; }
+.seg-title { font-size: 11px; color: var(--color-text-muted); margin-bottom: 6px; }
 .tabs { display: flex; gap: 3px; margin-bottom: 8px; }
-.tabs button { flex: 1; font-size: 11px; padding: 3px; background: #313244; color: #cdd6f4; border: 1px solid #45475a; border-radius: 4px; cursor: pointer; }
-.tabs button.active { background: #89b4fa; color: #1e1e2e; border-color: #89b4fa; }
+.tabs button { flex: 1; font-size: 11px; padding: 3px; background: var(--color-border); color: var(--color-text); border: 1px solid #d1d5db; border-radius: 4px; cursor: pointer; }
+.tabs button.active { background: var(--color-primary); color: var(--color-surface); border-color: var(--color-primary); }
 .fields { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
 .coord-row { display: grid; grid-template-columns: 20px 60px 60px; gap: 4px; align-items: center; }
-.axis-label { font-size: 10px; color: #6c7086; text-align: center; }
+.axis-label { font-size: 10px; color: #9ca3af; text-align: center; }
 label { display: flex; flex-direction: column; font-size: 11px; gap: 2px; }
-label.error > input { border-color: #f38ba8; }
-input { padding: 3px 4px; border: 1px solid #444; background: #1e1e2e; color: #cdd6f4; border-radius: 4px; font-size: 11px; width: 100%; min-width: 0; }
-.err-msg { font-size: 10px; color: #f38ba8; line-height: 1.3; }
-.custom-hint { font-size: 10px; color: #6c7086; line-height: 1.5; }
-code { color: #a6adc8; font-size: 10px; }
-.add-btn { width: 100%; background: #89b4fa; color: #1e1e2e; border: none; border-radius: 4px; padding: 5px; cursor: pointer; font-size: 12px; font-weight: 600; }
+label.error > input { border-color: #ef4444; }
+input { padding: 3px 4px; border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); border-radius: 4px; font-size: 11px; width: 100%; min-width: 0; }
+.err-msg { font-size: 10px; color: #ef4444; line-height: 1.3; }
+.custom-hint { font-size: 10px; color: #9ca3af; line-height: 1.5; }
+code { color: var(--color-text-muted); font-size: 10px; }
+.add-btn { width: 100%; background: var(--color-primary); color: var(--color-surface); border: none; border-radius: 4px; padding: 5px; cursor: pointer; font-size: 12px; font-weight: 600; }
 .add-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 </style>

@@ -405,7 +405,7 @@ function drawConnectivityGraph(ctx: CanvasRenderingContext2D) {
   const nodes: NetNode[] = []
   if (problemStore.draft.sink) nodes.push(problemStore.draft.sink)
   for (const c of problemStore.draft.candidates) nodes.push({ x: c.x, y: c.y })
-  drawReachGraph(ctx, nodes, '#1a3a5c', 1.5)
+  drawReachGraph(ctx, nodes, '#bfdbfe', 1.5)
 }
 
 function drawChromosomeConnectivityGraph(ctx: CanvasRenderingContext2D) {
@@ -431,7 +431,7 @@ function drawChromosomeConnectivityGraph(ctx: CanvasRenderingContext2D) {
       nodes.push({ x: cands[idx]!.x, y: cands[idx]!.y })
     }
   }
-  drawReachGraph(ctx, nodes, '#cba6f7', 2)
+  drawReachGraph(ctx, nodes, '#8b5cf6', 2)
 }
 
 function drawGrid(ctx: CanvasRenderingContext2D) {
@@ -441,9 +441,9 @@ function drawGrid(ctx: CanvasRenderingContext2D) {
   const mag = Math.pow(10, Math.floor(Math.log10(rawStep)))
   const step = [1, 2, 5, 10].map(f => f * mag).find(s => span / s <= 10) ?? mag * 10
 
-  ctx.strokeStyle = '#2a2a3e'
+  ctx.strokeStyle = '#e5e7eb'
   ctx.lineWidth = 0.5
-  ctx.fillStyle = '#6c7086'
+  ctx.fillStyle = '#9ca3af'
   ctx.font = `${Math.max(9, Math.min(11, scale * 8))}px monospace`
   ctx.textAlign = 'center'
 
@@ -466,7 +466,7 @@ function drawGrid(ctx: CanvasRenderingContext2D) {
     ctx.fillText(String(Math.round(y)), labelX - 4, py + 3)
   }
 
-  ctx.strokeStyle = '#45475a'
+  ctx.strokeStyle = '#d1d5db'
   ctx.lineWidth = 1
   if (xmin <= 0 && 0 <= xmax) {
     const [px] = worldToCanvas(0, 0)
@@ -487,7 +487,7 @@ function drawRegionBorder(ctx: CanvasRenderingContext2D) {
   const [px1, py1] = worldToCanvas(xmin, ymax)
   const [px2, py2] = worldToCanvas(xmax, ymin)
   const active = !!regionDrag.value || !!hoveredHandle.value
-  ctx.strokeStyle = active ? '#cdd6f4' : '#89b4fa'
+  ctx.strokeStyle = active ? '#111827' : '#3b82f6'
   ctx.lineWidth = active ? 2 : 1.5
   ctx.setLineDash([5, 4])
   ctx.strokeRect(px1, py1, px2 - px1, py2 - py1)
@@ -498,9 +498,9 @@ function drawRegionBorder(ctx: CanvasRenderingContext2D) {
     const isActive = regionDrag.value?.handle === h || hoveredHandle.value === h
     ctx.beginPath()
     ctx.rect(hx - 4, hy - 4, 8, 8)
-    ctx.fillStyle = isActive ? '#cdd6f4' : '#89b4fa'
+    ctx.fillStyle = isActive ? '#111827' : '#3b82f6'
     ctx.fill()
-    ctx.strokeStyle = '#181825'
+    ctx.strokeStyle = '#f8fafc'
     ctx.lineWidth = 1
     ctx.stroke()
   }
@@ -515,9 +515,9 @@ function drawTargets(ctx: CanvasRenderingContext2D) {
     ctx.beginPath()
     ctx.moveTo(px, py - s); ctx.lineTo(px + s, py); ctx.lineTo(px, py + s); ctx.lineTo(px - s, py)
     ctx.closePath()
-    ctx.fillStyle = '#f9e2af'
+    ctx.fillStyle = '#f59e0b'
     ctx.fill()
-    ctx.strokeStyle = selected ? '#cba6f7' : '#1e1e2e'
+    ctx.strokeStyle = selected ? '#8b5cf6' : 'var(--color-surface)'
     ctx.lineWidth = selected ? 2.5 : 1
     ctx.stroke()
   }
@@ -535,15 +535,15 @@ function drawCandidates(ctx: CanvasRenderingContext2D) {
     const active = !!(mask && mask[i] === 1)
     ctx.beginPath()
     ctx.arc(px, py, selected ? 7 : active ? 6 : 5, 0, Math.PI * 2)
-    ctx.fillStyle = active ? '#89b4fa' : '#a6e3a1'
+    ctx.fillStyle = active ? 'var(--color-primary)' : '#10b981'
     ctx.fill()
-    ctx.strokeStyle = selected ? '#f9e2af' : active ? '#cdd6f4' : '#1e1e2e'
+    ctx.strokeStyle = selected ? '#f59e0b' : active ? '#111827' : '#ffffff'
     ctx.lineWidth = selected ? 2.5 : active ? 2 : 1
     ctx.stroke()
     if (active) {
       ctx.beginPath()
       ctx.arc(px, py, 10, 0, Math.PI * 2)
-      ctx.strokeStyle = '#89b4fa88'
+      ctx.strokeStyle = 'rgba(59,130,246,0.5)'
       ctx.lineWidth = 1.5
       ctx.stroke()
     }
@@ -561,13 +561,13 @@ function drawRelays(ctx: CanvasRenderingContext2D) {
     ctx.beginPath()
     ctx.moveTo(px, py - size); ctx.lineTo(px + size, py); ctx.lineTo(px, py + size); ctx.lineTo(px - size, py)
     ctx.closePath()
-    ctx.fillStyle = '#89b4fa'
+    ctx.fillStyle = '#3b82f6'
     ctx.fill()
-    ctx.strokeStyle = selected ? '#f9e2af' : '#cdd6f4'
+    ctx.strokeStyle = selected ? '#f59e0b' : '#111827'
     ctx.lineWidth = selected ? 2.5 : 1.5
     ctx.stroke()
     ctx.beginPath(); ctx.arc(px, py, 1.5, 0, Math.PI * 2)
-    ctx.fillStyle = '#1e1e2e'; ctx.fill()
+    ctx.fillStyle = '#ffffff'; ctx.fill()
   }
 }
 
@@ -582,15 +582,15 @@ function drawP4Route(ctx: CanvasRenderingContext2D) {
   }
   if (pts.length < 1) return
   ctx.save()
-  ctx.strokeStyle = '#cba6f7'; ctx.lineWidth = 2; ctx.setLineDash([8, 4])
+  ctx.strokeStyle = '#8b5cf6'; ctx.lineWidth = 2; ctx.setLineDash([8, 4])
   ctx.beginPath(); ctx.moveTo(pts[0]![0], pts[0]![1])
   for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i]![0], pts[i]![1])
   ctx.stroke(); ctx.setLineDash([])
-  drawArrowsAlongPath(ctx, pts, '#cba6f7', 2)
+  drawArrowsAlongPath(ctx, pts, '#8b5cf6', 2)
   ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center'
   pts.forEach(([x, y], i) => {
-    ctx.fillStyle = '#cba6f7'; ctx.beginPath(); ctx.arc(x + 10, y - 10, 8, 0, Math.PI * 2); ctx.fill()
-    ctx.fillStyle = '#1e1e2e'; ctx.fillText(String(i + 1), x + 10, y - 7)
+    ctx.fillStyle = '#8b5cf6'; ctx.beginPath(); ctx.arc(x + 10, y - 10, 8, 0, Math.PI * 2); ctx.fill()
+    ctx.fillStyle = '#ffffff'; ctx.fillText(String(i + 1), x + 10, y - 7)
   })
   ctx.restore()
 }
@@ -601,14 +601,14 @@ function drawSink(ctx: CanvasRenderingContext2D) {
   const [px, py] = worldToCanvas(sink.x, sink.y)
   const selected = editorStore.selected?.type === 'sink'
   const r = selected ? 11 : 9
-  ctx.strokeStyle = selected ? '#f9e2af' : '#f38ba8'
+  ctx.strokeStyle = selected ? '#f59e0b' : '#ef4444'
   ctx.lineWidth = selected ? 3 : 2.5
   ctx.beginPath(); ctx.moveTo(px - r, py); ctx.lineTo(px + r, py); ctx.stroke()
   ctx.beginPath(); ctx.moveTo(px, py - r); ctx.lineTo(px, py + r); ctx.stroke()
   ctx.beginPath(); ctx.arc(px, py, 6, 0, Math.PI * 2); ctx.stroke()
 }
 
-const ROUTE_COLORS = ['#ff4dc4', '#00e5ff', '#ff6b35', '#39ff14', '#ffe600', '#bf5fff']
+const ROUTE_COLORS = ['#2563eb', '#0891b2', '#d97706', '#16a34a', '#9333ea', '#dc2626']
 const ROUTE_DASHES = [[10, 5], [6, 4], [14, 4, 3, 4], [4, 4], [12, 3, 3, 3], [8, 6]]
 const ARROW_SPACING = 60
 
@@ -650,7 +650,7 @@ function drawMobileRoutes(ctx: CanvasRenderingContext2D) {
           ctx.setLineDash(dash); ctx.strokeStyle = color
         } else {
           ctx.setLineDash([])
-          ctx.fillStyle = '#f38ba8'; ctx.font = '11px monospace'; ctx.textAlign = 'left'
+          ctx.fillStyle = '#ef4444'; ctx.font = '11px monospace'; ctx.textAlign = 'left'
           ctx.fillText('⚠ expr', viewport.value.offX + 4, viewport.value.offY + 14)
           ctx.setLineDash(dash)
         }
@@ -730,7 +730,7 @@ function drawArrowsAlongPath(ctx: CanvasRenderingContext2D, pts: [number, number
 function drawPolylinePreview(ctx: CanvasRenderingContext2D) {
   const pts = polylinePoints.value
   if (pts.length === 0) return
-  ctx.strokeStyle = '#89b4fa'; ctx.lineWidth = 1.5
+  ctx.strokeStyle = '#3b82f6'; ctx.lineWidth = 1.5
   for (let i = 0; i < pts.length - 1; i++) {
     const [x1, y1] = worldToCanvas(pts[i]![0], pts[i]![1])
     const [x2, y2] = worldToCanvas(pts[i + 1]![0], pts[i + 1]![1])
@@ -743,7 +743,7 @@ function drawPolylinePreview(ctx: CanvasRenderingContext2D) {
   }
   for (const pt of pts) {
     const [px, py] = worldToCanvas(pt[0], pt[1])
-    ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI * 2); ctx.fillStyle = '#89b4fa'; ctx.fill()
+    ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI * 2); ctx.fillStyle = '#3b82f6'; ctx.fill()
   }
 }
 
@@ -754,19 +754,19 @@ function drawEllipsePreview(ctx: CanvasRenderingContext2D) {
   const [ex] = worldToCanvas(drag.current[0], drag.center[1])
   const [, ey] = worldToCanvas(drag.center[0], drag.current[1])
   const rx = Math.abs(ex - cpx); const ry = Math.abs(ey - cpy)
-  ctx.strokeStyle = '#89b4fa'; ctx.lineWidth = 1.5
+  ctx.strokeStyle = '#3b82f6'; ctx.lineWidth = 1.5
   if (rx > 1 && ry > 1) {
     ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.ellipse(cpx, cpy, rx, ry, 0, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([])
-    ctx.strokeStyle = '#45475a'; ctx.lineWidth = 0.5
+    ctx.strokeStyle = '#d1d5db'; ctx.lineWidth = 0.5
     ctx.beginPath(); ctx.moveTo(cpx, cpy); ctx.lineTo(ex, cpy); ctx.stroke()
     ctx.beginPath(); ctx.moveTo(cpx, cpy); ctx.lineTo(cpx, ey); ctx.stroke()
     const wx = Math.abs(drag.current[0] - drag.center[0])
     const wy = Math.abs(drag.current[1] - drag.center[1])
-    ctx.fillStyle = '#a6adc8'; ctx.font = '10px monospace'; ctx.textAlign = 'center'
+    ctx.fillStyle = '#6b7280'; ctx.font = '10px monospace'; ctx.textAlign = 'center'
     ctx.fillText(`rx=${Math.round(wx)}`, (cpx + ex) / 2, cpy - 5)
     ctx.textAlign = 'left'; ctx.fillText(`ry=${Math.round(wy)}`, cpx + 4, (cpy + ey) / 2)
   }
-  ctx.beginPath(); ctx.arc(cpx, cpy, 3, 0, Math.PI * 2); ctx.fillStyle = '#89b4fa'; ctx.fill()
+  ctx.beginPath(); ctx.arc(cpx, cpy, 3, 0, Math.PI * 2); ctx.fillStyle = '#3b82f6'; ctx.fill()
 }
 
 function drawMeasure(ctx: CanvasRenderingContext2D) {
@@ -778,7 +778,7 @@ function drawMeasure(ctx: CanvasRenderingContext2D) {
     if (editorStore.activeTool === 'measure' && hover.value) {
       const [hx, hy] = worldToCanvas(hover.value[0], hover.value[1])
       ctx.beginPath(); ctx.arc(hx, hy, 4, 0, Math.PI * 2)
-      ctx.strokeStyle = '#ffe600'; ctx.lineWidth = 1.5; ctx.stroke()
+      ctx.strokeStyle = '#d97706'; ctx.lineWidth = 1.5; ctx.stroke()
     }
     return
   }
@@ -788,7 +788,7 @@ function drawMeasure(ctx: CanvasRenderingContext2D) {
   const dist = Math.hypot(current[0] - liveAnchor[0], current[1] - liveAnchor[1])
   const locked = ms?.locked ?? false
 
-  ctx.strokeStyle = '#ffe600'; ctx.lineWidth = locked ? 2 : 1.5
+  ctx.strokeStyle = '#d97706'; ctx.lineWidth = locked ? 2 : 1.5
   ctx.setLineDash(locked ? [] : [6, 4])
   ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke(); ctx.setLineDash([])
 
@@ -800,19 +800,20 @@ function drawMeasure(ctx: CanvasRenderingContext2D) {
     ctx.beginPath(); ctx.moveTo(bx + nx, by + ny); ctx.lineTo(bx - nx, by - ny); ctx.stroke()
   }
 
-  ctx.beginPath(); ctx.arc(ax, ay, 4, 0, Math.PI * 2); ctx.fillStyle = '#ffe600'; ctx.fill()
-  ctx.beginPath(); ctx.arc(bx, by, 4, 0, Math.PI * 2); ctx.fillStyle = locked ? '#ffe600' : '#fff'; ctx.fill()
+  ctx.beginPath(); ctx.arc(ax, ay, 4, 0, Math.PI * 2); ctx.fillStyle = '#d97706'; ctx.fill()
+  ctx.beginPath(); ctx.arc(bx, by, 4, 0, Math.PI * 2); ctx.fillStyle = locked ? '#d97706' : '#fff'; ctx.fill()
 
   const midX = (ax + bx) / 2; const midY = (ay + by) / 2
   const label = `${dist.toFixed(1)} u`
   ctx.font = 'bold 13px monospace'
   const tw = ctx.measureText(label).width
-  ctx.fillStyle = 'rgba(24,24,37,0.8)'; ctx.fillRect(midX - tw / 2 - 5, midY - 11, tw + 10, 17)
-  ctx.fillStyle = '#ffe600'; ctx.textAlign = 'center'; ctx.fillText(label, midX, midY + 4)
+  ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.fillRect(midX - tw / 2 - 5, midY - 11, tw + 10, 17)
+  ctx.strokeStyle = '#e5e7eb'; ctx.lineWidth = 1; ctx.strokeRect(midX - tw / 2 - 5, midY - 11, tw + 10, 17)
+  ctx.fillStyle = '#92400e'; ctx.textAlign = 'center'; ctx.fillText(label, midX, midY + 4)
 
   if (locked && len > 20) {
     const dx = Math.abs(current[0] - liveAnchor[0]); const dy = Math.abs(current[1] - liveAnchor[1])
-    ctx.font = '10px monospace'; ctx.fillStyle = '#a6adc8'; ctx.textAlign = 'left'
+    ctx.font = '10px monospace'; ctx.fillStyle = '#6b7280'; ctx.textAlign = 'left'
     ctx.fillText(`Δx=${dx.toFixed(1)}  Δy=${dy.toFixed(1)}`, midX + 8, midY + 20)
   }
 }
@@ -826,7 +827,7 @@ function drawScaleCalibrate(ctx: CanvasRenderingContext2D) {
     if (editorStore.activeTool === 'scale-calibrate' && hover.value) {
       const [hx, hy] = worldToCanvas(hover.value[0], hover.value[1])
       ctx.beginPath(); ctx.arc(hx, hy, 4, 0, Math.PI * 2)
-      ctx.strokeStyle = '#00bfff'; ctx.lineWidth = 1.5; ctx.stroke()
+      ctx.strokeStyle = '#3b82f6'; ctx.lineWidth = 1.5; ctx.stroke()
     }
     return
   }
@@ -837,7 +838,7 @@ function drawScaleCalibrate(ctx: CanvasRenderingContext2D) {
   const locked = ms?.locked ?? false
   const len = Math.hypot(bx - ax, by - ay)
 
-  ctx.strokeStyle = '#00bfff'; ctx.lineWidth = locked ? 2.5 : 1.5
+  ctx.strokeStyle = '#3b82f6'; ctx.lineWidth = locked ? 2.5 : 1.5
   ctx.setLineDash(locked ? [] : [6, 4])
   ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke(); ctx.setLineDash([])
 
@@ -848,20 +849,21 @@ function drawScaleCalibrate(ctx: CanvasRenderingContext2D) {
     ctx.beginPath(); ctx.moveTo(bx + nx, by + ny); ctx.lineTo(bx - nx, by - ny); ctx.stroke()
   }
 
-  ctx.beginPath(); ctx.arc(ax, ay, 5, 0, Math.PI * 2); ctx.fillStyle = '#00bfff'; ctx.fill()
-  ctx.beginPath(); ctx.arc(bx, by, 5, 0, Math.PI * 2); ctx.fillStyle = locked ? '#00bfff' : '#ffffff'; ctx.fill()
+  ctx.beginPath(); ctx.arc(ax, ay, 5, 0, Math.PI * 2); ctx.fillStyle = '#3b82f6'; ctx.fill()
+  ctx.beginPath(); ctx.arc(bx, by, 5, 0, Math.PI * 2); ctx.fillStyle = locked ? '#3b82f6' : '#ffffff'; ctx.fill()
 
   if (!locked) {
     const midX = (ax + bx) / 2; const midY = (ay + by) / 2
     const label = `${dist.toFixed(1)} u`
     ctx.font = 'bold 13px monospace'
     const tw = ctx.measureText(label).width
-    ctx.fillStyle = 'rgba(24,24,37,0.85)'; ctx.fillRect(midX - tw / 2 - 5, midY - 11, tw + 10, 17)
-    ctx.fillStyle = '#00bfff'; ctx.textAlign = 'center'; ctx.fillText(label, midX, midY + 4)
+    ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.fillRect(midX - tw / 2 - 5, midY - 11, tw + 10, 17)
+    ctx.strokeStyle = '#e5e7eb'; ctx.lineWidth = 1; ctx.strokeRect(midX - tw / 2 - 5, midY - 11, tw + 10, 17)
+    ctx.fillStyle = '#1d4ed8'; ctx.textAlign = 'center'; ctx.fillText(label, midX, midY + 4)
   }
 
   if (locked && len > 4) {
-    ctx.strokeStyle = '#00bfff'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]); ctx.globalAlpha = 0.4
+    ctx.strokeStyle = '#3b82f6'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]); ctx.globalAlpha = 0.4
     ctx.beginPath()
     ctx.ellipse((ax + bx) / 2, (ay + by) / 2, len / 2 + 12, 12, Math.atan2(by - ay, bx - ax), 0, Math.PI * 2)
     ctx.stroke(); ctx.globalAlpha = 1; ctx.setLineDash([])
@@ -1106,40 +1108,42 @@ function isInputTarget(e: KeyboardEvent) {
 
 <style scoped>
 .canvas-wrapper {
-  position: relative; flex: 1; background: #181825; overflow: hidden; outline: none;
+  position: relative; flex: 1; background: var(--color-bg); overflow: hidden; outline: none;
 }
 canvas { display: block; width: 100%; height: 100%; }
 .coords {
   position: absolute; bottom: 8px; right: 12px;
-  font-size: 11px; color: #a6adc8; background: #1e1e2e99;
+  font-size: 11px; color: var(--color-text-muted); background: rgba(255,255,255,0.75);
   padding: 2px 8px; border-radius: 4px; pointer-events: none; font-family: monospace;
+  border: 1px solid var(--color-border);
 }
 .tool-hint {
   position: absolute; bottom: 8px; left: 12px;
-  font-size: 11px; color: #6c7086; background: #1e1e2e99;
+  font-size: 11px; color: #6b7280; background: rgba(255,255,255,0.75);
   padding: 2px 8px; border-radius: 4px; pointer-events: none; max-width: calc(100% - 160px);
+  border: 1px solid var(--color-border);
 }
-.tool-hint.warn { color: #fab387; }
+.tool-hint.warn { color: #f97316; }
 .calibration-toast {
   position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
-  background: #00bfff; color: #1e1e2e;
+  background: #3b82f6; color: var(--color-surface);
   padding: 6px 16px; border-radius: 20px; font-size: 12px; font-weight: 700;
   pointer-events: none; white-space: nowrap; z-index: 20;
 }
 .scale-input-overlay {
   position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-  background: #1e1e2e; border: 1.5px solid #00bfff; border-radius: 8px;
+  background: var(--color-surface); border: 1.5px solid #3b82f6; border-radius: 8px;
   padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; min-width: 240px;
   box-shadow: 0 8px 32px rgba(0,0,0,0.7), 0 0 0 9999px rgba(0,0,0,0.35); z-index: 9999;
 }
-.scale-label { font-size: 11px; color: #a6adc8; }
-.scale-dist-hint { font-size: 10px; color: #6c7086; font-family: monospace; }
+.scale-label { font-size: 11px; color: var(--color-text-muted); }
+.scale-dist-hint { font-size: 10px; color: #9ca3af; font-family: monospace; }
 .scale-input-overlay input {
-  padding: 5px 7px; border: 1px solid #00bfff; background: #313244; color: #cdd6f4;
+  padding: 5px 7px; border: 1px solid #3b82f6; background: var(--color-surface); color: var(--color-text);
   border-radius: 4px; font-size: 13px; width: 100%; box-sizing: border-box;
 }
 .scale-btns { display: flex; gap: 6px; }
 .scale-btns button { flex: 1; padding: 5px; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }
-.scale-btns .apply { background: #00bfff; color: #1e1e2e; }
-.scale-btns .cancel { background: #313244; color: #cdd6f4; border: 1px solid #45475a; }
+.scale-btns .apply { background: #3b82f6; color: var(--color-surface); }
+.scale-btns .cancel { background: var(--color-border); color: var(--color-text); border: 1px solid #d1d5db; }
 </style>

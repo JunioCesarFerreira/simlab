@@ -65,13 +65,13 @@ function addEmpty() {
 
 <style scoped>
 .chrom-panel { display: flex; flex-direction: column; gap: 6px; }
-.list-header { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: #89b4fa; }
-.list-header button.ghost { background: none; border: 1px dashed #45475a; color: #a6adc8; padding: 2px 6px; border-radius: 4px; cursor: pointer; font-size: 11px; }
+.list-header { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--color-primary); }
+.list-header button.ghost { background: none; border: 1px dashed #d1d5db; color: var(--color-text-muted); padding: 2px 6px; border-radius: 4px; cursor: pointer; font-size: 11px; }
 .list-header button.ghost:disabled { opacity: 0.4; cursor: not-allowed; }
-.empty { font-size: 11px; color: #6c7086; text-align: center; padding: 6px 0; }
+.empty { font-size: 11px; color: #9ca3af; text-align: center; padding: 6px 0; }
 .row { display: grid; grid-template-columns: 20px 1fr 1fr 18px; gap: 3px; align-items: center; }
-.idx { font-size: 10px; color: #6c7086; text-align: right; }
-input { padding: 2px 4px; border: 1px solid #444; background: #1e1e2e; color: #cdd6f4; border-radius: 4px; font-size: 11px; width: 100%; min-width: 0; }
-.remove { background: none; border: none; color: #f38ba8; cursor: pointer; font-size: 11px; padding: 0; line-height: 1; }
-.err-msg { font-size: 10px; color: #f38ba8; }
+.idx { font-size: 10px; color: #9ca3af; text-align: right; }
+input { padding: 2px 4px; border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); border-radius: 4px; font-size: 11px; width: 100%; min-width: 0; }
+.remove { background: none; border: none; color: #ef4444; cursor: pointer; font-size: 11px; padding: 0; line-height: 1; }
+.err-msg { font-size: 10px; color: #ef4444; }
 </style>

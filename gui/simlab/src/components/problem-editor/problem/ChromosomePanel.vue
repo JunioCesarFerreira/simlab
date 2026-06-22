@@ -56,10 +56,10 @@ function downloadJson() {
 
 <style scoped>
 .dispatcher { display: flex; flex-direction: column; gap: 8px; }
-.empty-state { text-align: center; padding: 20px 4px; color: #6c7086; font-size: 12px; display: flex; flex-direction: column; gap: 10px; }
+.empty-state { text-align: center; padding: 20px 4px; color: #9ca3af; font-size: 12px; display: flex; flex-direction: column; gap: 10px; }
 .empty-state p { line-height: 1.4; }
-button.primary { align-self: center; background: #89b4fa; color: #1e1e2e; border: none; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }
-.footer { display: flex; gap: 4px; margin-top: 6px; border-top: 1px solid #313244; padding-top: 8px; }
-.footer button { flex: 1; padding: 4px 6px; font-size: 11px; background: #313244; color: #cdd6f4; border: 1px solid #45475a; border-radius: 4px; cursor: pointer; }
-.footer button.danger { background: none; color: #f38ba8; border-color: #45475a; flex: 0 0 auto; padding: 4px 8px; }
+button.primary { align-self: center; background: var(--color-primary); color: var(--color-surface); border: none; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }
+.footer { display: flex; gap: 4px; margin-top: 6px; border-top: 1px solid var(--color-border); padding-top: 8px; }
+.footer button { flex: 1; padding: 4px 6px; font-size: 11px; background: var(--color-border); color: var(--color-text); border: 1px solid #d1d5db; border-radius: 4px; cursor: pointer; }
+.footer button.danger { background: none; color: #ef4444; border-color: #d1d5db; flex: 0 0 auto; padding: 4px 8px; }
 </style>
