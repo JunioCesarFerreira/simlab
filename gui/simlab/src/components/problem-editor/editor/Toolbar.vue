@@ -69,7 +69,7 @@ function loadImage(event: Event) {
 <style scoped>
 .toolbar { display: flex; align-items: center; gap: 4px; padding: 4px 10px; background: var(--color-surface); border-bottom: 1px solid var(--color-border); height: 44px; }
 .tool-group { display: flex; gap: 2px; }
-button, .icon-btn { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: var(--color-border); color: var(--color-text); border: 1px solid #d1d5db; border-radius: 6px; cursor: pointer; font-size: 15px; }
+button, .icon-btn { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: var(--color-border); color: #1e293b; border: 1px solid #94a3b8; border-radius: 6px; cursor: pointer; font-size: 15px; }
 button.active { background: var(--color-primary); color: var(--color-surface); border-color: var(--color-primary); }
 button.chrom.active { background: #8b5cf6; border-color: #8b5cf6; }
 button:disabled { opacity: 0.35; cursor: not-allowed; }
