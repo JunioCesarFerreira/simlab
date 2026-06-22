@@ -30,8 +30,8 @@ const showJson = computed(() => editorStore.showJsonPreview)
 .problem-editor {
   /* Scoped token overrides: medium cool-gray panels, distinct from the main app's pure white */
   --color-bg: #dce3ed;
-  --color-surface: #edf1f7;
-  --color-border: #b8c5d4;
+  --color-surface: #f3f6fb;
+  --color-border: #c8d4e2;
   --color-text: #0f172a;
   --color-text-muted: #4b5875;
   --color-primary-light: #dbeafe;
