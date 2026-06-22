@@ -28,12 +28,29 @@ const showJson = computed(() => editorStore.showJsonPreview)
 
 <style scoped>
 .problem-editor {
+  /* Scoped token overrides: medium cool-gray panels, distinct from the main app's pure white */
+  --color-bg: #dce3ed;
+  --color-surface: #edf1f7;
+  --color-border: #b8c5d4;
+  --color-text: #0f172a;
+  --color-text-muted: #4b5875;
+  --color-primary-light: #dbeafe;
+
   display: flex;
   flex-direction: column;
   height: 100%;
   background: var(--color-bg);
   overflow: hidden;
 }
+
+/* Inputs and selects stay white so they stand out from panel surfaces */
+.problem-editor :deep(input),
+.problem-editor :deep(select) {
+  background: #ffffff;
+  color: var(--color-text);
+  border-color: var(--color-border);
+}
+
 .editor-body {
   display: flex;
   flex: 1;
@@ -53,6 +70,7 @@ const showJson = computed(() => editorStore.showJsonPreview)
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  background: #f0f4f9;
 }
 .json-overlay {
   position: absolute;

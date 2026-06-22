@@ -441,9 +441,9 @@ function drawGrid(ctx: CanvasRenderingContext2D) {
   const mag = Math.pow(10, Math.floor(Math.log10(rawStep)))
   const step = [1, 2, 5, 10].map(f => f * mag).find(s => span / s <= 10) ?? mag * 10
 
-  ctx.strokeStyle = '#e5e7eb'
+  ctx.strokeStyle = '#c8d3e0'
   ctx.lineWidth = 0.5
-  ctx.fillStyle = '#9ca3af'
+  ctx.fillStyle = '#64748b'
   ctx.font = `${Math.max(9, Math.min(11, scale * 8))}px monospace`
   ctx.textAlign = 'center'
 
@@ -466,7 +466,7 @@ function drawGrid(ctx: CanvasRenderingContext2D) {
     ctx.fillText(String(Math.round(y)), labelX - 4, py + 3)
   }
 
-  ctx.strokeStyle = '#d1d5db'
+  ctx.strokeStyle = '#94a3b8'
   ctx.lineWidth = 1
   if (xmin <= 0 && 0 <= xmax) {
     const [px] = worldToCanvas(0, 0)
@@ -1108,20 +1108,20 @@ function isInputTarget(e: KeyboardEvent) {
 
 <style scoped>
 .canvas-wrapper {
-  position: relative; flex: 1; background: var(--color-bg); overflow: hidden; outline: none;
+  position: relative; flex: 1; background: #f0f4f9; overflow: hidden; outline: none;
 }
 canvas { display: block; width: 100%; height: 100%; }
 .coords {
   position: absolute; bottom: 8px; right: 12px;
-  font-size: 11px; color: var(--color-text-muted); background: rgba(255,255,255,0.75);
+  font-size: 11px; color: #4b5875; background: rgba(240,244,249,0.85);
   padding: 2px 8px; border-radius: 4px; pointer-events: none; font-family: monospace;
-  border: 1px solid var(--color-border);
+  border: 1px solid #b8c5d4;
 }
 .tool-hint {
   position: absolute; bottom: 8px; left: 12px;
-  font-size: 11px; color: #6b7280; background: rgba(255,255,255,0.75);
+  font-size: 11px; color: #4b5875; background: rgba(240,244,249,0.85);
   padding: 2px 8px; border-radius: 4px; pointer-events: none; max-width: calc(100% - 160px);
-  border: 1px solid var(--color-border);
+  border: 1px solid #b8c5d4;
 }
 .tool-hint.warn { color: #f97316; }
 .calibration-toast {
