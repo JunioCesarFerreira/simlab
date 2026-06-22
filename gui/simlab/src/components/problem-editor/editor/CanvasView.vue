@@ -390,10 +390,10 @@ function drawReachGraph(ctx: CanvasRenderingContext2D, nodes: NetNode[], color: 
   ctx.lineWidth = lineWidth
   for (let i = 0; i < nodes.length; i++) {
     for (let j = i + 1; j < nodes.length; j++) {
-      const d = Math.hypot(nodes[j].x - nodes[i].x, nodes[j].y - nodes[i].y)
+      const d = Math.hypot(nodes[j]!.x - nodes[i]!.x, nodes[j]!.y - nodes[i]!.y)
       if (d <= radiusOfReach) {
-        const [ax, ay] = worldToCanvas(nodes[i].x, nodes[i].y)
-        const [bx, by] = worldToCanvas(nodes[j].x, nodes[j].y)
+        const [ax, ay] = worldToCanvas(nodes[i]!.x, nodes[i]!.y)
+        const [bx, by] = worldToCanvas(nodes[j]!.x, nodes[j]!.y)
         ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke()
       }
     }
@@ -420,7 +420,7 @@ function drawChromosomeConnectivityGraph(ctx: CanvasRenderingContext2D) {
   } else if (chrom.kind === 'problem2' || chrom.kind === 'problem3') {
     const cands = problemStore.draft.candidates
     chrom.mask.forEach((bit, i) => {
-      if (bit === 1 && i < cands.length) nodes.push({ x: cands[i].x, y: cands[i].y })
+      if (bit === 1 && i < cands.length) nodes.push({ x: cands[i]!.x, y: cands[i]!.y })
     })
   } else if (chrom.kind === 'problem4') {
     const cands = problemStore.draft.candidates
@@ -428,7 +428,7 @@ function drawChromosomeConnectivityGraph(ctx: CanvasRenderingContext2D) {
     for (const idx of chrom.route) {
       if (idx < 0 || idx >= cands.length || seen.has(idx)) continue
       seen.add(idx)
-      nodes.push({ x: cands[idx].x, y: cands[idx].y })
+      nodes.push({ x: cands[idx]!.x, y: cands[idx]!.y })
     }
   }
   drawReachGraph(ctx, nodes, '#cba6f7', 2)
@@ -529,7 +529,7 @@ function drawCandidates(ctx: CanvasRenderingContext2D) {
   const hasMask = chrom && (chrom.kind === 'problem2' || chrom.kind === 'problem3')
   const mask = hasMask ? chrom.mask : null
   for (let i = 0; i < problemStore.draft.candidates.length; i++) {
-    const c = problemStore.draft.candidates[i]
+    const c = problemStore.draft.candidates[i]!
     const [px, py] = worldToCanvas(c.x, c.y)
     const selected = sel?.type === 'candidate' && sel.id === c.id
     const active = !!(mask && mask[i] === 1)
@@ -578,13 +578,13 @@ function drawP4Route(ctx: CanvasRenderingContext2D) {
   const pts: [number, number][] = []
   for (const idx of chrom.route) {
     if (idx < 0 || idx >= cands.length) continue
-    pts.push(worldToCanvas(cands[idx].x, cands[idx].y))
+    pts.push(worldToCanvas(cands[idx]!.x, cands[idx]!.y))
   }
   if (pts.length < 1) return
   ctx.save()
   ctx.strokeStyle = '#cba6f7'; ctx.lineWidth = 2; ctx.setLineDash([8, 4])
-  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1])
-  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1])
+  ctx.beginPath(); ctx.moveTo(pts[0]![0], pts[0]![1])
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i]![0], pts[i]![1])
   ctx.stroke(); ctx.setLineDash([])
   drawArrowsAlongPath(ctx, pts, '#cba6f7', 2)
   ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center'
@@ -614,8 +614,8 @@ const ARROW_SPACING = 60
 
 function drawMobileRoutes(ctx: CanvasRenderingContext2D) {
   problemStore.draft.mobileNodes.forEach((node, ni) => {
-    const color = ROUTE_COLORS[ni % ROUTE_COLORS.length]
-    const dash  = ROUTE_DASHES[ni % ROUTE_DASHES.length]
+    const color = ROUTE_COLORS[ni % ROUTE_COLORS.length]!
+    const dash  = ROUTE_DASHES[ni % ROUTE_DASHES.length]!
     const isActive = editorStore.activeNodeId === node.id
     const lw = isActive ? 3 : 2
 
@@ -643,8 +643,8 @@ function drawMobileRoutes(ctx: CanvasRenderingContext2D) {
         const pts = sampleCustomSegment(seg.exprX, seg.exprY, 80)
         if (pts && pts.length > 1) {
           const canvasPts = pts.map(([wx, wy]) => worldToCanvas(wx, wy))
-          ctx.beginPath(); ctx.moveTo(canvasPts[0][0], canvasPts[0][1])
-          for (let i = 1; i < canvasPts.length; i++) ctx.lineTo(canvasPts[i][0], canvasPts[i][1])
+          ctx.beginPath(); ctx.moveTo(canvasPts[0]![0], canvasPts[0]![1])
+          for (let i = 1; i < canvasPts.length; i++) ctx.lineTo(canvasPts[i]![0], canvasPts[i]![1])
           ctx.stroke(); ctx.setLineDash([])
           drawArrowsAlongPath(ctx, canvasPts, color, lw)
           ctx.setLineDash(dash); ctx.strokeStyle = color
@@ -659,7 +659,7 @@ function drawMobileRoutes(ctx: CanvasRenderingContext2D) {
 
     ctx.setLineDash([])
     if (node.segments.length > 0) {
-      const s = node.segments[0]
+      const s = node.segments[0]!
       const lx = s.type === 'line' ? s.start[0] : s.type === 'ellipse' ? s.center[0] : 0
       const ly = s.type === 'line' ? s.start[1] : s.type === 'ellipse' ? s.center[1] : 0
       const [lpx, lpy] = worldToCanvas(lx, ly)
@@ -709,20 +709,20 @@ function drawArrowsAlongEllipse(ctx: CanvasRenderingContext2D, cx: number, cy: n
 function drawArrowsAlongPath(ctx: CanvasRenderingContext2D, pts: [number, number][], color: string, lw: number) {
   const cumLen: number[] = [0]
   for (let i = 1; i < pts.length; i++) {
-    cumLen.push(cumLen[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]))
+    cumLen.push(cumLen[i - 1]! + Math.hypot(pts[i]![0] - pts[i - 1]![0], pts[i]![1] - pts[i - 1]![1]))
   }
-  const total = cumLen[cumLen.length - 1]
+  const total = cumLen[cumLen.length - 1]!
   if (total < ARROW_SPACING) return
   const count = Math.floor(total / ARROW_SPACING)
   for (let k = 1; k <= count; k++) {
     const target = (k / (count + 1)) * total
     let i = 1
-    while (i < cumLen.length - 1 && cumLen[i] < target) i++
-    const segLen = cumLen[i] - cumLen[i - 1]
-    const t = segLen > 0 ? (target - cumLen[i - 1]) / segLen : 0
-    const px = pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * t
-    const py = pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * t
-    const angle = Math.atan2(pts[i][1] - pts[i - 1][1], pts[i][0] - pts[i - 1][0])
+    while (i < cumLen.length - 1 && cumLen[i]! < target) i++
+    const segLen = cumLen[i]! - cumLen[i - 1]!
+    const t = segLen > 0 ? (target - cumLen[i - 1]!) / segLen : 0
+    const px = pts[i - 1]![0] + (pts[i]![0] - pts[i - 1]![0]) * t
+    const py = pts[i - 1]![1] + (pts[i]![1] - pts[i - 1]![1]) * t
+    const angle = Math.atan2(pts[i]![1] - pts[i - 1]![1], pts[i]![0] - pts[i - 1]![0])
     drawArrowHead(ctx, px, py, angle, color, 7 + lw)
   }
 }
@@ -732,12 +732,12 @@ function drawPolylinePreview(ctx: CanvasRenderingContext2D) {
   if (pts.length === 0) return
   ctx.strokeStyle = '#89b4fa'; ctx.lineWidth = 1.5
   for (let i = 0; i < pts.length - 1; i++) {
-    const [x1, y1] = worldToCanvas(pts[i][0], pts[i][1])
-    const [x2, y2] = worldToCanvas(pts[i + 1][0], pts[i + 1][1])
+    const [x1, y1] = worldToCanvas(pts[i]![0], pts[i]![1])
+    const [x2, y2] = worldToCanvas(pts[i + 1]![0], pts[i + 1]![1])
     ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke()
   }
   if (hover.value) {
-    const [x1, y1] = worldToCanvas(pts[pts.length - 1][0], pts[pts.length - 1][1])
+    const [x1, y1] = worldToCanvas(pts[pts.length - 1]![0], pts[pts.length - 1]![1])
     const [x2, y2] = worldToCanvas(hover.value[0], hover.value[1])
     ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); ctx.setLineDash([])
   }
@@ -1016,7 +1016,7 @@ function handleMouseUp(e: MouseEvent) {
     const pt: [number, number] = [snap(wx), snap(wy)]
     const prev = polylinePoints.value
     if (prev.length > 0) {
-      problemStore.addSegmentToNode(editorStore.activeNodeId, { type: 'line', start: prev[prev.length - 1], end: pt })
+      problemStore.addSegmentToNode(editorStore.activeNodeId, { type: 'line', start: prev[prev.length - 1]!, end: pt })
     }
     polylinePoints.value = [...prev, pt]
   }

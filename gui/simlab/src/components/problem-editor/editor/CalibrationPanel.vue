@@ -62,7 +62,8 @@ watch(() => editorStore.imageWorldBounds, (b) => {
 }, { immediate: true })
 
 function apply() {
-  const [a, b, c, d] = bounds.value.map(Number)
+  const nums = bounds.value.map(Number) as [number, number, number, number]
+  const [a, b, c, d] = nums
   if (isFinite(a) && isFinite(b) && isFinite(c) && isFinite(d) && a < c && b < d) {
     editorStore.setImageWorldBounds([a, b, c, d])
   }
