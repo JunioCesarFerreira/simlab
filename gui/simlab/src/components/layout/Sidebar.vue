@@ -17,6 +17,10 @@
         <span class="nav-icon">◈</span>
         Experiments
       </RouterLink>
+      <RouterLink to="/problems" class="nav-link">
+        <span class="nav-icon">⊙</span>
+        Problems
+      </RouterLink>
     </div>
   </nav>
 </template>

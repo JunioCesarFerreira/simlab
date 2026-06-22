@@ -15,6 +15,7 @@ const routes: RouteRecordRaw[] = [
     component: () => import("../../pages/ExperimentDetail.vue"),
     props: true,
   },
+  { path: "/problems", component: () => import("../../pages/ProblemEditor.vue") },
 ];
 
 export default createRouter({
