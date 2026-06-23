@@ -228,19 +228,26 @@ async function submit() {
 
   try {
     const experimentId = await createExperiment({
+      id: null,
       name: form.experiment.name.trim(),
+      status: 'Waiting',
+      system_message: null,
+      created_time: null,
+      start_time: null,
+      end_time: null,
+      generations: [],
       parameters: {
         strategy: form.experiment.strategy,
         algorithm: {
-          population_size:      form.experiment.populationSize,
+          population_size:       form.experiment.populationSize,
           number_of_generations: form.experiment.numberOfGenerations,
-          random_seed:          form.experiment.randomSeed,
-          prob_cx:              form.experiment.probCx,
-          prob_mt:              form.experiment.probMt,
-          per_gene_prob:        form.experiment.perGeneProb,
-          selection_method:     form.experiment.selectionMethod,
-          crossover_method:     form.experiment.crossoverMethod,
-          mutation_method:      form.experiment.mutationMethod,
+          random_seed:           form.experiment.randomSeed,
+          prob_cx:               form.experiment.probCx,
+          prob_mt:               form.experiment.probMt,
+          per_gene_prob:         form.experiment.perGeneProb,
+          selection_method:      form.experiment.selectionMethod,
+          crossover_method:      form.experiment.crossoverMethod,
+          mutation_method:       form.experiment.mutationMethod,
         },
         simulation: {
           duration:     form.simulation.duration,
@@ -251,6 +258,7 @@ async function submit() {
       },
       source_repository_options: {},
       data_conversion_config: form.dataConversion,
+      pareto_front: null,
     })
     emit('created', experimentId)
   } catch (e: unknown) {

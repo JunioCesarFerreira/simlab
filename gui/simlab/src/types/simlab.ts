@@ -185,13 +185,23 @@ export interface CampaignFullDto {
 
 /* -------------------------------------------------------
  * Experiment creation
+ * The POST /experiments/ endpoint expects the full experiment
+ * shape with id: null and server-controlled fields pre-set.
  * ----------------------------------------------------- */
 
 export interface ExperimentCreateDto {
+  id: null;
   name: string;
+  status: "Waiting";
+  system_message: null;
+  created_time: ISODateTime | null;
+  start_time: null;
+  end_time: null;
+  generations: [];
   parameters: ParametersDto;
   source_repository_options: Record<string, ID>;
   data_conversion_config: DataConversionConfigDto;
+  pareto_front: null;
 }
 
 /* -------------------------------------------------------
