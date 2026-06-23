@@ -21,6 +21,10 @@
         <span class="nav-icon">⊙</span>
         Problems
       </RouterLink>
+      <RouterLink to="/sources" class="nav-link">
+        <span class="nav-icon">⊛</span>
+        Sources
+      </RouterLink>
     </div>
   </nav>
 </template>
