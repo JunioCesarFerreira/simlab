@@ -72,14 +72,16 @@ function loadImage(event: Event) {
 <style scoped>
 .toolbar { display: flex; align-items: center; gap: 4px; padding: 4px 10px; background: var(--color-surface); border-bottom: 1px solid var(--color-border); height: 44px; }
 .tool-group { display: flex; gap: 2px; }
-button, .icon-btn { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: var(--color-border); color: #1e293b; border: 1px solid #94a3b8; border-radius: 6px; cursor: pointer; font-size: 15px; }
-button.active { background: var(--color-primary); color: var(--color-surface); border-color: var(--color-primary); }
+button, .icon-btn { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: var(--color-border); color: var(--color-text); border: 1px solid #94a3b8; border-radius: 6px; cursor: pointer; font-size: 15px; }
+button.active { background: var(--color-primary); color: #ffffff; border-color: var(--color-primary); }
 button.chrom.active { background: #8b5cf6; border-color: #8b5cf6; }
 button:disabled { opacity: 0.35; cursor: not-allowed; }
 .icon-btn { cursor: pointer; }
 .spacer { flex: 1; }
 .separator { width: 1px; height: 24px; background: var(--color-border); margin: 0 4px; }
-.launch-btn { width: auto; padding: 0 12px; gap: 6px; font-size: 13px; font-weight: 600; background: #16a34a; color: #fff; border-color: #16a34a; }
-.launch-btn:hover:not(:disabled) { background: #15803d; border-color: #15803d; }
-.launch-btn:disabled { background: var(--color-border); color: #94a3b8; border-color: #94a3b8; opacity: 0.5; }
+.launch-btn { width: auto; padding: 0 12px; gap: 6px; font-size: 13px; font-weight: 600; background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+.launch-btn:hover:not(:disabled) { background: #2563eb; border-color: #2563eb; }
+.launch-btn:disabled { background: var(--color-border); color: var(--color-text-muted); border-color: transparent; opacity: 0.5; }
+:global(html.dark) button:not(.active):not(.launch-btn),
+:global(html.dark) .icon-btn { border-color: #45475a; }
 </style>

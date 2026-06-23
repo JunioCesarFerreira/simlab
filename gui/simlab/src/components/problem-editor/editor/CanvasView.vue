@@ -46,10 +46,43 @@ import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useProblemStore } from '../../../app/stores/problemStore'
 import { useEditorStore } from '../../../app/stores/editorStore'
 import { sampleCustomSegment } from '../../../services/expressionEvaluator'
+import { useTheme } from '../../../composables/useTheme'
 import type { Region } from '../../../types/problem'
 
 const problemStore = useProblemStore()
 const editorStore = useEditorStore()
+const { isDark } = useTheme()
+
+/* Canvas colour palette — recomputed each draw() call so theme changes take effect immediately */
+interface CanvasColors {
+  canvasBg: string; grid: string; gridLabel: string; axis: string
+  regionActive: string; handleBorder: string; surface: string
+  nodeStroke: string; nodeStrokeEmph: string; connectivity: string
+  measureBg: string; measureBorder: string; measureText: string
+  scaleLabelText: string; dimText: string; ellipseAxis: string
+}
+let C: CanvasColors = buildColors(false)
+
+function buildColors(dark: boolean): CanvasColors {
+  return {
+    canvasBg:       dark ? '#181825' : '#f0f4f9',
+    grid:           dark ? '#313244' : '#c8d3e0',
+    gridLabel:      dark ? '#6c7086' : '#64748b',
+    axis:           dark ? '#45475a' : '#94a3b8',
+    regionActive:   dark ? '#cdd6f4' : '#111827',
+    handleBorder:   dark ? '#11111b' : '#f8fafc',
+    surface:        dark ? '#1e1e2e' : '#ffffff',
+    nodeStroke:     dark ? '#181825' : '#ffffff',
+    nodeStrokeEmph: dark ? '#cdd6f4' : '#111827',
+    connectivity:   dark ? 'rgba(137,180,250,0.30)' : '#bfdbfe',
+    measureBg:      dark ? 'rgba(30,30,46,0.95)' : 'rgba(255,255,255,0.95)',
+    measureBorder:  dark ? '#313244' : '#e5e7eb',
+    measureText:    dark ? '#f9e2af' : '#92400e',
+    scaleLabelText: dark ? '#89b4fa' : '#1d4ed8',
+    dimText:        dark ? '#6c7086' : '#6b7280',
+    ellipseAxis:    dark ? '#45475a' : '#d1d5db',
+  }
+}
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const wrapperRef = ref<HTMLDivElement | null>(null)
@@ -339,7 +372,9 @@ function draw() {
   const ctx = canvas.getContext('2d')!
   const { vw, vh, offX, offY } = viewport.value
 
-  ctx.clearRect(0, 0, canvasW.value, canvasH.value)
+  C = buildColors(isDark.value)
+  ctx.fillStyle = C.canvasBg
+  ctx.fillRect(0, 0, canvasW.value, canvasH.value)
 
   if (bgImage) {
     const calBounds = editorStore.imageWorldBounds
@@ -405,7 +440,7 @@ function drawConnectivityGraph(ctx: CanvasRenderingContext2D) {
   const nodes: NetNode[] = []
   if (problemStore.draft.sink) nodes.push(problemStore.draft.sink)
   for (const c of problemStore.draft.candidates) nodes.push({ x: c.x, y: c.y })
-  drawReachGraph(ctx, nodes, '#bfdbfe', 1.5)
+  drawReachGraph(ctx, nodes, C.connectivity, 1.5)
 }
 
 function drawChromosomeConnectivityGraph(ctx: CanvasRenderingContext2D) {
@@ -441,9 +476,9 @@ function drawGrid(ctx: CanvasRenderingContext2D) {
   const mag = Math.pow(10, Math.floor(Math.log10(rawStep)))
   const step = [1, 2, 5, 10].map(f => f * mag).find(s => span / s <= 10) ?? mag * 10
 
-  ctx.strokeStyle = '#c8d3e0'
+  ctx.strokeStyle = C.grid
   ctx.lineWidth = 0.5
-  ctx.fillStyle = '#64748b'
+  ctx.fillStyle = C.gridLabel
   ctx.font = `${Math.max(9, Math.min(11, scale * 8))}px monospace`
   ctx.textAlign = 'center'
 
@@ -466,7 +501,7 @@ function drawGrid(ctx: CanvasRenderingContext2D) {
     ctx.fillText(String(Math.round(y)), labelX - 4, py + 3)
   }
 
-  ctx.strokeStyle = '#94a3b8'
+  ctx.strokeStyle = C.axis
   ctx.lineWidth = 1
   if (xmin <= 0 && 0 <= xmax) {
     const [px] = worldToCanvas(0, 0)
@@ -487,7 +522,7 @@ function drawRegionBorder(ctx: CanvasRenderingContext2D) {
   const [px1, py1] = worldToCanvas(xmin, ymax)
   const [px2, py2] = worldToCanvas(xmax, ymin)
   const active = !!regionDrag.value || !!hoveredHandle.value
-  ctx.strokeStyle = active ? '#111827' : '#3b82f6'
+  ctx.strokeStyle = active ? C.regionActive : '#3b82f6'
   ctx.lineWidth = active ? 2 : 1.5
   ctx.setLineDash([5, 4])
   ctx.strokeRect(px1, py1, px2 - px1, py2 - py1)
@@ -498,9 +533,9 @@ function drawRegionBorder(ctx: CanvasRenderingContext2D) {
     const isActive = regionDrag.value?.handle === h || hoveredHandle.value === h
     ctx.beginPath()
     ctx.rect(hx - 4, hy - 4, 8, 8)
-    ctx.fillStyle = isActive ? '#111827' : '#3b82f6'
+    ctx.fillStyle = isActive ? C.regionActive : '#3b82f6'
     ctx.fill()
-    ctx.strokeStyle = '#f8fafc'
+    ctx.strokeStyle = C.handleBorder
     ctx.lineWidth = 1
     ctx.stroke()
   }
@@ -517,7 +552,7 @@ function drawTargets(ctx: CanvasRenderingContext2D) {
     ctx.closePath()
     ctx.fillStyle = '#f59e0b'
     ctx.fill()
-    ctx.strokeStyle = selected ? '#8b5cf6' : 'var(--color-surface)'
+    ctx.strokeStyle = selected ? '#8b5cf6' : C.surface
     ctx.lineWidth = selected ? 2.5 : 1
     ctx.stroke()
   }
@@ -537,7 +572,7 @@ function drawCandidates(ctx: CanvasRenderingContext2D) {
     ctx.arc(px, py, selected ? 7 : active ? 6 : 5, 0, Math.PI * 2)
     ctx.fillStyle = active ? 'var(--color-primary)' : '#10b981'
     ctx.fill()
-    ctx.strokeStyle = selected ? '#f59e0b' : active ? '#111827' : '#ffffff'
+    ctx.strokeStyle = selected ? '#f59e0b' : active ? C.nodeStrokeEmph : C.nodeStroke
     ctx.lineWidth = selected ? 2.5 : active ? 2 : 1
     ctx.stroke()
     if (active) {
@@ -563,11 +598,11 @@ function drawRelays(ctx: CanvasRenderingContext2D) {
     ctx.closePath()
     ctx.fillStyle = '#3b82f6'
     ctx.fill()
-    ctx.strokeStyle = selected ? '#f59e0b' : '#111827'
+    ctx.strokeStyle = selected ? '#f59e0b' : C.nodeStrokeEmph
     ctx.lineWidth = selected ? 2.5 : 1.5
     ctx.stroke()
     ctx.beginPath(); ctx.arc(px, py, 1.5, 0, Math.PI * 2)
-    ctx.fillStyle = '#ffffff'; ctx.fill()
+    ctx.fillStyle = C.nodeStroke; ctx.fill()
   }
 }
 
@@ -757,12 +792,12 @@ function drawEllipsePreview(ctx: CanvasRenderingContext2D) {
   ctx.strokeStyle = '#3b82f6'; ctx.lineWidth = 1.5
   if (rx > 1 && ry > 1) {
     ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.ellipse(cpx, cpy, rx, ry, 0, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([])
-    ctx.strokeStyle = '#d1d5db'; ctx.lineWidth = 0.5
+    ctx.strokeStyle = C.ellipseAxis; ctx.lineWidth = 0.5
     ctx.beginPath(); ctx.moveTo(cpx, cpy); ctx.lineTo(ex, cpy); ctx.stroke()
     ctx.beginPath(); ctx.moveTo(cpx, cpy); ctx.lineTo(cpx, ey); ctx.stroke()
     const wx = Math.abs(drag.current[0] - drag.center[0])
     const wy = Math.abs(drag.current[1] - drag.center[1])
-    ctx.fillStyle = '#6b7280'; ctx.font = '10px monospace'; ctx.textAlign = 'center'
+    ctx.fillStyle = C.dimText; ctx.font = '10px monospace'; ctx.textAlign = 'center'
     ctx.fillText(`rx=${Math.round(wx)}`, (cpx + ex) / 2, cpy - 5)
     ctx.textAlign = 'left'; ctx.fillText(`ry=${Math.round(wy)}`, cpx + 4, (cpy + ey) / 2)
   }
@@ -801,19 +836,19 @@ function drawMeasure(ctx: CanvasRenderingContext2D) {
   }
 
   ctx.beginPath(); ctx.arc(ax, ay, 4, 0, Math.PI * 2); ctx.fillStyle = '#d97706'; ctx.fill()
-  ctx.beginPath(); ctx.arc(bx, by, 4, 0, Math.PI * 2); ctx.fillStyle = locked ? '#d97706' : '#fff'; ctx.fill()
+  ctx.beginPath(); ctx.arc(bx, by, 4, 0, Math.PI * 2); ctx.fillStyle = locked ? '#d97706' : C.nodeStroke; ctx.fill()
 
   const midX = (ax + bx) / 2; const midY = (ay + by) / 2
   const label = `${dist.toFixed(1)} u`
   ctx.font = 'bold 13px monospace'
   const tw = ctx.measureText(label).width
-  ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.fillRect(midX - tw / 2 - 5, midY - 11, tw + 10, 17)
-  ctx.strokeStyle = '#e5e7eb'; ctx.lineWidth = 1; ctx.strokeRect(midX - tw / 2 - 5, midY - 11, tw + 10, 17)
-  ctx.fillStyle = '#92400e'; ctx.textAlign = 'center'; ctx.fillText(label, midX, midY + 4)
+  ctx.fillStyle = C.measureBg; ctx.fillRect(midX - tw / 2 - 5, midY - 11, tw + 10, 17)
+  ctx.strokeStyle = C.measureBorder; ctx.lineWidth = 1; ctx.strokeRect(midX - tw / 2 - 5, midY - 11, tw + 10, 17)
+  ctx.fillStyle = C.measureText; ctx.textAlign = 'center'; ctx.fillText(label, midX, midY + 4)
 
   if (locked && len > 20) {
     const dx = Math.abs(current[0] - liveAnchor[0]); const dy = Math.abs(current[1] - liveAnchor[1])
-    ctx.font = '10px monospace'; ctx.fillStyle = '#6b7280'; ctx.textAlign = 'left'
+    ctx.font = '10px monospace'; ctx.fillStyle = C.dimText; ctx.textAlign = 'left'
     ctx.fillText(`Δx=${dx.toFixed(1)}  Δy=${dy.toFixed(1)}`, midX + 8, midY + 20)
   }
 }
@@ -850,16 +885,16 @@ function drawScaleCalibrate(ctx: CanvasRenderingContext2D) {
   }
 
   ctx.beginPath(); ctx.arc(ax, ay, 5, 0, Math.PI * 2); ctx.fillStyle = '#3b82f6'; ctx.fill()
-  ctx.beginPath(); ctx.arc(bx, by, 5, 0, Math.PI * 2); ctx.fillStyle = locked ? '#3b82f6' : '#ffffff'; ctx.fill()
+  ctx.beginPath(); ctx.arc(bx, by, 5, 0, Math.PI * 2); ctx.fillStyle = locked ? '#3b82f6' : C.nodeStroke; ctx.fill()
 
   if (!locked) {
     const midX = (ax + bx) / 2; const midY = (ay + by) / 2
     const label = `${dist.toFixed(1)} u`
     ctx.font = 'bold 13px monospace'
     const tw = ctx.measureText(label).width
-    ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.fillRect(midX - tw / 2 - 5, midY - 11, tw + 10, 17)
-    ctx.strokeStyle = '#e5e7eb'; ctx.lineWidth = 1; ctx.strokeRect(midX - tw / 2 - 5, midY - 11, tw + 10, 17)
-    ctx.fillStyle = '#1d4ed8'; ctx.textAlign = 'center'; ctx.fillText(label, midX, midY + 4)
+    ctx.fillStyle = C.measureBg; ctx.fillRect(midX - tw / 2 - 5, midY - 11, tw + 10, 17)
+    ctx.strokeStyle = C.measureBorder; ctx.lineWidth = 1; ctx.strokeRect(midX - tw / 2 - 5, midY - 11, tw + 10, 17)
+    ctx.fillStyle = C.scaleLabelText; ctx.textAlign = 'center'; ctx.fillText(label, midX, midY + 4)
   }
 
   if (locked && len > 4) {
@@ -874,7 +909,7 @@ watch(
   [() => problemStore.draft, canvasW, canvasH, hover, polylinePoints, ellipseDrag,
     () => editorStore.selected, () => editorStore.imageWorldBounds,
     () => editorStore.showConnectivity, () => editorStore.showChromosomeConnectivity, hoveredHandle, regionDrag,
-    measureState, scaleCalibrateState],
+    measureState, scaleCalibrateState, isDark],
   () => draw(),
   { deep: true }
 )
@@ -1110,6 +1145,9 @@ function isInputTarget(e: KeyboardEvent) {
 .canvas-wrapper {
   position: relative; flex: 1; background: #f0f4f9; overflow: hidden; outline: none;
 }
+:global(html.dark) .canvas-wrapper {
+  background: #181825;
+}
 canvas { display: block; width: 100%; height: 100%; }
 .coords {
   position: absolute; bottom: 8px; right: 12px;
@@ -1117,16 +1155,22 @@ canvas { display: block; width: 100%; height: 100%; }
   padding: 2px 8px; border-radius: 4px; pointer-events: none; font-family: monospace;
   border: 1px solid #b8c5d4;
 }
+:global(html.dark) .coords {
+  color: #6c7086; background: rgba(24,24,37,0.88); border-color: #313244;
+}
 .tool-hint {
   position: absolute; bottom: 8px; left: 12px;
   font-size: 11px; color: #4b5875; background: rgba(240,244,249,0.85);
   padding: 2px 8px; border-radius: 4px; pointer-events: none; max-width: calc(100% - 160px);
   border: 1px solid #b8c5d4;
 }
+:global(html.dark) .tool-hint {
+  color: #6c7086; background: rgba(24,24,37,0.88); border-color: #313244;
+}
 .tool-hint.warn { color: #f97316; }
 .calibration-toast {
   position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
-  background: #3b82f6; color: var(--color-surface);
+  background: #3b82f6; color: #ffffff;
   padding: 6px 16px; border-radius: 20px; font-size: 12px; font-weight: 700;
   pointer-events: none; white-space: nowrap; z-index: 20;
 }
@@ -1137,13 +1181,13 @@ canvas { display: block; width: 100%; height: 100%; }
   box-shadow: 0 8px 32px rgba(0,0,0,0.7), 0 0 0 9999px rgba(0,0,0,0.35); z-index: 9999;
 }
 .scale-label { font-size: 11px; color: var(--color-text-muted); }
-.scale-dist-hint { font-size: 10px; color: #9ca3af; font-family: monospace; }
+.scale-dist-hint { font-size: 10px; color: var(--color-text-muted); font-family: monospace; }
 .scale-input-overlay input {
   padding: 5px 7px; border: 1px solid #3b82f6; background: var(--color-surface); color: var(--color-text);
   border-radius: 4px; font-size: 13px; width: 100%; box-sizing: border-box;
 }
 .scale-btns { display: flex; gap: 6px; }
 .scale-btns button { flex: 1; padding: 5px; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }
-.scale-btns .apply { background: #3b82f6; color: var(--color-surface); }
-.scale-btns .cancel { background: var(--color-border); color: var(--color-text); border: 1px solid #d1d5db; }
+.scale-btns .apply { background: #3b82f6; color: #ffffff; }
+.scale-btns .cancel { background: var(--color-border); color: var(--color-text); border: 1px solid var(--color-border); }
 </style>

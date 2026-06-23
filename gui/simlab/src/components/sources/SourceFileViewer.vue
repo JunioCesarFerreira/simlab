@@ -203,43 +203,71 @@ onUnmounted(() => document.removeEventListener('keydown', onKeyDown))
 
 /* Body */
 .viewer-body {
-  flex: 1; overflow: hidden;
-  display: flex; flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  /* Ensures the code background fills the entire body area including
+     any space below short files, preventing a colour flash on open. */
+  background: var(--hljs-code-bg);
 }
 
 .viewer-loading, .viewer-error {
   display: flex; align-items: center; justify-content: center;
   height: 120px;
   font-size: 13px; color: var(--color-text-muted);
+  background: var(--color-surface);
 }
-.viewer-error { color: #ef4444; }
+.viewer-error { color: var(--status-error); }
 
-/* Code area */
+/*
+ * Code area
+ *
+ * The gutter (line-numbers) and the code (code-pre) share the SAME
+ * background — var(--hljs-code-bg) inherited from .code-wrap.
+ *
+ * Why: CSS gives no reliable way to fill the entire scrollable height
+ * of an overflow:auto container with a child element's background.
+ * min-height:100% inside such a container resolves to the viewport
+ * height, not the scroll height, so below long-file content the
+ * container's own background bleeds into the gutter area, showing a
+ * different colour. The only robust fix is to unify the backgrounds and
+ * use border-right + muted text colour for visual gutter separation —
+ * the same pattern used by GitHub, GitLab, and VS Code's web viewer.
+ */
 .code-wrap {
   display: flex;
-  flex: 1; overflow: auto;
+  flex: 1;
+  overflow: auto;
+  background: var(--hljs-code-bg);
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-  font-size: 13px; line-height: 1.6;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .line-numbers {
-  display: flex; flex-direction: column;
+  display: flex;
+  flex-direction: column;
   padding: 16px 12px 16px 16px;
   text-align: right;
   min-width: 48px;
-  color: #94a3b8;
-  font-size: 12px; line-height: 1.6;
-  background: #f8fafc;
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+  /* font-size must match .code-pre exactly (13px × 1.6 = 20.8 px/line)
+     so line numbers stay aligned throughout the file */
+  font-size: 13px;
+  line-height: 1.6;
+  background: transparent;   /* unified with .code-wrap — no mismatch */
   border-right: 1px solid var(--color-border);
   user-select: none;
-  flex-shrink: 0;
 }
 
 .code-pre {
-  margin: 0; flex: 1;
+  margin: 0;
+  flex: 1;
   padding: 16px;
-  overflow: visible;
-  background: #fafbfc;
+  background: transparent;
+  color: var(--color-text);
 }
 
 .code-block {
@@ -247,24 +275,24 @@ onUnmounted(() => document.removeEventListener('keydown', onKeyDown))
   white-space: pre;
 }
 
-/* Highlight.js token overrides — light theme matching the GUI palette */
-:deep(.hljs-keyword)      { color: #0369a1; font-weight: 600; }
-:deep(.hljs-built_in)     { color: #0369a1; }
-:deep(.hljs-type)         { color: #7c3aed; }
-:deep(.hljs-literal)      { color: #059669; }
-:deep(.hljs-number)       { color: #d97706; }
-:deep(.hljs-operator)     { color: #475569; }
-:deep(.hljs-punctuation)  { color: #475569; }
-:deep(.hljs-string)       { color: #059669; }
-:deep(.hljs-comment)      { color: #94a3b8; font-style: italic; }
-:deep(.hljs-doctag)       { color: #94a3b8; font-style: italic; }
-:deep(.hljs-meta)         { color: #b45309; }          /* preprocessor directives */
-:deep(.hljs-meta .hljs-string) { color: #059669; }
-:deep(.hljs-title)        { color: #1d4ed8; font-weight: 600; }
-:deep(.hljs-title.function_) { color: #1d4ed8; font-weight: 600; }
-:deep(.hljs-params)       { color: #334155; }
-:deep(.hljs-variable)     { color: #334155; }
-:deep(.hljs-attr)         { color: #7c3aed; }
-:deep(.hljs-symbol)       { color: #dc2626; }
-:deep(.hljs-section)      { color: #1d4ed8; font-weight: 700; }  /* Makefile targets */
+/* Highlight.js token overrides — driven by CSS vars, theme-aware */
+:deep(.hljs-keyword)      { color: var(--hljs-keyword); font-weight: 600; }
+:deep(.hljs-built_in)     { color: var(--hljs-builtin); }
+:deep(.hljs-type)         { color: var(--hljs-type); }
+:deep(.hljs-literal)      { color: var(--hljs-literal); }
+:deep(.hljs-number)       { color: var(--hljs-number); }
+:deep(.hljs-operator)     { color: var(--hljs-operator); }
+:deep(.hljs-punctuation)  { color: var(--hljs-operator); }
+:deep(.hljs-string)       { color: var(--hljs-string); }
+:deep(.hljs-comment)      { color: var(--hljs-comment); font-style: italic; }
+:deep(.hljs-doctag)       { color: var(--hljs-comment); font-style: italic; }
+:deep(.hljs-meta)         { color: var(--hljs-meta); }
+:deep(.hljs-meta .hljs-string) { color: var(--hljs-string); }
+:deep(.hljs-title)        { color: var(--hljs-title); font-weight: 600; }
+:deep(.hljs-title.function_) { color: var(--hljs-title); font-weight: 600; }
+:deep(.hljs-params)       { color: var(--hljs-params); }
+:deep(.hljs-variable)     { color: var(--hljs-params); }
+:deep(.hljs-attr)         { color: var(--hljs-type); }
+:deep(.hljs-symbol)       { color: var(--hljs-symbol); }
+:deep(.hljs-section)      { color: var(--hljs-section); font-weight: 700; }
 </style>
