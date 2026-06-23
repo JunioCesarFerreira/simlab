@@ -753,14 +753,46 @@ class NSGA3LoopStrategy(EngineStrategy):
             self._finalize_experiment(system_msg=error_msg)
             return
 
-        R_F_list = [list(row) for row in p_previous.tolist()] + [list(row) for row in p_current.tolist()]
+        R_population = self._parents + self._current_population
+        R_objectives = (
+            [list(row) for row in p_previous.tolist()]
+            + [list(row) for row in p_current.tolist()]
+        )
 
-        fronts = fast_nondominated_sort(R_F_list)
+        self._parents = self._select_next_parents(R_population, R_objectives)
+        if self._parents is None:
+            return  # _finalize_experiment already called inside
+
+        offspring = self._run_genetic_algorithm()
+        self._current_population = offspring
+        self._generation_enqueue()
+
+        logger.info("[NSGA-III] Offspring enqueued; waiting for P_t results.")
+        return
+
+    def _select_next_parents(
+        self,
+        R_population: list,
+        R_objectives: "list[list[float]]",
+    ) -> "list | None":
+        """NSGA-III environmental selection: choose self._pop_size parents from
+        the union R = P_{t-1} ∪ P_t.
+
+        Returns the selected chromosome list, or **None** if selection failed.
+        **Contract for subclasses that return None:** the override MUST call
+        ``self._finalize_experiment()`` before returning None — the caller
+        (_evolution) checks for None and returns immediately without any further
+        state cleanup. Subclasses that never fail may simply never return None.
+
+        Subclasses override this to delegate sorting/niching to DEAP or pymoo
+        while keeping all MongoDB infrastructure from NSGA3LoopStrategy.
+        """
+        fronts = fast_nondominated_sort(R_objectives)
         if not fronts:
-            error_msg = "No fronts on union; aborting."
-            logger.exception(f"[NSGA-III] {error_msg}")
+            error_msg = "No fronts on union R_t; aborting."
+            logger.exception("[NSGA-III] %s", error_msg)
             self._finalize_experiment(system_msg=error_msg)
-            return
+            return None
 
         selected_idx: list[int] = []
         for front in fronts:
@@ -769,20 +801,13 @@ class NSGA3LoopStrategy(EngineStrategy):
             else:
                 remaining = self._pop_size - len(selected_idx)
                 if remaining > 0:
-                    partial = niching_selection(front, R_F_list, self._ref_points, remaining, self._ga_rng)
+                    partial = niching_selection(
+                        front, R_objectives, self._ref_points, remaining, self._ga_rng
+                    )
                     selected_idx.extend(partial)
                 break
 
-        self._parents = [self._current_population[idx - len(p_previous)]
-                         if idx >= len(p_previous) else self._parents[idx]
-                         for idx in selected_idx]
-
-        offspring = self._run_genetic_algorithm()
-        self._current_population = offspring
-        self._generation_enqueue()
-
-        logger.info("[NSGA-III] Offspring enqueued; waiting for P_t results.")
-        return
+        return [R_population[idx] for idx in selected_idx]
 
 
 # ---------------------------------------
