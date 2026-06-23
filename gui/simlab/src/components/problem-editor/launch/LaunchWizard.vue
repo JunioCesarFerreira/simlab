@@ -36,7 +36,13 @@
         <!-- Body -->
         <div class="modal-body">
           <Step1Problem v-if="currentStep === 1" />
-          <Step2Experiment v-else-if="currentStep === 2" v-model="form.experiment" />
+          <Step2Experiment
+            v-else-if="currentStep === 2"
+            v-model="form.experiment"
+            :repositories="repositories"
+            :repositories-loading="repositoriesLoading"
+            :show-validation="showValidation"
+          />
           <Step3Simulation v-else-if="currentStep === 3" v-model="form.simulation" :show-validation="showValidation" />
           <Step4Objectives v-else-if="currentStep === 4" v-model="form.objectives" :show-validation="showValidation" />
           <Step5DataConversion v-else-if="currentStep === 5" v-model="form.dataConversion" :show-validation="showValidation" />
@@ -80,11 +86,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useProblemStore } from '../../../app/stores/problemStore'
 import { exportProblem } from '../../../services/exportProblemJson'
 import { createExperiment } from '../../../api/experiments'
-import type { DataConversionConfigDto, JsonObject, ObjectiveItem } from '../../../types/simlab'
+import { getAllRepositories } from '../../../api/repositories'
+import type { DataConversionConfigDto, JsonObject, ObjectiveItem, SourceRepositoryDto } from '../../../types/simlab'
 
 import Step1Problem from './steps/Step1Problem.vue'
 import Step2Experiment from './steps/Step2Experiment.vue'
@@ -104,7 +111,7 @@ const problemStore = useProblemStore()
 const TOTAL_STEPS = 5
 const STEP_LABELS = [
   'Review the problem defined in the editor',
-  'Configure the experiment and algorithm',
+  'Configure the experiment, repository and algorithm',
   'Configure simulation parameters',
   'Define optimization objectives',
   'Configure data conversion',
@@ -116,6 +123,24 @@ const showValidation = ref(false)
 const submitting = ref(false)
 const submitError = ref<string | null>(null)
 
+// Source repositories loaded from API
+const repositories = ref<SourceRepositoryDto[]>([])
+const repositoriesLoading = ref(false)
+
+onMounted(async () => {
+  repositoriesLoading.value = true
+  try {
+    repositories.value = await getAllRepositories()
+  } catch {
+    // Non-fatal: user can still type a repo ID manually if select is empty
+  } finally {
+    repositoriesLoading.value = false
+  }
+})
+
+// Derive initial MAC protocol from the chromosome draft
+const initMacProtocol = problemStore.draft.chromosome?.macProtocol ?? 'csma'
+
 // Defaults from post-nsga3-experiment-p2.json
 const form = reactive<{
   experiment: Step2Value
@@ -126,6 +151,7 @@ const form = reactive<{
   experiment: {
     name: 'Performing optimization with NSGA-III on problem P2',
     strategy: 'nsga3',
+    sourceOptions: [{ protocol: initMacProtocol, repoId: '' }],
     populationSize: 50,
     numberOfGenerations: 10,
     randomSeed: 42,
@@ -176,7 +202,9 @@ const canProceed = computed((): boolean => {
     case 2: return (
       form.experiment.name.trim().length > 0 &&
       form.experiment.populationSize >= 2 &&
-      form.experiment.numberOfGenerations >= 1
+      form.experiment.numberOfGenerations >= 1 &&
+      form.experiment.sourceOptions.length > 0 &&
+      form.experiment.sourceOptions.every(o => o.protocol.trim().length > 0 && o.repoId.trim().length > 0)
     )
     case 3: return form.simulation.randomSeeds.length > 0 && form.simulation.duration >= 1
     case 4: return (
@@ -223,6 +251,12 @@ async function submit() {
     return
   }
 
+  // Build source_repository_options from the user's mappings
+  const sourceRepoOpts: Record<string, string> = {}
+  for (const { protocol, repoId } of form.experiment.sourceOptions) {
+    if (protocol && repoId) sourceRepoOpts[protocol] = repoId
+  }
+
   submitting.value = true
   submitError.value = null
 
@@ -256,7 +290,7 @@ async function submit() {
         problem: exported.problem as JsonObject,
         objectives: form.objectives,
       },
-      source_repository_options: {},
+      source_repository_options: sourceRepoOpts,
       data_conversion_config: form.dataConversion,
       pareto_front: null,
     })
