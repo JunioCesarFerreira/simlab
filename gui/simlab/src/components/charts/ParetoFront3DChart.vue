@@ -72,11 +72,14 @@ const { isDark } = useTheme();
 
 const chartEl = ref<HTMLElement | null>(null);
 let chart: echarts.ECharts | null = null;
+let ro: ResizeObserver | null = null;
 
 onMounted(() => {
   if (!chartEl.value) return;
   // echarts-gl requires canvas (WebGL) renderer — never use svg here
   chart = echarts.init(chartEl.value);
+  ro = new ResizeObserver(() => chart?.resize());
+  ro.observe(chartEl.value);
   buildOption();
   chart.on("click", (params: Record<string, unknown>) => {
     const data = params.data as Point3D | undefined;
@@ -90,6 +93,8 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  ro?.disconnect();
+  ro = null;
   chart?.dispose();
   chart = null;
 });
@@ -243,11 +248,12 @@ function buildOption() {
 
   const dark = isDark.value;
 
-  const axisColor = dark ? "#45475a" : "#94a3b8";
+  const axisColor  = dark ? "#45475a" : "#c0cad8";
   const labelColor = dark ? "#7f849c" : "#64748b";
   const nameColor  = dark ? "#a6adc8" : "#374151";
-  const splitColor = dark ? "#313244" : "#e5e7eb";
-  const bgColor    = dark ? "#181825" : "#f0f4f9";
+  const splitColor = dark ? "#313244" : "#dde3eb";
+  const bgColor    = dark ? "#181825" : "#ffffff";
+  const envColor   = dark ? "#181825" : "#ffffff";
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const axisConfig = (name: string): any => ({
@@ -269,8 +275,8 @@ function buildOption() {
       data: populationData.value,
       symbolSize: 5,
       itemStyle: {
-        color: dark ? "#585b70" : "#94a3b8",
-        opacity: 0.45,
+        color: dark ? "#585b70" : "#b0bac8",
+        opacity: dark ? 0.45 : 0.5,
       },
       emphasis: {
         itemStyle: { color: dark ? "#7f849c" : "#64748b", opacity: 0.9 },
@@ -346,15 +352,17 @@ function buildOption() {
       splitArea: { show: false },
       light: {
         main: {
-          intensity: dark ? 0.7 : 1.1,
-          shadow: true,
-          shadowQuality: "high",
+          intensity: dark ? 0.7 : 1.0,
+          // Shadows look dramatic and dark on white backgrounds — disable in light
+          shadow: dark,
+          shadowQuality: "medium",
         },
         ambient: {
-          intensity: dark ? 0.4 : 0.3,
+          // High ambient in light mode fills shadows and keeps the scene bright
+          intensity: dark ? 0.4 : 0.8,
         },
       },
-      environment: bgColor,
+      environment: envColor,
       viewControl: {
         autoRotate: false,
         rotateSensitivity: 1.5,
@@ -367,8 +375,9 @@ function buildOption() {
         maxDistance: 600,
       },
       postEffect: {
-        enable: true,
-        SSAO: { enable: true, radius: 2, intensity: 1.2, quality: "medium" },
+        enable: dark,
+        // SSAO (ambient occlusion) darkens concavities — looks dirty on white
+        SSAO: { enable: dark, radius: 2, intensity: dark ? 1.0 : 0, quality: "medium" },
       },
     },
     xAxis3D: axisConfig(xKey.value),
