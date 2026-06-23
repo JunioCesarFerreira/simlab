@@ -11,6 +11,8 @@ from lib.strategy.nsga3 import NSGA3LoopStrategy
 from lib.strategy.nsga2 import NSGA2LoopStrategy
 from lib.strategy.batch import BatchStrategy
 from lib.strategy.random_search import RandomSearchStrategy
+from lib.strategy.nsga3_deap import NSGA3DeapStrategy
+from lib.strategy.nsga3_pymoo import NSGA3PymooStrategy
 
 # --------------------------- Logging --------------------------------
 logging.basicConfig(
@@ -40,6 +42,10 @@ def select_strategy(exp_doc: dict) -> EngineStrategy:
         return BatchStrategy(exp_doc, mongo)
     if exp_type == "random_search":
         return RandomSearchStrategy(exp_doc, mongo)
+    if exp_type == "nsga3_deap":
+        return NSGA3DeapStrategy(exp_doc, mongo)
+    if exp_type == "nsga3_pymoo":
+        return NSGA3PymooStrategy(exp_doc, mongo)
     raise ValueError(f"[mo-engine] Experiment type unknown: {exp_type}")
 
 
