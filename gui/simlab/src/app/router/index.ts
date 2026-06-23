@@ -16,6 +16,12 @@ const routes: RouteRecordRaw[] = [
     props: true,
   },
   { path: "/problems", component: () => import("../../pages/ProblemEditor.vue") },
+  { path: "/sources", component: () => import("../../pages/SourceRepositoriesList.vue") },
+  {
+    path: "/sources/:id",
+    component: () => import("../../pages/SourceRepositoryDetail.vue"),
+    props: true,
+  },
 ];
 
 export default createRouter({
