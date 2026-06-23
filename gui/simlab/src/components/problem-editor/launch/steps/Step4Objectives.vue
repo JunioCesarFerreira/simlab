@@ -1,8 +1,8 @@
 <template>
   <div class="step">
     <p class="hint">
-      Defina as métricas que o algoritmo deve otimizar. Cada objetivo mapeia para uma métrica calculada
-      a partir dos logs de simulação (configurada no passo seguinte).
+      Define the metrics the algorithm must optimize. Each objective maps to a metric calculated
+      from the simulation logs (configured in the next step).
     </p>
 
     <div class="objectives-list">
@@ -11,7 +11,7 @@
         <input
           :value="obj.metric_name"
           type="text"
-          placeholder="ex: energy, coverage, latency"
+          placeholder="e.g. energy, coverage, latency"
           list="metric-suggestions"
           class="obj-name"
           :class="{ invalid: showValidation && !obj.metric_name.trim() }"
@@ -22,26 +22,26 @@
           class="obj-goal"
           @change="updateObj(i, 'goal', ($event.target as HTMLSelectElement).value)"
         >
-          <option value="min">Minimizar</option>
-          <option value="max">Maximizar</option>
+          <option value="min">Minimize</option>
+          <option value="max">Maximize</option>
         </select>
-        <button class="remove-btn" :disabled="modelValue.length <= 1" @click="remove(i)" title="Remover">×</button>
+        <button class="remove-btn" :disabled="modelValue.length <= 1" @click="remove(i)" title="Remove">×</button>
       </div>
     </div>
 
     <datalist id="metric-suggestions">
       <option value="energy" />
-      <option value="coverage" />
       <option value="latency" />
-      <option value="packet_loss" />
       <option value="throughput" />
+      <option value="coverage" />
+      <option value="packet_loss" />
       <option value="lifetime" />
     </datalist>
 
-    <button class="add-btn" @click="add">+ Adicionar objetivo</button>
+    <button class="add-btn" @click="add">+ Add objective</button>
 
     <span v-if="showValidation && hasEmpty" class="err">
-      Todos os objetivos precisam ter um nome de métrica.
+      All objectives must have a metric name.
     </span>
   </div>
 </template>

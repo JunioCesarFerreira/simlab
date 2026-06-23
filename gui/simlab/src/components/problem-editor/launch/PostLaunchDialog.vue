@@ -1,45 +1,43 @@
 <template>
   <Teleport to="body">
     <div class="backdrop" @click.self="close">
-      <div class="modal" role="dialog" aria-modal="true" aria-label="Experimento criado">
+      <div class="modal" role="dialog" aria-modal="true" aria-label="Experiment created">
 
         <div class="success-header">
           <span class="check-icon">✓</span>
           <div>
-            <h2 class="title">Experimento criado!</h2>
+            <h2 class="title">Experiment created!</h2>
             <p class="exp-id">ID: <span class="mono">{{ experimentId }}</span></p>
           </div>
         </div>
 
         <!-- Campaign assignment -->
         <div class="section">
-          <p class="section-label">Deseja adicionar a uma campanha?</p>
+          <p class="section-label">Would you like to add it to a campaign?</p>
 
           <div class="campaign-options">
-            <!-- Add to existing -->
             <div class="option-card" :class="{ selected: mode === 'existing' }" @click="mode = 'existing'">
               <span class="option-radio" />
               <div>
-                <div class="option-title">Campanha existente</div>
-                <div class="option-sub">Selecione uma campanha já criada</div>
+                <div class="option-title">Existing campaign</div>
+                <div class="option-sub">Select a campaign already created</div>
               </div>
             </div>
-            <!-- Create new -->
             <div class="option-card" :class="{ selected: mode === 'new' }" @click="mode = 'new'">
               <span class="option-radio" />
               <div>
-                <div class="option-title">Nova campanha</div>
-                <div class="option-sub">Crie uma campanha e adicione o experimento</div>
+                <div class="option-title">New campaign</div>
+                <div class="option-sub">Create a campaign and add this experiment</div>
               </div>
             </div>
           </div>
 
           <!-- Existing campaign select -->
           <div v-if="mode === 'existing'" class="sub-form">
-            <div v-if="loadingCampaigns" class="loading-text">Carregando campanhas…</div>
-            <div v-else-if="campaigns.length === 0" class="empty-text">Nenhuma campanha disponível.</div>
+            <div v-if="loadingCampaigns" class="loading-text">Loading campaigns…</div>
+            <div v-else-if="campaigns.length === 0" class="empty-text">No campaigns available.</div>
             <select v-else v-model="selectedCampaignId" class="field-select">
-              <option value="">Selecione uma campanha…</option>
+              <option value="">Select a campaign…</option>
               <option v-for="c in campaigns" :key="c.id" :value="c.id">
                 {{ c.name }} ({{ c.experiment_count }} exp.)
               </option>
@@ -51,13 +49,13 @@
             <input
               v-model="newCampaignName"
               type="text"
-              placeholder="Nome da campanha *"
+              placeholder="Campaign name *"
               class="field-input"
             />
             <input
               v-model="newCampaignDesc"
               type="text"
-              placeholder="Descrição (opcional)"
+              placeholder="Description (optional)"
               class="field-input"
             />
           </div>
@@ -66,16 +64,16 @@
         <div v-if="assignError" class="err-banner">{{ assignError }}</div>
 
         <div class="footer">
-          <button class="btn-secondary" @click="navigateToExperiment">Ver experimento →</button>
+          <button class="btn-secondary" @click="navigateToExperiment">View experiment →</button>
           <button
             v-if="mode === 'existing' || mode === 'new'"
             class="btn-primary"
             :disabled="!canAssign || assigning"
             @click="assignToCampaign"
           >
-            {{ assigning ? 'Adicionando…' : 'Adicionar à campanha' }}
+            {{ assigning ? 'Adding…' : 'Add to campaign' }}
           </button>
-          <button class="btn-secondary" @click="close">Fechar</button>
+          <button class="btn-secondary" @click="close">Close</button>
         </div>
 
       </div>
@@ -114,7 +112,7 @@ onMounted(async () => {
   try {
     campaigns.value = await getAllCampaigns()
   } catch {
-    // silently ignore — user can still create a new one
+    // silently ignore — user can still create a new campaign
   } finally {
     loadingCampaigns.value = false
   }
@@ -137,7 +135,7 @@ async function assignToCampaign() {
     router.push(`/campaigns/${campaignId}`)
     emit('close')
   } catch (e: unknown) {
-    assignError.value = e instanceof Error ? e.message : 'Erro ao adicionar à campanha.'
+    assignError.value = e instanceof Error ? e.message : 'Failed to add to campaign.'
   } finally {
     assigning.value = false
   }

@@ -1,18 +1,18 @@
 <template>
   <Teleport to="body">
     <div class="backdrop" @click.self="requestClose">
-      <div class="modal" role="dialog" aria-modal="true" :aria-label="`Lançar experimento — passo ${currentStep} de ${TOTAL_STEPS}`">
+      <div class="modal" role="dialog" aria-modal="true" :aria-label="`Launch experiment — step ${currentStep} of ${TOTAL_STEPS}`">
 
         <!-- Header -->
         <div class="modal-header">
           <div class="header-title">
             <span class="header-icon">🚀</span>
             <div>
-              <h2 class="title">Lançar experimento</h2>
+              <h2 class="title">Launch experiment</h2>
               <p class="subtitle">{{ STEP_LABELS[currentStep - 1] }}</p>
             </div>
           </div>
-          <button class="close-btn" @click="requestClose" aria-label="Fechar">✕</button>
+          <button class="close-btn" @click="requestClose" aria-label="Close">✕</button>
         </div>
 
         <!-- Step indicator -->
@@ -49,10 +49,10 @@
           </div>
           <div class="footer-actions">
             <button v-if="currentStep > 1" class="btn-secondary" @click="prev" :disabled="submitting">
-              ← Anterior
+              ← Back
             </button>
             <button class="btn-secondary" @click="requestClose" :disabled="submitting">
-              Cancelar
+              Cancel
             </button>
             <button
               v-if="currentStep < TOTAL_STEPS"
@@ -60,7 +60,7 @@
               @click="next"
               :disabled="!canProceed"
             >
-              Próximo →
+              Next →
             </button>
             <button
               v-else
@@ -68,8 +68,8 @@
               @click="submit"
               :disabled="!canProceed || submitting"
             >
-              <span v-if="submitting">Criando…</span>
-              <span v-else>Criar experimento</span>
+              <span v-if="submitting">Creating…</span>
+              <span v-else>Create experiment</span>
             </button>
           </div>
         </div>
@@ -103,19 +103,20 @@ const problemStore = useProblemStore()
 
 const TOTAL_STEPS = 5
 const STEP_LABELS = [
-  'Revise o problema definido no editor',
-  'Configure o experimento e o algoritmo',
-  'Configure os seeds de simulação',
-  'Defina os objetivos de otimização',
-  'Configure a conversão dos dados',
+  'Review the problem defined in the editor',
+  'Configure the experiment and algorithm',
+  'Configure simulation parameters',
+  'Define optimization objectives',
+  'Configure data conversion',
 ]
-const STEP_SHORT = ['Problema', 'Experimento', 'Simulação', 'Objetivos', 'Dados']
+const STEP_SHORT = ['Problem', 'Experiment', 'Simulation', 'Objectives', 'Data']
 
 const currentStep = ref(1)
 const showValidation = ref(false)
 const submitting = ref(false)
 const submitError = ref<string | null>(null)
 
+// Defaults from post-nsga3-experiment-p2.json
 const form = reactive<{
   experiment: Step2Value
   simulation: Step3Value
@@ -123,19 +124,49 @@ const form = reactive<{
   dataConversion: DataConversionConfigDto
 }>({
   experiment: {
-    name: '',
-    strategy: 'nsga2',
-    populationSize: 100,
-    numberOfGenerations: 50,
+    name: 'Performing optimization with NSGA-III on problem P2',
+    strategy: 'nsga3',
+    populationSize: 50,
+    numberOfGenerations: 10,
+    randomSeed: 42,
+    probCx: 0.8,
+    probMt: 0.15,
+    perGeneProb: 0.1,
+    selectionMethod: 'tournament',
+    crossoverMethod: 'uniform_mask',
+    mutationMethod: 'bitflip',
   },
   simulation: {
-    randomSeeds: [1, 2, 3],
+    duration: 180,
+    randomSeeds: [336157, 667370, 35239, 873465, 987654, 123456, 493499, 5343],
   },
-  objectives: [{ metric_name: 'energy', goal: 'min' }],
+  objectives: [
+    { metric_name: 'latency',    goal: 'min' },
+    { metric_name: 'energy',     goal: 'min' },
+    { metric_name: 'throughput', goal: 'max' },
+  ],
   dataConversion: {
     node_col: 'node',
-    time_col: 'time',
-    metrics: [],
+    time_col: 'root_time_now',
+    metrics: [
+      { name: 'cpu_energy_mj',       kind: 'sum_all',              column: 'cpu_energy_mj' },
+      { name: 'lpm_energy_mj',       kind: 'sum_all',              column: 'lpm_energy_mj' },
+      { name: 'radio_tx_energy_mj',  kind: 'sum_all',              column: 'radio_tx_energy_mj' },
+      { name: 'radio_rx_energy_mj',  kind: 'sum_all',              column: 'radio_rx_energy_mj' },
+      { name: 'total_sent',          kind: 'sum_last_minus_first', column: 'total_sent' },
+      { name: 'total_received',      kind: 'sum_last_minus_first', column: 'total_received' },
+      { name: 'server_sent',         kind: 'sum_last_minus_first', column: 'server_received' },
+      { name: 'bytes_tx',            kind: 'sum_last_minus_first', column: 'bytes_tx' },
+      { name: 'bytes_rx',            kind: 'sum_last_minus_first', column: 'bytes_rx' },
+      { name: 'server_bytes_rx',     kind: 'sum_last_minus_first', column: 'server_bytes_rx' },
+      { name: 'r2n_latency',         kind: 'mean',                 column: 'r2n_latency' },
+      { name: 'n2r_latency',         kind: 'mean',                 column: 'n2r_latency' },
+      { name: 'hops',                kind: 'mean',                 column: 'hops' },
+      { name: 'rtt_latency',         kind: 'mean',                 column: 'rtt_latency' },
+      { name: 'latency',             kind: 'mean',                 column: 'rtt_latency' },
+      { name: 'energy',              kind: 'sum_all',              column: 'total_energy_mj' },
+      { name: 'throughput',          kind: 'sum_last_minus_first', column: 'server_received' },
+    ],
   },
 })
 
@@ -147,7 +178,7 @@ const canProceed = computed((): boolean => {
       form.experiment.populationSize >= 2 &&
       form.experiment.numberOfGenerations >= 1
     )
-    case 3: return form.simulation.randomSeeds.length > 0
+    case 3: return form.simulation.randomSeeds.length > 0 && form.simulation.duration >= 1
     case 4: return (
       form.objectives.length > 0 &&
       form.objectives.every(o => o.metric_name.trim().length > 0)
@@ -188,7 +219,7 @@ async function submit() {
   try {
     exported = exportProblem(problemStore.draft)
   } catch (e: unknown) {
-    submitError.value = e instanceof Error ? e.message : 'Problema inválido para exportação.'
+    submitError.value = e instanceof Error ? e.message : 'Invalid problem — cannot export.'
     return
   }
 
@@ -201,10 +232,18 @@ async function submit() {
       parameters: {
         strategy: form.experiment.strategy,
         algorithm: {
-          population_size: form.experiment.populationSize,
+          population_size:      form.experiment.populationSize,
           number_of_generations: form.experiment.numberOfGenerations,
+          random_seed:          form.experiment.randomSeed,
+          prob_cx:              form.experiment.probCx,
+          prob_mt:              form.experiment.probMt,
+          per_gene_prob:        form.experiment.perGeneProb,
+          selection_method:     form.experiment.selectionMethod,
+          crossover_method:     form.experiment.crossoverMethod,
+          mutation_method:      form.experiment.mutationMethod,
         },
         simulation: {
+          duration:     form.simulation.duration,
           random_seeds: form.simulation.randomSeeds,
         },
         problem: exported.problem as JsonObject,
@@ -215,7 +254,7 @@ async function submit() {
     })
     emit('created', experimentId)
   } catch (e: unknown) {
-    submitError.value = e instanceof Error ? e.message : 'Erro ao criar experimento. Tente novamente.'
+    submitError.value = e instanceof Error ? e.message : 'Failed to create experiment. Please try again.'
   } finally {
     submitting.value = false
   }
@@ -278,7 +317,7 @@ function requestClose() {
   display: flex; flex-direction: column; align-items: center; gap: 4px;
   flex: 1; cursor: default; position: relative; z-index: 1;
 }
-.step-dot:not(.step-dot--active):not(:disabled) { cursor: pointer; }
+.step-dot:not(.step-dot--active) { cursor: pointer; }
 .step-dot-num {
   width: 28px; height: 28px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;

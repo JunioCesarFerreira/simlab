@@ -1,31 +1,31 @@
 <template>
   <div class="step">
     <p class="hint">
-      Configure como os logs de simulação são convertidos em métricas. As colunas referem-se ao arquivo CSV
-      produzido pelo simulador Cooja.
+      Configure how simulation logs are converted into metrics. Columns refer to the CSV file
+      produced by the Cooja simulator.
     </p>
 
-    <div class="section-divider">Colunas de identificação</div>
+    <div class="section-divider">Identification columns</div>
 
     <div class="fields-row">
       <div class="field-group">
-        <label class="field-label" for="node-col">Coluna de nó <span class="required">*</span></label>
+        <label class="field-label" for="node-col">Node column <span class="required">*</span></label>
         <input
           id="node-col"
           :value="modelValue.node_col"
           type="text"
-          placeholder="ex: node"
+          placeholder="e.g. node"
           :class="{ invalid: showValidation && !modelValue.node_col.trim() }"
           @input="updateHeader('node_col', ($event.target as HTMLInputElement).value)"
         />
       </div>
       <div class="field-group">
-        <label class="field-label" for="time-col">Coluna de tempo <span class="required">*</span></label>
+        <label class="field-label" for="time-col">Time column <span class="required">*</span></label>
         <input
           id="time-col"
           :value="modelValue.time_col"
           type="text"
-          placeholder="ex: time"
+          placeholder="e.g. root_time_now"
           :class="{ invalid: showValidation && !modelValue.time_col.trim() }"
           @input="updateHeader('time_col', ($event.target as HTMLInputElement).value)"
         />
@@ -33,73 +33,74 @@
     </div>
 
     <div class="section-divider">
-      Métricas
+      Metrics
       <span class="metrics-count">({{ modelValue.metrics.length }})</span>
     </div>
 
     <div v-if="modelValue.metrics.length === 0" class="empty-metrics">
-      Nenhuma métrica configurada. Adicione abaixo.
+      No metrics configured. Add one below.
     </div>
 
     <div v-for="(m, i) in modelValue.metrics" :key="i" class="metric-card">
       <div class="metric-header">
         <span class="metric-index">#{{ i + 1 }}</span>
-        <button class="remove-metric" @click="removeMetric(i)" title="Remover métrica">Remover</button>
+        <button class="remove-metric" @click="removeMetric(i)" title="Remove metric">Remove</button>
       </div>
       <div class="metric-fields">
         <div class="field-group">
-          <label class="field-label">Nome <span class="required">*</span></label>
+          <label class="field-label">Name <span class="required">*</span></label>
           <input
             :value="m.name"
             type="text"
-            placeholder="ex: energy"
+            placeholder="e.g. energy"
             list="metric-name-suggestions"
             :class="{ invalid: showValidation && !m.name.trim() }"
             @input="updateMetric(i, 'name', ($event.target as HTMLInputElement).value)"
           />
         </div>
         <div class="field-group">
-          <label class="field-label">Tipo (kind) <span class="required">*</span></label>
+          <label class="field-label">Kind <span class="required">*</span></label>
           <select
             :value="m.kind"
             @change="updateMetric(i, 'kind', ($event.target as HTMLSelectElement).value)"
           >
-            <option value="">Selecione...</option>
+            <option value="">Select...</option>
             <option value="mean">mean</option>
-            <option value="sum">sum</option>
+            <option value="sum_all">sum_all</option>
+            <option value="sum_last_minus_first">sum_last_minus_first</option>
             <option value="max">max</option>
             <option value="min">min</option>
-            <option value="percentile">percentile</option>
             <option value="last">last</option>
+            <option value="percentile">percentile</option>
           </select>
         </div>
         <div class="field-group">
-          <label class="field-label">Coluna no CSV <span class="required">*</span></label>
+          <label class="field-label">CSV column <span class="required">*</span></label>
           <input
             :value="m.column"
             type="text"
-            placeholder="ex: energy_consumed"
+            placeholder="e.g. total_energy_mj"
             :class="{ invalid: showValidation && !m.column.trim() }"
             @input="updateMetric(i, 'column', ($event.target as HTMLInputElement).value)"
           />
         </div>
         <div class="field-group" v-if="m.kind === 'percentile'">
-          <label class="field-label">Percentil (q)</label>
+          <label class="field-label">Percentile (q)</label>
           <input
             :value="m.q ?? ''"
             type="number"
             min="0" max="100" step="0.1"
-            placeholder="ex: 95"
+            placeholder="e.g. 95"
             @input="updateMetricNum(i, 'q', ($event.target as HTMLInputElement).value)"
           />
         </div>
         <div class="field-group">
-          <label class="field-label">Escala (scale)</label>
+          <label class="field-label">Scale</label>
           <input
             :value="m.scale ?? ''"
             type="number"
             step="any"
-            placeholder="ex: 1.0"
+            placeholder="e.g. 1.0"
             @input="updateMetricNum(i, 'scale', ($event.target as HTMLInputElement).value)"
           />
         </div>
@@ -108,14 +109,18 @@
 
     <datalist id="metric-name-suggestions">
       <option value="energy" />
-      <option value="coverage" />
       <option value="latency" />
-      <option value="packet_loss" />
       <option value="throughput" />
-      <option value="lifetime" />
+      <option value="cpu_energy_mj" />
+      <option value="lpm_energy_mj" />
+      <option value="radio_tx_energy_mj" />
+      <option value="radio_rx_energy_mj" />
+      <option value="total_sent" />
+      <option value="total_received" />
+      <option value="rtt_latency" />
     </datalist>
 
-    <button class="add-metric-btn" @click="addMetric">+ Adicionar métrica</button>
+    <button class="add-metric-btn" @click="addMetric">+ Add metric</button>
   </div>
 </template>
 

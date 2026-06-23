@@ -22,7 +22,7 @@
     <button :class="{ active: showChromosomeConnectivity }" class="chrom" title="Chromosome Connectivity  [H] — sink + nodes active in current chromosome" @click="editorStore.toggleChromosomeConnectivity()">⬢</button>
     <button :class="{ active: showJson }" title="JSON Preview  [{ }]" @click="editorStore.toggleJsonPreview()">{ }</button>
     <div class="separator" />
-    <button class="launch-btn" :disabled="!hasSink" :title="hasSink ? 'Lançar experimento' : 'Lançar experimento — posicione o sink primeiro'" @click="$emit('launch')">🚀</button>
+    <button class="launch-btn" :disabled="!hasSink" :title="hasSink ? 'Launch experiment' : 'Launch experiment — place a sink first'" @click="$emit('launch')">🚀</button>
   </div>
 </template>
 

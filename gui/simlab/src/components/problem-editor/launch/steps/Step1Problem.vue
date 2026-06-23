@@ -1,27 +1,27 @@
 <template>
   <div class="step-problem">
     <div v-if="!hasSink" class="warn-banner">
-      ⚠ O problema não tem sink posicionado. Posicione o sink no editor antes de continuar.
+      ⚠ The problem has no sink placed. Position the sink in the editor before continuing.
     </div>
 
     <div class="summary-grid">
       <div class="summary-item">
-        <span class="label">Tipo</span>
+        <span class="label">Type</span>
         <span class="value badge">{{ draft.name }}</span>
       </div>
       <div class="summary-item">
-        <span class="label">Região</span>
+        <span class="label">Region</span>
         <span class="value mono">
           [{{ draft.region[0] }}, {{ draft.region[1] }}] →
           [{{ draft.region[2] }}, {{ draft.region[3] }}]
         </span>
       </div>
       <div class="summary-item">
-        <span class="label">Raio de alcance</span>
+        <span class="label">Reach radius</span>
         <span class="value mono">{{ draft.radiusOfReach }} u</span>
       </div>
       <div class="summary-item">
-        <span class="label">Raio de interferência</span>
+        <span class="label">Interference radius</span>
         <span class="value mono">{{ draft.radiusOfInter }} u</span>
       </div>
       <div class="summary-item" v-if="draft.sink">
@@ -29,29 +29,29 @@
         <span class="value mono">({{ draft.sink.x }}, {{ draft.sink.y }})</span>
       </div>
       <div class="summary-item" v-if="draft.candidates.length > 0">
-        <span class="label">Candidatos</span>
+        <span class="label">Candidates</span>
         <span class="value mono">{{ draft.candidates.length }}</span>
       </div>
       <div class="summary-item" v-if="draft.targets.length > 0">
-        <span class="label">Alvos</span>
+        <span class="label">Targets</span>
         <span class="value mono">{{ draft.targets.length }}</span>
       </div>
       <div class="summary-item" v-if="draft.mobileNodes.length > 0">
-        <span class="label">Nós móveis</span>
+        <span class="label">Mobile nodes</span>
         <span class="value mono">{{ draft.mobileNodes.length }}</span>
       </div>
       <div class="summary-item" v-if="draft.name === 'problem1'">
-        <span class="label">Num. sensores</span>
+        <span class="label">Num. sensors</span>
         <span class="value mono">{{ draft.numSensors }}</span>
       </div>
       <div class="summary-item">
-        <span class="label">Protocolo MAC</span>
+        <span class="label">MAC protocol</span>
         <span class="value mono">{{ macProtocol }}</span>
       </div>
     </div>
 
     <p class="note">
-      Para alterar o problema, feche este assistente e use o editor de problemas.
+      To change the problem, close this wizard and use the problem editor.
     </p>
   </div>
 </template>
