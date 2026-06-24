@@ -250,6 +250,19 @@
               @mousedown="startParetoResize"
             />
           </div>
+          <div class="card chart-card" :style="{ height: hvgdH + 'px' }">
+            <div class="section-title">HV &amp; GD per generation</div>
+            <HvGdChart
+              :experiment-id="props.id"
+              :objective-names="store.objectiveNames"
+              :objective-goals="store.objectiveGoals"
+            />
+            <div
+              class="resize-handle"
+              title="Arrastar para redimensionar"
+              @mousedown="startHvGdResize"
+            />
+          </div>
           <div class="card chart-card" :style="{ height: evolutionH + 'px' }">
             <div class="section-title">Objectives evolution (best per generation)</div>
             <ObjectivesEvolutionChart
@@ -322,6 +335,7 @@ const ParetoFront3DChart = defineAsyncComponent(
   () => import("../components/charts/ParetoFront3DChart.vue"),
 );
 import ObjectivesEvolutionChart from "../components/charts/ObjectivesEvolutionChart.vue";
+import HvGdChart from "../components/charts/HvGdChart.vue";
 import IndividualDetailPanel from "../components/detail/IndividualDetailPanel.vue";
 import ProblemVizModal from "../components/detail/ProblemVizModal.vue";
 import { downloadAnalysisZip, downloadTopologiesZip } from "../api/files";
@@ -338,6 +352,7 @@ const has3Objectives = computed(() => (store.objectiveNames?.length ?? 0) >= 3);
 
 // Per-card resizable height
 const { height: paretoH, startResize: startParetoResize } = useResizable({ initial: 420 });
+const { height: hvgdH, startResize: startHvGdResize } = useResizable({ initial: 280 });
 const { height: evolutionH, startResize: startEvoResize } = useResizable({ initial: 380 });
 
 const sortedGenerations = computed(() =>

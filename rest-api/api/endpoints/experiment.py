@@ -1,7 +1,8 @@
+import json
 import os
 import subprocess
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from bson import errors as bson_errors
 from tempfile import NamedTemporaryFile
 from pydantic import BaseModel
@@ -221,6 +222,62 @@ def plot_pareto_results(
         return {"status": "ok", "output": result.stdout}
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail="Pareto analysis timed out (10 min limit)")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+_HV_GD_SCRIPT = os.getenv(
+    "SIMLAB_HV_GD_SCRIPT",
+    "/home/junio/Documentos/simlab/pareto-analysis/compute_hv_gd.py",
+)
+
+
+@router.get("/{experiment_id}/hv-gd")
+def get_hv_gd(
+    experiment_id: str,
+    objectives: list[str] = Query(...),
+    minimize: list[str] = Query(...),
+    factory: MongoRepository = Depends(get_factory),
+) -> dict:
+    """Compute hypervolume and generational distance per generation."""
+    try:
+        doc = factory.experiment_repo.get(experiment_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Experiment not found")
+    except bson_errors.InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid experiment_id")
+
+    if len(objectives) < 2 or len(minimize) != len(objectives):
+        raise HTTPException(
+            status_code=422,
+            detail="objectives and minimize must have the same length (≥ 2)",
+        )
+
+    api_key = os.getenv("SIMLAB_API_KEY", "api-password")
+    cmd = [
+        _PARETO_PYTHON, _HV_GD_SCRIPT,
+        "--expid", experiment_id,
+        "--objectives", *objectives,
+        "--minimize", *minimize,
+        "--api-base", "http://localhost:8000/api/v1",
+        "--api-key", api_key,
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=os.path.dirname(_HV_GD_SCRIPT),
+        )
+        if result.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"HV/GD computation failed:\n{result.stderr}")
+        return json.loads(result.stdout)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="HV/GD computation timed out (2 min limit)")
     except HTTPException:
         raise
     except Exception as e:
