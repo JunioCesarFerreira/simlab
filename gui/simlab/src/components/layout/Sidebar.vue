@@ -17,11 +17,30 @@
         <span class="nav-icon">◈</span>
         Experiments
       </RouterLink>
+      <RouterLink to="/problems" class="nav-link">
+        <span class="nav-icon">⊙</span>
+        Problems
+      </RouterLink>
+      <RouterLink to="/sources" class="nav-link">
+        <span class="nav-icon">⊛</span>
+        Sources
+      </RouterLink>
+    </div>
+
+    <div class="sidebar-footer">
+      <button class="theme-toggle" :title="isDark ? 'Switch to light mode' : 'Switch to dark mode'" @click="toggle">
+        <span class="toggle-icon">{{ isDark ? '☀' : '🌙' }}</span>
+        <span class="toggle-label">{{ isDark ? 'Light mode' : 'Dark mode' }}</span>
+      </button>
     </div>
   </nav>
 </template>
 
-<script setup lang="ts"></script>
+<script setup lang="ts">
+import { useTheme } from '../../composables/useTheme'
+
+const { isDark, toggle } = useTheme()
+</script>
 
 <style scoped>
 .sidebar {
@@ -59,6 +78,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  flex: 1;
 }
 
 .nav-link {
@@ -74,7 +94,7 @@
 }
 
 .nav-link:hover {
-  background: var(--color-bg);
+  background: var(--color-surface-hover);
   color: var(--color-text);
 }
 
@@ -89,5 +109,42 @@
   width: 18px;
   text-align: center;
   flex-shrink: 0;
+}
+
+/* Theme toggle */
+.sidebar-footer {
+  border-top: 1px solid var(--color-border);
+  padding-top: 10px;
+  margin-top: 4px;
+}
+
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  transition: background 0.12s, color 0.12s;
+  cursor: pointer;
+}
+
+.theme-toggle:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.toggle-icon {
+  font-size: 16px;
+  width: 18px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.toggle-label {
+  font-size: 13px;
 }
 </style>

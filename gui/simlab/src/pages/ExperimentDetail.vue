@@ -205,21 +205,51 @@
 
         <!-- Charts panel -->
         <div class="charts-panel">
-          <div class="card chart-card">
-            <div class="section-title">Pareto Front</div>
+          <div class="card chart-card" :style="{ height: paretoH + 'px' }">
+            <div class="section-title pareto-title">
+              Pareto Front
+              <div v-if="has3Objectives" class="view-toggle">
+                <button
+                  :class="['vt-btn', { active: chartView === '2d' }]"
+                  @click="chartView = '2d'"
+                >2D</button>
+                <button
+                  :class="['vt-btn', { active: chartView === '3d' }]"
+                  @click="chartView = '3d'"
+                >3D</button>
+              </div>
+            </div>
             <ParetoFrontChart
+              v-if="chartView === '2d'"
               :pareto-front="store.experiment.pareto_front"
               :generations="store.experiment.generations"
               :objective-names="store.objectiveNames"
               @click-individual="openIndividual"
             />
+            <ParetoFront3DChart
+              v-else
+              :pareto-front="store.experiment.pareto_front"
+              :generations="store.experiment.generations"
+              :objective-names="store.objectiveNames"
+              @click-individual="openIndividual"
+            />
+            <div
+              class="resize-handle"
+              title="Arrastar para redimensionar"
+              @mousedown="startParetoResize"
+            />
           </div>
-          <div class="card chart-card">
+          <div class="card chart-card" :style="{ height: evolutionH + 'px' }">
             <div class="section-title">Objectives evolution (best per generation)</div>
             <ObjectivesEvolutionChart
               :generations="store.experiment.generations"
               :objective-names="store.objectiveNames"
               :objective-goals="store.objectiveGoals"
+            />
+            <div
+              class="resize-handle"
+              title="Arrastar para redimensionar"
+              @mousedown="startEvoResize"
             />
           </div>
         </div>
@@ -276,15 +306,28 @@ import { useExperimentDetailStore } from "../app/stores/experimentDetailStore";
 import StatusBadge from "../components/common/StatusBadge.vue";
 import GenerationRow from "../components/detail/GenerationRow.vue";
 import ParetoFrontChart from "../components/charts/ParetoFrontChart.vue";
+import { defineAsyncComponent } from "vue";
+const ParetoFront3DChart = defineAsyncComponent(
+  () => import("../components/charts/ParetoFront3DChart.vue"),
+);
 import ObjectivesEvolutionChart from "../components/charts/ObjectivesEvolutionChart.vue";
 import IndividualDetailPanel from "../components/detail/IndividualDetailPanel.vue";
 import ProblemVizModal from "../components/detail/ProblemVizModal.vue";
 import { downloadAnalysisZip, downloadTopologiesZip } from "../api/files";
 import { updateExperiment } from "../api/experiments";
+import { useResizable } from "../composables/useResizable";
 import type { IndividualDto, JsonObject } from "../types/simlab";
 
 const props = defineProps<{ id: string }>();
 const store = useExperimentDetailStore();
+
+// 2D / 3D toggle — only shown when there are ≥ 3 objectives
+const chartView = ref<"2d" | "3d">("2d");
+const has3Objectives = computed(() => (store.objectiveNames?.length ?? 0) >= 3);
+
+// Per-card resizable height
+const { height: paretoH, startResize: startParetoResize } = useResizable({ initial: 420 });
+const { height: evolutionH, startResize: startEvoResize } = useResizable({ initial: 380 });
 
 const sortedGenerations = computed(() =>
   [...(store.experiment?.generations ?? [])].sort((a, b) => a.index - b.index),
@@ -784,9 +827,80 @@ onBeforeUnmount(() => {
 }
 
 .chart-card {
-  min-height: 320px;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  /* height controlled by :style binding — min enforced by useResizable */
+}
+
+.resize-handle {
+  flex-shrink: 0;
+  height: 10px;
+  margin: 4px -16px -16px;  /* bleed to card edges, absorb card padding-bottom */
+  cursor: ns-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-top: 1px solid var(--color-border);
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.resize-handle::after {
+  content: '';
+  width: 36px;
+  height: 3px;
+  border-radius: 99px;
+  background: var(--color-border);
+  transition: background 0.15s, transform 0.15s;
+}
+
+.resize-handle:hover {
+  background: var(--color-surface-hover);
+}
+
+.resize-handle:hover::after {
+  background: var(--color-text-muted);
+  transform: scaleX(1.25);
+}
+
+.pareto-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.view-toggle {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.vt-btn {
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  background: transparent;
+  transition: background 0.12s, color 0.12s;
+  letter-spacing: 0.03em;
+}
+
+.vt-btn:hover {
+  color: var(--color-text);
+}
+
+.vt-btn.active {
+  background: var(--color-surface);
+  color: var(--color-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
 /* Progress */

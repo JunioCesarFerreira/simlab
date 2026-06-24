@@ -1,5 +1,6 @@
 import client from "./client";
 import type {
+  ExperimentCreateDto,
   ExperimentDto,
   ExperimentFullDto,
   ExperimentInfoDto,
@@ -50,5 +51,12 @@ export async function updateExperiment(
 
 export async function deleteExperiment(id: string): Promise<boolean> {
   const { data } = await client.delete<boolean>(`/experiments/${id}`);
+  return data;
+}
+
+export async function createExperiment(
+  payload: ExperimentCreateDto,
+): Promise<string> {
+  const { data } = await client.post<string>("/experiments/", payload);
   return data;
 }
