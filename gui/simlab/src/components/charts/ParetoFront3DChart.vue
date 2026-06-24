@@ -243,7 +243,7 @@ const rankedGroups = computed<Point3D[][]>(() => {
   const groups: Point3D[][] = Array.from({ length: MAX_LABELED_RANKS + 1 }, () => []);
   for (const p of populationData.value) {
     const r = rankMap.value.get(p.individualId) ?? MAX_LABELED_RANKS;
-    groups[r].push(p);
+    groups[r]!.push(p);
   }
   return groups;
 });
