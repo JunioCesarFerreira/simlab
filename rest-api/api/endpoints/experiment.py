@@ -2,6 +2,9 @@ import json
 import os
 import subprocess
 
+import numpy as np
+import moocore
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from bson import errors as bson_errors
 from tempfile import NamedTemporaryFile
@@ -228,10 +231,40 @@ def plot_pareto_results(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-_HV_GD_SCRIPT = os.getenv(
-    "SIMLAB_HV_GD_SCRIPT",
-    "/home/junio/Documentos/simlab/pareto-analysis/compute_hv_gd.py",
-)
+# ── HV/GD inline helpers ──────────────────────────────────────────────────────
+
+_PENALTY_THRESHOLD = 1.0e8
+
+
+def _is_penalized(objs: list[float]) -> bool:
+    return any(abs(v) >= _PENALTY_THRESHOLD for v in objs)
+
+
+def _dominates(a: list[float], b: list[float], minimize: list[bool]) -> bool:
+    """True if a dominates b (at least as good everywhere, strictly better somewhere)."""
+    better = False
+    for ai, bi, m in zip(a, b, minimize):
+        if (m and ai > bi) or (not m and ai < bi):
+            return False
+        if (m and ai < bi) or (not m and ai > bi):
+            better = True
+    return better
+
+
+def _pareto_front(objs_list: list[list[float]], minimize: list[bool]) -> list[int]:
+    """Returns indices of the non-dominated (rank-0) individuals."""
+    n = len(objs_list)
+    dominated = [False] * n
+    for i in range(n):
+        if dominated[i]:
+            continue
+        for j in range(n):
+            if i == j:
+                continue
+            if _dominates(objs_list[j], objs_list[i], minimize):
+                dominated[i] = True
+                break
+    return [i for i in range(n) if not dominated[i]]
 
 
 @router.get("/{experiment_id}/hv-gd")
@@ -243,42 +276,113 @@ def get_hv_gd(
 ) -> dict:
     """Compute hypervolume and generational distance per generation."""
     try:
-        doc = factory.experiment_repo.get(experiment_id)
-        if not doc:
-            raise HTTPException(status_code=404, detail="Experiment not found")
+        exp_oid = ObjectId(experiment_id)
     except bson_errors.InvalidId:
         raise HTTPException(status_code=400, detail="Invalid experiment_id")
 
-    if len(objectives) < 2 or len(minimize) != len(objectives):
+    n_obj = len(objectives)
+    if n_obj < 2 or len(minimize) != n_obj:
         raise HTTPException(
             status_code=422,
             detail="objectives and minimize must have the same length (≥ 2)",
         )
 
-    api_key = os.getenv("SIMLAB_API_KEY", "api-password")
-    cmd = [
-        _PARETO_PYTHON, _HV_GD_SCRIPT,
-        "--expid", experiment_id,
-        "--objectives", *objectives,
-        "--minimize", *minimize,
-        "--api-base", "http://localhost:8000/api/v1",
-        "--api-key", api_key,
-    ]
+    doc = factory.experiment_repo.get(experiment_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Experiment not found")
 
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=120,
-            cwd=os.path.dirname(_HV_GD_SCRIPT),
+    stored_pf: list[dict] = doc.get("pareto_front") or []
+    if not stored_pf:
+        return {"generations": [], "hv": [], "gd": [], "worst_point": {}}
+
+    minimize_bools = [m.lower() == "true" for m in minimize]
+
+    # ── Fetch generations + individuals directly from DB ─────────────────────
+    gens = factory.generation_repo.find_by_experiment(exp_oid)
+
+    individuals_per_gen: dict[int, list[list[float]]] = {}
+    for gen in gens:
+        gen_idx: int = gen["index"]
+        individuals = factory.individual_repo.find_by_generation(gen["_id"])
+        valid: list[list[float]] = []
+        for ind in individuals:
+            raw = ind.get("objectives") or []
+            if len(raw) < n_obj:
+                continue
+            objs = [float(raw[i]) for i in range(n_obj)]
+            if _is_penalized(objs):
+                continue
+            valid.append(objs)
+        individuals_per_gen[gen_idx] = valid
+
+    if not individuals_per_gen:
+        return {"generations": [], "hv": [], "gd": [], "worst_point": {}}
+
+    # ── Worst feasible point → HV reference (original space) ─────────────────
+    all_objs = [o for v in individuals_per_gen.values() for o in v]
+    worst = [
+        max(o[i] for o in all_objs) if minimize_bools[i]
+        else min(o[i] for o in all_objs)
+        for i in range(n_obj)
+    ]
+    worst_ref = [v + abs(v) * 0.05 + 1.0 for v in worst]
+
+    # ── GD reference: stored Pareto front in minimization space ──────────────
+    seen_ref: set[tuple] = set()
+    ref_min_rows: list[list[float]] = []
+    for p in stored_pf:
+        objs_dict: dict = p.get("objectives") or {}
+        row_min = tuple(
+            float(objs_dict.get(o, 0.0)) if minimize_bools[i]
+            else -float(objs_dict.get(o, 0.0))
+            for i, o in enumerate(objectives)
         )
-        if result.returncode != 0:
-            raise HTTPException(status_code=500, detail=f"HV/GD computation failed:\n{result.stderr}")
-        return json.loads(result.stdout)
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=504, detail="HV/GD computation timed out (2 min limit)")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        if row_min not in seen_ref:
+            seen_ref.add(row_min)
+            ref_min_rows.append(list(row_min))
+    final_front = np.array(ref_min_rows, dtype=float)
+
+    # ── Per-generation HV / GD ────────────────────────────────────────────────
+    generations_sorted = sorted(individuals_per_gen.keys())
+    hv_values: list[float] = []
+    gd_values: list[float | None] = []
+
+    for gen_idx in generations_sorted:
+        pop_objs = individuals_per_gen[gen_idx]
+        if not pop_objs:
+            hv_values.append(0.0)
+            gd_values.append(None)
+            continue
+
+        front_idx = _pareto_front(pop_objs, minimize_bools)
+        if not front_idx:
+            hv_values.append(0.0)
+            gd_values.append(None)
+            continue
+
+        # Minimization space + dedup by objective tuple
+        seen_pts: set[tuple] = set()
+        pts_min_rows: list[list[float]] = []
+        for i in front_idx:
+            key = tuple(
+                pop_objs[i][j] if minimize_bools[j] else -pop_objs[i][j]
+                for j in range(n_obj)
+            )
+            if key not in seen_pts:
+                seen_pts.add(key)
+                pts_min_rows.append(list(key))
+        pts_min = np.array(pts_min_rows, dtype=float)
+
+        hv_val = float(moocore.hypervolume(pts_min, ref=worst_ref))
+        diffs = pts_min[:, np.newaxis, :] - final_front[np.newaxis, :, :]
+        gd_val = float(np.sqrt((diffs ** 2).sum(axis=2)).min(axis=1).mean())
+
+        hv_values.append(hv_val)
+        gd_values.append(gd_val)
+
+    return {
+        "generations": generations_sorted,
+        "hv": hv_values,
+        "gd": gd_values,
+        "worst_point": dict(zip(objectives, worst_ref)),
+    }
