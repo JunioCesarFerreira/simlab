@@ -55,11 +55,13 @@ import "echarts-gl";
 import { useTheme } from "../../composables/useTheme";
 import type { ParetoFrontItemDto, GenerationDto } from "../../types/simlab";
 import { isPenalized } from "../../types/simlab";
+import { computeRanksWithDuplicates } from "../../utils/nonDominatedSort";
 
 const props = defineProps<{
   paretoFront: ParetoFrontItemDto[] | null | undefined;
   generations?: GenerationDto[];
   objectiveNames?: string[];
+  objectiveGoals?: string[];
 }>();
 
 const emit = defineEmits<{
@@ -201,9 +203,57 @@ const paretoData = computed<Point3D[]>(() =>
   }),
 );
 
+// ── Rank computation ─────────────────────────────────────────────────────────
+
+const MAX_LABELED_RANKS = 5;
+
+const RANK_PALETTE = [
+  "#3b82f6", // Front 1 — blue
+  "#10b981", // Front 2 — emerald
+  "#f59e0b", // Front 3 — amber
+  "#8b5cf6", // Front 4 — violet
+  "#f43f5e", // Front 5 — rose
+  "#94a3b8", // Other   — gray
+] as const;
+
+const RANK_SIZES_3D = [6, 5, 5, 4, 4, 3] as const;
+
+const minimize3D = computed<boolean[]>(() =>
+  (props.objectiveGoals ?? []).map((g) => g === "min"),
+);
+
+const rankMap = computed<Map<string, number>>(() => {
+  if (!props.objectiveGoals?.length || populationData.value.length === 0) {
+    return new Map();
+  }
+  const pts = populationData.value.map((p) => ({
+    id: p.individualId,
+    objectives: p.allObjectives as number[],
+  }));
+  const raw = computeRanksWithDuplicates(pts, minimize3D.value);
+  const capped = new Map<string, number>();
+  for (const [id, r] of raw) {
+    capped.set(id, Math.min(r, MAX_LABELED_RANKS));
+  }
+  return capped;
+});
+
+const rankedGroups = computed<Point3D[][]>(() => {
+  if (rankMap.value.size === 0) return [];
+  const groups: Point3D[][] = Array.from({ length: MAX_LABELED_RANKS + 1 }, () => []);
+  for (const p of populationData.value) {
+    const r = rankMap.value.get(p.individualId) ?? MAX_LABELED_RANKS;
+    groups[r].push(p);
+  }
+  return groups;
+});
+
 const markedPoint = computed<Point3D | null>(() => {
   if (!markedId.value) return null;
-  return paretoData.value.find((p) => p.individualId === markedId.value) ?? null;
+  const all = rankedGroups.value.length > 0
+    ? rankedGroups.value.flat()
+    : paretoData.value;
+  return all.find((p) => p.individualId === markedId.value) ?? null;
 });
 
 // ── Tooltip ───────────────────────────────────────────────────────────────────
@@ -266,39 +316,56 @@ function buildOption() {
     splitLine: { lineStyle: { color: splitColor, opacity: 0.6 } },
   });
 
+  const useRanks = rankedGroups.value.length > 0;
   const series = [];
 
-  if (populationData.value.length > 0) {
+  if (useRanks) {
+    const presentRanks = rankedGroups.value
+      .map((g, r) => ({ r, g }))
+      .filter(({ g }) => g.length > 0);
+
+    for (const { r, g } of presentRanks) {
+      const isOther = r === MAX_LABELED_RANKS;
+      const name  = isOther ? "Other" : `Front ${r + 1}`;
+      const color = RANK_PALETTE[r] ?? RANK_PALETTE[RANK_PALETTE.length - 1];
+      const size  = RANK_SIZES_3D[r] ?? RANK_SIZES_3D[RANK_SIZES_3D.length - 1];
+      const data  = g.filter((p) => p.individualId !== markedId.value);
+
+      series.push({
+        name,
+        type: "scatter3D",
+        data,
+        symbolSize: size,
+        itemStyle: {
+          color,
+          opacity: isOther ? (dark ? 0.35 : 0.4) : 0.9,
+        },
+        emphasis: { itemStyle: { color, opacity: 1 } },
+      });
+    }
+  } else {
+    if (populationData.value.length > 0) {
+      series.push({
+        name: "Population",
+        type: "scatter3D",
+        data: populationData.value,
+        symbolSize: 3,
+        itemStyle: {
+          color: dark ? "#585b70" : "#b0bac8",
+          opacity: dark ? 0.45 : 0.5,
+        },
+        emphasis: { itemStyle: { color: dark ? "#7f849c" : "#64748b", opacity: 0.9 } },
+      });
+    }
     series.push({
-      name: "Population",
+      name: "Pareto Front",
       type: "scatter3D",
-      data: populationData.value,
-      symbolSize: 3,
-      itemStyle: {
-        color: dark ? "#585b70" : "#b0bac8",
-        opacity: dark ? 0.45 : 0.5,
-      },
-      emphasis: {
-        itemStyle: { color: dark ? "#7f849c" : "#64748b", opacity: 0.9 },
-      },
+      data: paretoData.value.filter((p) => p.individualId !== markedId.value),
+      symbolSize: 6,
+      itemStyle: { color: "#3b82f6", opacity: 0.92 },
+      emphasis: { itemStyle: { color: "#1d4ed8", opacity: 1 }, label: { show: false } },
     });
   }
-
-  series.push({
-    name: "Pareto Front",
-    type: "scatter3D",
-    data: paretoData.value.filter((p) => p.individualId !== markedId.value),
-    symbolSize: 6,
-    itemStyle: {
-      color: "#3b82f6",
-      opacity: 0.92,
-      borderWidth: 0,
-    },
-    emphasis: {
-      itemStyle: { color: "#1d4ed8", opacity: 1 },
-      label: { show: false },
-    },
-  });
 
   if (markedPoint.value) {
     series.push({
@@ -312,8 +379,15 @@ function buildOption() {
   }
 
   const legendData = [
-    ...(populationData.value.length > 0 ? ["Population"] : []),
-    "Pareto Front",
+    ...(useRanks
+      ? rankedGroups.value
+          .map((g, r) => ({ r, g }))
+          .filter(({ g }) => g.length > 0)
+          .map(({ r }) => (r === MAX_LABELED_RANKS ? "Other" : `Front ${r + 1}`))
+      : [
+          ...(populationData.value.length > 0 ? ["Population"] : []),
+          "Pareto Front",
+        ]),
     ...(markedPoint.value ? ["Pinned"] : []),
   ];
 
@@ -395,6 +469,7 @@ watch(
   [
     () => props.paretoFront,
     () => props.generations,
+    () => props.objectiveGoals,
     xKey, yKey, zKey,
     markedPoint,
     isDark,

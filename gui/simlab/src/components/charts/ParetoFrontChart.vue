@@ -51,11 +51,13 @@ import type { TopLevelFormatterParams } from "echarts/types/dist/shared";
 import { useEChart } from "../../composables/useEChart";
 import type { ParetoFrontItemDto, GenerationDto } from "../../types/simlab";
 import { isPenalized } from "../../types/simlab";
+import { computeRanksWithDuplicates } from "../../utils/nonDominatedSort";
 
 const props = defineProps<{
   paretoFront: ParetoFrontItemDto[] | null | undefined;
   generations?: GenerationDto[];
   objectiveNames?: string[];
+  objectiveGoals?: string[];
 }>();
 
 const emit = defineEmits<{
@@ -166,10 +168,63 @@ const paretoData = computed<ChartPoint[]>(() =>
   }),
 );
 
+// ── Rank computation ─────────────────────────────────────────────────────────
+
+const MAX_LABELED_RANKS = 5;
+
+// palette: index = rank (0-based), last entry = "other"
+const RANK_PALETTE = [
+  "#3b82f6", // Front 1 — blue
+  "#10b981", // Front 2 — emerald
+  "#f59e0b", // Front 3 — amber
+  "#8b5cf6", // Front 4 — violet
+  "#f43f5e", // Front 5 — rose
+  "#94a3b8", // Other   — gray
+] as const;
+
+const RANK_SIZES = [11, 10, 9, 8, 7, 6] as const;
+
+const minimize = computed<boolean[]>(() =>
+  (props.objectiveGoals ?? []).map((g) => g === "min"),
+);
+
+/** Map individualId → 0-indexed rank, capped at MAX_LABELED_RANKS */
+const rankMap = computed<Map<string, number>>(() => {
+  if (!props.objectiveGoals?.length || populationData.value.length === 0) {
+    return new Map();
+  }
+  const pts = populationData.value.map((p) => ({
+    id: p.individualId,
+    objectives: p.allObjectives as number[],
+  }));
+  const raw = computeRanksWithDuplicates(pts, minimize.value);
+  // Cap so everything above rank 4 becomes MAX_LABELED_RANKS
+  const capped = new Map<string, number>();
+  for (const [id, r] of raw) {
+    capped.set(id, Math.min(r, MAX_LABELED_RANKS));
+  }
+  return capped;
+});
+
+/** populationData grouped by rank; group MAX_LABELED_RANKS = "Other" */
+const rankedGroups = computed<ChartPoint[][]>(() => {
+  if (rankMap.value.size === 0) return [];
+  const groups: ChartPoint[][] = Array.from({ length: MAX_LABELED_RANKS + 1 }, () => []);
+  for (const p of populationData.value) {
+    const r = rankMap.value.get(p.individualId) ?? MAX_LABELED_RANKS;
+    groups[r].push(p);
+  }
+  return groups;
+});
+
 // The currently pinned point re-projected onto the current axes
 const markedPoint = computed<ChartPoint | null>(() => {
   if (!markedId.value) return null;
-  return paretoData.value.find((p) => p.individualId === markedId.value) ?? null;
+  // Check in rank-0 group first (most likely location), then all others
+  const all = rankedGroups.value.length > 0
+    ? rankedGroups.value.flat()
+    : paretoData.value;
+  return all.find((p) => p.individualId === markedId.value) ?? null;
 });
 
 function formatTooltip(params: TopLevelFormatterParams): string {
@@ -205,37 +260,67 @@ function formatTooltip(params: TopLevelFormatterParams): string {
 function buildOption() {
   if (!hasSufficientData.value || !ready.value) return;
 
+  const useRanks = rankedGroups.value.length > 0;
   const series = [];
 
-  if (populationData.value.length > 0) {
+  if (useRanks) {
+    // ── Ranked view ──────────────────────────────────────────────────────────
+    const presentRanks = rankedGroups.value
+      .map((g, r) => ({ r, g }))
+      .filter(({ g }) => g.length > 0);
+
+    for (const { r, g } of presentRanks) {
+      const isOther = r === MAX_LABELED_RANKS;
+      const name = isOther ? "Other" : `Front ${r + 1}`;
+      const color = RANK_PALETTE[r] ?? RANK_PALETTE[RANK_PALETTE.length - 1];
+      const size  = RANK_SIZES[r]  ?? RANK_SIZES[RANK_SIZES.length - 1];
+      const data  = g.filter((p) => p.individualId !== markedId.value);
+
+      series.push({
+        name,
+        type: "scatter" as const,
+        data,
+        symbolSize: size,
+        itemStyle: {
+          color,
+          borderColor: isOther ? "transparent" : "#fff",
+          borderWidth: isOther ? 0 : 1,
+          opacity: isOther ? 0.45 : 0.9,
+        },
+        emphasis: { itemStyle: { color, opacity: 1, borderWidth: 1.5 } },
+        z: MAX_LABELED_RANKS + 2 - r,
+      });
+    }
+  } else {
+    // ── Fallback (no goals provided) ─────────────────────────────────────────
+    if (populationData.value.length > 0) {
+      series.push({
+        name: "Population",
+        type: "scatter" as const,
+        data: populationData.value,
+        symbolSize: 7,
+        itemStyle: {
+          color: "#94a3b8",
+          borderColor: "rgba(255,255,255,0.6)",
+          borderWidth: 1,
+          opacity: 0.55,
+        },
+        emphasis: { itemStyle: { color: "#64748b", opacity: 1 } },
+        z: 1,
+      });
+    }
     series.push({
-      name: "Population",
+      name: "Pareto Front",
       type: "scatter" as const,
-      data: populationData.value,
-      symbolSize: 7,
-      itemStyle: {
-        color: "#94a3b8",
-        borderColor: "rgba(255,255,255,0.6)",
-        borderWidth: 1,
-        opacity: 0.55,
-      },
-      emphasis: { itemStyle: { color: "#64748b", opacity: 1 } },
-      z: 1,
+      data: paretoData.value.filter((p) => p.individualId !== markedId.value),
+      symbolSize: 11,
+      itemStyle: { color: "#3b82f6", borderColor: "#fff", borderWidth: 1.5 },
+      emphasis: { itemStyle: { color: "#1d4ed8", borderColor: "#fff", borderWidth: 2 } },
+      z: 2,
     });
   }
 
-  series.push({
-    name: "Pareto Front",
-    type: "scatter" as const,
-    // Exclude the marked point from this series so the pin renders cleanly on top
-    data: paretoData.value.filter((p) => p.individualId !== markedId.value),
-    symbolSize: 11,
-    itemStyle: { color: "#3b82f6", borderColor: "#fff", borderWidth: 1.5 },
-    emphasis: { itemStyle: { color: "#1d4ed8", borderColor: "#fff", borderWidth: 2 } },
-    z: 2,
-  });
-
-  // Pinned point — rendered on top as a gold pin symbol
+  // Pinned point — always rendered on top as a gold pin symbol
   if (markedPoint.value) {
     series.push({
       name: "Pinned",
@@ -251,8 +336,15 @@ function buildOption() {
   }
 
   const legendData = [
-    ...(populationData.value.length > 0 ? ["Population"] : []),
-    "Pareto Front",
+    ...(useRanks
+      ? rankedGroups.value
+          .map((g, r) => ({ r, g }))
+          .filter(({ g }) => g.length > 0)
+          .map(({ r }) => (r === MAX_LABELED_RANKS ? "Other" : `Front ${r + 1}`))
+      : [
+          ...(populationData.value.length > 0 ? ["Population"] : []),
+          "Pareto Front",
+        ]),
     ...(markedPoint.value ? ["Pinned"] : []),
   ];
 
@@ -286,7 +378,10 @@ function buildOption() {
   });
 }
 
-watch([ready, () => props.paretoFront, () => props.generations, xKey, yKey, markedPoint], buildOption);
+watch(
+  [ready, () => props.paretoFront, () => props.generations, () => props.objectiveGoals, xKey, yKey, markedPoint],
+  buildOption,
+);
 
 onMounted(() => {
   buildOption();

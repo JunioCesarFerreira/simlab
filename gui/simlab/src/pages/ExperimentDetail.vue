@@ -235,6 +235,7 @@
               :pareto-front="store.experiment.pareto_front"
               :generations="store.experiment.generations"
               :objective-names="store.objectiveNames"
+              :objective-goals="store.objectiveGoals"
               @click-individual="openIndividual"
             />
             <ParetoFront3DChart
@@ -242,6 +243,7 @@
               :pareto-front="store.experiment.pareto_front"
               :generations="store.experiment.generations"
               :objective-names="store.objectiveNames"
+              :objective-goals="store.objectiveGoals"
               @click-individual="openIndividual"
             />
             <div
