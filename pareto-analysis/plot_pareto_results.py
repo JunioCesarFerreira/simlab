@@ -8,12 +8,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import colormaps
 
-from deap.tools._hypervolume import hv
+import moocore
 
 from lib.api import (
     build_session,
     get_generations_from_experiment,
-    upload_analysis_file_api
+    get_experiment_pareto_front,
+    upload_analysis_file_api,
 )
 
 # ------------------------------------------------------------
@@ -526,7 +527,17 @@ def plot_parallel_coordinates_pareto0(
         print("[WARN] Empty Pareto front 0 (parallel coordinates)")
         return
 
-    ids = [p["id"] for p in front0]
+    # Deduplicate by objectives so legend is not overloaded by clones
+    seen: set[tuple] = set()
+    unique_front0 = []
+    for p in front0:
+        key = tuple(p["objectives"][o] for o in objective_names)
+        if key not in seen:
+            seen.add(key)
+            unique_front0.append(p)
+    front0 = unique_front0
+
+    ids = [p.get("id", str(i)) for i, p in enumerate(front0)]
 
     data = np.array([
         [p["objectives"][obj] for obj in objective_names]
@@ -583,7 +594,17 @@ def plot_radar_pareto0(
         print("[WARN] Empty Pareto front 0 (radar)")
         return
 
-    ids = [p["id"] for p in front0]
+    # Deduplicate by objectives
+    seen: set[tuple] = set()
+    unique_front0 = []
+    for p in front0:
+        key = tuple(p["objectives"][o] for o in objective_names)
+        if key not in seen:
+            seen.add(key)
+            unique_front0.append(p)
+    front0 = unique_front0
+
+    ids = [p.get("id", str(i)) for i, p in enumerate(front0)]
 
     data = np.array([
         [p["objectives"][obj] for obj in objective_names]
@@ -1284,97 +1305,116 @@ def main():
     args.minimize = [s.lower() == "true" for s in args.minimize]
 
     # ------------------------------------------------------------
-    # INITIAL DATA FETCHING & PREPARATION
+    # INITIAL DATA FETCHING
     # ------------------------------------------------------------
     session = build_session(args.api_key)
 
+    # Non-penalized individuals per generation (penalized filtered in lib/api.py)
     individuals_per_gen = get_generations_from_experiment(
         session=session,
         api_base=args.api_base,
         experiment_id=args.expid,
-        label_objectives=args.objectives
+        label_objectives=args.objectives,
     )
-    
-    population = build_population_from_api(individuals_per_gen)
-    fronts = fast_nondominated_sort(population, args.objectives, args.minimize)
 
-    # Build `pareto_by_front` from the `rank` values assigned to `population`.
-    # This guarantees consistency between the population-based distributions
-    # and the pareto_by_front mapping used by plotting functions.
-    pareto_by_front = defaultdict(list)
-    for p in population:
-        pareto_by_front[p.get("rank", 999)].append(p)
+    # Authoritative Pareto front stored by the engine — exactly what the GUI shows.
+    # Items: {"objectives": {metric: value, ...}, "chromosome": {...}}
+    stored_pareto = get_experiment_pareto_front(
+        session=session,
+        api_base=args.api_base,
+        experiment_id=args.expid,
+    )
 
-    # Ensure every rank in the range [0, max_rank] exists (possibly empty)
-    max_rank = max((p.get("rank", 0) for p in population), default=0)
-    for r in range(max_rank + 1):
-        pareto_by_front.setdefault(r, [])
-
-    # Propagate `rank` assigned to population elements back to the
-    # original `individuals_per_gen` items so downstream analyses can use it.
-    id_rank_map = {p["id"]: p.get("rank") for p in population}
-    for gen, inds in individuals_per_gen.items():
-        for ind in inds:
-            iid = ind.get("id")
-            if iid is None:
-                continue
-            if iid in id_rank_map and id_rank_map[iid] is not None:
-                ind["rank"] = id_rank_map[iid]
+    # pareto_by_front used for Pareto-front visualizations (2D/3D, parallel, radar).
+    # Wraps the stored front directly so plots match the GUI.
+    pareto_by_front_viz = {0: stored_pareto}
 
     # ------------------------------------------------------------
-    # Pareto dominance analysis and plots
+    # GLOBAL POPULATION — deduplicated by exact objectives
+    # ------------------------------------------------------------
+    # The same chromosome can appear in multiple generations with
+    # different MongoDB _ids.  Keeping all copies inflates the
+    # non-dominated front because duplicates never dominate each other.
+    # We deduplicate here so that rank-based analyses (distributions,
+    # lifetime coloring) reflect unique solutions.
+    seen_obj_keys: set[tuple] = set()
+    dedup_population: list[dict] = []
+    for gen, inds in individuals_per_gen.items():
+        for ind in inds:
+            key = tuple(ind["objectives"][o] for o in args.objectives)
+            if key not in seen_obj_keys:
+                seen_obj_keys.add(key)
+                dedup_population.append({
+                    "id": ind["id"],
+                    "generation": gen,
+                    "objectives": ind["objectives"],
+                })
+
+    # Global non-dominated sort on the deduplicated population.
+    dedup_fronts = fast_nondominated_sort(dedup_population, args.objectives, args.minimize)
+
+    # Build rank mapping: objective-tuple → global rank
+    obj_rank_map: dict[tuple, int] = {}
+    for rank, front in enumerate(dedup_fronts):
+        for ind in front:
+            key = tuple(ind["objectives"][o] for o in args.objectives)
+            obj_rank_map[key] = rank
+
+    # pareto_by_front used for distribution/lifetime analysis (has "id" fields).
+    pareto_by_front_analysis: dict[int, list[dict]] = defaultdict(list)
+    for ind in dedup_population:
+        key = tuple(ind["objectives"][o] for o in args.objectives)
+        rank = obj_rank_map.get(key, 999)
+        ind["rank"] = rank
+        pareto_by_front_analysis[rank].append(ind)
+
+    # Propagate rank to every individual in individuals_per_gen
+    # (including duplicates across generations) so lifetime plots work.
+    for gen, inds in individuals_per_gen.items():
+        for ind in inds:
+            key = tuple(ind["objectives"][o] for o in args.objectives)
+            ind["rank"] = obj_rank_map.get(key, 999)
+
+    # flat list with rank for distribution plots
+    population_ranked = build_population_from_api(individuals_per_gen)
+    for ind in population_ranked:
+        key = tuple(ind["objectives"][o] for o in args.objectives)
+        ind["rank"] = obj_rank_map.get(key, 999)
+
+    # ------------------------------------------------------------
+    # Pareto front plots (use stored_pareto — matches the GUI)
     # ------------------------------------------------------------
     pareto_plot = Path(f"pareto_fronts_{args.expid}.png")
     plot_pareto_fronts(
-        pareto_by_front,
+        pareto_by_front_viz,
         tuple(args.objectives),
-        pareto_plot
+        pareto_plot,
     )
     upload_analysis_file_api(
-        session,
-        args.api_base,
-        args.expid,
-        pareto_plot,
-        "pareto_fronts",
-        "Pareto fronts (dominance layers)"
+        session, args.api_base, args.expid, pareto_plot,
+        "pareto_fronts", "Pareto fronts (dominance layers)",
     )
     print("[OK] Pareto dominance analysis completed")
-    
+
     # ------------------------------------------------------------
     # Distribution of individuals per global front and generation
     # ------------------------------------------------------------
     dist_plot = Path(f"pareto_distribution_{args.expid}.png")
-    plot_global_front_per_generation_distribution(
-        population,
-        dist_plot
-    )
+    plot_global_front_per_generation_distribution(population_ranked, dist_plot)
     upload_analysis_file_api(
-        session,
-        args.api_base,
-        args.expid,
-        dist_plot,
-        "pareto_distribution",
-        "Distribution of individuals per front and generation"
-    )        
+        session, args.api_base, args.expid, dist_plot,
+        "pareto_distribution", "Distribution of individuals per front and generation",
+    )
     print("[OK] Distribution of individuals per front and generation completed")
-    
+
     # ------------------------------------------------------------
     # Global distribution of individuals across fronts
     # ------------------------------------------------------------
-    global_dist_plot = Path(
-        f"pareto_global_distribution_{args.expid}.png"
-    )
-    plot_global_front_distribution(
-        population=population,
-        output_path=global_dist_plot
-    )
+    global_dist_plot = Path(f"pareto_global_distribution_{args.expid}.png")
+    plot_global_front_distribution(population=population_ranked, output_path=global_dist_plot)
     upload_analysis_file_api(
-        session,
-        args.api_base,
-        args.expid,
-        global_dist_plot,
-        "pareto_global_distribution",
-        "Global distribution of individuals across Pareto fronts"
+        session, args.api_base, args.expid, global_dist_plot,
+        "pareto_global_distribution", "Global distribution of individuals across Pareto fronts",
     )
     print("[OK] Global Pareto distribution completed")
 
@@ -1384,60 +1424,46 @@ def main():
     front_gen_plot = Path(f"pareto_fronts_per_generation_{args.expid}.png")
     plot_local_front_per_generation_distribution(
         population=individuals_per_gen,
-        output_path=front_gen_plot
+        output_path=front_gen_plot,
     )
     upload_analysis_file_api(
-        session,
-        args.api_base,
-        args.expid,
-        front_gen_plot,
-        "pareto_fronts_per_generation",
-        "Pareto fronts distribution computed intra-generation"
+        session, args.api_base, args.expid, front_gen_plot,
+        "pareto_fronts_per_generation", "Pareto fronts distribution computed intra-generation",
     )
     print("[OK] Pareto fronts per generation completed")
 
     # ------------------------------------------------------------
     # Lifetime analysis
     # ------------------------------------------------------------
-    
     lifetime_dir = Path(f"lifetimes_{args.expid}")
     plot_individual_lifetime_per_generation(
         individuals_per_generation=individuals_per_gen,
-        pareto_by_front=pareto_by_front,
-        output_dir=lifetime_dir
+        pareto_by_front=pareto_by_front_analysis,
+        output_dir=lifetime_dir,
     )
     for file in lifetime_dir.glob("*.png"):
         upload_analysis_file_api(
-            session,
-            args.api_base,
-            args.expid,
-            file,
-            file.name.replace(".png", ""),
-            file.name.replace(".png", "")        
+            session, args.api_base, args.expid,
+            file, file.name.replace(".png", ""), file.name.replace(".png", ""),
         )
     print("[OK] Lifetime per generation completed")
-        
+
     lifetime_plot = Path(f"individual_lifetime_{args.expid}.png")
     plot_individual_lifetime(
         individuals_per_generation=individuals_per_gen,
-        pareto_by_front=pareto_by_front,
-        output_path=lifetime_plot
+        pareto_by_front=pareto_by_front_analysis,
+        output_path=lifetime_plot,
     )
     upload_analysis_file_api(
-        session,
-        args.api_base,
-        args.expid,
-        lifetime_plot,
-        "individual_lifetime",
-        "Individual survival across generations (colored by global Pareto rank)"
+        session, args.api_base, args.expid, lifetime_plot,
+        "individual_lifetime", "Individual survival across generations (colored by global Pareto rank)",
     )
     print("[OK] Individual lifetime completed")
-    
-    # ------------------------------------------------------------
-    # Pareto front per generation
-    # ------------------------------------------------------------
 
-    pareto_per_gen = {}
+    # ------------------------------------------------------------
+    # Local Pareto front per generation → last-generation plot
+    # ------------------------------------------------------------
+    pareto_per_gen: dict[int, list[dict]] = {}
     for gen, inds in individuals_per_gen.items():
         local_pop = [
             {"id": ind["id"], "generation": gen, "objectives": ind["objectives"]}
@@ -1446,150 +1472,113 @@ def main():
         local_fronts = fast_nondominated_sort(local_pop, args.objectives, args.minimize)
         pareto_per_gen[gen] = local_fronts[0] if local_fronts else []
 
-    last_front_plot = Path(
-        f"pareto_last_generation_{args.expid}.png"
-    )
+    last_front_plot = Path(f"pareto_last_generation_{args.expid}.png")
     plot_last_generation_pareto_front(
         pareto_per_generation=pareto_per_gen,
         objective_names=tuple(args.objectives),
-        output_path=last_front_plot
+        output_path=last_front_plot,
     )
     upload_analysis_file_api(
-        session,
-        args.api_base,
-        args.expid,
-        last_front_plot,
-        "pareto_last_generation",
-        "Pareto front of the last generation"
+        session, args.api_base, args.expid, last_front_plot,
+        "pareto_last_generation", "Pareto front of the last generation",
     )
     print("[OK] Pareto front of last generation completed")
 
     # ------------------------------------------------------------
     # HV and GD computation
     # ------------------------------------------------------------
-    
-    # Worst reference point for hypervolume
+    # Reference point: worst feasible values + margin (no penalty contamination).
     worst_point = compute_worst_point(
         individuals_per_gen,
         tuple(args.objectives),
-        minimize=args.minimize
+        minimize=args.minimize,
     )
-    worst_point = [coord + 1.0 for coord in worst_point]
+    worst_point = [coord + abs(coord) * 0.05 + 1.0 for coord in worst_point]
 
-    final_front = np.array([
+    # GD reference: unique objectives from the stored (authoritative) Pareto front.
+    stored_obj_matrix = np.array([
         [p["objectives"][o] for o in args.objectives]
-        for p in pareto_by_front[0]
+        for p in stored_pareto
     ])
-    
-    final_front = to_minimization_array(final_front, objectives=args.objectives, minimize=args.minimize)
+    stored_obj_unique = np.unique(stored_obj_matrix, axis=0)
+    final_front = to_minimization_array(
+        stored_obj_unique, objectives=args.objectives, minimize=args.minimize
+    )
 
-    hv_values = []
-    gd_values = []
+    hv_values: list[float] = []
+    gd_values: list[float] = []
 
     for gen, inds in individuals_per_gen.items():
-        # handle empty generations
         if not inds:
             hv_values.append(0.0)
             gd_values.append(np.nan)
             continue
 
-        # normalize API items to internal population format expected by
-        # fast_nondominated_sort (uses keys: "id", "objectives")
         local_population = [
-            {
-                "id": ind.get("id"),
-                "generation": gen,
-                "objectives": ind["objectives"]
-            }
+            {"id": ind["id"], "generation": gen, "objectives": ind["objectives"]}
             for ind in inds
         ]
-
-        fronts = fast_nondominated_sort(local_population, args.objectives, args.minimize)
-        if not fronts:
+        local_fronts = fast_nondominated_sort(local_population, args.objectives, args.minimize)
+        if not local_fronts:
             hv_values.append(0.0)
             gd_values.append(np.nan)
             continue
 
-        front = fronts[0]
-
-        points = np.array([
+        front_points = np.array([
             [p["objectives"][o] for o in args.objectives]
-            for p in front
+            for p in local_fronts[0]
         ])
-
-        points = to_minimization_array(points, objectives=args.objectives, minimize=args.minimize)
-
-        print(f"points: {points}")
-        print(f"worst_point: {worst_point}")
-        hv_val = hv.hypervolume(points, worst_point)
-
-        gd_val = compute_gd(
-            points,
-            final_front
+        # Deduplicate per-generation front before HV/GD
+        front_points = np.unique(front_points, axis=0)
+        front_min = to_minimization_array(
+            front_points, objectives=args.objectives, minimize=args.minimize
         )
+
+        hv_val = moocore.hypervolume(front_min, ref=worst_point)
+        gd_val = compute_gd(front_min, final_front)
 
         hv_values.append(hv_val)
         gd_values.append(gd_val)
 
     hv_gd_plot = Path(f"hv_gd_{args.expid}.png")
-    
     generations = sorted(individuals_per_gen.keys())
     plot_hv_gd(
         generations=generations,
         hv_values=hv_values,
         gd_values=gd_values,
         worst_point=worst_point,
-        output_path=hv_gd_plot
+        output_path=hv_gd_plot,
     )
     upload_analysis_file_api(
-        session,
-        args.api_base,
-        args.expid,
-        hv_gd_plot,
-        "hv_gd",
-        "Hypervolume and generational distance evolution 2"
-    )    
+        session, args.api_base, args.expid, hv_gd_plot,
+        "hv_gd", "Hypervolume and generational distance evolution 2",
+    )
     print("[OK] Pareto HV and GD analysis completed")
-    
-    # ------------------------------------------------------------
-    # Parallel coordinates and radar for Pareto front 0
-    # ------------------------------------------------------------
 
+    # ------------------------------------------------------------
+    # Parallel coordinates and radar (stored Pareto front 0)
+    # ------------------------------------------------------------
     parallel_plot = Path(f"pareto_parallel_{args.expid}.png")
     plot_parallel_coordinates_pareto0(
-        pareto_by_front,
-        tuple(args.objectives),
-        args.minimize,
-        parallel_plot
+        pareto_by_front_viz, tuple(args.objectives), args.minimize, parallel_plot,
     )
     upload_analysis_file_api(
-        session,
-        args.api_base,
-        args.expid,
-        parallel_plot,
-        "pareto_parallel",
-        "Pareto front 0 — parallel coordinates"
+        session, args.api_base, args.expid, parallel_plot,
+        "pareto_parallel", "Pareto front 0 — parallel coordinates",
     )
     print("[OK] Pareto parallel coordinates analysis completed")
 
     radar_plot = Path(f"pareto_radar_{args.expid}.png")
     plot_radar_pareto0(
-        pareto_by_front,
-        tuple(args.objectives),
-        args.minimize,
-        radar_plot
+        pareto_by_front_viz, tuple(args.objectives), args.minimize, radar_plot,
     )
     upload_analysis_file_api(
-        session,
-        args.api_base,
-        args.expid,
-        radar_plot,
-        "pareto_radar",
-        "Pareto front 0 — radar plot"
+        session, args.api_base, args.expid, radar_plot,
+        "pareto_radar", "Pareto front 0 — radar plot",
     )
     print("[OK] Pareto radar coordinates analysis completed")
 
-    # ------------------------------------------------------------    
+    # ------------------------------------------------------------
     # Cleanup
     # ------------------------------------------------------------
     if not args.keep_the_files:

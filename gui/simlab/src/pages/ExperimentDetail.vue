@@ -53,6 +53,17 @@
           </div>
           <div class="header-actions">
             <button
+              v-if="has3Objectives"
+              class="action-btn pareto-btn"
+              :class="{ 'pareto-running': plotParetoState === 'running', 'pareto-done': plotParetoState === 'done', 'pareto-error': plotParetoState === 'error' }"
+              :disabled="plotParetoState === 'running'"
+              :title="plotParetoState === 'error' ? plotParetoError : undefined"
+              @click="doPlotPareto"
+            >
+              <span v-if="plotParetoState === 'running'" class="spinner" />
+              {{ plotParetoState === 'running' ? 'Running analysis…' : plotParetoState === 'done' ? '✓ Analysis done' : plotParetoState === 'error' ? '✗ Analysis failed' : 'Plot Pareto results' }}
+            </button>
+            <button
               v-if="hasAnalysisFiles"
               class="action-btn"
               :disabled="downloading.analysis"
@@ -314,7 +325,7 @@ import ObjectivesEvolutionChart from "../components/charts/ObjectivesEvolutionCh
 import IndividualDetailPanel from "../components/detail/IndividualDetailPanel.vue";
 import ProblemVizModal from "../components/detail/ProblemVizModal.vue";
 import { downloadAnalysisZip, downloadTopologiesZip } from "../api/files";
-import { updateExperiment } from "../api/experiments";
+import { updateExperiment, plotParetoResults } from "../api/experiments";
 import { useResizable } from "../composables/useResizable";
 import type { IndividualDto, JsonObject } from "../types/simlab";
 
@@ -454,6 +465,28 @@ async function doDownloadTopologies() {
   try { await downloadTopologiesZip(props.id); }
   catch (e) { console.error("Error downloading topologies:", e); }
   finally { downloading.topologies = false; }
+}
+
+const plotParetoState = ref<"idle" | "running" | "done" | "error">("idle");
+const plotParetoError = ref("");
+
+async function doPlotPareto() {
+  if (plotParetoState.value === "running") return;
+  const objectives = store.objectiveNames.slice(0, 3);
+  const goals = store.objectiveGoals.slice(0, 3);
+  const minimize = goals.map((g) => g === "min");
+  plotParetoState.value = "running";
+  plotParetoError.value = "";
+  try {
+    await plotParetoResults(props.id, objectives, minimize);
+    plotParetoState.value = "done";
+    await store.refresh(props.id);
+    setTimeout(() => { plotParetoState.value = "idle"; }, 4000);
+  } catch (e) {
+    plotParetoError.value = e instanceof Error ? e.message : String(e);
+    plotParetoState.value = "error";
+    setTimeout(() => { plotParetoState.value = "idle"; }, 6000);
+  }
 }
 
 const totalDuration = computed(() => {
@@ -652,6 +685,23 @@ onBeforeUnmount(() => {
   border-color: var(--color-primary);
   color: var(--color-primary);
 }
+
+.pareto-btn { display: flex; align-items: center; gap: 6px; }
+.pareto-btn.pareto-running { border-color: var(--color-primary); color: var(--color-primary); opacity: 0.8; cursor: wait; }
+.pareto-btn.pareto-done { border-color: #16a34a; color: #16a34a; }
+.pareto-btn.pareto-error { border-color: #dc2626; color: #dc2626; }
+
+.spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* Timeline */
 .timeline-bar {

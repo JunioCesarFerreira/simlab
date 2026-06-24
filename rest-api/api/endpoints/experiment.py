@@ -1,6 +1,10 @@
+import os
+import subprocess
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from bson import errors as bson_errors
 from tempfile import NamedTemporaryFile
+from pydantic import BaseModel
 
 from bson import ObjectId
 
@@ -154,6 +158,69 @@ async def attach_analysis_file(
         return str(oid)
     except bson_errors.InvalidId:
         raise HTTPException(status_code=400, detail="Invalid experiment_id")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ParetoPlotRequest(BaseModel):
+    objectives: list[str]
+    minimize: list[bool]
+
+
+_PARETO_SCRIPT = os.getenv(
+    "SIMLAB_PARETO_SCRIPT",
+    "/home/junio/Documentos/simlab/pareto-analysis/plot_pareto_results.py",
+)
+_PARETO_PYTHON = os.getenv(
+    "SIMLAB_PARETO_PYTHON",
+    "/home/junio/github/simlab/mo-engine/.venv/bin/python",
+)
+
+
+@router.post("/{experiment_id}/plot-pareto")
+def plot_pareto_results(
+    experiment_id: str,
+    body: ParetoPlotRequest,
+    factory: MongoRepository = Depends(get_factory),
+) -> dict:
+    """Run pareto analysis script and upload resulting plots to the experiment."""
+    try:
+        doc = factory.experiment_repo.get(experiment_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Experiment not found")
+    except bson_errors.InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid experiment_id")
+
+    if len(body.objectives) < 3 or len(body.minimize) < 3:
+        raise HTTPException(status_code=422, detail="objectives and minimize must each have at least 3 items")
+
+    api_key = os.getenv("SIMLAB_API_KEY", "api-password")
+    minimize_strs = [str(m) for m in body.minimize[:3]]
+
+    cmd = [
+        _PARETO_PYTHON, _PARETO_SCRIPT,
+        "--expid", experiment_id,
+        "--objectives", *body.objectives[:3],
+        "--minimize", *minimize_strs,
+        "--api-base", "http://localhost:8000/api/v1",
+        "--api-key", api_key,
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=600,
+            cwd=os.path.dirname(_PARETO_SCRIPT),
+        )
+        if result.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"Script failed:\n{result.stderr}")
+        return {"status": "ok", "output": result.stdout}
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="Pareto analysis timed out (10 min limit)")
     except HTTPException:
         raise
     except Exception as e:
