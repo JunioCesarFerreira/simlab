@@ -273,7 +273,7 @@ function buildOption() {
       name: "Population",
       type: "scatter3D",
       data: populationData.value,
-      symbolSize: 5,
+      symbolSize: 3,
       itemStyle: {
         color: dark ? "#585b70" : "#b0bac8",
         opacity: dark ? 0.45 : 0.5,
@@ -288,7 +288,7 @@ function buildOption() {
     name: "Pareto Front",
     type: "scatter3D",
     data: paretoData.value.filter((p) => p.individualId !== markedId.value),
-    symbolSize: 9,
+    symbolSize: 6,
     itemStyle: {
       color: "#3b82f6",
       opacity: 0.92,
@@ -305,7 +305,7 @@ function buildOption() {
       name: "Pinned",
       type: "scatter3D",
       data: [markedPoint.value],
-      symbolSize: 14,
+      symbolSize: 10,
       itemStyle: { color: "#f59e0b", opacity: 1 },
       emphasis: { itemStyle: { color: "#d97706", opacity: 1 } },
     });
