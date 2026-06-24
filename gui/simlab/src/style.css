@@ -1,25 +1,43 @@
 /* -------------------------------------------------------
- * Design tokens
+ * Design tokens — Light (default)
  * ----------------------------------------------------- */
 :root {
-  --color-bg: #f8fafc;
-  --color-surface: #ffffff;
-  --color-border: #e5e7eb;
-  --color-text: #111827;
-  --color-text-muted: #6b7280;
-  --color-primary: #3b82f6;
+  --color-bg:           #f8fafc;
+  --color-surface:      #ffffff;
+  --color-surface-hover: #f1f5f9;
+  --color-border:       #e5e7eb;
+  --color-text:         #111827;
+  --color-text-muted:   #6b7280;
+  --color-primary:      #3b82f6;
   --color-primary-light: #eff6ff;
 
   --status-waiting: #f59e0b;
   --status-running: #3b82f6;
-  --status-done: #10b981;
-  --status-error: #ef4444;
+  --status-done:    #10b981;
+  --status-error:   #ef4444;
 
   --radius-sm: 4px;
   --radius-md: 8px;
   --radius-lg: 12px;
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+
+  /* Syntax highlight tokens — light */
+  --hljs-keyword:    #0369a1;
+  --hljs-builtin:    #0369a1;
+  --hljs-type:       #7c3aed;
+  --hljs-literal:    #059669;
+  --hljs-number:     #d97706;
+  --hljs-operator:   #475569;
+  --hljs-string:     #059669;
+  --hljs-comment:    #94a3b8;
+  --hljs-meta:       #b45309;
+  --hljs-title:      #1d4ed8;
+  --hljs-params:     #334155;
+  --hljs-section:    #1d4ed8;
+  --hljs-symbol:     #dc2626;
+  --hljs-code-bg:    #f8fafc;
+  --hljs-gutter-bg:  #f1f5f9;
 
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
@@ -30,6 +48,178 @@
   background-color: var(--color-bg);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* -------------------------------------------------------
+ * Design tokens — Dark  (Catppuccin Mocha base)
+ *
+ * --color-primary stays #3b82f6 so that all hardcoded
+ * `color: #fff` on buttons keep sufficient contrast (4.5:1).
+ * Using the lighter Catppuccin #89b4fa would drop to ~3.3:1.
+ * ----------------------------------------------------- */
+html.dark {
+  --color-bg:           #11111b;   /* Crust  */
+  --color-surface:      #1e1e2e;   /* Base   */
+  --color-surface-hover: #313244;  /* Surface0 */
+  --color-border:       #313244;   /* Surface0 */
+  --color-text:         #cdd6f4;   /* Text   */
+  --color-text-muted:   #7f849c;   /* Overlay1 — better contrast than Overlay0 */
+  --color-primary:      #3b82f6;   /* keep identical to light — works with #fff text */
+  --color-primary-light: rgba(59, 130, 246, 0.16);
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5);
+
+  /* Tell browsers to render native controls in dark mode */
+  color-scheme: dark;
+
+  /* Syntax highlight tokens — Catppuccin Mocha */
+  --hljs-keyword:    #89b4fa;   /* Blue   */
+  --hljs-builtin:    #89b4fa;
+  --hljs-type:       #cba6f7;   /* Mauve  */
+  --hljs-literal:    #a6e3a1;   /* Green  */
+  --hljs-number:     #fab387;   /* Peach  */
+  --hljs-operator:   #89dceb;   /* Sky    */
+  --hljs-string:     #a6e3a1;   /* Green  */
+  --hljs-comment:    #585b70;   /* Surface2 */
+  --hljs-meta:       #f9e2af;   /* Yellow */
+  --hljs-title:      #89b4fa;   /* Blue   */
+  --hljs-params:     #cdd6f4;   /* Text   */
+  --hljs-section:    #89b4fa;   /* Blue   */
+  --hljs-symbol:     #f38ba8;   /* Red    */
+  --hljs-code-bg:    #181825;   /* Mantle */
+  --hljs-gutter-bg:  #11111b;   /* Crust  */
+
+  background-color: var(--color-bg);
+  color: var(--color-text);
+}
+
+/* -------------------------------------------------------
+ * Dark mode — semantic state overrides
+ *
+ * Scoped Vue styles compile to .class[data-v-xxx] → (0,2,0).
+ * html.dark .class → (0,2,1) which wins, so no !important
+ * is needed for single-class selectors.
+ * For :hover pseudo-classes we need !important to beat
+ * the inline specificity from scoped hover rules.
+ * ----------------------------------------------------- */
+
+/* Error / danger banners and inline messages */
+html.dark .error-banner,
+html.dark .form-error,
+html.dark .err-banner {
+  background: rgba(243, 139, 168, 0.10);
+  border-color: rgba(243, 139, 168, 0.30);
+  color: #f38ba8;
+}
+
+/* Warning banners */
+html.dark .warn-banner {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.35);
+  color: #f9e2af;
+}
+
+/* Success icon circle */
+html.dark .check-icon {
+  background: rgba(16, 185, 129, 0.16);
+}
+
+/* "Outlined" danger buttons (bg + text-only style, no solid bg) */
+html.dark .danger-btn {
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.40);
+  color: #f38ba8;
+}
+html.dark .danger-btn:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.24) !important;
+}
+
+/* Remove / destroy icon-buttons */
+html.dark .remove-btn {
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.40);
+  color: #f38ba8;
+}
+html.dark .remove-btn:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.24) !important;
+}
+
+html.dark .remove-file-btn,
+html.dark .file-remove {
+  border-color: rgba(243, 139, 168, 0.35);
+  color: #f38ba8;
+}
+
+/* Blue hover states and blue-tinted elements (hardcoded #dbeafe) */
+html.dark .refresh-btn:hover:not(:disabled) {
+  background: var(--color-primary-light) !important;
+}
+html.dark .viz-btn {
+  border-color: rgba(59, 130, 246, 0.30);
+}
+html.dark .viz-btn:hover {
+  background: var(--color-primary-light) !important;
+}
+html.dark .live-pill {
+  background: rgba(59, 130, 246, 0.16);
+  color: #89b4fa;
+}
+html.dark .link-btn:hover {
+  background: var(--color-primary-light) !important;
+}
+
+/* Coloured pills (ProblemVizModal, IndividualRow) */
+html.dark .pill--blue {
+  background: rgba(59, 130, 246, 0.14);
+  border-color: rgba(59, 130, 246, 0.30);
+  color: #89b4fa;
+}
+html.dark .pill--green {
+  background: rgba(16, 185, 129, 0.14);
+  border-color: rgba(16, 185, 129, 0.30);
+  color: #a6e3a1;
+}
+html.dark .penalty-badge {
+  background: rgba(245, 158, 11, 0.14);
+  color: #f9e2af;
+}
+
+/* -------------------------------------------------------
+ * Dark mode — problem-editor scoped overrides
+ *
+ * Token overrides on .problem-editor take precedence over
+ * .problem-editor alone (higher specificity via html.dark).
+ * ----------------------------------------------------- */
+html.dark .problem-editor {
+  --color-bg:            #181825;
+  --color-surface:       #1e1e2e;
+  --color-border:        #313244;
+  --color-text:          #cdd6f4;
+  --color-text-muted:    #a6adc8;
+  --color-primary-light: rgba(137, 180, 250, 0.14);
+}
+
+html.dark .problem-editor .canvas-area {
+  background: #11111b !important;
+}
+
+/* Force form elements to respect dark palette inside the editor */
+html.dark .problem-editor input,
+html.dark .problem-editor select,
+html.dark .problem-editor textarea {
+  background: #313244 !important;
+  color: #cdd6f4 !important;
+  border-color: #45475a !important;
+}
+
+html.dark .problem-editor .code {
+  background: #181825 !important;
+  color: #89b4fa !important;
+}
+
+html.dark .problem-editor .node-item.active {
+  background: #313244 !important;
 }
 
 /* -------------------------------------------------------

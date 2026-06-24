@@ -28,3 +28,13 @@ class MongoGridFSHandler:
                 logger.info(f"File {local_path} saved successfully.")
         except Exception as e:
             logger.error(f"Failed to save file {file_id}: {e}")
+
+    def read_file_content(self, file_id: str) -> bytes:
+        with self.connection.connect() as db:
+            fs = gridfs.GridFS(db)
+            return fs.get(ObjectId(file_id)).read()
+
+    def delete_file(self, file_id: str) -> None:
+        with self.connection.connect() as db:
+            fs = gridfs.GridFS(db)
+            fs.delete(ObjectId(file_id))

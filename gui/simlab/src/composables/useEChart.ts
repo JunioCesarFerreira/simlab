@@ -3,16 +3,20 @@ import * as echarts from "echarts";
 
 export function useEChart(containerRef: Ref<HTMLElement | null>) {
   let chart: echarts.ECharts | null = null;
+  let ro: ResizeObserver | null = null;
   const ready = ref(false);
 
   onMounted(() => {
-    if (containerRef.value) {
-      chart = echarts.init(containerRef.value, null, { renderer: "svg" });
-      ready.value = true;
-    }
+    if (!containerRef.value) return;
+    chart = echarts.init(containerRef.value, null, { renderer: "svg" });
+    ready.value = true;
+    ro = new ResizeObserver(() => chart?.resize());
+    ro.observe(containerRef.value);
   });
 
   onBeforeUnmount(() => {
+    ro?.disconnect();
+    ro = null;
     chart?.dispose();
     chart = null;
   });
