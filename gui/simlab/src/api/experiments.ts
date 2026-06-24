@@ -60,3 +60,15 @@ export async function createExperiment(
   const { data } = await client.post<string>("/experiments/", payload);
   return data;
 }
+
+export async function plotParetoResults(
+  id: string,
+  objectives: string[],
+  minimize: boolean[],
+): Promise<{ status: string; output: string }> {
+  const { data } = await client.post<{ status: string; output: string }>(
+    `/experiments/${id}/plot-pareto`,
+    { objectives, minimize },
+  );
+  return data;
+}
