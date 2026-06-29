@@ -15,8 +15,10 @@ export interface SortablePoint {
 function dominates(b: number[], a: number[], minimize: boolean[]): boolean {
   let betterOnOne = false;
   for (let i = 0; i < a.length; i++) {
-    const bBetter = minimize[i] ? b[i] < a[i] : b[i] > a[i];
-    const bWorse  = minimize[i] ? b[i] > a[i] : b[i] < a[i];
+    const bi = b[i]!;
+    const ai = a[i]!;
+    const bBetter = minimize[i] ? bi < ai : bi > ai;
+    const bWorse  = minimize[i] ? bi > ai : bi < ai;
     if (bWorse) return false;
     if (bBetter) betterOnOne = true;
   }
@@ -32,13 +34,15 @@ export function computeRanks(
   const dominated = Array.from({ length: n }, () => [] as number[]); // which points i dominates
 
   for (let i = 0; i < n; i++) {
+    const pi = points[i]!;
     for (let j = i + 1; j < n; j++) {
-      if (dominates(points[j].objectives, points[i].objectives, minimize)) {
-        domCount[i]++;
-        dominated[j].push(i);
-      } else if (dominates(points[i].objectives, points[j].objectives, minimize)) {
-        domCount[j]++;
-        dominated[i].push(j);
+      const pj = points[j]!;
+      if (dominates(pj.objectives, pi.objectives, minimize)) {
+        domCount[i] = domCount[i]! + 1;
+        dominated[j]!.push(i);
+      } else if (dominates(pi.objectives, pj.objectives, minimize)) {
+        domCount[j] = domCount[j]! + 1;
+        dominated[i]!.push(j);
       }
     }
   }
@@ -55,8 +59,8 @@ export function computeRanks(
     const next: number[] = [];
     for (const i of current) {
       rank[i] = r;
-      for (const j of dominated[i]) {
-        if (--domCount[j] === 0) next.push(j);
+      for (const j of dominated[i]!) {
+        if (--domCount[j]! === 0) next.push(j);
       }
     }
     r++;
@@ -64,7 +68,7 @@ export function computeRanks(
   }
 
   const result = new Map<string, number>();
-  for (let i = 0; i < n; i++) result.set(points[i].id, rank[i]);
+  for (let i = 0; i < n; i++) result.set(points[i]!.id, rank[i]!);
   return result;
 }
 

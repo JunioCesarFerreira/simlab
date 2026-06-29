@@ -81,7 +81,7 @@ function onExperimentCreated(experimentId: string) {
   max-width: 340px;
   flex-shrink: 0;
   border-right: 1px solid var(--color-border);
-  overflow: hidden;
+  overflow-y: auto;
 }
 .canvas-area {
   flex: 1;

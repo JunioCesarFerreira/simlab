@@ -3,7 +3,7 @@
     <Sidebar class="sidebar" />
     <div class="main">
       <Topbar class="topbar" />
-      <div class="content">
+      <div class="content" :class="{ 'full-screen': route.meta.fullScreen }">
         <slot />
       </div>
     </div>
@@ -11,15 +11,18 @@
 </template>
 
 <script setup lang="ts">
+import { useRoute } from 'vue-router'
 import Sidebar from "./Sidebar.vue";
 import Topbar from "./TopBar.vue";
+
+const route = useRoute()
 </script>
 
 <style scoped>
 .shell {
   display: grid;
   grid-template-columns: 220px 1fr;
-  min-height: 100vh;
+  height: 100vh;
   background: var(--color-bg);
 }
 
@@ -34,7 +37,7 @@ import Topbar from "./TopBar.vue";
 .main {
   display: grid;
   grid-template-rows: 48px 1fr;
-  min-height: 100vh;
+  height: 100vh;
   overflow: hidden;
 }
 
@@ -47,5 +50,10 @@ import Topbar from "./TopBar.vue";
 .content {
   padding: 24px;
   overflow-y: auto;
+}
+
+.content.full-screen {
+  padding: 0;
+  overflow: hidden;
 }
 </style>
