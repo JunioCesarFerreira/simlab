@@ -212,7 +212,7 @@ const rankedGroups = computed<ChartPoint[][]>(() => {
   const groups: ChartPoint[][] = Array.from({ length: MAX_LABELED_RANKS + 1 }, () => []);
   for (const p of populationData.value) {
     const r = rankMap.value.get(p.individualId) ?? MAX_LABELED_RANKS;
-    groups[r].push(p);
+    groups[r]!.push(p);
   }
   return groups;
 });

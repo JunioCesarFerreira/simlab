@@ -106,9 +106,11 @@ function buildHvOption(d: HvGdData, dark: boolean): echarts.EChartsOption {
       backgroundColor: c.tooltip,
       borderColor: c.tooltipBorder,
       textStyle: { color: c.text, fontSize: 12 },
-      formatter: (params: echarts.DefaultLabelFormatterCallbackParams[]) => {
-        const p = params[0];
-        return `${p.axisValueLabel}<br/><b>HV</b>: ${(p.value as number).toExponential(3)}`;
+      formatter: (params) => {
+        const list = params as Array<echarts.DefaultLabelFormatterCallbackParams & { axisValueLabel?: string }>;
+        const p = list[0];
+        if (!p) return "";
+        return `${p.axisValueLabel ?? p.name}<br/><b>HV</b>: ${(p.value as number).toExponential(3)}`;
       },
     },
     grid: { top: 30, right: 20, bottom: 40, left: 60, containLabel: false },
@@ -161,10 +163,12 @@ function buildGdOption(d: HvGdData, dark: boolean): echarts.EChartsOption {
       backgroundColor: c.tooltip,
       borderColor: c.tooltipBorder,
       textStyle: { color: c.text, fontSize: 12 },
-      formatter: (params: echarts.DefaultLabelFormatterCallbackParams[]) => {
-        const p = params[0];
+      formatter: (params) => {
+        const list = params as Array<echarts.DefaultLabelFormatterCallbackParams & { axisValueLabel?: string }>;
+        const p = list[0];
+        if (!p) return "";
         const v = p.value as number;
-        return `${p.axisValueLabel}<br/><b>GD</b>: ${v.toFixed(4)}`;
+        return `${p.axisValueLabel ?? p.name}<br/><b>GD</b>: ${v.toFixed(4)}`;
       },
     },
     grid: { top: 30, right: 20, bottom: 40, left: 60, containLabel: false },
