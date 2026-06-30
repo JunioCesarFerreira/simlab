@@ -161,6 +161,7 @@ const form = reactive<{
     selectionMethod: 'tournament',
     crossoverMethod: 'uniform_mask',
     mutationMethod: 'bitflip',
+    divisions: 10,
   },
   simulation: {
     duration: 180,
@@ -260,6 +261,9 @@ async function submit() {
   submitting.value = true
   submitError.value = null
 
+  const isNsga3 = ['nsga3', 'nsga3_deap', 'nsga3_pymoo'].includes(form.experiment.strategy)
+  const isEvolutionary = form.experiment.strategy !== 'random_search'
+
   try {
     const experimentId = await createExperiment({
       id: null,
@@ -276,12 +280,15 @@ async function submit() {
           population_size:       form.experiment.populationSize,
           number_of_generations: form.experiment.numberOfGenerations,
           random_seed:           form.experiment.randomSeed,
-          prob_cx:               form.experiment.probCx,
-          prob_mt:               form.experiment.probMt,
-          per_gene_prob:         form.experiment.perGeneProb,
-          selection_method:      form.experiment.selectionMethod,
-          crossover_method:      form.experiment.crossoverMethod,
-          mutation_method:       form.experiment.mutationMethod,
+          ...(isNsga3 && { divisions: form.experiment.divisions }),
+          ...(isEvolutionary && {
+            prob_cx:          form.experiment.probCx,
+            prob_mt:          form.experiment.probMt,
+            per_gene_prob:    form.experiment.perGeneProb,
+            selection_method: form.experiment.selectionMethod,
+            crossover_method: form.experiment.crossoverMethod,
+            mutation_method:  form.experiment.mutationMethod,
+          }),
         },
         simulation: {
           duration:     form.simulation.duration,
