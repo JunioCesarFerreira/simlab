@@ -823,8 +823,18 @@ class NSGA3LoopStrategy(EngineStrategy):
         children: list[Chromosome] = []
         seen: set[Chromosome] = set()
 
-        fronts: list[list[int]] = fast_nondominated_sort(parents_objectives)
-        individual_ranks: dict[int, int] = compute_individual_ranks(fronts)
+        n_obj = len(self._objective_keys)
+        if all(self._problem_adapter.penalty_objectives(g, n_obj) is not None for g in parents):
+            # Every parent is infeasible: assign uniform rank so tournament selection
+            # is purely random. Gradient-penalty magnitudes must not bias exploration
+            # when there is no feasible reference to guide convergence.
+            individual_ranks: dict[int, int] = {i: 0 for i in range(len(parents))}
+            logger.warning(
+                "[NSGA-III] All %d parents infeasible — uniform selection rank applied.", len(parents)
+            )
+        else:
+            fronts: list[list[int]] = fast_nondominated_sort(parents_objectives)
+            individual_ranks = compute_individual_ranks(fronts)
 
         max_attempts = self._pop_size * 10
         attempts = 0
