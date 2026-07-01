@@ -244,6 +244,8 @@
               :generations="store.experiment.generations"
               :objective-names="store.objectiveNames"
               :objective-goals="store.objectiveGoals"
+              :strategy="store.experiment.parameters.strategy"
+              :reference-point-divisions="(store.experiment.parameters.algorithm?.['divisions'] as number | undefined)"
               @click-individual="openIndividual"
             />
             <div

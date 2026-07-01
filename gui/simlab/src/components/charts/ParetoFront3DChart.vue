@@ -29,6 +29,14 @@
 
         <div class="pin-controls">
           <button
+            v-if="hasNicheLineData"
+            :class="['niche-btn', { active: showNicheLines }]"
+            :title="showNicheLines ? 'Hide niche lines' : 'Show niche lines (NSGA-III reference directions)'"
+            @click="showNicheLines = !showNicheLines"
+          >
+            ⟁ Niche Lines
+          </button>
+          <button
             :class="['pin-btn', { active: markMode }]"
             :title="markMode ? 'Exit pin mode' : 'Enter pin mode — click a Pareto point to pin it'"
             @click="markMode = !markMode"
@@ -62,6 +70,8 @@ const props = defineProps<{
   generations?: GenerationDto[];
   objectiveNames?: string[];
   objectiveGoals?: string[];
+  strategy?: string;
+  referencePointDivisions?: number;
 }>();
 
 const emit = defineEmits<{
@@ -107,6 +117,31 @@ interface Point3D {
   value: [number, number, number];
   individualId: string;
   allObjectives: number[] | Record<string, number>;
+}
+
+// ── Niche lines (NSGA-III reference directions) ───────────────────────────────
+
+const NSGA3_STRATEGIES = ['nsga3', 'nsga3_deap', 'nsga3_pymoo'] as const;
+const MAX_NICHE_LINES = 500;
+
+const showNicheLines = ref(true);
+
+const hasNicheLineData = computed(() =>
+  NSGA3_STRATEGIES.includes(props.strategy as never) &&
+  !!props.referencePointDivisions &&
+  props.referencePointDivisions >= 1 &&
+  hasSufficientData.value &&
+  paretoData.value.length > 0,
+);
+
+function dassDennisRefPoints(m: number, p: number): number[][] {
+  const points: number[][] = [];
+  function gen(dim: number, remaining: number, current: number[]) {
+    if (dim === 1) { points.push([...current, remaining / p]); return; }
+    for (let k = 0; k <= remaining; k++) gen(dim - 1, remaining - k, [...current, k / p]);
+  }
+  gen(m, p, []);
+  return points;
 }
 
 // ── Pin state ─────────────────────────────────────────────────────────────────
@@ -378,6 +413,82 @@ function buildOption() {
     });
   }
 
+  // ── Niche lines (NSGA-III) ────────────────────────────────────────────────
+  if (showNicheLines.value && hasNicheLineData.value) {
+    const m = availableKeys.value.length;
+    const p = props.referencePointDivisions!;
+    const refPoints = dassDennisRefPoints(m, p);
+
+    if (refPoints.length <= MAX_NICHE_LINES) {
+      const xi = xIdx.value;
+      const yi = yIdx.value;
+      const zi = zIdx.value;
+
+      // Use full population bounding box (wider than Pareto front alone)
+      const bboxPts = populationData.value.length > 0
+        ? populationData.value
+        : paretoData.value;
+
+      let minX = Infinity, minY = Infinity, minZ = Infinity;
+      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+      for (const pt of bboxPts) {
+        const [x, y, z] = pt.value;
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+        if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+      }
+
+      const goals = props.objectiveGoals ?? [];
+      const isMaxX = goals[xi] === 'max';
+      const isMaxY = goals[yi] === 'max';
+      const isMaxZ = goals[zi] === 'max';
+
+      // Ideal point: best value per axis according to goal
+      const ox = isMaxX ? maxX : minX;
+      const oy = isMaxY ? maxY : minY;
+      const oz = isMaxZ ? maxZ : minZ;
+
+      // Sign: min objectives extend toward higher values; max toward lower
+      const sx = isMaxX ? -1 : 1;
+      const sy = isMaxY ? -1 : 1;
+      const sz = isMaxZ ? -1 : 1;
+
+      // 10% extension beyond the population range for visual breathing room
+      const rangeX = ((maxX - minX) || 1) * 1.1;
+      const rangeY = ((maxY - minY) || 1) * 1.1;
+      const rangeZ = ((maxZ - minZ) || 1) * 1.1;
+
+      const lineColor = dark ? '#74c7ec' : '#0284c7';
+      const lineOpacity = dark ? 0.28 : 0.32;
+
+      let added = 0;
+      for (const ref of refPoints) {
+        let wx = ref[xi] ?? 0;
+        let wy = ref[yi] ?? 0;
+        let wz = ref[zi] ?? 0;
+        const wsum = wx + wy + wz;
+        // Skip directions with no component in the displayed axes (only relevant for m > 3)
+        if (wsum < 1e-10) continue;
+        // L1-normalise the 3D projection so all lines reach the same scale
+        // regardless of how many objectives are outside the 3 displayed axes
+        wx /= wsum;
+        wy /= wsum;
+        wz /= wsum;
+
+        series.push({
+          name: `__niche_${added++}`,
+          type: 'line3D',
+          data: [
+            [ox, oy, oz],
+            [ox + sx * wx * rangeX, oy + sy * wy * rangeY, oz + sz * wz * rangeZ],
+          ],
+          lineStyle: { color: lineColor, width: 1, opacity: lineOpacity },
+          silent: true,
+        });
+      }
+    }
+  }
+
   const legendData = [
     ...(useRanks
       ? rankedGroups.value
@@ -470,8 +581,11 @@ watch(
     () => props.paretoFront,
     () => props.generations,
     () => props.objectiveGoals,
+    () => props.strategy,
+    () => props.referencePointDivisions,
     xKey, yKey, zKey,
     markedPoint,
+    showNicheLines,
     isDark,
   ],
   () => buildOption(),
@@ -536,6 +650,7 @@ watch(
   margin-left: auto;
 }
 
+.niche-btn,
 .pin-btn {
   font-size: 11px;
   font-weight: 600;
@@ -548,9 +663,16 @@ watch(
   cursor: pointer;
 }
 
+.niche-btn:hover,
 .pin-btn:hover {
   background: var(--color-bg);
   color: var(--color-text);
+}
+
+.niche-btn.active {
+  background: #e0f2fe;
+  border-color: #38bdf8;
+  color: #0369a1;
 }
 
 .pin-btn.active {
