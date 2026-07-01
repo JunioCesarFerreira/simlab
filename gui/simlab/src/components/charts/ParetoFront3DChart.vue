@@ -653,13 +653,13 @@ function buildOption() {
       viewControl: {
         autoRotate: false,
         rotateSensitivity: 1.5,
-        zoomSensitivity: 1.2,
+        zoomSensitivity: 1.5,
         panSensitivity: 1,
         distance: 220,
         alpha: 20,
         beta: 40,
-        minDistance: 40,
-        maxDistance: 600,
+        minDistance: 5,
+        maxDistance: 2000,
       },
       postEffect: {
         enable: dark,
