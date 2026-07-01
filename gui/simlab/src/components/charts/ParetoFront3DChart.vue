@@ -453,10 +453,9 @@ function buildOption() {
       const sy = isMaxY ? -1 : 1;
       const sz = isMaxZ ? -1 : 1;
 
-      // 10% extension beyond the population range for visual breathing room
-      const rangeX = ((maxX - minX) || 1) * 1.1;
-      const rangeY = ((maxY - minY) || 1) * 1.1;
-      const rangeZ = ((maxZ - minZ) || 1) * 1.1;
+      const rangeX = (maxX - minX) || 1;
+      const rangeY = (maxY - minY) || 1;
+      const rangeZ = (maxZ - minZ) || 1;
 
       const lineColor = dark ? '#74c7ec' : '#0284c7';
       const lineOpacity = dark ? 0.28 : 0.32;
@@ -475,12 +474,23 @@ function buildOption() {
         wy /= wsum;
         wz /= wsum;
 
+        // Extend the line until it exits the population bounding box:
+        // in normalised space each axis is [0,1], so t_max = min(1/wi) for wi > 0.
+        // This guarantees every Pareto point (which is inside the box) lies within the line.
+        // An extra 10% pushes the tip visibly past the outermost data points.
+        let tMax = Infinity;
+        if (wx > 1e-10) tMax = Math.min(tMax, 1 / wx);
+        if (wy > 1e-10) tMax = Math.min(tMax, 1 / wy);
+        if (wz > 1e-10) tMax = Math.min(tMax, 1 / wz);
+        if (!isFinite(tMax)) continue;
+        tMax *= 1.1;
+
         series.push({
           name: `__niche_${added++}`,
           type: 'line3D',
           data: [
             [ox, oy, oz],
-            [ox + sx * wx * rangeX, oy + sy * wy * rangeY, oz + sz * wz * rangeZ],
+            [ox + sx * wx * tMax * rangeX, oy + sy * wy * tMax * rangeY, oz + sz * wz * tMax * rangeZ],
           ],
           lineStyle: { color: lineColor, width: 1, opacity: lineOpacity },
           silent: true,
