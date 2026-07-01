@@ -37,6 +37,13 @@
             ⟁ Niche Lines
           </button>
           <button
+            :class="['dom-btn', { active: dominanceMode }]"
+            :title="dominanceMode ? 'Exit dominance mode' : 'Enter dominance mode — click a point to highlight the region it dominates'"
+            @click="dominanceMode = !dominanceMode"
+          >
+            ▣ {{ dominanceMode ? (dominancePoint ? 'Clear…' : 'Click a point…') : 'Dominance' }}
+          </button>
+          <button
             :class="['pin-btn', { active: markMode }]"
             :title="markMode ? 'Exit pin mode' : 'Enter pin mode — click a Pareto point to pin it'"
             @click="markMode = !markMode"
@@ -98,6 +105,9 @@ onMounted(() => {
     if (!data?.individualId) return;
     if (markMode.value) {
       markedId.value = markedId.value === data.individualId ? "" : data.individualId;
+    } else if (dominanceMode.value) {
+      dominancePoint.value =
+        dominancePoint.value?.individualId === data.individualId ? null : data;
     } else {
       emit("click-individual", data.individualId);
     }
@@ -148,6 +158,13 @@ function dassDennisRefPoints(m: number, p: number): number[][] {
 
 const markMode = ref(false);
 const markedId = ref("");
+
+// ── Dominance region ──────────────────────────────────────────────────────────
+
+const dominanceMode = ref(false);
+const dominancePoint = ref<Point3D | null>(null);
+
+watch(dominanceMode, (active) => { if (!active) dominancePoint.value = null; });
 
 // ── Axis state ────────────────────────────────────────────────────────────────
 
@@ -499,6 +516,81 @@ function buildOption() {
     }
   }
 
+  // ── Dominance region ─────────────────────────────────────────────────────────
+  if (dominancePoint.value) {
+    const dp = dominancePoint.value;
+    const [dpx, dpy, dpz] = dp.value;
+
+    const xi = xIdx.value, yi = yIdx.value, zi = zIdx.value;
+    const goals = props.objectiveGoals ?? [];
+    const isMaxX = goals[xi] === 'max';
+    const isMaxY = goals[yi] === 'max';
+    const isMaxZ = goals[zi] === 'max';
+
+    // Bounding box from all available data (population or Pareto)
+    const bboxPts = populationData.value.length > 0 ? populationData.value : paretoData.value;
+    let bMinX = Infinity, bMinY = Infinity, bMinZ = Infinity;
+    let bMaxX = -Infinity, bMaxY = -Infinity, bMaxZ = -Infinity;
+    for (const pt of bboxPts) {
+      const [x, y, z] = pt.value;
+      if (x < bMinX) bMinX = x; if (x > bMaxX) bMaxX = x;
+      if (y < bMinY) bMinY = y; if (y > bMaxY) bMaxY = y;
+      if (z < bMinZ) bMinZ = z; if (z > bMaxZ) bMaxZ = z;
+    }
+
+    // Dominance box: from selected point to the "worst" corner per axis
+    // min objective → dominated region extends toward higher values (nadir)
+    // max objective → dominated region extends toward lower values (nadir)
+    const lx = isMaxX ? bMinX : dpx;
+    const ly = isMaxY ? bMinY : dpy;
+    const lz = isMaxZ ? bMinZ : dpz;
+    const hx = isMaxX ? dpx : bMaxX;
+    const hy = isMaxY ? dpy : bMaxY;
+    const hz = isMaxZ ? dpz : bMaxZ;
+
+    const domColor = '#ef4444';
+
+    // 6 faces of the dominance box rendered as parametric surfaces
+    type PFn = (u: number, v: number) => number;
+    const faces: Array<{ x: PFn; y: PFn; z: PFn }> = [
+      { x: ()  => lx,              y: (u)    => ly + u*(hy-ly), z: (_u, v) => lz + v*(hz-lz) }, // x=lx
+      { x: ()  => hx,              y: (u)    => ly + u*(hy-ly), z: (_u, v) => lz + v*(hz-lz) }, // x=hx
+      { x: (u) => lx + u*(hx-lx), y: ()     => ly,             z: (_u, v) => lz + v*(hz-lz) }, // y=ly
+      { x: (u) => lx + u*(hx-lx), y: ()     => hy,             z: (_u, v) => lz + v*(hz-lz) }, // y=hy
+      { x: (u) => lx + u*(hx-lx), y: (_u,v) => ly + v*(hy-ly), z: ()     => lz             }, // z=lz
+      { x: (u) => lx + u*(hx-lx), y: (_u,v) => ly + v*(hy-ly), z: ()     => hz             }, // z=hz
+    ];
+
+    faces.forEach((face, i) => {
+      series.push({
+        name: `__dom_face_${i}`,
+        type: 'surface',
+        coordinateSystem: 'cartesian3D',
+        parametric: true,
+        parametricEquation: {
+          u: { min: 0, max: 1, step: 1 },
+          v: { min: 0, max: 1, step: 1 },
+          x: face.x,
+          y: face.y,
+          z: face.z,
+        },
+        itemStyle: { color: domColor, opacity: dark ? 0.18 : 0.15 },
+        wireframe: { show: false },
+        silent: true,
+      });
+    });
+
+    // Highlight the dominance source point in red
+    series.push({
+      name: '__dom_point',
+      type: 'scatter3D',
+      data: [dp],
+      symbolSize: 11,
+      itemStyle: { color: domColor, opacity: 1 },
+      silent: true,
+    });
+  }
+
   const legendData = [
     ...(useRanks
       ? rankedGroups.value
@@ -596,6 +688,7 @@ watch(
     xKey, yKey, zKey,
     markedPoint,
     showNicheLines,
+    dominancePoint,
     isDark,
   ],
   () => buildOption(),
@@ -661,6 +754,7 @@ watch(
 }
 
 .niche-btn,
+.dom-btn,
 .pin-btn {
   font-size: 11px;
   font-weight: 600;
@@ -674,6 +768,7 @@ watch(
 }
 
 .niche-btn:hover,
+.dom-btn:hover,
 .pin-btn:hover {
   background: var(--color-bg);
   color: var(--color-text);
@@ -683,6 +778,12 @@ watch(
   background: #e0f2fe;
   border-color: #38bdf8;
   color: #0369a1;
+}
+
+.dom-btn.active {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #991b1b;
 }
 
 .pin-btn.active {
