@@ -17,7 +17,7 @@
     </p>
 
     <div class="field-group">
-      <label class="field-label">Seeds <span class="required">*</span></label>
+      <label class="field-label">Seeds <span class="seed-count">({{ modelValue.randomSeeds.length }})</span> <span class="required">*</span></label>
       <div class="seeds-row">
         <div class="chips">
           <span v-for="(seed, i) in modelValue.randomSeeds" :key="i" class="chip">
@@ -35,6 +35,7 @@
             @keydown.enter.prevent="addSeed"
           />
           <button class="add-btn" @click="addSeed" :disabled="!canAdd">+ Add</button>
+          <button class="rand-btn" @click="addRandomSeed" title="Insert a random seed">⚄ Random</button>
         </div>
       </div>
       <span v-if="showError" class="err">Add at least one seed.</span>
@@ -94,6 +95,16 @@ function removeSeed(i: number) {
 function applyPreset(seeds: number[]) {
   emit('update:modelValue', { ...props.modelValue, randomSeeds: seeds })
 }
+
+function addRandomSeed() {
+  for (let attempts = 0; attempts < 50; attempts++) {
+    const v = Math.floor(Math.random() * 999983) + 1
+    if (!props.modelValue.randomSeeds.includes(v)) {
+      emit('update:modelValue', { ...props.modelValue, randomSeeds: [...props.modelValue.randomSeeds, v] })
+      return
+    }
+  }
+}
 </script>
 
 <style scoped>
@@ -134,8 +145,17 @@ input:focus { border-color: var(--color-primary); }
 .add-btn {
   padding: 7px 14px; background: var(--color-primary); color: #fff;
   border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; border: none; cursor: pointer;
+  white-space: nowrap;
 }
 .add-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.rand-btn {
+  padding: 7px 13px; background: none; color: #7c3aed;
+  border: 1px solid #7c3aed; border-radius: var(--radius-sm);
+  font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+}
+.rand-btn:hover { background: rgba(124,58,237,0.1); }
+.seed-count { color: var(--color-text-muted); font-weight: 400; }
 .presets { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .presets-label { font-size: 11px; color: var(--color-text-muted); }
 .preset-btn {
