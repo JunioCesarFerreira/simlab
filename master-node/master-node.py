@@ -23,7 +23,7 @@ from lib.synthetic_data import run_synthetic_simulation
 
 # pylib
 from pylib.db import create_mongo_repository_factory, MongoRepository, EnumStatus
-from pylib.db.models import Simulation, SourceRepository
+from pylib.db.models import Simulation, SourceRepository, SshWorker
 from pylib.db.repositories.simulation import SimulationRepository
 from pylib import cooja_files
 from pylib import statistics
@@ -44,8 +44,7 @@ class Settings:
     local_dir: str
     remote_dir: str
     local_log_dir: str
-    hostnames: list[str]
-    ports: list[int]
+    default_n: int
     sim_timeout_sec: int
     jvm_xms: str
     jvm_xmx: str
@@ -66,13 +65,6 @@ class Settings:
         Path(local_log_dir).mkdir(exist_ok=True)
 
         default_n = int(os.getenv("NUMBER_OF_CONTAINERS", "3"))
-        if is_docker:
-            hostnames = [f"cooja{i+1}" for i in range(default_n)]
-            ports = [22 for _ in range(default_n)]
-        else:
-            hostnames = ["localhost" for _ in range(default_n)]
-            ports = [2231 + i for i in range(default_n)]
-
         sim_timeout_sec = int(os.getenv("SIM_TIMEOUT_SEC", "3600"))
         jvm_xms = os.getenv("COOJA_JVM_XMS", "1g")
         jvm_xmx = os.getenv("COOJA_JVM_XMX", "2g")
@@ -84,8 +76,7 @@ class Settings:
             local_dir=local_dir,
             remote_dir=remote_dir,
             local_log_dir=local_log_dir,
-            hostnames=hostnames,
-            ports=ports,
+            default_n=default_n,
             sim_timeout_sec=sim_timeout_sec,
             jvm_xms=jvm_xms,
             jvm_xmx=jvm_xmx,
@@ -93,13 +84,6 @@ class Settings:
 
 
 SET = Settings.from_env()
-
-
-def _assert_capacity(num_workers: int) -> None:
-    if num_workers > len(SET.hostnames) or num_workers > len(SET.ports):
-        raise ValueError(
-            f"Workers({num_workers}) > hostnames({len(SET.hostnames)})/ports({len(SET.ports)})"
-        )
 
 
 def _check_and_close_generation(generation_id: ObjectId, mongo: MongoRepository) -> None:
@@ -144,6 +128,51 @@ def recover_stuck_simulations(mongo: MongoRepository) -> None:
         generation_id = sim.get("generation_id")
         if generation_id:
             _check_and_close_generation(generation_id, mongo)
+
+
+def ensure_ssh_workers(mongo: MongoRepository) -> list[SshWorker]:
+    """
+    Load SSH workers from the database. If none exist, create the default
+    sequential list based on IS_DOCKER and NUMBER_OF_CONTAINERS env vars
+    and persist it so operators can inspect and edit it later.
+    """
+    workers = mongo.ssh_worker_repo.find_enabled()
+    if workers:
+        log.info("Loaded %d SSH worker(s) from database.", len(workers))
+        return workers
+
+    log.info(
+        "No SSH workers found in database. Creating %d default worker(s) (is_docker=%s).",
+        SET.default_n, SET.is_docker,
+    )
+    if SET.is_docker:
+        defaults: list[SshWorker] = [
+            {
+                "hostname": f"cooja{i + 1}",
+                "port": 22,
+                "username": "root",
+                "password": "root",
+                "enabled": True,
+                "label": f"cooja{i + 1}",
+            }
+            for i in range(SET.default_n)
+        ]
+    else:
+        defaults = [
+            {
+                "hostname": "localhost",
+                "port": 2231 + i,
+                "username": "root",
+                "password": "root",
+                "enabled": True,
+                "label": f"local-worker-{i + 1}",
+            }
+            for i in range(SET.default_n)
+        ]
+
+    mongo.ssh_worker_repo.insert_many(defaults)
+    log.info("Default SSH workers persisted to 'ssh_workers' collection.")
+    return defaults
 
 
 def prepare_simulation_files(
@@ -194,15 +223,16 @@ def prepare_simulation_files(
 
 def run_cooja_simulation(
     sim: Simulation,
-    port: int,
-    hostname: str,
+    worker: SshWorker,
     mongo: MongoRepository,
 ) -> None:
     """
     Executes the simulation in the container via SSH, monitors logs, and stores results in GridFS.
     """
     sim_oid = ObjectId(sim["_id"]) if not isinstance(sim["_id"], ObjectId) else sim["_id"]
-    ssh: SSHClient = create_ssh_client(hostname, port, "root", "root")
+    hostname = worker["hostname"]
+    port = worker["port"]
+    ssh: SSHClient = create_ssh_client(hostname, port, worker["username"], worker["password"])
     try:
         log.info("[port=%s host=%s] Starting simulation %s", port, hostname, sim_oid)
         mongo.simulation_repo.mark_running(sim_oid)
@@ -221,11 +251,11 @@ def run_cooja_simulation(
             if chan.recv_ready():
                 out = chan.recv(4096).decode("utf-8", errors="ignore")
                 if out:
-                    log.info("[ssh][%s][stdout] %s", hostname if SET.is_docker else port, out)
+                    log.info("[ssh][%s][stdout] %s", hostname, out)
             if chan.recv_stderr_ready():
                 err = chan.recv_stderr(4096).decode("utf-8", errors="ignore")
                 if err:
-                    log.error("[ssh][%s][stderr] %s", hostname if SET.is_docker else port, err)
+                    log.error("[ssh][%s][stderr] %s", hostname, err)
             time.sleep(0.1)
 
         log_path = f"{SET.local_log_dir}/sim_{sim_oid}.log"
@@ -275,12 +305,14 @@ def run_cooja_simulation(
         ssh.close()
 
 
-def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostname: str) -> None:
+def simulation_worker(worker_id: int, sim_queue: queue.Queue, worker: SshWorker) -> None:
     """
     Worker that consumes simulation IDs from the queue and executes each one.
     The full simulation document is fetched from MongoDB at execution time.
     Simulations not in WAITING status are skipped (already claimed by another worker).
     """
+    hostname = worker["hostname"]
+    port = worker["port"]
     mongo = create_mongo_repository_factory(SET.mongo_uri, SET.db_name)
     while True:
         sim_id = sim_queue.get()
@@ -318,13 +350,13 @@ def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostnam
                     _check_and_close_generation(sim["generation_id"], mongo)
                 continue
 
-            ssh = create_ssh_client(hostname, port, "root", "root")
+            ssh = create_ssh_client(hostname, port, worker["username"], worker["password"])
             try:
                 send_files_scp(ssh, SET.local_dir, SET.remote_dir, local_files, remote_files)
             finally:
                 ssh.close()
 
-            run_cooja_simulation(sim, port, hostname, mongo)
+            run_cooja_simulation(sim, worker, mongo)
 
             for f in local_files:
                 try:
@@ -345,17 +377,16 @@ def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostnam
             sim_queue.task_done()
 
 
-def start_workers(num_workers: int) -> queue.Queue:
-    _assert_capacity(num_workers)
+def start_workers(workers: list[SshWorker]) -> queue.Queue:
     q: queue.Queue = queue.Queue()
-    for i in range(num_workers):
+    for i, worker in enumerate(workers):
         t = Thread(
             target=simulation_worker,
-            args=(i, q, SET.ports[i], SET.hostnames[i]),
+            args=(i, q, worker),
             daemon=True,
         )
         t.start()
-    log.info("Workers started: %s", num_workers)
+    log.info("Workers started: %d", len(workers))
     return q
 
 
@@ -392,15 +423,18 @@ def watch_status_waiting_enqueue(
 
 
 def main() -> None:
-    number_of_containers = len(SET.hostnames)
     log.info("start")
-    log.info("number of containers: %s", number_of_containers)
     log.info("env: MONGO_URI=%s | DB_NAME=%s | IS_DOCKER=%s", SET.mongo_uri, SET.db_name, SET.is_docker)
 
     mongo = create_mongo_repository_factory(SET.mongo_uri, SET.db_name)
 
+    workers = ensure_ssh_workers(mongo)
+    log.info("Number of workers: %d", len(workers))
+    for w in workers:
+        log.info("  worker: host=%s port=%s label=%s", w["hostname"], w["port"], w.get("label", ""))
+
     recover_stuck_simulations(mongo)
-    sim_queue = start_workers(number_of_containers)
+    sim_queue = start_workers(workers)
     load_initial_waiting_jobs(mongo, sim_queue)
 
     Thread(
