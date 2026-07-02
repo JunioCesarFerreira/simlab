@@ -17,6 +17,7 @@
       </label>
     </div>
     <div class="spacer" />
+    <button title="Save / Load problems  [Ctrl+S]" @click="$emit('problems')">💾</button>
     <button title="Import JSON" @click="$emit('import')">⬆</button>
     <button :class="{ active: showConnectivity }" title="Connectivity Graph  [G] — sink + all candidates within reach" @click="editorStore.toggleConnectivity()">⬡</button>
     <button :class="{ active: showChromosomeConnectivity }" class="chrom" title="Chromosome Connectivity  [H] — sink + nodes active in current chromosome" @click="editorStore.toggleChromosomeConnectivity()">⬢</button>
@@ -32,7 +33,7 @@ import { useEditorStore, type EditorTool } from '../../../app/stores/editorStore
 import { useProblemStore } from '../../../app/stores/problemStore'
 import { hasCandidates, hasTargets } from '../../../types/problem'
 
-defineEmits<{ import: []; launch: [] }>()
+defineEmits<{ import: []; launch: []; problems: [] }>()
 
 const editorStore = useEditorStore()
 const problemStore = useProblemStore()

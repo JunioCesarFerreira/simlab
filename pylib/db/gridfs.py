@@ -34,6 +34,12 @@ class MongoGridFSHandler:
             fs = gridfs.GridFS(db)
             return fs.get(ObjectId(file_id)).read()
 
+    def upload_bytes(self, data: bytes, name: str) -> ObjectId:
+        with self.connection.connect() as db:
+            fs = gridfs.GridFS(db)
+            file_id = fs.put(data, filename=name)
+        return ObjectId(file_id)
+
     def delete_file(self, file_id: str) -> None:
         with self.connection.connect() as db:
             fs = gridfs.GridFS(db)

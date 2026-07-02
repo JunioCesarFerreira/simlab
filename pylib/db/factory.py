@@ -10,6 +10,7 @@ from pylib.db.repositories.source import SourceRepositoryAccess
 from pylib.db.repositories.analytics import AnalyticsRepository
 from pylib.db.repositories.genome_cache import GenomeCacheRepository
 from pylib.db.repositories.campaign import CampaignRepository
+from pylib.db.repositories.problem import ProblemRepository
 
 
 class MongoRepository(NamedTuple):
@@ -22,6 +23,7 @@ class MongoRepository(NamedTuple):
     analytics_repo: AnalyticsRepository
     genome_cache_repo: GenomeCacheRepository
     campaign_repo: CampaignRepository
+    problem_repo: ProblemRepository
 
 
 def create_mongo_repository_factory(mongo_uri: str, db_name: str) -> MongoRepository:
@@ -35,6 +37,7 @@ def create_mongo_repository_factory(mongo_uri: str, db_name: str) -> MongoReposi
     analytics_repo = AnalyticsRepository(connection)
     genome_cache_repo = GenomeCacheRepository(connection)
     campaign_repo = CampaignRepository(connection)
+    problem_repo = ProblemRepository(connection)
     return MongoRepository(
         experiment_repo=experiment_repo,
         simulation_repo=simulation_repo,
@@ -45,4 +48,5 @@ def create_mongo_repository_factory(mongo_uri: str, db_name: str) -> MongoReposi
         analytics_repo=analytics_repo,
         genome_cache_repo=genome_cache_repo,
         campaign_repo=campaign_repo,
+        problem_repo=problem_repo,
     )
