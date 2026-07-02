@@ -29,6 +29,13 @@
 
         <div class="pin-controls">
           <button
+            :class="['pan-btn', { active: panMode }]"
+            :title="panMode ? 'Switch back to rotate mode (left drag rotates)' : 'Switch to pan mode (left drag moves the scene)'"
+            @click="panMode = !panMode"
+          >
+            ✋ {{ panMode ? 'Panning' : 'Pan' }}
+          </button>
+          <button
             v-if="hasNicheLineData"
             :class="['niche-btn', { active: showNicheLines }]"
             :title="showNicheLines ? 'Hide niche lines' : 'Show niche lines (NSGA-III reference directions)'"
@@ -57,7 +64,7 @@
         </div>
       </div>
 
-      <div ref="chartEl" class="chart" />
+      <div ref="chartEl" :class="['chart', { 'chart--pan': panMode }]" />
     </template>
   </div>
 </template>
@@ -92,6 +99,9 @@ const { isDark } = useTheme();
 const chartEl = ref<HTMLElement | null>(null);
 let chart: echarts.ECharts | null = null;
 let ro: ResizeObserver | null = null;
+// True after the first successful setOption; subsequent calls use replaceMerge
+// to preserve the user's camera state (zoom, rotation, pan).
+let cameraInitialized = false;
 
 onMounted(() => {
   if (!chartEl.value) return;
@@ -153,6 +163,10 @@ function dassDennisRefPoints(m: number, p: number): number[][] {
   gen(m, p, []);
   return points;
 }
+
+// ── Pan mode ──────────────────────────────────────────────────────────────────
+
+const panMode = ref(false);
 
 // ── Pin state ─────────────────────────────────────────────────────────────────
 
@@ -652,14 +666,18 @@ function buildOption() {
       environment: envColor,
       viewControl: {
         autoRotate: false,
+        // In pan mode swap mouse buttons: left drag pans, middle drag rotates
+        rotateMouseButton: panMode.value ? 'middle' : 'left',
+        panMouseButton:    panMode.value ? 'left'   : 'middle',
         rotateSensitivity: 1.5,
         zoomSensitivity: 1.5,
         panSensitivity: 1,
-        distance: 220,
-        alpha: 20,
-        beta: 40,
         minDistance: 5,
         maxDistance: 2000,
+        // Initial camera position — included ONLY on the first render.
+        // Omitting distance/alpha/beta on updates means echarts-gl never
+        // re-applies them, so the user's current zoom/rotation is preserved.
+        ...(!cameraInitialized && { distance: 220, alpha: 20, beta: 40 }),
       },
       postEffect: {
         enable: dark,
@@ -673,7 +691,16 @@ function buildOption() {
     series,
   };
 
-  chart.setOption(option, true);
+  if (!cameraInitialized) {
+    chart.setOption(option, true);
+    cameraInitialized = true;
+  } else {
+    // replaceMerge replaces only the series array (correct add/remove of niche
+    // lines, dominance faces, etc.) while merging everything else — the
+    // echarts-gl viewControl state (zoom, rotation, pan) is untouched.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (chart as any).setOption(option, { replaceMerge: ['series'] });
+  }
 }
 
 // ── Reactivity ────────────────────────────────────────────────────────────────
@@ -689,6 +716,7 @@ watch(
     markedPoint,
     showNicheLines,
     dominancePoint,
+    panMode,
     isDark,
   ],
   () => buildOption(),
@@ -708,6 +736,14 @@ watch(
 .chart {
   flex: 1;
   min-height: 340px;
+}
+
+.chart--pan {
+  cursor: grab;
+}
+
+.chart--pan:active {
+  cursor: grabbing;
 }
 
 .empty {
@@ -753,6 +789,7 @@ watch(
   margin-left: auto;
 }
 
+.pan-btn,
 .niche-btn,
 .dom-btn,
 .pin-btn {
@@ -767,11 +804,18 @@ watch(
   cursor: pointer;
 }
 
+.pan-btn:hover,
 .niche-btn:hover,
 .dom-btn:hover,
 .pin-btn:hover {
   background: var(--color-bg);
   color: var(--color-text);
+}
+
+.pan-btn.active {
+  background: #ede9fe;
+  border-color: #a78bfa;
+  color: #5b21b6;
 }
 
 .niche-btn.active {
