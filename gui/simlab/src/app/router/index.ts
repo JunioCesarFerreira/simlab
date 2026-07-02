@@ -22,6 +22,7 @@ const routes: RouteRecordRaw[] = [
     component: () => import("../../pages/SourceRepositoryDetail.vue"),
     props: true,
   },
+  { path: "/compare", component: () => import("../../pages/ExperimentsComparison.vue") },
 ];
 
 export default createRouter({

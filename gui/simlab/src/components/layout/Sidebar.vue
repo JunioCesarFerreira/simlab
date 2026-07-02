@@ -25,6 +25,10 @@
         <span class="nav-icon">⊛</span>
         Sources
       </RouterLink>
+      <RouterLink to="/compare" class="nav-link">
+        <span class="nav-icon">⊟</span>
+        Compare
+      </RouterLink>
     </div>
 
     <div class="sidebar-footer">
