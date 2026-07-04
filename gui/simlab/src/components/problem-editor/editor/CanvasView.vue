@@ -58,6 +58,7 @@ interface CanvasColors {
   canvasBg: string; grid: string; gridLabel: string; axis: string
   regionActive: string; handleBorder: string; surface: string
   nodeStroke: string; nodeStrokeEmph: string; connectivity: string
+  connectivityOnImage: string; chromConnOnImage: string
   measureBg: string; measureBorder: string; measureText: string
   scaleLabelText: string; dimText: string; ellipseAxis: string
 }
@@ -74,7 +75,9 @@ function buildColors(dark: boolean): CanvasColors {
     surface:        dark ? '#1e1e2e' : '#ffffff',
     nodeStroke:     dark ? '#181825' : '#ffffff',
     nodeStrokeEmph: dark ? '#cdd6f4' : '#111827',
-    connectivity:   dark ? 'rgba(137,180,250,0.30)' : '#bfdbfe',
+    connectivity:      dark ? 'rgba(137,180,250,0.30)' : '#bfdbfe',
+    connectivityOnImage: 'rgba(30,58,138,0.9)',
+    chromConnOnImage:    'rgba(76,29,149,0.9)',
     measureBg:      dark ? 'rgba(30,30,46,0.95)' : 'rgba(255,255,255,0.95)',
     measureBorder:  dark ? '#313244' : '#e5e7eb',
     measureText:    dark ? '#f9e2af' : '#92400e',
@@ -418,17 +421,22 @@ function draw() {
 
 type NetNode = { x: number; y: number }
 
-function drawReachGraph(ctx: CanvasRenderingContext2D, nodes: NetNode[], color: string, lineWidth: number) {
+function drawReachGraph(ctx: CanvasRenderingContext2D, nodes: NetNode[], color: string, lineWidth: number, halo = false) {
   if (nodes.length === 0) return
   const { radiusOfReach } = problemStore.draft
-  ctx.strokeStyle = color
-  ctx.lineWidth = lineWidth
   for (let i = 0; i < nodes.length; i++) {
     for (let j = i + 1; j < nodes.length; j++) {
       const d = Math.hypot(nodes[j]!.x - nodes[i]!.x, nodes[j]!.y - nodes[i]!.y)
       if (d <= radiusOfReach) {
         const [ax, ay] = worldToCanvas(nodes[i]!.x, nodes[i]!.y)
         const [bx, by] = worldToCanvas(nodes[j]!.x, nodes[j]!.y)
+        if (halo) {
+          ctx.strokeStyle = 'rgba(255,255,255,0.55)'
+          ctx.lineWidth = lineWidth + 2.5
+          ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke()
+        }
+        ctx.strokeStyle = color
+        ctx.lineWidth = lineWidth
         ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke()
       }
     }
@@ -440,7 +448,8 @@ function drawConnectivityGraph(ctx: CanvasRenderingContext2D) {
   const nodes: NetNode[] = []
   if (problemStore.draft.sink) nodes.push(problemStore.draft.sink)
   for (const c of problemStore.draft.candidates) nodes.push({ x: c.x, y: c.y })
-  drawReachGraph(ctx, nodes, C.connectivity, 1.5)
+  const hasImg = bgImage !== null
+  drawReachGraph(ctx, nodes, hasImg ? C.connectivityOnImage : C.connectivity, 1.5, hasImg)
 }
 
 function drawChromosomeConnectivityGraph(ctx: CanvasRenderingContext2D) {
@@ -466,7 +475,8 @@ function drawChromosomeConnectivityGraph(ctx: CanvasRenderingContext2D) {
       nodes.push({ x: cands[idx]!.x, y: cands[idx]!.y })
     }
   }
-  drawReachGraph(ctx, nodes, '#8b5cf6', 2)
+  const hasImg = bgImage !== null
+  drawReachGraph(ctx, nodes, hasImg ? C.chromConnOnImage : '#8b5cf6', 2, hasImg)
 }
 
 function drawGrid(ctx: CanvasRenderingContext2D) {
