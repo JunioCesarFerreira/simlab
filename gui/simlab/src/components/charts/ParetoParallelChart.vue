@@ -1,10 +1,10 @@
 <template>
   <div class="chart-wrap">
-    <div v-if="!hasSufficientData" class="empty">
+    <div v-show="!hasSufficientData" class="empty">
       <span v-if="!paretoFront?.length">Pareto front not available</span>
       <span v-else>At least 2 objectives are required for visualization</span>
     </div>
-    <div v-else ref="chartEl" class="chart" />
+    <div v-show="hasSufficientData" ref="chartEl" class="chart" />
   </div>
 </template>
 
@@ -136,9 +136,20 @@ function buildOption() {
     ? ["#38bdf8", "#4ade80", "#fde047", "#fb923c", "#f87171"]
     : ["#2563eb", "#0891b2", "#059669", "#d97706", "#dc2626"];
 
-  // Per-axis actual min / max
-  const mins = keys.map((k) => Math.min(...items.map((it) => it.objectives[k] ?? 0)));
-  const maxs = keys.map((k) => Math.max(...items.map((it) => it.objectives[k] ?? 0)));
+  // Per-axis actual min / max — single O(n×k) pass avoids k spread allocations
+  const mins = keys.map(() => Infinity);
+  const maxs = keys.map(() => -Infinity);
+  for (const it of items) {
+    for (let i = 0; i < keys.length; i++) {
+      const v = it.objectives[keys[i]!] ?? 0;
+      if (v < mins[i]!) mins[i] = v;
+      if (v > maxs[i]!) maxs[i] = v;
+    }
+  }
+  // Guard for empty front
+  for (let i = 0; i < keys.length; i++) {
+    if (!isFinite(mins[i]!)) { mins[i] = 0; maxs[i] = 1; }
+  }
 
   // Data: plain value arrays — visualMap colours each line by dim 0
   const data = items.map((item) => keys.map((k) => item.objectives[k] ?? 0));

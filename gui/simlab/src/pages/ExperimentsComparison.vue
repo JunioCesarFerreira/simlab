@@ -449,6 +449,8 @@ async function loadCampaigns() {
   loadingCampaigns.value = true;
   try {
     allCampaigns.value = await getAllCampaigns();
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e);
   } finally {
     loadingCampaigns.value = false;
   }
@@ -502,9 +504,9 @@ async function runComparison() {
 
     result.value = { expA, expB, hvgdA, hvgdB };
 
-    const objs = expA.parameters.objectives;
-    axisX.value = objs[0]?.metric_name ?? '';
-    axisY.value = objs[1]?.metric_name ?? objs[0]?.metric_name ?? '';
+    const shared = sharedObjectives.value;
+    axisX.value = shared[0]?.metric_name ?? '';
+    axisY.value = shared[1]?.metric_name ?? shared[0]?.metric_name ?? '';
 
     await nextTick();
     renderParetoChart();
@@ -539,7 +541,11 @@ function ensureRo(el: HTMLElement) {
 
 function getOrInit(el: HTMLElement | null, existing: echarts.ECharts | null): echarts.ECharts | null {
   if (!el) return null;
-  if (existing && !existing.isDisposed()) return existing;
+  // Reuse only when the chart is still bound to the same DOM element.
+  // After a v-if toggle the ref points to a new element; reusing the old
+  // chart would render into the detached node and leave the new one blank.
+  if (existing && !existing.isDisposed() && existing.getDom() === el) return existing;
+  existing?.dispose();
   return echarts.init(el, null, { renderer: 'svg' });
 }
 

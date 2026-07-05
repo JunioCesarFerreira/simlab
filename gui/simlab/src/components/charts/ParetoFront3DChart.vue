@@ -133,6 +133,7 @@ onBeforeUnmount(() => {
   ro = null;
   chart?.dispose();
   chart = null;
+  cameraInitialized = false;
 });
 
 // ── Data types ───────────────────────────────────────────────────────────────

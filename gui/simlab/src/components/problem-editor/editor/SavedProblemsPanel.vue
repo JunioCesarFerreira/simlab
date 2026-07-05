@@ -155,7 +155,11 @@ async function saveProblem() {
     );
 
     if (includeBackground.value && editorStore.backgroundImage) {
-      await uploadBackground(id, editorStore.backgroundImage);
+      try {
+        await uploadBackground(id, editorStore.backgroundImage);
+      } catch (bgErr) {
+        saveError.value = bgErr instanceof Error ? bgErr.message : 'Background upload failed.';
+      }
     }
 
     saveOk.value = true;

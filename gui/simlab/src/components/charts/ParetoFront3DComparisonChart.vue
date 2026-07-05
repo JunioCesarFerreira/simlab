@@ -79,6 +79,7 @@ onBeforeUnmount(() => {
   ro = null;
   chart?.dispose();
   chart = null;
+  cameraInitialized = false;
 });
 
 // ── Pan mode ─────────────────────────────────────────────────────────────────
@@ -101,9 +102,9 @@ watch(
   keys,
   (k) => {
     if (k.length >= 3) {
-      xKey.value = k[0] ?? '';
-      yKey.value = k[1] ?? '';
-      zKey.value = k[2] ?? '';
+      if (!xKey.value || !k.includes(xKey.value)) xKey.value = k[0] ?? '';
+      if (!yKey.value || !k.includes(yKey.value)) yKey.value = k[1] ?? '';
+      if (!zKey.value || !k.includes(zKey.value)) zKey.value = k[2] ?? '';
     }
   },
   { immediate: true },

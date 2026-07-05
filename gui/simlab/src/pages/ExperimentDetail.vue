@@ -382,6 +382,8 @@ const viewState = useExperimentViewState(props.id);
 
 const chartView = ref<"2d" | "3d">(viewState.value.chartView);
 watch(chartView, (v) => { viewState.value.chartView = v; });
+// Reset to 2D if objectives data loads and turns out there aren't 3
+watch(has3Objectives, (has3) => { if (!has3 && chartView.value === '3d') chartView.value = '2d'; });
 
 // Per-card resizable height (initialized from saved state)
 const { height: paretoH, startResize: startParetoResize } = useResizable({ initial: viewState.value.paretoH });

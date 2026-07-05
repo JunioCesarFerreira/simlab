@@ -81,7 +81,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onBeforeUnmount } from 'vue'
 
 export interface Step3Value {
   duration: number
@@ -142,6 +142,8 @@ const fileInputEl = ref<HTMLInputElement | null>(null)
 const importFeedback = ref('')
 const importOk = ref(true)
 let feedbackTimer: ReturnType<typeof setTimeout> | null = null
+
+onBeforeUnmount(() => { if (feedbackTimer) clearTimeout(feedbackTimer) })
 
 function flash(msg: string, ok: boolean) {
   importFeedback.value = msg
