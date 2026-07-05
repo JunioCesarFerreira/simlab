@@ -287,6 +287,21 @@
               @mousedown="startEvoResize"
             />
           </div>
+          <div class="card chart-card" :style="{ height: parallelH + 'px' }">
+            <div class="section-title">Parallel coordinates — Pareto solutions</div>
+            <ParetoParallelChart
+              :pareto-front="store.experiment.pareto_front"
+              :generations="store.experiment.generations"
+              :objective-names="store.objectiveNames"
+              :objective-goals="store.objectiveGoals"
+              @click-individual="openIndividual"
+            />
+            <div
+              class="resize-handle"
+              title="Arrastar para redimensionar"
+              @mousedown="startParallelResize"
+            />
+          </div>
         </div>
       </div>
 
@@ -348,6 +363,7 @@ const ParetoFront3DChart = defineAsyncComponent(
 );
 import ObjectivesEvolutionChart from "../components/charts/ObjectivesEvolutionChart.vue";
 import HvGdChart from "../components/charts/HvGdChart.vue";
+import ParetoParallelChart from "../components/charts/ParetoParallelChart.vue";
 import IndividualDetailPanel from "../components/detail/IndividualDetailPanel.vue";
 import ProblemVizModal from "../components/detail/ProblemVizModal.vue";
 import { downloadAnalysisZip, downloadTopologiesZip } from "../api/files";
@@ -371,9 +387,11 @@ watch(chartView, (v) => { viewState.value.chartView = v; });
 const { height: paretoH, startResize: startParetoResize } = useResizable({ initial: viewState.value.paretoH });
 const { height: hvgdH, startResize: startHvGdResize } = useResizable({ initial: viewState.value.hvgdH });
 const { height: evolutionH, startResize: startEvoResize } = useResizable({ initial: viewState.value.evolutionH });
+const { height: parallelH, startResize: startParallelResize } = useResizable({ initial: viewState.value.parallelH, min: 180, max: 800 });
 watch(paretoH, (v) => { viewState.value.paretoH = v; });
 watch(hvgdH, (v) => { viewState.value.hvgdH = v; });
 watch(evolutionH, (v) => { viewState.value.evolutionH = v; });
+watch(parallelH, (v) => { viewState.value.parallelH = v; });
 
 // Axis selections — persisted and passed to chart components as initial values
 const paretoXKey = ref(viewState.value.paretoXKey);

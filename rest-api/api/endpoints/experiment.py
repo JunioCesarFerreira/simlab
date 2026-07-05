@@ -175,7 +175,7 @@ class ParetoPlotRequest(BaseModel):
 
 _PARETO_SCRIPT = os.getenv(
     "SIMLAB_PARETO_SCRIPT",
-    "/home/junio/Documentos/simlab/pareto-analysis/plot_pareto_results.py",
+    "/home/junio/github/simlab/pareto-analysis/plot_pareto_results.py",
 )
 _PARETO_PYTHON = os.getenv(
     "SIMLAB_PARETO_PYTHON",

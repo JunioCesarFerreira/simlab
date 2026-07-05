@@ -5,6 +5,7 @@ interface ExperimentViewState {
   paretoH: number
   hvgdH: number
   evolutionH: number
+  parallelH: number
   paretoXKey: string
   paretoYKey: string
   pareto3dXKey: string
@@ -17,6 +18,7 @@ const DEFAULTS: ExperimentViewState = {
   paretoH: 420,
   hvgdH: 280,
   evolutionH: 380,
+  parallelH: 320,
   paretoXKey: '',
   paretoYKey: '',
   pareto3dXKey: '',
