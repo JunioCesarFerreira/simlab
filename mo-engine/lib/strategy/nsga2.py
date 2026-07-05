@@ -755,14 +755,9 @@ class NSGA2LoopStrategy(EngineStrategy):
         R_population = self._parents + self._current_population
         R_F_list = [list(row) for row in p_previous.tolist()] + [list(row) for row in p_current.tolist()]
 
-        fronts = fast_nondominated_sort(R_F_list)
-        if not fronts:
-            error_msg = "No fronts on union; aborting."
-            logger.exception(f"[NSGA-II] {error_msg}")
-            self._finalize_experiment(system_msg=error_msg)
-            return
-
-        self._parents = select_next_population(fronts, R_F_list, R_population, self._pop_size)
+        self._parents = self._select_next_parents(R_population, R_F_list)
+        if self._parents is None:
+            return  # _finalize_experiment already called inside
 
         offspring = self._run_genetic_algorithm()
         self._current_population = offspring
@@ -770,6 +765,34 @@ class NSGA2LoopStrategy(EngineStrategy):
 
         logger.info("[NSGA-II] Offspring enqueued; waiting for P_t results.")
         return
+
+
+# ---------------------------------------
+# Environmental selection (overridable)
+# ---------------------------------------
+    def _select_next_parents(
+        self,
+        R_population: list,
+        R_objectives: "list[list[float]]",
+    ) -> "list | None":
+        """NSGA-II environmental selection: choose self._pop_size parents from R = P_{t-1} ∪ P_t.
+
+        Returns the selected chromosome list, or **None** if selection failed.
+        **Contract for subclasses that return None:** the override MUST call
+        ``self._finalize_experiment()`` before returning None — the caller
+        (_evolution) checks for None and returns immediately without any further
+        state cleanup. Subclasses that never fail may simply never return None.
+
+        Subclasses override this to delegate sorting/crowding to DEAP or pymoo
+        while keeping all MongoDB infrastructure from NSGA2LoopStrategy.
+        """
+        fronts = fast_nondominated_sort(R_objectives)
+        if not fronts:
+            error_msg = "No fronts on union; aborting."
+            logger.exception("[NSGA-II] %s", error_msg)
+            self._finalize_experiment(system_msg=error_msg)
+            return None
+        return select_next_population(fronts, R_objectives, R_population, self._pop_size)
 
 
 # ---------------------------------------

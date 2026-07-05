@@ -21,8 +21,12 @@
         :value="modelValue.strategy"
         @change="update('strategy', ($event.target as HTMLSelectElement).value)"
       >
-        <optgroup label="NSGA">
-          <option value="nsga2">NSGA-II</option>
+        <optgroup label="NSGA-II">
+          <option value="nsga2">NSGA-II (native)</option>
+          <option value="nsga2_deap">NSGA-II + DEAP</option>
+          <option value="nsga2_pymoo">NSGA-II + pymoo</option>
+        </optgroup>
+        <optgroup label="NSGA-III">
           <option value="nsga3">NSGA-III (native)</option>
           <option value="nsga3_deap">NSGA-III + DEAP</option>
           <option value="nsga3_pymoo">NSGA-III + pymoo</option>
@@ -255,10 +259,12 @@ export interface Step2Value {
 }
 
 const NSGA3_STRATEGIES = ['nsga3', 'nsga3_deap', 'nsga3_pymoo']
-const EVOLUTIONARY_STRATEGIES = ['nsga2', 'nsga3', 'nsga3_deap', 'nsga3_pymoo']
+const EVOLUTIONARY_STRATEGIES = ['nsga2', 'nsga2_deap', 'nsga2_pymoo', 'nsga3', 'nsga3_deap', 'nsga3_pymoo']
 
 const STRATEGY_HINTS: Record<string, string> = {
-  nsga2:        'NSGA-II — crowding-distance selection, suitable for 2-3 objectives.',
+  nsga2:        'NSGA-II — crowding-distance selection, suitable for 2–3 objectives (native implementation).',
+  nsga2_deap:   'NSGA-II — environmental selection via DEAP\'s selNSGA2. Requires deap ≥ 1.3.',
+  nsga2_pymoo:  'NSGA-II — environmental selection via pymoo\'s RankAndCrowding. Requires pymoo ≥ 0.6.',
   nsga3:        'NSGA-III — reference-point niching, better for 3+ objectives (native implementation).',
   nsga3_deap:   'NSGA-III — environmental selection via DEAP\'s selNSGA3. Requires deap ≥ 1.3.',
   nsga3_pymoo:  'NSGA-III — environmental selection via pymoo\'s ReferenceDirectionSurvival. Requires pymoo ≥ 0.6.',
