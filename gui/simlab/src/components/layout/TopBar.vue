@@ -2,12 +2,14 @@
   <header class="topbar">
     <div class="left">Experiment management &amp; analysis</div>
     <div class="right">
-      <span class="pill">v0.1</span>
+      <span class="pill">v{{ appVersion }}</span>
     </div>
   </header>
 </template>
 
-<script setup lang="ts"></script>
+<script setup lang="ts">
+const appVersion = __APP_VERSION__
+</script>
 
 <style scoped>
 .topbar {
