@@ -13,11 +13,18 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _extract_genome_from_sim(sim: dict) -> list[float]:
-    """Reconstructs the [x0,y0,x1,y1,...] vector from fixedMotes."""
+    """Reconstructs the [x0,y0,x1,y1,...] decision-variable vector from fixedMotes.
+
+    The sink is a fixed infrastructure node (not a decision variable), so it is
+    excluded — only relay positions form the genome. This keeps the number of
+    decision variables consistent with n_relays (genome length = 2·n_relays).
+    """
     fixed = (((sim or {}).get("parameters") or {})
              .get("simulationElements") or {}).get("fixedMotes") or []
     genome: list[float] = []
     for mote in fixed:
+        if mote.get("name") == "sink":
+            continue
         pos = mote.get("position") or [0.0, 0.0]
         genome.extend([float(pos[0]), float(pos[1])])
     return genome
@@ -136,13 +143,30 @@ def run_synthetic_simulation(
     mongo.simulation_repo.mark_running(sim_oid)
 
     exp_id = sim["experiment_id"]
-    cfg = mongo.experiment_repo.get_metrics_data_conversion(str(exp_id))
-    obj_items = cfg.get("objectives", []) or []
-    objective_names = [it["name"] for it in obj_items if "name" in it]
-
     params = (mongo.experiment_repo.get(exp_id) or {}).get("parameters", {}) or {}
-    region = tuple(params.get("region", (-100.0, -100.0, 100.0, 100.0)))
-    M = len(cfg.get("objectives", []))
+
+    # Objective names must match parameters.objectives[].metric_name, since the
+    # mo-engine reads simulation results keyed by those exact names (in order).
+    obj_items = params.get("objectives", []) or []
+    objective_names = [
+        it.get("metric_name") or it.get("name")
+        for it in obj_items
+        if it.get("metric_name") or it.get("name")
+    ]
+    # Legacy fallback: derive names from data_conversion_config.metrics.
+    if not objective_names:
+        cfg = mongo.experiment_repo.get_metrics_data_conversion(str(exp_id)) or {}
+        objective_names = [m["name"] for m in (cfg.get("metrics") or []) if m.get("name")]
+
+    # 'region' lives inside the problem sub-document (parameters.problem.region);
+    # fall back to a legacy top-level 'region' and finally to a default Ω.
+    problem_cfg = params.get("problem", {}) or {}
+    region = tuple(
+        problem_cfg.get("region")
+        or params.get("region")
+        or (-100.0, -100.0, 100.0, 100.0)
+    )
+    M = len(objective_names)
 
     genome_xy = _extract_genome_from_sim(sim)
     vals = _eval_benchmark(genome_xy, region, bench=bench, M=M, noise_std=noise_std)

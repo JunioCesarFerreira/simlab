@@ -75,9 +75,21 @@ Thin wrappers around Paramiko and SCP:
 
 ### `lib/synthetic_data.py`
 
-Optional execution mode (`ENABLE_DATA_SYNTHETIC=true`) that replaces actual Cooja runs with benchmark functions.
+Optional execution mode that replaces actual Cooja runs with benchmark functions.
 Supported benchmarks: **DTLZ2** (default), **ZDT1**, **SCH1**.
 Useful for testing the optimization pipeline without launching the simulator.
+
+Two ways to enable it, with the per-experiment config taking precedence over the
+environment variables:
+
+- **Per-experiment** — `parameters.simulation.synthetic = { enabled, bench, noise_std }`,
+  set through the GUI *Synthetic Instances* editor or the Launch Wizard toggle.
+- **Global fallback** — `ENABLE_DATA_SYNTHETIC=true` (+ `BENCH`, `NOISE_STD`).
+
+The genome (relay coordinates, excluding the fixed sink) is normalized to `[0,1]ⁿ`
+via `parameters.problem.region`; objectives are written keyed by
+`parameters.objectives[].metric_name`. See
+[docs/markdown/SYNTHETIC_MODE.md](../docs/markdown/SYNTHETIC_MODE.md) for the full guide.
 
 ---
 

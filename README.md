@@ -312,7 +312,7 @@ All raw outputs, logs, and metadata are stored in MongoDB/GridFS for reproducibi
 ### 6. Additional Resources
 
 * **Synthetic Problems Guide**
-  A detailed usage guide for running synthetic benchmark problems (without requiring Cooja) is available in the [documentation directory](./docs/markdown/SYNTHETIC_MODE.md).
+  A detailed usage guide for running synthetic benchmark problems (DTLZ2, ZDT1, SCH1) without requiring Cooja is available in the [documentation directory](./docs/markdown/SYNTHETIC_MODE.md). Synthetic instances can be defined visually from the **Synthetic Instances** page in the GUI (sidebar → *Synthetic*), or enabled per-experiment via the Launch Wizard toggle.
 
 * **Changelog**
   Recent updates and feature additions are documented in the [`CHANGELOG.md`](./CHANGELOG.md) file.

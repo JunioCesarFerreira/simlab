@@ -304,8 +304,9 @@ Todos os arquivos e metadados permanecem armazenados no MongoDB/GridFS, garantin
 ### Recursos Adicionais
 
 * **Guia de Problemas Sintéticos**
-  Um guia detalhado para execução de benchmarks sintéticos (sem necessidade do Cooja) está disponível em:
-  [docs/markdown/SYNTHETIC_MODE.md](./docs/markdown/SYNTHETIC_MODE.md)
+  Um guia detalhado para execução de benchmarks sintéticos (DTLZ2, ZDT1, SCH1) sem necessidade do Cooja está disponível em:
+  [docs/markdown/SYNTHETIC_MODE.md](./docs/markdown/SYNTHETIC_MODE.md).
+  As instâncias sintéticas podem ser definidas visualmente na página **Synthetic Instances** da GUI (menu lateral → *Synthetic*), ou ativadas por experimento através do toggle no Launch Wizard.
 
 * **Changelog**
   Atualizações e novas funcionalidades estão documentadas em [`CHANGELOG.md`](./CHANGELOG.md).

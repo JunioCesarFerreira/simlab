@@ -7,6 +7,39 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased] — Phase 1 of the implementation plan
 
+### Added — synthetic benchmark instances (GUI + per-experiment config)
+
+- **Synthetic Instances GUI editor** (`gui/simlab/src/components/synthetic-editor/`,
+  route `/synthetic`, sidebar entry): visual definition of DTLZ2 / ZDT1 / SCH1
+  benchmark instances (objectives `M`, decision variables `n`, noise σ, region Ω)
+  with a live theoretical Pareto-front preview — 2D SVG for `M = 2` and an
+  interactive **3D quarter-sphere** (echarts-gl) for DTLZ2 `M = 3`. A dedicated
+  4-step launch wizard creates the experiment directly.
+- **Per-experiment synthetic config**: `parameters.simulation.synthetic =
+  { enabled, bench, noise_std }` (`SyntheticConfig` in `pylib`), which takes
+  precedence over the `ENABLE_DATA_SYNTHETIC` / `BENCH` / `NOISE_STD` env vars.
+  Also exposed as an optional toggle in the existing Launch Wizard (step 3).
+- **REST endpoint** `GET /synthetic/benchmarks` (benchmark catalogue) and
+  `is_synthetic` / `synthetic_bench` fields on the experiment list response,
+  driving an amber *Synthetic* badge in the experiment card and detail views.
+- **mo-engine**: when `synthetic.enabled = true`, all strategies (NSGA-II/III,
+  Random Search, Batch) skip CSC/firmware generation and source-repository
+  lookups (no Cooja artifacts are produced).
+
+### Fixed — synthetic evaluation correctness
+
+- Objectives are now derived from `parameters.objectives[].metric_name` (in
+  order) instead of the empty `data_conversion_config.objectives`, so results
+  are stored under the exact keys the mo-engine reads back (previously the
+  objectives map was written empty).
+- Region normalization now reads `parameters.problem.region` (was reading a
+  non-existent top-level `parameters.region`, always falling back to the default
+  Ω and ignoring custom regions).
+- The fixed **sink** is excluded from the genome, keeping the decision-variable
+  count consistent with `n_relays` (genome length = `2 · n_relays`).
+- SCH1 now maps its decision variable back to the region's x-axis scale
+  consistently with DTLZ2/ZDT1; ZDT1 guards against `sqrt` of a negative value.
+
 ### Added — alignment with the SimLab paper (article reproducibility)
 
 - **Random Search strategy** (`mo-engine/lib/strategy/random_search.py`):
