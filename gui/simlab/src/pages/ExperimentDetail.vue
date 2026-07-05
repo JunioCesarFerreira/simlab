@@ -236,7 +236,10 @@
               :generations="store.experiment.generations"
               :objective-names="store.objectiveNames"
               :objective-goals="store.objectiveGoals"
+              :init-x="paretoXKey"
+              :init-y="paretoYKey"
               @click-individual="openIndividual"
+              @axis-change="onParetoAxisChange"
             />
             <ParetoFront3DChart
               v-else
@@ -246,7 +249,11 @@
               :objective-goals="store.objectiveGoals"
               :strategy="store.experiment.parameters.strategy"
               :reference-point-divisions="(store.experiment.parameters.algorithm?.['divisions'] as number | undefined)"
+              :init-x="pareto3dXKey"
+              :init-y="pareto3dYKey"
+              :init-z="pareto3dZKey"
               @click-individual="openIndividual"
+              @axis-change="on3dAxisChange"
             />
             <div
               class="resize-handle"
@@ -329,8 +336,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount } from "vue";
+import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } from "vue";
 import { useExperimentDetailStore } from "../app/stores/experimentDetailStore";
+import { useExperimentViewState } from "../composables/useExperimentViewState";
 import StatusBadge from "../components/common/StatusBadge.vue";
 import GenerationRow from "../components/detail/GenerationRow.vue";
 import ParetoFrontChart from "../components/charts/ParetoFrontChart.vue";
@@ -351,13 +359,44 @@ const props = defineProps<{ id: string }>();
 const store = useExperimentDetailStore();
 
 // 2D / 3D toggle — only shown when there are ≥ 3 objectives
-const chartView = ref<"2d" | "3d">("2d");
 const has3Objectives = computed(() => (store.objectiveNames?.length ?? 0) >= 3);
 
-// Per-card resizable height
-const { height: paretoH, startResize: startParetoResize } = useResizable({ initial: 420 });
-const { height: hvgdH, startResize: startHvGdResize } = useResizable({ initial: 280 });
-const { height: evolutionH, startResize: startEvoResize } = useResizable({ initial: 380 });
+// Persistent per-experiment view state (survives navigation away and back)
+const viewState = useExperimentViewState(props.id);
+
+const chartView = ref<"2d" | "3d">(viewState.value.chartView);
+watch(chartView, (v) => { viewState.value.chartView = v; });
+
+// Per-card resizable height (initialized from saved state)
+const { height: paretoH, startResize: startParetoResize } = useResizable({ initial: viewState.value.paretoH });
+const { height: hvgdH, startResize: startHvGdResize } = useResizable({ initial: viewState.value.hvgdH });
+const { height: evolutionH, startResize: startEvoResize } = useResizable({ initial: viewState.value.evolutionH });
+watch(paretoH, (v) => { viewState.value.paretoH = v; });
+watch(hvgdH, (v) => { viewState.value.hvgdH = v; });
+watch(evolutionH, (v) => { viewState.value.evolutionH = v; });
+
+// Axis selections — persisted and passed to chart components as initial values
+const paretoXKey = ref(viewState.value.paretoXKey);
+const paretoYKey = ref(viewState.value.paretoYKey);
+const pareto3dXKey = ref(viewState.value.pareto3dXKey);
+const pareto3dYKey = ref(viewState.value.pareto3dYKey);
+const pareto3dZKey = ref(viewState.value.pareto3dZKey);
+watch(paretoXKey, (v) => { viewState.value.paretoXKey = v; });
+watch(paretoYKey, (v) => { viewState.value.paretoYKey = v; });
+watch(pareto3dXKey, (v) => { viewState.value.pareto3dXKey = v; });
+watch(pareto3dYKey, (v) => { viewState.value.pareto3dYKey = v; });
+watch(pareto3dZKey, (v) => { viewState.value.pareto3dZKey = v; });
+
+function onParetoAxisChange({ x, y }: { x: string; y: string }) {
+  paretoXKey.value = x;
+  paretoYKey.value = y;
+}
+
+function on3dAxisChange({ x, y, z }: { x: string; y: string; z: string }) {
+  pareto3dXKey.value = x;
+  pareto3dYKey.value = y;
+  pareto3dZKey.value = z;
+}
 
 const sortedGenerations = computed(() =>
   [...(store.experiment?.generations ?? [])].sort((a, b) => a.index - b.index),

@@ -86,10 +86,14 @@ const props = defineProps<{
   objectiveGoals?: string[];
   strategy?: string;
   referencePointDivisions?: number;
+  initX?: string;
+  initY?: string;
+  initZ?: string;
 }>();
 
 const emit = defineEmits<{
   (e: "click-individual", individualId: string): void;
+  (e: "axis-change", axes: { x: string; y: string; z: string }): void;
 }>();
 
 const { isDark } = useTheme();
@@ -192,21 +196,25 @@ const hasSufficientData = computed(
   () => (props.paretoFront?.length ?? 0) > 0 && availableKeys.value.length >= 3,
 );
 
-const xKey = ref("");
-const yKey = ref("");
-const zKey = ref("");
+const xKey = ref(props.initX ?? "");
+const yKey = ref(props.initY ?? "");
+const zKey = ref(props.initZ ?? "");
 
 watch(
   availableKeys,
   (keys) => {
     if (keys.length >= 3) {
-      xKey.value = keys[0] ?? "";
-      yKey.value = keys[1] ?? "";
-      zKey.value = keys[2] ?? "";
+      if (!xKey.value || !keys.includes(xKey.value)) xKey.value = keys[0] ?? "";
+      if (!yKey.value || !keys.includes(yKey.value)) yKey.value = keys[1] ?? "";
+      if (!zKey.value || !keys.includes(zKey.value)) zKey.value = keys[2] ?? "";
     }
   },
   { immediate: true },
 );
+
+watch([xKey, yKey, zKey], ([x, y, z]) => {
+  emit("axis-change", { x, y, z });
+});
 
 const xIdx = computed(() => availableKeys.value.indexOf(xKey.value));
 const yIdx = computed(() => availableKeys.value.indexOf(yKey.value));
