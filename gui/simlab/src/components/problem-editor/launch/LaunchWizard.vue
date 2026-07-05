@@ -112,6 +112,7 @@ import Step2Experiment from './steps/Step2Experiment.vue'
 import type { Step2Value } from './steps/Step2Experiment.vue'
 import Step3Simulation from './steps/Step3Simulation.vue'
 import type { Step3Value } from './steps/Step3Simulation.vue'
+// Step3SyntheticValue is used when building the payload below
 import Step4Objectives from './steps/Step4Objectives.vue'
 import Step5DataConversion from './steps/Step5DataConversion.vue'
 
@@ -181,6 +182,7 @@ const form = reactive<{
   simulation: {
     duration: 180,
     randomSeeds: [336157, 667370, 35239, 873465, 987654, 123456, 493499, 5343],
+    synthetic: { enabled: false, bench: 'DTLZ2', noiseStd: 0 },
   },
   objectives: [
     { metric_name: 'latency',    goal: 'min' },
@@ -222,7 +224,7 @@ const canProceed = computed((): boolean => {
       form.experiment.sourceOptions.length > 0 &&
       form.experiment.sourceOptions.every(o => o.protocol.trim().length > 0 && o.repoId.trim().length > 0)
     )
-    case 3: return form.simulation.randomSeeds.length > 0 && form.simulation.duration >= 1
+    case 3: return form.simulation.synthetic.enabled || (form.simulation.randomSeeds.length > 0 && form.simulation.duration >= 1)
     case 4: return (
       form.objectives.length > 0 &&
       form.objectives.every(o => o.metric_name.trim().length > 0)
@@ -308,6 +310,13 @@ async function submit() {
         simulation: {
           duration:     form.simulation.duration,
           random_seeds: form.simulation.randomSeeds,
+          ...(form.simulation.synthetic.enabled && {
+            synthetic: {
+              enabled:   true,
+              bench:     form.simulation.synthetic.bench,
+              noise_std: form.simulation.synthetic.noiseStd,
+            },
+          }),
         },
         problem: exported.problem as JsonObject,
         objectives: form.objectives,

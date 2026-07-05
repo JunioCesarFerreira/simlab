@@ -62,6 +62,13 @@ class NSGA3LoopStrategy(EngineStrategy):
             for k, v in src_repo_opts.items()
         }
 
+        # Synthetic mode: when enabled, CSC files and source-repo lookups are skipped.
+        # Objectives are evaluated by the master-node using a mathematical benchmark.
+        syn_cfg: dict = simulation_config.get("synthetic", {}) or {}
+        self._is_synthetic: bool = bool(syn_cfg.get("enabled", False))
+        if self._is_synthetic:
+            logger.info("[NSGA3] Synthetic mode enabled — skipping CSC/source-repo for simulations.")
+
         # --- simulation and algorithm parameters ---
         self._sim_duration: int = int(simulation_config.get("duration", 120))
         self._sim_rand_seeds: list[int] = [int(x) for x in simulation_config.get("random_seeds", [123456])]
@@ -894,9 +901,15 @@ class NSGA3LoopStrategy(EngineStrategy):
             gen_oid: ObjectId,
             config: SimulationConfig,
             ) -> ObjectId:
-        files_ids = create_files(config, self.mongo.fs_handler)
-        # Resolve source repository for this genome
-        _, src_id = self._genome_hash_to_source(genome_hash)
+        if self._is_synthetic:
+            csc_file_id = None
+            pos_file_id = None
+            src_id = None
+        else:
+            files_ids = create_files(config, self.mongo.fs_handler)
+            csc_file_id = files_ids.get("csc_file_id", "")
+            pos_file_id = files_ids.get("pos_file_id", "")
+            _, src_id = self._genome_hash_to_source(genome_hash)
 
         sim_doc: Simulation = {
             "experiment_id": exp_oid,
@@ -907,8 +920,8 @@ class NSGA3LoopStrategy(EngineStrategy):
             "start_time": None,
             "end_time": None,
             "parameters": config,
-            "pos_file_id": files_ids.get("pos_file_id", ""),
-            "csc_file_id": files_ids.get("csc_file_id", ""),
+            "pos_file_id": pos_file_id,
+            "csc_file_id": csc_file_id,
             "source_repository_id": src_id,
             "log_cooja_id": "",
             "runtime_log_id": "",

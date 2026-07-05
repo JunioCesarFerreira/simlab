@@ -42,6 +42,9 @@
             </div>
             <div class="header-meta">
               <StatusBadge :status="store.experiment.status" />
+              <span v-if="isSynthetic" class="badge-synthetic">
+                ⬡ Synthetic — {{ syntheticBench }}
+              </span>
               <span v-if="store.isRunning" class="live-pill">● LIVE</span>
               <span class="meta-date" v-if="store.experiment.created_time">
                 Created {{ formatDate(store.experiment.created_time) }}
@@ -376,6 +379,15 @@ const store = useExperimentDetailStore();
 
 // 2D / 3D toggle — only shown when there are ≥ 3 objectives
 const has3Objectives = computed(() => (store.objectiveNames?.length ?? 0) >= 3);
+
+const isSynthetic = computed(() => {
+  const syn = (store.experiment?.parameters?.simulation as Record<string, unknown> | undefined)
+  return Boolean((syn?.['synthetic'] as Record<string, unknown> | undefined)?.['enabled'])
+})
+const syntheticBench = computed(() => {
+  const syn = (store.experiment?.parameters?.simulation as Record<string, unknown> | undefined)
+  return ((syn?.['synthetic'] as Record<string, unknown> | undefined)?.['bench'] as string | undefined) ?? 'Synthetic'
+})
 
 // Persistent per-experiment view state (survives navigation away and back)
 const viewState = useExperimentViewState(props.id);
@@ -725,6 +737,20 @@ onBeforeUnmount(() => {
   padding: 2px 8px;
   border-radius: 999px;
   animation: pulse 2s infinite;
+}
+
+.badge-synthetic {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #d97706;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 999px;
+  white-space: nowrap;
 }
 
 @keyframes pulse {

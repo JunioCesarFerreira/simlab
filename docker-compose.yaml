@@ -197,6 +197,13 @@ services:
       - NUMBER_OF_CONTAINERS=16
       - COOJA_JVM_XMS=4g
       - COOJA_JVM_XMX=4g
+      # Synthetic benchmark mode (global fallback — prefer per-experiment config via GUI)
+      # ENABLE_DATA_SYNTHETIC=True  → bypass Cooja and evaluate BENCH analytically
+      # BENCH=DTLZ2                 → benchmark function: DTLZ2 | ZDT1 | SCH1
+      # NOISE_STD=0.0               → Gaussian noise std added to benchmark output
+      #- ENABLE_DATA_SYNTHETIC=False
+      #- BENCH=DTLZ2
+      #- NOISE_STD=0.0
     ports:
       - "2220:22"
     labels:

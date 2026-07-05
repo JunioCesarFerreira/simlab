@@ -23,6 +23,19 @@ class DataConversionConfig(TypedDict):
     metrics: list[MetricItem]
 
 
+class SyntheticConfig(TypedDict, total=False):
+    """Per-experiment synthetic benchmark configuration.
+
+    When ``enabled`` is True the master-node evaluates a classical benchmark
+    function (DTLZ2, ZDT1 or SCH1) instead of running a Cooja simulation.
+    All fields are optional; missing values fall back to the master-node
+    environment variables (ENABLE_DATA_SYNTHETIC, BENCH, NOISE_STD).
+    """
+    enabled: bool
+    bench: str    # "DTLZ2" | "ZDT1" | "SCH1"
+    noise_std: float
+
+
 class Parameters(TypedDict):
     strategy: str
     algorithm: dict[str, Any]  # Algorithm parameters defined in config/algorithm.py

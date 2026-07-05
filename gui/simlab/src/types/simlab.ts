@@ -110,6 +110,8 @@ export interface ExperimentInfoDto {
   start_time?: ISODateTime | null;
   end_time?: ISODateTime | null;
   status: ExperimentStatus; // adicionado client-side (vem do endpoint by-status)
+  is_synthetic?: boolean;
+  synthetic_bench?: string | null;
 }
 
 export interface ExperimentDto {

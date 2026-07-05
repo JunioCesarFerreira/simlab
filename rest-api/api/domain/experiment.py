@@ -58,9 +58,11 @@ class ExperimentFullDto(TypedDict):
     generations: list[GenerationDto]
 
 
-class ExperimentInfoDto(TypedDict):
+class ExperimentInfoDto(TypedDict, total=False):
     id: Optional[str]
     name: str
     system_message: Optional[str]
     start_time: Optional[datetime]
     end_time: Optional[datetime]
+    is_synthetic: bool
+    synthetic_bench: Optional[str]

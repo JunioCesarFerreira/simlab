@@ -16,6 +16,7 @@ const routes: RouteRecordRaw[] = [
     props: true,
   },
   { path: "/problems", component: () => import("../../pages/ProblemEditor.vue"), meta: { fullScreen: true } },
+  { path: "/synthetic", component: () => import("../../pages/SyntheticEditor.vue"), meta: { fullScreen: true } },
   { path: "/sources", component: () => import("../../pages/SourceRepositoriesList.vue") },
   {
     path: "/sources/:id",

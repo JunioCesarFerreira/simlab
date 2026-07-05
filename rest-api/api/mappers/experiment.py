@@ -55,12 +55,16 @@ def experiment_full_from_mongo(doc: dict, generations: list[GenerationDto]) -> E
 
 def experiment_info_from_mongo(doc: dict) -> ExperimentInfoDto:
     id_str, d = pop_id(doc)
+    syn_cfg: dict = ((d.get("parameters") or {}).get("simulation") or {}).get("synthetic") or {}
+    is_synthetic: bool = bool(syn_cfg.get("enabled", False))
     return {
         "id": id_str,
         "name": d.get("name", ""),
         "system_message": d.get("system_message", ""),
         "start_time": d.get("start_time"),
         "end_time": d.get("end_time"),
+        "is_synthetic": is_synthetic,
+        "synthetic_bench": syn_cfg.get("bench") if is_synthetic else None,
     }
 
 

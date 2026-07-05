@@ -21,6 +21,10 @@
         <span class="nav-icon">⊙</span>
         Problems
       </RouterLink>
+      <RouterLink to="/synthetic" class="nav-link nav-link--synthetic">
+        <span class="nav-icon">⬡</span>
+        Synthetic
+      </RouterLink>
       <RouterLink to="/sources" class="nav-link">
         <span class="nav-icon">⊛</span>
         Sources
@@ -106,6 +110,11 @@ const { isDark, toggle } = useTheme()
   background: var(--color-primary-light);
   color: var(--color-primary);
   font-weight: 600;
+}
+
+.nav-link--synthetic.router-link-active {
+  background: rgba(245, 158, 11, 0.08);
+  color: #d97706;
 }
 
 .nav-icon {

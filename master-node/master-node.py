@@ -299,10 +299,22 @@ def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostnam
                          port, sim_id, sim.get("status"))
                 continue
 
-            mode = os.getenv("ENABLE_DATA_SYNTHETIC", "False").lower() == "true"
+            # Resolve synthetic mode: per-experiment config takes priority over env var.
+            exp_doc = mongo.experiment_repo.get(sim["experiment_id"]) or {}
+            syn_cfg: dict = (
+                exp_doc.get("parameters", {}) or {}
+            ).get("simulation", {}).get("synthetic", {}) or {}
+            mode: bool = syn_cfg.get(
+                "enabled",
+                os.getenv("ENABLE_DATA_SYNTHETIC", "False").lower() == "true",
+            )
             log.info("mode: %s", "Synthetic Data" if mode else "Simulation")
             if mode:
-                run_synthetic_simulation(sim, mongo)
+                bench: str = syn_cfg.get("bench") or os.getenv("BENCH", "DTLZ2")
+                noise_std: float = float(
+                    syn_cfg.get("noise_std", os.getenv("NOISE_STD", "0.0"))
+                )
+                run_synthetic_simulation(sim, mongo, bench=bench, noise_std=noise_std)
                 continue
 
             log.info("[port=%s host=%s] Preparing simulation %s", port, hostname, sim_id)

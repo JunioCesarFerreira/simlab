@@ -2,7 +2,12 @@
   <RouterLink :to="`/experiments/${experiment.id}`" class="card experiment-card">
     <div class="row">
       <div class="name">{{ experiment.name }}</div>
-      <StatusBadge :status="experiment.status" />
+      <div class="badges">
+        <span v-if="experiment.is_synthetic" class="badge-synthetic">
+          ⬡ {{ experiment.synthetic_bench ?? 'Synthetic' }}
+        </span>
+        <StatusBadge :status="experiment.status" />
+      </div>
     </div>
     <div v-if="experiment.system_message" class="message">
       {{ experiment.system_message }}
@@ -57,6 +62,27 @@ function formatDate(iso: string): string {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.badge-synthetic {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #d97706;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 99px;
+  white-space: nowrap;
 }
 
 .name {
