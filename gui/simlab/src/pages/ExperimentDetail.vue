@@ -8,7 +8,7 @@
       Error: {{ store.error }}
     </div>
 
-    <!-- Individual detail panel -->
+    <!-- Individual detail panel — fixed overlay, rendered on top of main content -->
     <IndividualDetailPanel
       v-if="selectedIndividual"
       :individual="selectedIndividual"
@@ -17,7 +17,7 @@
       @close="selectedIndividual = null"
     />
 
-    <template v-else-if="store.experiment">
+    <template v-if="store.experiment">
       <!-- Header -->
       <div class="header">
         <RouterLink to="/experiments" class="back-link">← Experiments</RouterLink>
