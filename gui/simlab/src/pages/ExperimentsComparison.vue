@@ -145,58 +145,108 @@
         </div>
       </div>
 
-      <!-- ── Pareto front 2D chart ─────────────────────────────────────────── -->
-      <div class="card" v-if="sharedObjectives.length >= 2">
-        <div class="card-header-row">
-          <h2 class="card-title">Pareto Front</h2>
-          <div v-if="sharedObjectives.length > 2" class="axis-sel-row">
-            <label class="axis-label">X:
-              <select class="axis-sel" v-model="axisX" @change="renderParetoChart">
-                <option v-for="o in sharedObjectives" :key="o.metric_name" :value="o.metric_name">
-                  {{ o.metric_name }}
-                </option>
-              </select>
-            </label>
-            <label class="axis-label">Y:
-              <select class="axis-sel" v-model="axisY" @change="renderParetoChart">
-                <option v-for="o in sharedObjectives" :key="o.metric_name" :value="o.metric_name">
-                  {{ o.metric_name }}
-                </option>
-              </select>
-            </label>
+      <!-- ── Pareto front ─────────────────────────────────────────────────── -->
+      <div
+        v-if="sharedObjectives.length >= 2"
+        class="card chart-card"
+        :style="{ height: paretoH + 'px' }"
+      >
+        <div class="section-title pareto-title">
+          Pareto Front
+          <div class="pareto-title-right">
+            <!-- 2D axis selectors (only in 2D when > 2 objectives) -->
+            <div v-if="chartView === '2d' && sharedObjectives.length > 2" class="axis-sel-row">
+              <label class="axis-label">X:
+                <select class="axis-sel" v-model="axisX" @change="renderParetoChart">
+                  <option v-for="o in sharedObjectives" :key="o.metric_name" :value="o.metric_name">
+                    {{ o.metric_name }}
+                  </option>
+                </select>
+              </label>
+              <label class="axis-label">Y:
+                <select class="axis-sel" v-model="axisY" @change="renderParetoChart">
+                  <option v-for="o in sharedObjectives" :key="o.metric_name" :value="o.metric_name">
+                    {{ o.metric_name }}
+                  </option>
+                </select>
+              </label>
+            </div>
+            <!-- 2D / 3D toggle — only when ≥ 3 shared objectives -->
+            <div v-if="sharedObjectives.length >= 3" class="view-toggle">
+              <button
+                :class="['vt-btn', { active: chartView === '2d' }]"
+                @click="chartView = '2d'"
+              >2D</button>
+              <button
+                :class="['vt-btn', { active: chartView === '3d' }]"
+                @click="chartView = '3d'"
+              >3D</button>
+            </div>
           </div>
         </div>
-        <div ref="paretoEl" class="chart-2d" />
+
+        <!-- 2D scatter -->
+        <div v-if="chartView === '2d'" ref="paretoEl" class="chart-fill" />
+
+        <!-- 3D component -->
+        <ParetoFront3DComparisonChart
+          v-else
+          :front-a="result.expA.pareto_front ?? []"
+          :front-b="result.expB.pareto_front ?? []"
+          :name-a="result.expA.name"
+          :name-b="result.expB.name"
+          :objectives="sharedObjectives"
+        />
+
+        <div
+          class="resize-handle"
+          title="Drag to resize"
+          @mousedown="startParetoResize"
+        />
       </div>
 
       <!-- ── Convergence charts ────────────────────────────────────────────── -->
-      <div class="card" v-if="result.hvgdA || result.hvgdB">
-        <h2 class="card-title">Convergence</h2>
+      <div
+        v-if="result.hvgdA || result.hvgdB"
+        class="card chart-card"
+        :style="{ height: convergenceH + 'px' }"
+      >
+        <div class="section-title">Convergence</div>
         <div class="evo-row">
           <div class="evo-block">
             <div class="evo-label">Hypervolume (HV)</div>
-            <div ref="hvEl" class="chart-evo" />
+            <div ref="hvEl" class="chart-fill" />
           </div>
           <div class="evo-block">
             <div class="evo-label">Generational Distance (GD)</div>
-            <div ref="gdEl" class="chart-evo" />
+            <div ref="gdEl" class="chart-fill" />
           </div>
         </div>
+        <div
+          class="resize-handle"
+          title="Drag to resize"
+          @mousedown="startConvergenceResize"
+        />
       </div>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, defineAsyncComponent } from 'vue';
 import { RouterLink } from 'vue-router';
 import * as echarts from 'echarts';
 import { useTheme } from '../composables/useTheme';
+import { useResizable } from '../composables/useResizable';
 import { getAllCampaigns, getCampaignFull } from '../api/campaigns';
 import { getExperiment } from '../api/experiments';
 import client from '../api/client';
 import type { CampaignInfoDto, ExperimentDto, ObjectiveItem } from '../types/simlab';
 import { extractFront, coverage, epsilonIndicator, igdPlus, spacing } from '../utils/comparisonMetrics';
+
+const ParetoFront3DComparisonChart = defineAsyncComponent(
+  () => import('../components/charts/ParetoFront3DComparisonChart.vue'),
+);
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -241,6 +291,11 @@ function palette(dark: boolean) {
   };
 }
 
+// ── Resizable cards ──────────────────────────────────────────────────────────
+
+const { height: paretoH, startResize: startParetoResize } = useResizable({ initial: 420 });
+const { height: convergenceH, startResize: startConvergenceResize } = useResizable({ initial: 300 });
+
 // ── State ────────────────────────────────────────────────────────────────────
 
 const allCampaigns = ref<CampaignInfoDto[]>([]);
@@ -252,6 +307,7 @@ const exp2Id = ref('');
 const loading = ref(false);
 const error = ref('');
 const result = ref<ComparisonResult | null>(null);
+const chartView = ref<'2d' | '3d'>('2d');
 const axisX = ref('');
 const axisY = ref('');
 
@@ -431,6 +487,7 @@ async function runComparison() {
   loading.value = true;
   error.value = '';
   result.value = null;
+  chartView.value = '2d';
 
   try {
     const [expA, expB] = await Promise.all([
@@ -445,7 +502,6 @@ async function runComparison() {
 
     result.value = { expA, expB, hvgdA, hvgdB };
 
-    // Set default axis selections
     const objs = expA.parameters.objectives;
     axisX.value = objs[0]?.metric_name ?? '';
     axisY.value = objs[1]?.metric_name ?? objs[0]?.metric_name ?? '';
@@ -470,6 +526,17 @@ let hvChart: echarts.ECharts | null = null;
 let gdChart: echarts.ECharts | null = null;
 let ro: ResizeObserver | null = null;
 
+function ensureRo(el: HTMLElement) {
+  if (!ro) {
+    ro = new ResizeObserver(() => {
+      paretoChart?.resize();
+      hvChart?.resize();
+      gdChart?.resize();
+    });
+  }
+  ro.observe(el);
+}
+
 function getOrInit(el: HTMLElement | null, existing: echarts.ECharts | null): echarts.ECharts | null {
   if (!el) return null;
   if (existing && !existing.isDisposed()) return existing;
@@ -480,6 +547,8 @@ function renderParetoChart() {
   if (!result.value || !paretoEl.value) return;
   paretoChart = getOrInit(paretoEl.value, paretoChart);
   if (!paretoChart) return;
+
+  ensureRo(paretoEl.value);
 
   const dark = isDark.value;
   const c = palette(dark);
@@ -554,17 +623,6 @@ function renderParetoChart() {
     },
     true,
   );
-
-  if (!ro) {
-    ro = new ResizeObserver(() => {
-      paretoChart?.resize();
-      hvChart?.resize();
-      gdChart?.resize();
-    });
-    if (paretoEl.value) ro.observe(paretoEl.value);
-    if (hvEl.value) ro.observe(hvEl.value);
-    if (gdEl.value) ro.observe(gdEl.value);
-  }
 }
 
 function buildEvoOption(
@@ -642,6 +700,7 @@ function renderEvolutionCharts() {
 
   if (hvEl.value) {
     hvChart = getOrInit(hvEl.value, hvChart);
+    ensureRo(hvEl.value);
     if (hvChart) {
       const dataA: [number, number][] = hvgdA
         ? hvgdA.generations.map((g, i) => [g, hvgdA.hv[i]!])
@@ -655,6 +714,7 @@ function renderEvolutionCharts() {
 
   if (gdEl.value) {
     gdChart = getOrInit(gdEl.value, gdChart);
+    ensureRo(gdEl.value);
     if (gdChart) {
       const dataA: [number, number][] = hvgdA
         ? hvgdA.generations.map((g, i) => [g, hvgdA.gd[i]!])
@@ -707,8 +767,15 @@ onBeforeUnmount(destroyCharts);
 
 watch(isDark, () => {
   if (!result.value) return;
-  renderParetoChart();
+  if (chartView.value === '2d') renderParetoChart();
   renderEvolutionCharts();
+});
+
+watch(chartView, async (view) => {
+  if (view === '2d') {
+    await nextTick();
+    renderParetoChart();
+  }
 });
 </script>
 
@@ -756,6 +823,14 @@ watch(isDark, () => {
   padding: 20px 22px;
 }
 
+/* Chart cards: flex column so children fill height; resize handle bleeds out */
+.chart-card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* height controlled by :style binding — min enforced by useResizable */
+}
+
 .card-title {
   font-size: 15px;
   font-weight: 600;
@@ -770,15 +845,93 @@ watch(isDark, () => {
   line-height: 1.6;
 }
 
-.card-header-row {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
+/* ── Section title (inside chart-card) ───────────────────────────────────── */
+
+.section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 10px;
+  flex-shrink: 0;
 }
 
-.card-header-row .card-title { margin: 0; }
+.pareto-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.pareto-title-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* ── 2D/3D view toggle ────────────────────────────────────────────────────── */
+
+.view-toggle {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm, 5px);
+}
+
+.vt-btn {
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  background: transparent;
+  transition: background 0.12s, color 0.12s;
+  letter-spacing: 0.03em;
+}
+
+.vt-btn:hover { color: var(--color-text); }
+
+.vt-btn.active {
+  background: var(--color-surface);
+  color: var(--color-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+/* ── Resize handle ────────────────────────────────────────────────────────── */
+
+.resize-handle {
+  flex-shrink: 0;
+  height: 10px;
+  margin: 4px -22px -20px; /* bleed to card edges, absorb card bottom padding */
+  cursor: ns-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-top: 1px solid var(--color-border);
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.resize-handle::after {
+  content: '';
+  width: 36px;
+  height: 3px;
+  border-radius: 99px;
+  background: var(--color-border);
+  transition: background 0.15s, transform 0.15s;
+}
+
+.resize-handle:hover { background: var(--color-surface-hover); }
+
+.resize-handle:hover::after {
+  background: var(--color-text-muted);
+  transform: scaleX(1.25);
+}
 
 /* ── Selectors ────────────────────────────────────────────────────────────── */
 
@@ -951,7 +1104,14 @@ watch(isDark, () => {
 .badge-b { background: rgba(249, 115, 22, 0.15); color: #f97316; }
 .badge-none { color: var(--color-text-muted); font-size: 12px; }
 
-/* ── Pareto chart ─────────────────────────────────────────────────────────── */
+/* ── Chart fill (flex child that fills remaining card height) ─────────────── */
+
+.chart-fill {
+  flex: 1;
+  min-height: 0;
+}
+
+/* ── 2D axis selectors ────────────────────────────────────────────────────── */
 
 .axis-sel-row {
   display: flex;
@@ -977,14 +1137,11 @@ watch(isDark, () => {
   cursor: pointer;
 }
 
-.chart-2d {
-  width: 100%;
-  height: 380px;
-}
-
-/* ── Evolution charts ─────────────────────────────────────────────────────── */
+/* ── Convergence charts ───────────────────────────────────────────────────── */
 
 .evo-row {
+  flex: 1;
+  min-height: 0;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
@@ -994,6 +1151,7 @@ watch(isDark, () => {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-height: 0;
 }
 
 .evo-label {
@@ -1001,11 +1159,7 @@ watch(isDark, () => {
   font-weight: 600;
   color: var(--color-text-muted);
   letter-spacing: 0.03em;
-}
-
-.chart-evo {
-  width: 100%;
-  height: 260px;
+  flex-shrink: 0;
 }
 
 @media (max-width: 720px) {
