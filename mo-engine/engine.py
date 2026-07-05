@@ -13,6 +13,8 @@ from lib.strategy.batch import BatchStrategy
 from lib.strategy.random_search import RandomSearchStrategy
 from lib.strategy.nsga3_deap import NSGA3DeapStrategy
 from lib.strategy.nsga3_pymoo import NSGA3PymooStrategy
+from lib.strategy.nsga2_deap import NSGA2DeapStrategy
+from lib.strategy.nsga2_pymoo import NSGA2PymooStrategy
 
 # --------------------------- Logging --------------------------------
 logging.basicConfig(
@@ -34,6 +36,7 @@ def select_strategy(exp_doc: dict) -> EngineStrategy:
     log.info("select strategy")
     exp_type = exp_doc.get("parameters", {}).get("strategy", "simple")
     log.info(f"selected: {exp_type}")
+    # When adding new strategies, remember to update the front-end: Step2Experiment.vue
     if exp_type == "nsga3":
         return NSGA3LoopStrategy(exp_doc, mongo)
     if exp_type == "nsga2":
@@ -46,6 +49,10 @@ def select_strategy(exp_doc: dict) -> EngineStrategy:
         return NSGA3DeapStrategy(exp_doc, mongo)
     if exp_type == "nsga3_pymoo":
         return NSGA3PymooStrategy(exp_doc, mongo)
+    if exp_type == "nsga2_deap":
+        return NSGA2DeapStrategy(exp_doc, mongo)
+    if exp_type == "nsga2_pymoo":
+        return NSGA2PymooStrategy(exp_doc, mongo)
     raise ValueError(f"[mo-engine] Experiment type unknown: {exp_type}")
 
 
