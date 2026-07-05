@@ -17,7 +17,7 @@
     </p>
 
     <div class="field-group">
-      <label class="field-label">Seeds <span class="required">*</span></label>
+      <label class="field-label">Seeds <span class="seed-count">({{ modelValue.randomSeeds.length }})</span> <span class="required">*</span></label>
       <div class="seeds-row">
         <div class="chips">
           <span v-for="(seed, i) in modelValue.randomSeeds" :key="i" class="chip">
@@ -35,6 +35,7 @@
             @keydown.enter.prevent="addSeed"
           />
           <button class="add-btn" @click="addSeed" :disabled="!canAdd">+ Add</button>
+          <button class="rand-btn" @click="addRandomSeed" title="Insert a random seed">⚄ Random</button>
         </div>
       </div>
       <span v-if="showError" class="err">Add at least one seed.</span>
@@ -46,11 +47,41 @@
         {{ preset.label }}
       </button>
     </div>
+
+    <!-- Import / Export -->
+    <div class="io-row">
+      <span class="io-label">Seeds file:</span>
+      <button
+        class="io-btn"
+        :disabled="modelValue.randomSeeds.length === 0"
+        title="Export current seeds to a JSON file"
+        @click="exportSeeds"
+      >
+        ↓ Export
+      </button>
+      <button
+        class="io-btn"
+        title="Import seeds from a JSON file (replaces current list)"
+        @click="triggerImport"
+      >
+        ↑ Import
+      </button>
+      <span v-if="importFeedback" :class="['io-feedback', importOk ? 'io-feedback--ok' : 'io-feedback--err']">
+        {{ importFeedback }}
+      </span>
+      <input
+        ref="fileInputEl"
+        type="file"
+        accept=".json"
+        class="hidden-input"
+        @change="handleImport"
+      />
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onBeforeUnmount } from 'vue'
 
 export interface Step3Value {
   duration: number
@@ -94,6 +125,78 @@ function removeSeed(i: number) {
 function applyPreset(seeds: number[]) {
   emit('update:modelValue', { ...props.modelValue, randomSeeds: seeds })
 }
+
+function addRandomSeed() {
+  for (let attempts = 0; attempts < 50; attempts++) {
+    const v = Math.floor(Math.random() * 999983) + 1
+    if (!props.modelValue.randomSeeds.includes(v)) {
+      emit('update:modelValue', { ...props.modelValue, randomSeeds: [...props.modelValue.randomSeeds, v] })
+      return
+    }
+  }
+}
+
+// ── Import / Export ──────────────────────────────────────────────────────────
+
+const fileInputEl = ref<HTMLInputElement | null>(null)
+const importFeedback = ref('')
+const importOk = ref(true)
+let feedbackTimer: ReturnType<typeof setTimeout> | null = null
+
+onBeforeUnmount(() => { if (feedbackTimer) clearTimeout(feedbackTimer) })
+
+function flash(msg: string, ok: boolean) {
+  importFeedback.value = msg
+  importOk.value = ok
+  if (feedbackTimer) clearTimeout(feedbackTimer)
+  feedbackTimer = setTimeout(() => { importFeedback.value = '' }, 3000)
+}
+
+function exportSeeds() {
+  const content = JSON.stringify({ seeds: props.modelValue.randomSeeds }, null, 2)
+  const blob = new Blob([content], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'seeds.json'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function triggerImport() {
+  if (!fileInputEl.value) return
+  fileInputEl.value.value = ''   // allow re-importing the same file
+  fileInputEl.value.click()
+}
+
+function handleImport(event: Event) {
+  const file = (event.target as HTMLInputElement).files?.[0]
+  if (!file) return
+
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    try {
+      const raw = JSON.parse(e.target?.result as string)
+      // Accept either { seeds: [...] } or a bare array
+      const arr: unknown = Array.isArray(raw) ? raw : raw?.seeds
+      if (!Array.isArray(arr) || arr.length === 0) {
+        flash('Invalid file — expected { "seeds": [...] }', false)
+        return
+      }
+      const seeds = arr.map((v) => parseInt(String(v), 10))
+      if (seeds.some((v) => !Number.isInteger(v) || isNaN(v))) {
+        flash('Invalid file — seeds must be integers', false)
+        return
+      }
+      const unique = [...new Set(seeds)]
+      emit('update:modelValue', { ...props.modelValue, randomSeeds: unique })
+      flash(`✓ Imported ${unique.length} seed${unique.length !== 1 ? 's' : ''}`, true)
+    } catch {
+      flash('Invalid JSON file', false)
+    }
+  }
+  reader.readAsText(file)
+}
 </script>
 
 <style scoped>
@@ -134,8 +237,17 @@ input:focus { border-color: var(--color-primary); }
 .add-btn {
   padding: 7px 14px; background: var(--color-primary); color: #fff;
   border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; border: none; cursor: pointer;
+  white-space: nowrap;
 }
 .add-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.rand-btn {
+  padding: 7px 13px; background: none; color: #7c3aed;
+  border: 1px solid #7c3aed; border-radius: var(--radius-sm);
+  font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+}
+.rand-btn:hover { background: rgba(124,58,237,0.1); }
+.seed-count { color: var(--color-text-muted); font-weight: 400; }
 .presets { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .presets-label { font-size: 11px; color: var(--color-text-muted); }
 .preset-btn {
@@ -145,4 +257,50 @@ input:focus { border-color: var(--color-primary); }
 }
 .preset-btn:hover { border-color: var(--color-primary); color: var(--color-primary); }
 .err { font-size: 11px; color: #ef4444; }
+
+/* ── Import / Export ──────────────────────────────────────────────────────── */
+
+.io-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.io-label {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.io-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s;
+}
+
+.io-btn:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.io-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.io-feedback {
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.io-feedback--ok  { color: #16a34a; }
+.io-feedback--err { color: #ef4444; }
+
+.hidden-input { display: none; }
 </style>

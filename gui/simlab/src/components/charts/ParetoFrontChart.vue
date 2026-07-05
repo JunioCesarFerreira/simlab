@@ -58,10 +58,13 @@ const props = defineProps<{
   generations?: GenerationDto[];
   objectiveNames?: string[];
   objectiveGoals?: string[];
+  initX?: string;
+  initY?: string;
 }>();
 
 const emit = defineEmits<{
   (e: "click-individual", individualId: string): void;
+  (e: "axis-change", axes: { x: string; y: string }): void;
 }>();
 
 interface ChartPoint {
@@ -87,15 +90,19 @@ const hasSufficientData = computed(
   () => (props.paretoFront?.length ?? 0) > 0 && availableKeys.value.length >= 2,
 );
 
-const xKey = ref("");
-const yKey = ref("");
+const xKey = ref(props.initX ?? "");
+const yKey = ref(props.initY ?? "");
 
 watch(availableKeys, (keys) => {
   if (keys.length >= 2) {
-    xKey.value = keys[0] ?? "";
-    yKey.value = keys[1] ?? "";
+    if (!xKey.value || !keys.includes(xKey.value)) xKey.value = keys[0] ?? "";
+    if (!yKey.value || !keys.includes(yKey.value)) yKey.value = keys[1] ?? "";
   }
 }, { immediate: true });
+
+watch([xKey, yKey], ([x, y]) => {
+  emit("axis-change", { x, y });
+});
 
 const xIdx = computed(() => availableKeys.value.indexOf(xKey.value));
 const yIdx = computed(() => availableKeys.value.indexOf(yKey.value));

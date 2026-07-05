@@ -1,6 +1,6 @@
 <template>
   <div class="problem-editor">
-    <Toolbar @import="showImport = true" @launch="showLaunch = true" />
+    <Toolbar @import="showImport = true" @launch="showLaunch = true" @problems="showProblems = true" />
     <div class="editor-body">
       <PropertiesPanel class="sidebar" />
       <div class="canvas-area">
@@ -8,6 +8,7 @@
         <JsonPreviewPanel v-if="showJson" class="json-overlay" />
       </div>
     </div>
+    <SavedProblemsPanel v-if="showProblems" @close="showProblems = false" />
     <ImportPanel v-if="showImport" @close="showImport = false" />
     <LaunchWizard
       v-if="showLaunch"
@@ -30,12 +31,14 @@ import PropertiesPanel from './PropertiesPanel.vue'
 import CanvasView from './CanvasView.vue'
 import JsonPreviewPanel from './JsonPreviewPanel.vue'
 import ImportPanel from './ImportPanel.vue'
+import SavedProblemsPanel from './SavedProblemsPanel.vue'
 import LaunchWizard from '../launch/LaunchWizard.vue'
 import PostLaunchDialog from '../launch/PostLaunchDialog.vue'
 
 const editorStore = useEditorStore()
 const showImport = ref(false)
 const showLaunch = ref(false)
+const showProblems = ref(false)
 const createdExperimentId = ref<string | null>(null)
 const showJson = computed(() => editorStore.showJsonPreview)
 

@@ -29,6 +29,28 @@
 
         <div class="pin-controls">
           <button
+            :class="['pan-btn', { active: panMode }]"
+            :title="panMode ? 'Switch back to rotate mode (left drag rotates)' : 'Switch to pan mode (left drag moves the scene)'"
+            @click="panMode = !panMode"
+          >
+            ✋ {{ panMode ? 'Panning' : 'Pan' }}
+          </button>
+          <button
+            v-if="hasNicheLineData"
+            :class="['niche-btn', { active: showNicheLines }]"
+            :title="showNicheLines ? 'Hide niche lines' : 'Show niche lines (NSGA-III reference directions)'"
+            @click="showNicheLines = !showNicheLines"
+          >
+            ⟁ Niche Lines
+          </button>
+          <button
+            :class="['dom-btn', { active: dominanceMode }]"
+            :title="dominanceMode ? 'Exit dominance mode' : 'Enter dominance mode — click a point to highlight the region it dominates'"
+            @click="dominanceMode = !dominanceMode"
+          >
+            ▣ {{ dominanceMode ? (dominancePoint ? 'Clear…' : 'Click a point…') : 'Dominance' }}
+          </button>
+          <button
             :class="['pin-btn', { active: markMode }]"
             :title="markMode ? 'Exit pin mode' : 'Enter pin mode — click a Pareto point to pin it'"
             @click="markMode = !markMode"
@@ -42,7 +64,7 @@
         </div>
       </div>
 
-      <div ref="chartEl" class="chart" />
+      <div ref="chartEl" :class="['chart', { 'chart--pan': panMode }]" />
     </template>
   </div>
 </template>
@@ -62,10 +84,16 @@ const props = defineProps<{
   generations?: GenerationDto[];
   objectiveNames?: string[];
   objectiveGoals?: string[];
+  strategy?: string;
+  referencePointDivisions?: number;
+  initX?: string;
+  initY?: string;
+  initZ?: string;
 }>();
 
 const emit = defineEmits<{
   (e: "click-individual", individualId: string): void;
+  (e: "axis-change", axes: { x: string; y: string; z: string }): void;
 }>();
 
 const { isDark } = useTheme();
@@ -75,6 +103,9 @@ const { isDark } = useTheme();
 const chartEl = ref<HTMLElement | null>(null);
 let chart: echarts.ECharts | null = null;
 let ro: ResizeObserver | null = null;
+// True after the first successful setOption; subsequent calls use replaceMerge
+// to preserve the user's camera state (zoom, rotation, pan).
+let cameraInitialized = false;
 
 onMounted(() => {
   if (!chartEl.value) return;
@@ -88,6 +119,9 @@ onMounted(() => {
     if (!data?.individualId) return;
     if (markMode.value) {
       markedId.value = markedId.value === data.individualId ? "" : data.individualId;
+    } else if (dominanceMode.value) {
+      dominancePoint.value =
+        dominancePoint.value?.individualId === data.individualId ? null : data;
     } else {
       emit("click-individual", data.individualId);
     }
@@ -99,6 +133,7 @@ onBeforeUnmount(() => {
   ro = null;
   chart?.dispose();
   chart = null;
+  cameraInitialized = false;
 });
 
 // ── Data types ───────────────────────────────────────────────────────────────
@@ -109,10 +144,46 @@ interface Point3D {
   allObjectives: number[] | Record<string, number>;
 }
 
+// ── Niche lines (NSGA-III reference directions) ───────────────────────────────
+
+const NSGA3_STRATEGIES = ['nsga3', 'nsga3_deap', 'nsga3_pymoo'] as const;
+const MAX_NICHE_LINES = 500;
+
+const showNicheLines = ref(true);
+
+const hasNicheLineData = computed(() =>
+  NSGA3_STRATEGIES.includes(props.strategy as never) &&
+  !!props.referencePointDivisions &&
+  props.referencePointDivisions >= 1 &&
+  hasSufficientData.value &&
+  paretoData.value.length > 0,
+);
+
+function dassDennisRefPoints(m: number, p: number): number[][] {
+  const points: number[][] = [];
+  function gen(dim: number, remaining: number, current: number[]) {
+    if (dim === 1) { points.push([...current, remaining / p]); return; }
+    for (let k = 0; k <= remaining; k++) gen(dim - 1, remaining - k, [...current, k / p]);
+  }
+  gen(m, p, []);
+  return points;
+}
+
+// ── Pan mode ──────────────────────────────────────────────────────────────────
+
+const panMode = ref(false);
+
 // ── Pin state ─────────────────────────────────────────────────────────────────
 
 const markMode = ref(false);
 const markedId = ref("");
+
+// ── Dominance region ──────────────────────────────────────────────────────────
+
+const dominanceMode = ref(false);
+const dominancePoint = ref<Point3D | null>(null);
+
+watch(dominanceMode, (active) => { if (!active) dominancePoint.value = null; });
 
 // ── Axis state ────────────────────────────────────────────────────────────────
 
@@ -126,21 +197,25 @@ const hasSufficientData = computed(
   () => (props.paretoFront?.length ?? 0) > 0 && availableKeys.value.length >= 3,
 );
 
-const xKey = ref("");
-const yKey = ref("");
-const zKey = ref("");
+const xKey = ref(props.initX ?? "");
+const yKey = ref(props.initY ?? "");
+const zKey = ref(props.initZ ?? "");
 
 watch(
   availableKeys,
   (keys) => {
     if (keys.length >= 3) {
-      xKey.value = keys[0] ?? "";
-      yKey.value = keys[1] ?? "";
-      zKey.value = keys[2] ?? "";
+      if (!xKey.value || !keys.includes(xKey.value)) xKey.value = keys[0] ?? "";
+      if (!yKey.value || !keys.includes(yKey.value)) yKey.value = keys[1] ?? "";
+      if (!zKey.value || !keys.includes(zKey.value)) zKey.value = keys[2] ?? "";
     }
   },
   { immediate: true },
 );
+
+watch([xKey, yKey, zKey], ([x, y, z]) => {
+  emit("axis-change", { x, y, z });
+});
 
 const xIdx = computed(() => availableKeys.value.indexOf(xKey.value));
 const yIdx = computed(() => availableKeys.value.indexOf(yKey.value));
@@ -378,6 +453,167 @@ function buildOption() {
     });
   }
 
+  // ── Niche lines (NSGA-III) ────────────────────────────────────────────────
+  if (showNicheLines.value && hasNicheLineData.value) {
+    const m = availableKeys.value.length;
+    const p = props.referencePointDivisions!;
+    const refPoints = dassDennisRefPoints(m, p);
+
+    if (refPoints.length <= MAX_NICHE_LINES) {
+      const xi = xIdx.value;
+      const yi = yIdx.value;
+      const zi = zIdx.value;
+
+      // Use full population bounding box (wider than Pareto front alone)
+      const bboxPts = populationData.value.length > 0
+        ? populationData.value
+        : paretoData.value;
+
+      let minX = Infinity, minY = Infinity, minZ = Infinity;
+      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+      for (const pt of bboxPts) {
+        const [x, y, z] = pt.value;
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+        if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+      }
+
+      const goals = props.objectiveGoals ?? [];
+      const isMaxX = goals[xi] === 'max';
+      const isMaxY = goals[yi] === 'max';
+      const isMaxZ = goals[zi] === 'max';
+
+      // Ideal point: best value per axis according to goal
+      const ox = isMaxX ? maxX : minX;
+      const oy = isMaxY ? maxY : minY;
+      const oz = isMaxZ ? maxZ : minZ;
+
+      // Sign: min objectives extend toward higher values; max toward lower
+      const sx = isMaxX ? -1 : 1;
+      const sy = isMaxY ? -1 : 1;
+      const sz = isMaxZ ? -1 : 1;
+
+      const rangeX = (maxX - minX) || 1;
+      const rangeY = (maxY - minY) || 1;
+      const rangeZ = (maxZ - minZ) || 1;
+
+      const lineColor = dark ? '#74c7ec' : '#0284c7';
+      const lineOpacity = dark ? 0.28 : 0.32;
+
+      let added = 0;
+      for (const ref of refPoints) {
+        let wx = ref[xi] ?? 0;
+        let wy = ref[yi] ?? 0;
+        let wz = ref[zi] ?? 0;
+        const wsum = wx + wy + wz;
+        // Skip directions with no component in the displayed axes (only relevant for m > 3)
+        if (wsum < 1e-10) continue;
+        // L1-normalise the 3D projection so all lines reach the same scale
+        // regardless of how many objectives are outside the 3 displayed axes
+        wx /= wsum;
+        wy /= wsum;
+        wz /= wsum;
+
+        // Extend the line until it exits the population bounding box:
+        // in normalised space each axis is [0,1], so t_max = min(1/wi) for wi > 0.
+        // This guarantees every Pareto point (which is inside the box) lies within the line.
+        // An extra 10% pushes the tip visibly past the outermost data points.
+        let tMax = Infinity;
+        if (wx > 1e-10) tMax = Math.min(tMax, 1 / wx);
+        if (wy > 1e-10) tMax = Math.min(tMax, 1 / wy);
+        if (wz > 1e-10) tMax = Math.min(tMax, 1 / wz);
+        if (!isFinite(tMax)) continue;
+        tMax *= 1.1;
+
+        series.push({
+          name: `__niche_${added++}`,
+          type: 'line3D',
+          data: [
+            [ox, oy, oz],
+            [ox + sx * wx * tMax * rangeX, oy + sy * wy * tMax * rangeY, oz + sz * wz * tMax * rangeZ],
+          ],
+          lineStyle: { color: lineColor, width: 1, opacity: lineOpacity },
+          silent: true,
+        });
+      }
+    }
+  }
+
+  // ── Dominance region ─────────────────────────────────────────────────────────
+  if (dominancePoint.value) {
+    const dp = dominancePoint.value;
+    const [dpx, dpy, dpz] = dp.value;
+
+    const xi = xIdx.value, yi = yIdx.value, zi = zIdx.value;
+    const goals = props.objectiveGoals ?? [];
+    const isMaxX = goals[xi] === 'max';
+    const isMaxY = goals[yi] === 'max';
+    const isMaxZ = goals[zi] === 'max';
+
+    // Bounding box from all available data (population or Pareto)
+    const bboxPts = populationData.value.length > 0 ? populationData.value : paretoData.value;
+    let bMinX = Infinity, bMinY = Infinity, bMinZ = Infinity;
+    let bMaxX = -Infinity, bMaxY = -Infinity, bMaxZ = -Infinity;
+    for (const pt of bboxPts) {
+      const [x, y, z] = pt.value;
+      if (x < bMinX) bMinX = x; if (x > bMaxX) bMaxX = x;
+      if (y < bMinY) bMinY = y; if (y > bMaxY) bMaxY = y;
+      if (z < bMinZ) bMinZ = z; if (z > bMaxZ) bMaxZ = z;
+    }
+
+    // Dominance box: from selected point to the "worst" corner per axis
+    // min objective → dominated region extends toward higher values (nadir)
+    // max objective → dominated region extends toward lower values (nadir)
+    const lx = isMaxX ? bMinX : dpx;
+    const ly = isMaxY ? bMinY : dpy;
+    const lz = isMaxZ ? bMinZ : dpz;
+    const hx = isMaxX ? dpx : bMaxX;
+    const hy = isMaxY ? dpy : bMaxY;
+    const hz = isMaxZ ? dpz : bMaxZ;
+
+    const domColor = '#ef4444';
+
+    // 6 faces of the dominance box rendered as parametric surfaces
+    type PFn = (u: number, v: number) => number;
+    const faces: Array<{ x: PFn; y: PFn; z: PFn }> = [
+      { x: ()  => lx,              y: (u)    => ly + u*(hy-ly), z: (_u, v) => lz + v*(hz-lz) }, // x=lx
+      { x: ()  => hx,              y: (u)    => ly + u*(hy-ly), z: (_u, v) => lz + v*(hz-lz) }, // x=hx
+      { x: (u) => lx + u*(hx-lx), y: ()     => ly,             z: (_u, v) => lz + v*(hz-lz) }, // y=ly
+      { x: (u) => lx + u*(hx-lx), y: ()     => hy,             z: (_u, v) => lz + v*(hz-lz) }, // y=hy
+      { x: (u) => lx + u*(hx-lx), y: (_u,v) => ly + v*(hy-ly), z: ()     => lz             }, // z=lz
+      { x: (u) => lx + u*(hx-lx), y: (_u,v) => ly + v*(hy-ly), z: ()     => hz             }, // z=hz
+    ];
+
+    faces.forEach((face, i) => {
+      series.push({
+        name: `__dom_face_${i}`,
+        type: 'surface',
+        coordinateSystem: 'cartesian3D',
+        parametric: true,
+        parametricEquation: {
+          u: { min: 0, max: 1, step: 1 },
+          v: { min: 0, max: 1, step: 1 },
+          x: face.x,
+          y: face.y,
+          z: face.z,
+        },
+        itemStyle: { color: domColor, opacity: dark ? 0.18 : 0.15 },
+        wireframe: { show: false },
+        silent: true,
+      });
+    });
+
+    // Highlight the dominance source point in red
+    series.push({
+      name: '__dom_point',
+      type: 'scatter3D',
+      data: [dp],
+      symbolSize: 11,
+      itemStyle: { color: domColor, opacity: 1 },
+      silent: true,
+    });
+  }
+
   const legendData = [
     ...(useRanks
       ? rankedGroups.value
@@ -439,14 +675,18 @@ function buildOption() {
       environment: envColor,
       viewControl: {
         autoRotate: false,
+        // In pan mode swap mouse buttons: left drag pans, middle drag rotates
+        rotateMouseButton: panMode.value ? 'middle' : 'left',
+        panMouseButton:    panMode.value ? 'left'   : 'middle',
         rotateSensitivity: 1.5,
-        zoomSensitivity: 1.2,
+        zoomSensitivity: 1.5,
         panSensitivity: 1,
-        distance: 220,
-        alpha: 20,
-        beta: 40,
-        minDistance: 40,
-        maxDistance: 600,
+        minDistance: 5,
+        maxDistance: 2000,
+        // Initial camera position — included ONLY on the first render.
+        // Omitting distance/alpha/beta on updates means echarts-gl never
+        // re-applies them, so the user's current zoom/rotation is preserved.
+        ...(!cameraInitialized && { distance: 220, alpha: 20, beta: 40 }),
       },
       postEffect: {
         enable: dark,
@@ -460,7 +700,16 @@ function buildOption() {
     series,
   };
 
-  chart.setOption(option, true);
+  if (!cameraInitialized) {
+    chart.setOption(option, true);
+    cameraInitialized = true;
+  } else {
+    // replaceMerge replaces only the series array (correct add/remove of niche
+    // lines, dominance faces, etc.) while merging everything else — the
+    // echarts-gl viewControl state (zoom, rotation, pan) is untouched.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (chart as any).setOption(option, { replaceMerge: ['series'] });
+  }
 }
 
 // ── Reactivity ────────────────────────────────────────────────────────────────
@@ -470,8 +719,13 @@ watch(
     () => props.paretoFront,
     () => props.generations,
     () => props.objectiveGoals,
+    () => props.strategy,
+    () => props.referencePointDivisions,
     xKey, yKey, zKey,
     markedPoint,
+    showNicheLines,
+    dominancePoint,
+    panMode,
     isDark,
   ],
   () => buildOption(),
@@ -491,6 +745,14 @@ watch(
 .chart {
   flex: 1;
   min-height: 340px;
+}
+
+.chart--pan {
+  cursor: grab;
+}
+
+.chart--pan:active {
+  cursor: grabbing;
 }
 
 .empty {
@@ -536,6 +798,9 @@ watch(
   margin-left: auto;
 }
 
+.pan-btn,
+.niche-btn,
+.dom-btn,
 .pin-btn {
   font-size: 11px;
   font-weight: 600;
@@ -548,9 +813,30 @@ watch(
   cursor: pointer;
 }
 
+.pan-btn:hover,
+.niche-btn:hover,
+.dom-btn:hover,
 .pin-btn:hover {
   background: var(--color-bg);
   color: var(--color-text);
+}
+
+.pan-btn.active {
+  background: #ede9fe;
+  border-color: #a78bfa;
+  color: #5b21b6;
+}
+
+.niche-btn.active {
+  background: #e0f2fe;
+  border-color: #38bdf8;
+  color: #0369a1;
+}
+
+.dom-btn.active {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #991b1b;
 }
 
 .pin-btn.active {

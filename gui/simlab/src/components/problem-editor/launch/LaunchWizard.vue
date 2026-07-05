@@ -1,6 +1,6 @@
 <template>
   <Teleport to="body">
-    <div class="backdrop" @click.self="requestClose">
+    <div class="backdrop">
       <div class="modal" role="dialog" aria-modal="true" :aria-label="`Launch experiment — step ${currentStep} of ${TOTAL_STEPS}`">
 
         <!-- Header -->
@@ -50,34 +50,48 @@
 
         <!-- Footer -->
         <div class="modal-footer">
-          <div class="footer-left">
-            <span v-if="submitError" class="submit-error">{{ submitError }}</span>
-          </div>
-          <div class="footer-actions">
-            <button v-if="currentStep > 1" class="btn-secondary" @click="prev" :disabled="submitting">
-              ← Back
-            </button>
-            <button class="btn-secondary" @click="requestClose" :disabled="submitting">
-              Cancel
-            </button>
-            <button
-              v-if="currentStep < TOTAL_STEPS"
-              class="btn-primary"
-              @click="next"
-              :disabled="!canProceed"
-            >
-              Next →
-            </button>
-            <button
-              v-else
-              class="btn-success"
-              @click="submit"
-              :disabled="!canProceed || submitting"
-            >
-              <span v-if="submitting">Creating…</span>
-              <span v-else>Create experiment</span>
-            </button>
-          </div>
+          <!-- Confirm-close banner -->
+          <template v-if="showCloseConfirm">
+            <div class="confirm-row">
+              <span class="confirm-msg">⚠ Discard all settings and close?</span>
+              <div class="footer-actions">
+                <button class="btn-secondary" @click="cancelClose">Keep editing</button>
+                <button class="btn-danger" @click="confirmClose">Discard & close</button>
+              </div>
+            </div>
+          </template>
+
+          <!-- Normal footer -->
+          <template v-else>
+            <div class="footer-left">
+              <span v-if="submitError" class="submit-error">{{ submitError }}</span>
+            </div>
+            <div class="footer-actions">
+              <button v-if="currentStep > 1" class="btn-secondary" @click="prev" :disabled="submitting">
+                ← Back
+              </button>
+              <button class="btn-secondary" @click="requestClose" :disabled="submitting">
+                Cancel
+              </button>
+              <button
+                v-if="currentStep < TOTAL_STEPS"
+                class="btn-primary"
+                @click="next"
+                :disabled="!canProceed"
+              >
+                Next →
+              </button>
+              <button
+                v-else
+                class="btn-success"
+                @click="submit"
+                :disabled="!canProceed || submitting"
+              >
+                <span v-if="submitting">Creating…</span>
+                <span v-else>Create experiment</span>
+              </button>
+            </div>
+          </template>
         </div>
 
       </div>
@@ -122,6 +136,7 @@ const currentStep = ref(1)
 const showValidation = ref(false)
 const submitting = ref(false)
 const submitError = ref<string | null>(null)
+const showCloseConfirm = ref(false)
 
 // Source repositories loaded from API
 const repositories = ref<SourceRepositoryDto[]>([])
@@ -310,7 +325,16 @@ async function submit() {
 }
 
 function requestClose() {
-  if (!submitting.value) emit('close')
+  if (submitting.value) return
+  showCloseConfirm.value = true
+}
+
+function confirmClose() {
+  emit('close')
+}
+
+function cancelClose() {
+  showCloseConfirm.value = false
 }
 </script>
 
@@ -423,4 +447,19 @@ function requestClose() {
 }
 .btn-success:disabled { opacity: 0.4; cursor: not-allowed; }
 button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.btn-danger {
+  padding: 8px 16px; border-radius: var(--radius-sm); border: none;
+  background: #ef4444; color: #fff;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.btn-danger:hover { background: #dc2626; }
+
+.confirm-row {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; gap: 12px;
+}
+.confirm-msg {
+  font-size: 13px; font-weight: 500; color: #b45309;
+}
 </style>
