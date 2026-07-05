@@ -161,13 +161,15 @@ onMounted(buildOption);
 
 <style scoped>
 .chart-wrap {
-  width: 100%;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .chart {
-  width: 100%;
-  height: 280px;
+  flex: 1;
+  min-height: 200px;
 }
 
 .empty {
