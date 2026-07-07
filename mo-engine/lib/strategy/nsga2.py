@@ -31,6 +31,12 @@ from lib.problem.resolve import build_adapter
 
 logger = logging.getLogger(__name__)
 
+# Finite sentinel for individuals with no metrics / unextractable objectives.
+# Kept above the frontend PENALTY_THRESHOLD (1e8) and the P1 penalty base (1e9),
+# and finite (not float("inf")) so objectives stay JSON-serializable and niching
+# distance math never produces NaN.
+WORST_OBJECTIVE = 1e12
+
 
 class NSGA2LoopStrategy(EngineStrategy):
     """
@@ -204,7 +210,7 @@ class NSGA2LoopStrategy(EngineStrategy):
         )
 
         n_obj = len(self._objective_keys)
-        worst_objectives = [float("inf")] * n_obj
+        worst_objectives = [WORST_OBJECTIVE] * n_obj
 
         for ind in self._current_population:
             if self._map_genome_objectives.get(ind) is not None:
@@ -839,7 +845,7 @@ class NSGA2LoopStrategy(EngineStrategy):
 # ---------------------------------------
     def _run_genetic_algorithm(self) -> list[list[float]]:
         parents = self._parents
-        worst = [float("inf")] * len(self._objective_keys)
+        worst = [WORST_OBJECTIVE] * len(self._objective_keys)
         parents_objectives = [self._map_genome_objectives.get(genome, worst) for genome in parents]
 
         logger.debug("objectives: %s", parents_objectives)

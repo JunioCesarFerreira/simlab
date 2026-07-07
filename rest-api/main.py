@@ -7,11 +7,15 @@ if project_path not in sys.path:
     sys.path.insert(0, project_path)
 
 from api.router import api_router
+from api.responses import SafeJSONResponse
 
 app = FastAPI(
     title="Simulation Management API",
     version="2.0.0",
-    openapi_version="3.0.3"
+    openapi_version="3.0.3",
+    # Tolerate non-finite floats (inf/nan) in stored objectives so reading an
+    # experiment never fails with HTTP 500 during JSON serialization.
+    default_response_class=SafeJSONResponse,
 )
 
 app.add_middleware(

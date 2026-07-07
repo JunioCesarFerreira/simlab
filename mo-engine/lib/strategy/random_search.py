@@ -26,6 +26,12 @@ from lib.problem.resolve import build_adapter
 
 logger = logging.getLogger(__name__)
 
+# Finite sentinel for individuals with no metrics / unextractable objectives.
+# Kept above the frontend PENALTY_THRESHOLD (1e8) and the P1 penalty base (1e9),
+# and finite (not float("inf")) so objectives stay JSON-serializable and niching
+# distance math never produces NaN.
+WORST_OBJECTIVE = 1e12
+
 
 class RandomSearchStrategy(EngineStrategy):
     """
@@ -503,7 +509,7 @@ class RandomSearchStrategy(EngineStrategy):
         )
 
         n_obj = len(self._objective_keys)
-        worst_objectives = [float("inf")] * n_obj
+        worst_objectives = [WORST_OBJECTIVE] * n_obj
 
         for ind in self._current_population:
             if self._map_genome_objectives.get(ind) is not None:
