@@ -19,7 +19,7 @@ if project_path not in sys.path:
 
 # lib master-node
 from lib.sshscp import create_ssh_client, send_files_scp
-from lib.synthetic_data import run_synthetic_simulation
+from lib.synthetic_data import run_synthetic_simulation, resolve_synthetic_settings
 
 # pylib
 from pylib.db import create_mongo_repository_factory, MongoRepository, EnumStatus
@@ -300,20 +300,20 @@ def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostnam
                 continue
 
             # Resolve synthetic mode: per-experiment config takes priority over env var.
-            exp_doc = mongo.experiment_repo.get(sim["experiment_id"]) or {}
-            syn_cfg: dict = (
-                exp_doc.get("parameters", {}) or {}
-            ).get("simulation", {}).get("synthetic", {}) or {}
-            mode: bool = syn_cfg.get(
-                "enabled",
-                os.getenv("ENABLE_DATA_SYNTHETIC", "False").lower() == "true",
-            )
-            log.info("mode: %s", "Synthetic Data" if mode else "Simulation")
-            if mode:
-                bench: str = syn_cfg.get("bench") or os.getenv("BENCH", "DTLZ2")
-                noise_std: float = float(
-                    syn_cfg.get("noise_std", os.getenv("NOISE_STD", "0.0"))
+            exp_id = sim.get("experiment_id")
+            exp_doc = mongo.experiment_repo.get(exp_id)
+            if exp_doc is None:
+                log.warning(
+                    "[port=%s] Experiment %s not found for simulation %s; "
+                    "falling back to the env-var synthetic setting.",
+                    port, exp_id, sim_id,
                 )
+            mode, bench, noise_std = resolve_synthetic_settings(exp_doc)
+            log.info(
+                "[port=%s] sim %s → mode=%s (exp=%s)",
+                port, sim_id, "Synthetic Data" if mode else "Simulation", exp_id,
+            )
+            if mode:
                 run_synthetic_simulation(sim, mongo, bench=bench, noise_std=noise_std)
                 continue
 

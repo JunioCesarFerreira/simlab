@@ -2,11 +2,44 @@ import os
 import math
 import random
 import logging
+from typing import Mapping, Optional
 from bson import ObjectId
 from pylib.db import create_mongo_repository_factory, EnumStatus, MongoRepository
 from pylib.db.models import Simulation
 
 log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Mode resolution (per-experiment config takes precedence over env vars)
+# ---------------------------------------------------------------------------
+
+def resolve_synthetic_settings(
+    exp_doc: Optional[dict],
+    env: Optional[Mapping[str, str]] = None,
+) -> tuple[bool, str, float]:
+    """Resolve ``(enabled, bench, noise_std)`` for a simulation's experiment.
+
+    The per-experiment ``parameters.simulation.synthetic`` block takes priority
+    over the ``ENABLE_DATA_SYNTHETIC`` / ``BENCH`` / ``NOISE_STD`` environment
+    variables. The nested lookup tolerates missing or present-but-None levels,
+    and ``enabled`` accepts both real booleans and string flags
+    (``"true"``/``"false"``) so legacy/stringified configs still work.
+    """
+    env = os.environ if env is None else env
+    syn_cfg = (
+        (((exp_doc or {}).get("parameters") or {}).get("simulation") or {}).get("synthetic") or {}
+    )
+    env_enabled = str(env.get("ENABLE_DATA_SYNTHETIC", "False")).strip().lower() == "true"
+    enabled_raw = syn_cfg.get("enabled", env_enabled)
+    enabled = (
+        enabled_raw.strip().lower() == "true"
+        if isinstance(enabled_raw, str)
+        else bool(enabled_raw)
+    )
+    bench = syn_cfg.get("bench") or env.get("BENCH", "DTLZ2")
+    noise_std = float(syn_cfg.get("noise_std", env.get("NOISE_STD", "0.0")))
+    return enabled, bench, noise_std
 
 # ---------------------------------------------------------------------------
 # Genome extraction

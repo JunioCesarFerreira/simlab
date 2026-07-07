@@ -158,6 +158,9 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._generation_enqueue()
         self._start_watcher()
         self._start_generation_poll()
+        # Catch-up: a fast (e.g. synthetic) generation may already be terminal
+        # before the change-stream watcher subscribed. Reconcile once at startup.
+        self._reconcile_current_generation()
 
 
     def event_simulation_done(self, sim_doc: dict):
@@ -413,13 +416,37 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._sim_watch_thread.start()
 
 
+    def _reconcile_current_generation(self) -> None:
+        """Catch-up check for the current generation.
+
+        Fast generations (e.g. synthetic mode, or fully genome-cached ones) can
+        reach a terminal state before the change-stream watcher subscribes,
+        which would otherwise miss the event. This reads the current status once
+        and processes it if already terminal. Idempotent: _handle_generation_done
+        ignores stale/duplicate calls under the lock.
+        """
+        if self._generation_id is None:
+            return
+        try:
+            gen = self.mongo.generation_repo.get(str(self._generation_id))
+        except Exception:
+            logger.exception("[NSGA-III] Reconcile: failed to read generation status.")
+            return
+        if gen and gen.get("status") in (EnumStatus.DONE, EnumStatus.ERROR):
+            logger.warning(
+                "[NSGA-III] Generation %s already %s at startup; processing (watcher race).",
+                self._generation_id, gen.get("status"),
+            )
+            with self._lock:
+                self._handle_generation_done(ObjectId(gen["_id"]))
+
     def _start_generation_poll(self) -> None:
         """
         Polling fallback that checks the current generation status every poll_interval seconds.
         Fires _handle_generation_done if the generation is terminal but the Change Stream
-        event was missed (e.g. after a reconnection gap).
+        event was missed (e.g. after a reconnection gap or a fast synthetic generation).
         """
-        poll_interval = int(os.getenv("BATCH_POLL_INTERVAL", "3600"))
+        poll_interval = int(os.getenv("BATCH_POLL_INTERVAL", "30"))
 
         def _poll():
             while not self._stop_flag:
@@ -480,10 +507,35 @@ class NSGA3LoopStrategy(EngineStrategy):
         # avoiding the race where master-node picks up a simulation before the generation exists.
         gen_oid = ObjectId()
 
+        # Insert the generation document (WAITING) BEFORE any simulation. Fast
+        # workers (e.g. synthetic mode) can complete every simulation in
+        # milliseconds; if the generation did not exist yet, master-node's
+        # generation mark_done() would update a missing document (no-op) and the
+        # generation would hang forever. Creating it first guarantees the close
+        # signal lands on an existing document.
+        gen_doc: Generation = {
+            "_id": gen_oid,
+            "experiment_id": exp_oid,
+            "index": gen_index,
+            "status": EnumStatus.WAITING,
+            "start_time": datetime.now(),
+            "end_time": None,
+        }
+        # Increment before inserting so the change-stream callback (which fires
+        # asynchronously) always sees the already-updated index.
+        self._gen_index += 1
+        self._generation_id = self.mongo.generation_repo.insert(gen_doc)
+
+        if gen_index == 0:
+            self.mongo.experiment_repo.update(str(exp_oid), {
+                "status": EnumStatus.RUNNING,
+                "start_time": datetime.now()
+            })
+
         first_seed = self._sim_rand_seeds[0] if self._sim_rand_seeds else 123456
         sims_inserted = 0
         seen_generation_hashes: set[str] = set()
-        
+
         self._count_sims_inserted = 0
 
         for i, genome in enumerate(population):
@@ -584,39 +636,17 @@ class NSGA3LoopStrategy(EngineStrategy):
 
             self._upload_topology_async(exp_oid, gen_oid, gen_index, i, genome_hash, dict(config))
 
-        # When every genome already has cached objectives there are no simulations to
-        # wait for.  Insert the generation directly as DONE so the change-stream watcher
-        # fires immediately and the algorithm can advance to the next generation.
-        all_cached = sims_inserted == 0
-        gen_doc: Generation = {
-            "_id": gen_oid,
-            "experiment_id": exp_oid,
-            "index": gen_index,
-            "status": EnumStatus.DONE if all_cached else EnumStatus.WAITING,
-            "start_time": datetime.now(),
-            "end_time": datetime.now() if all_cached else None,
-        }
-
-        # Increment before inserting so the change-stream callback (which fires
-        # asynchronously) always sees the already-updated index.
-        self._gen_index += 1
-        self._generation_id = self.mongo.generation_repo.insert(gen_doc)
-
-        if gen_index == 0:
-            self.mongo.experiment_repo.update(str(exp_oid), {
-                "status": EnumStatus.RUNNING,
-                "start_time": datetime.now()
-            })
-
-        if all_cached:
+        # When every genome already had cached objectives (or was penalised)
+        # there are no simulations to wait for. Mark the generation DONE and fire
+        # the handler directly in a worker thread — the change-stream event may be
+        # lost (watcher not yet subscribed on the first generation, or mid-
+        # reconnect), so this guarantees the evolution loop always advances.
+        if sims_inserted == 0:
+            self.mongo.generation_repo.mark_done(gen_oid)
             logger.info(
-                "[NSGA-III] Generation %d: all %d genomes have cached objectives; inserted as DONE.",
+                "[NSGA-III] Generation %d: all %d genomes have cached objectives; marked DONE.",
                 gen_index, len(population),
             )
-            # Change-stream event for this insert may be lost: the watcher may not
-            # have subscribed yet (first generation) or may be mid-reconnect. Fire
-            # the handler directly in a worker thread so the evolution loop always
-            # advances, even when every genome is cached or infeasible.
             Thread(
                 target=self._fire_generation_done,
                 args=(gen_oid,),

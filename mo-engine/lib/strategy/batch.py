@@ -154,6 +154,9 @@ class BatchStrategy(EngineStrategy):
         self._enqueue_batch()
         self._start_watcher()
         self._start_generation_poll()
+        # Catch-up: a fast (e.g. synthetic) generation may already be terminal
+        # before the change-stream watcher subscribed. Reconcile once at startup.
+        self._reconcile_current_generation()
 
     def event_simulation_done(self, sim_doc: dict):
         sim = sim_doc.get("fullDocument") or {}
@@ -221,8 +224,31 @@ class BatchStrategy(EngineStrategy):
         self._watch_thread.start()
         self._sim_watch_thread.start()
 
+    def _reconcile_current_generation(self) -> None:
+        """Catch-up check for the current generation.
+
+        Fast generations (e.g. synthetic mode, or fully penalised ones) can
+        reach a terminal state before the change-stream watcher subscribes,
+        which would otherwise miss the event. This reads the current status once
+        and processes it if already terminal. Idempotent under the lock.
+        """
+        if self._generation_id is None:
+            return
+        try:
+            gen = self.mongo.generation_repo.get(str(self._generation_id))
+        except Exception:
+            logger.exception("[Batch] Reconcile: failed to read generation status.")
+            return
+        if gen and gen.get("status") in (EnumStatus.DONE, EnumStatus.ERROR):
+            logger.warning(
+                "[Batch] Generation %s already %s at startup; processing (watcher race).",
+                self._generation_id, gen.get("status"),
+            )
+            with self._lock:
+                self._handle_generation_done(ObjectId(gen["_id"]))
+
     def _start_generation_poll(self) -> None:
-        poll_interval = int(os.getenv("BATCH_POLL_INTERVAL", "3600"))
+        poll_interval = int(os.getenv("BATCH_POLL_INTERVAL", "30"))
 
         def _poll():
             while not self._stop_flag:
@@ -252,6 +278,27 @@ class BatchStrategy(EngineStrategy):
         gen_oid = ObjectId()
         gen_index = 0
         first_seed = self._sim_rand_seeds[0] if self._sim_rand_seeds else 123456
+
+        # Insert the generation document (WAITING) BEFORE any simulation. Fast
+        # workers (e.g. synthetic mode) can complete every simulation in
+        # milliseconds; if the generation did not exist yet, master-node's
+        # generation mark_done() would update a missing document (no-op) and the
+        # generation would hang forever. Creating it first guarantees the close
+        # signal lands on an existing document.
+        gen_doc: Generation = {
+            "_id": gen_oid,
+            "experiment_id": exp_oid,
+            "index": gen_index,
+            "status": EnumStatus.WAITING,
+            "start_time": datetime.now(),
+            "end_time": None,
+        }
+        self._generation_id = self.mongo.generation_repo.insert(gen_doc)
+
+        self.mongo.experiment_repo.update(str(exp_oid), {
+            "status": EnumStatus.RUNNING,
+            "start_time": datetime.now(),
+        })
 
         sims_inserted = 0
         self._sim_done_count = 0
@@ -323,22 +370,10 @@ class BatchStrategy(EngineStrategy):
             )
 
         all_penalised = sims_inserted == 0
-        gen_doc: Generation = {
-            "_id": gen_oid,
-            "experiment_id": exp_oid,
-            "index": gen_index,
-            "status": EnumStatus.DONE if all_penalised else EnumStatus.WAITING,
-            "start_time": datetime.now(),
-            "end_time": datetime.now() if all_penalised else None,
-        }
-        self._generation_id = self.mongo.generation_repo.insert(gen_doc)
-
-        self.mongo.experiment_repo.update(str(exp_oid), {
-            "status": EnumStatus.RUNNING,
-            "start_time": datetime.now(),
-        })
-
         if all_penalised:
+            # No simulations to wait for — mark DONE and trigger the handler
+            # directly (the change-stream event would otherwise never fire).
+            self.mongo.generation_repo.mark_done(gen_oid)
             logger.info(
                 "[Batch] No simulations enqueued (all chromosomes penalised); "
                 "generation marked DONE immediately."

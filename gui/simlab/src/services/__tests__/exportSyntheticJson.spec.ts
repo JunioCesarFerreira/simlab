@@ -38,10 +38,11 @@ describe('exportSyntheticExperiment', () => {
     expect(sim.synthetic).toEqual({ enabled: true, bench: 'DTLZ2', noise_std: 0 })
   })
 
-  it('encodes the problem as P1 with n_relays = ceil(nVars/2) and no mobile nodes', () => {
+  it('encodes the problem as P1 (canonical name) with n_relays = ceil(nVars/2) and no mobile nodes', () => {
     const dto = build(makeDraft({ nVars: 7 })) // ceil(7/2) = 4
     const problem = dto.parameters.problem as Record<string, any>
-    expect(problem.type).toBe('p1')
+    // MUST be the canonical key the mo-engine resolves the adapter by
+    expect(problem.name).toBe('problem1')
     expect(problem.number_of_relays).toBe(4)
     expect(problem.mobile_nodes).toEqual([])
     expect(problem.min_coverage_percentage).toBe(0)

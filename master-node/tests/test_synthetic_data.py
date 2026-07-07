@@ -17,6 +17,7 @@ from lib.synthetic_data import (
     _zdt1,
     _sch1,
     _eval_benchmark,
+    resolve_synthetic_settings,
 )
 
 REGION = (-100.0, -100.0, 100.0, 100.0)
@@ -131,3 +132,55 @@ class TestEvalBenchmark:
         noisy = _eval_benchmark([10.0, 20.0], REGION, bench="ZDT1", M=2, noise_std=5.0)
         # with a large sigma the noisy result almost surely differs
         assert noisy != base
+
+
+# ── Mode resolution (per-experiment vs env) ──────────────────────────────────
+
+class TestResolveSyntheticSettings:
+    def _exp(self, synthetic):
+        return {"parameters": {"simulation": {"synthetic": synthetic}}}
+
+    def test_per_experiment_enabled_takes_priority(self):
+        exp = self._exp({"enabled": True, "bench": "ZDT1", "noise_std": 0.1})
+        # env says disabled, but per-experiment wins
+        enabled, bench, noise = resolve_synthetic_settings(exp, env={})
+        assert enabled is True
+        assert bench == "ZDT1"
+        assert noise == 0.1
+
+    def test_env_fallback_when_no_block(self):
+        enabled, bench, noise = resolve_synthetic_settings(
+            {"parameters": {"simulation": {}}},
+            env={"ENABLE_DATA_SYNTHETIC": "true", "BENCH": "SCH1", "NOISE_STD": "0.2"},
+        )
+        assert enabled is True
+        assert bench == "SCH1"
+        assert noise == 0.2
+
+    def test_disabled_by_default(self):
+        enabled, bench, noise = resolve_synthetic_settings({"parameters": {}}, env={})
+        assert enabled is False
+        assert bench == "DTLZ2"  # default
+        assert noise == 0.0
+
+    def test_enabled_accepts_string_flag(self):
+        exp = self._exp({"enabled": "true", "bench": "DTLZ2"})
+        enabled, _, _ = resolve_synthetic_settings(exp, env={})
+        assert enabled is True
+        exp_false = self._exp({"enabled": "false"})
+        assert resolve_synthetic_settings(exp_false, env={})[0] is False
+
+    def test_none_experiment_falls_back_to_env(self):
+        enabled, _, _ = resolve_synthetic_settings(None, env={"ENABLE_DATA_SYNTHETIC": "true"})
+        assert enabled is True
+
+    def test_tolerates_none_nested_levels(self):
+        # parameters present but simulation is None — must not raise
+        exp = {"parameters": {"simulation": None}}
+        enabled, bench, noise = resolve_synthetic_settings(exp, env={})
+        assert enabled is False
+
+    def test_per_experiment_bench_overrides_env(self):
+        exp = self._exp({"enabled": True, "bench": "ZDT1"})
+        _, bench, _ = resolve_synthetic_settings(exp, env={"BENCH": "DTLZ2"})
+        assert bench == "ZDT1"
