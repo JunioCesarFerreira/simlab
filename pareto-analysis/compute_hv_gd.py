@@ -29,6 +29,22 @@ def main() -> None:
     parser.add_argument("--expid", required=True)
     parser.add_argument("--objectives", nargs="+", required=True)
     parser.add_argument("--minimize", nargs="+", required=True)
+    parser.add_argument(
+        "--true-front-bench",
+        choices=["DTLZ2", "ZDT1", "SCH1"],
+        default=None,
+        help=(
+            "For synthetic experiments: use the benchmark's analytical Pareto "
+            "front as the GD reference (convergence to the true optimum) instead "
+            "of the experiment's own stored final front (self-reference)."
+        ),
+    )
+    parser.add_argument(
+        "--true-front-m",
+        type=int,
+        default=None,
+        help="Number of objectives for the analytical front (default: len(objectives)).",
+    )
     args = parser.parse_args()
     minimize: list[bool] = [s.lower() == "true" for s in args.minimize]
     objectives: list[str] = args.objectives
@@ -42,28 +58,39 @@ def main() -> None:
         label_objectives=objectives,
     )
 
-    stored_pf = get_experiment_pareto_front(
-        session=session,
-        api_base=args.api_base,
-        experiment_id=args.expid,
-    )
-
-    if not stored_pf:
-        # No reference front available yet — return empty result
+    if not individuals_per_gen:
+        # No evaluated individuals — nothing to measure
         print(json.dumps({"generations": [], "hv": [], "gd": [], "worst_point": {}}))
         return
+
+    # GD reference front — either the benchmark's analytical (true) front or the
+    # experiment's own stored final front.
+    if args.true_front_bench:
+        from lib.true_fronts import sample_true_front
+        m = args.true_front_m or len(objectives)
+        true_front = sample_true_front(args.true_front_bench, m)
+        final_front_min = to_minimization_array(true_front, objectives=objectives, minimize=minimize)
+    else:
+        stored_pf = get_experiment_pareto_front(
+            session=session,
+            api_base=args.api_base,
+            experiment_id=args.expid,
+        )
+        if not stored_pf:
+            # No reference front available yet — return empty result
+            print(json.dumps({"generations": [], "hv": [], "gd": [], "worst_point": {}}))
+            return
+        # GD reference front: unique objective vectors from stored Pareto front (min space)
+        stored_matrix = np.array([
+            [p["objectives"][o] for o in objectives]
+            for p in stored_pf
+        ])
+        stored_unique = np.unique(stored_matrix, axis=0)
+        final_front_min = to_minimization_array(stored_unique, objectives=objectives, minimize=minimize)
 
     # Reference point: worst feasible objective + 5% margin
     worst_raw = compute_worst_point(individuals_per_gen, tuple(objectives), minimize=minimize)
     worst_point_ref = [coord + abs(coord) * 0.05 + 1.0 for coord in worst_raw]
-
-    # GD reference front: unique objective vectors from stored Pareto front (min space)
-    stored_matrix = np.array([
-        [p["objectives"][o] for o in objectives]
-        for p in stored_pf
-    ])
-    stored_unique = np.unique(stored_matrix, axis=0)
-    final_front_min = to_minimization_array(stored_unique, objectives=objectives, minimize=minimize)
 
     generations_sorted = sorted(individuals_per_gen.keys())
     hv_values: list[float] = []

@@ -44,7 +44,7 @@
     <div v-for="(m, i) in modelValue.metrics" :key="i" class="metric-card">
       <div class="metric-header">
         <span class="metric-index">#{{ i + 1 }}</span>
-        <button class="remove-metric" @click="removeMetric(i)" title="Remove metric">Remove</button>
+        <button class="remove-metric" title="Remove metric" @click="removeMetric(i)">Remove</button>
       </div>
       <div class="metric-fields">
         <div class="field-group">
@@ -84,7 +84,7 @@
             @input="updateMetric(i, 'column', ($event.target as HTMLInputElement).value)"
           />
         </div>
-        <div class="field-group" v-if="m.kind === 'percentile'">
+        <div v-if="m.kind === 'percentile'" class="field-group">
           <label class="field-label">Percentile (q)</label>
           <input
             :value="m.q ?? ''"

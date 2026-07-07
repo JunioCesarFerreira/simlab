@@ -80,8 +80,8 @@
         <button
           class="remove-repo-btn"
           :disabled="modelValue.sourceOptions.length <= 1"
-          @click="removeSourceOpt(i)"
           title="Remove mapping"
+          @click="removeSourceOpt(i)"
         >×</button>
       </div>
     </div>

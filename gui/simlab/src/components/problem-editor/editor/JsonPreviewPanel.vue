@@ -2,8 +2,8 @@
   <div class="json-preview">
     <div class="header">
       <span>JSON Preview</span>
-      <button @click="copyJson" :disabled="errors.length > 0">{{ copied ? 'Copied!' : 'Copy' }}</button>
-      <button @click="downloadJson" :disabled="errors.length > 0">Download</button>
+      <button :disabled="errors.length > 0" @click="copyJson">{{ copied ? 'Copied!' : 'Copy' }}</button>
+      <button :disabled="errors.length > 0" @click="downloadJson">Download</button>
       <button class="close-btn" @click="editorStore.toggleJsonPreview()">✕</button>
     </div>
     <div v-if="errors.length > 0" class="errors">

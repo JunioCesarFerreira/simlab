@@ -15,7 +15,7 @@
       <div v-if="success" class="success">✓ Problema carregado com sucesso</div>
       <div class="actions">
         <button @click="loadFromFile">Abrir arquivo…</button>
-        <button class="primary" @click="doImport" :disabled="!raw.trim()">Importar</button>
+        <button class="primary" :disabled="!raw.trim()" @click="doImport">Importar</button>
       </div>
       <input ref="fileInput" type="file" accept=".json,application/json" style="display:none" @change="onFile" />
     </div>

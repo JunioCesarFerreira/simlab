@@ -1,7 +1,7 @@
 <template>
   <div class="step">
     <p class="hint">
-      Objectives are pre-populated based on the benchmark (f1…f{{ M }}, all minimised).
+      Objectives are pre-populated based on the benchmark (f1…f{{ objectiveCount }}, all minimised).
       You can rename each metric — names will appear in charts and analysis.
     </p>
 
@@ -39,7 +39,7 @@ import type { ObjectiveItem } from '../../../../types/simlab'
 const props = defineProps<{
   modelValue: ObjectiveItem[]
   showValidation: boolean
-  M: number
+  objectiveCount: number
 }>()
 const emit = defineEmits<{ 'update:modelValue': [v: ObjectiveItem[]] }>()
 

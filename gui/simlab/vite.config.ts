@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import vue from "@vitejs/plugin-vue";
 import { readFileSync } from "node:fs";
 
@@ -9,5 +9,9 @@ export default defineConfig({
   plugins: [vue()],
   define: {
     __APP_VERSION__: JSON.stringify(version),
+  },
+  test: {
+    environment: "node",
+    include: ["src/**/*.spec.ts"],
   },
 });

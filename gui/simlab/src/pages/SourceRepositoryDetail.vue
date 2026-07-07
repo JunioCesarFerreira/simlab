@@ -64,16 +64,16 @@
             <button
               class="view-file-btn"
               :disabled="removingFileId === f.id"
-              @click="openViewer(f.id, f.file_name)"
               title="View file"
+              @click="openViewer(f.id, f.file_name)"
             >
               &#128065;
             </button>
             <button
               class="remove-file-btn"
               :disabled="removingFileId === f.id"
-              @click="removeFile(f.id)"
               title="Remove file"
+              @click="removeFile(f.id)"
             >
               {{ removingFileId === f.id ? '…' : '×' }}
             </button>
@@ -113,8 +113,8 @@
             </div>
           </div>
           <div class="modal-footer">
-            <button class="secondary-btn" @click="closeEdit" :disabled="saving">Cancel</button>
-            <button class="primary-btn" @click="submitEdit" :disabled="!editForm.name.trim() || saving">
+            <button class="secondary-btn" :disabled="saving" @click="closeEdit">Cancel</button>
+            <button class="primary-btn" :disabled="!editForm.name.trim() || saving" @click="submitEdit">
               {{ saving ? "Saving…" : "Save" }}
             </button>
           </div>
@@ -151,8 +151,8 @@
             </div>
           </div>
           <div class="modal-footer">
-            <button class="secondary-btn" @click="closeAddFiles" :disabled="addingFiles">Cancel</button>
-            <button class="primary-btn" @click="submitAddFiles" :disabled="addFilesForm.files.length === 0 || addingFiles">
+            <button class="secondary-btn" :disabled="addingFiles" @click="closeAddFiles">Cancel</button>
+            <button class="primary-btn" :disabled="addFilesForm.files.length === 0 || addingFiles" @click="submitAddFiles">
               {{ addingFiles ? "Uploading…" : "Upload Files" }}
             </button>
           </div>
@@ -176,8 +176,8 @@
             <div v-if="deleteError" class="form-error">{{ deleteError }}</div>
           </div>
           <div class="modal-footer">
-            <button class="secondary-btn" @click="showDeleteConfirm = false" :disabled="deleting">Cancel</button>
-            <button class="danger-btn" @click="executeDelete" :disabled="deleting">
+            <button class="secondary-btn" :disabled="deleting" @click="showDeleteConfirm = false">Cancel</button>
+            <button class="danger-btn" :disabled="deleting" @click="executeDelete">
               {{ deleting ? "Deleting…" : "Delete permanently" }}
             </button>
           </div>

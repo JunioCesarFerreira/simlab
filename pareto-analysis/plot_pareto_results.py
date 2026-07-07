@@ -253,6 +253,18 @@ def compute_worst_point(
 # Generational Distance computation
 # ------------------------------------------------------------
 def compute_gd(front: np.ndarray, ref_front: np.ndarray) -> float:
+    """Generational Distance (RMS variant) between ``front`` and ``ref_front``.
+
+    For each point p in ``front``, let d(p) be its Euclidean distance to the
+    nearest point of ``ref_front``. This returns the root-mean-square:
+
+        GD = sqrt( (1/N) * sum_p d(p)^2 )
+
+    This is the p=2 / RMS formulation (Schütze et al., 2012), which is more
+    stable than Van Veldhuizen's classic ``(1/N) * (sum d^p)^(1/p)`` under
+    fronts of different cardinality. Both inputs must be in the same
+    minimization objective space. Returns +inf if either set is empty.
+    """
     if len(front) == 0 or len(ref_front) == 0:
         return float("inf")
 

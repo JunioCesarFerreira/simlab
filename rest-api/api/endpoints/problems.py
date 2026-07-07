@@ -1,3 +1,4 @@
+import logging
 import mimetypes
 from io import BytesIO
 
@@ -8,6 +9,8 @@ from pylib.db import MongoRepository
 from api.dependencies import get_factory
 from api.domain.problem import ProblemInfoDto, ProblemDto, ProblemCreateDto, ProblemUpdateDto
 from api.mappers.problem import problem_to_info_dto, problem_to_dto
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -122,7 +125,10 @@ async def upload_background(
             try:
                 factory.fs_handler.delete_file(str(old_bg))
             except Exception:
-                pass
+                # Best-effort cleanup of the previous image — a stale GridFS
+                # file must not block uploading the new one.
+                log.warning("Failed to delete old background %s for problem %s",
+                            old_bg, problem_id, exc_info=True)
 
         data = await file.read()
         filename = file.filename or "background.png"
@@ -164,7 +170,9 @@ def get_background(
                 if guessed and guessed.startswith("image/"):
                     content_type = guessed
         except Exception:
-            pass
+            # Non-fatal: fall back to the default image/png content type.
+            log.warning("Could not infer MIME type for background %s; using %s",
+                        bg_id, content_type, exc_info=True)
 
         return Response(content=data, media_type=content_type)
     except HTTPException:

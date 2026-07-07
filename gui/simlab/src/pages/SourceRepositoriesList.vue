@@ -96,8 +96,8 @@
           </div>
 
           <div class="modal-footer">
-            <button class="secondary-btn" @click="closeCreate" :disabled="creating">Cancel</button>
-            <button class="primary-btn" @click="submitCreate" :disabled="!canCreate || creating">
+            <button class="secondary-btn" :disabled="creating" @click="closeCreate">Cancel</button>
+            <button class="primary-btn" :disabled="!canCreate || creating" @click="submitCreate">
               {{ creating ? "Creating…" : "Create Repository" }}
             </button>
           </div>

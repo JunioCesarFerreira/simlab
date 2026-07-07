@@ -1,5 +1,5 @@
 <template>
-  <div class="canvas-wrapper" ref="wrapperRef" tabindex="0" @keydown.capture="handleKey">
+  <div ref="wrapperRef" class="canvas-wrapper" tabindex="0" @keydown.capture="handleKey">
     <canvas
       ref="canvasRef"
       :width="canvasW"
@@ -12,7 +12,7 @@
       @contextmenu.prevent="handleRightClick"
       @mouseleave="handleMouseLeave"
     />
-    <div class="coords" v-if="hover">
+    <div v-if="hover" class="coords">
       {{ fmtC(hover[0]) }}, {{ fmtC(hover[1]) }}
     </div>
     <div class="tool-hint" :class="{ warn: isToolWarn }">{{ toolHint }}</div>

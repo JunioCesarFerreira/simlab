@@ -13,7 +13,7 @@
     <div class="tool-group">
       <label class="icon-btn" title="Load background image">
         🖼
-        <input type="file" accept="image/*" @change="loadImage" style="display:none" />
+        <input type="file" accept="image/*" style="display:none" @change="loadImage" />
       </label>
     </div>
     <div class="spacer" />

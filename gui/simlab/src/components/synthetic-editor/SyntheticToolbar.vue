@@ -6,10 +6,10 @@
       <span class="toolbar-sub">benchmark-driven experiment builder</span>
     </div>
     <div class="toolbar-actions">
-      <button class="btn-tool" @click="emit('saved')" title="Saved configurations">
+      <button class="btn-tool" title="Saved configurations" @click="emit('saved')">
         <span class="btn-icon">⊞</span> Saved
       </button>
-      <button class="btn-tool" @click="emit('reset')" title="Reset to defaults">
+      <button class="btn-tool" title="Reset to defaults" @click="emit('reset')">
         <span class="btn-icon">↺</span> Reset
       </button>
       <button class="btn-launch" @click="emit('launch')">

@@ -25,7 +25,7 @@
           <option value="min">Minimize</option>
           <option value="max">Maximize</option>
         </select>
-        <button class="remove-btn" :disabled="modelValue.length <= 1" @click="remove(i)" title="Remove">×</button>
+        <button class="remove-btn" :disabled="modelValue.length <= 1" title="Remove" @click="remove(i)">×</button>
       </div>
     </div>
 

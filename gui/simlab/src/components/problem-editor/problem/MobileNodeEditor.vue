@@ -9,8 +9,8 @@
       <input v-model.number="node.timeStep" type="number" min="0.01" step="0.01" placeholder="step" />
     </div>
     <div class="checkboxes">
-      <label class="inline"><input type="checkbox" v-model="node.isClosed" /> Closed</label>
-      <label class="inline"><input type="checkbox" v-model="node.isRoundTrip" /> Round Trip</label>
+      <label class="inline"><input v-model="node.isClosed" type="checkbox" /> Closed</label>
+      <label class="inline"><input v-model="node.isRoundTrip" type="checkbox" /> Round Trip</label>
     </div>
 
     <div class="segments-section">
@@ -23,7 +23,7 @@
       <div v-if="node.segments.length === 0" class="empty">No segments yet</div>
     </div>
 
-    <SegmentEditor :nodeId="node.id" />
+    <SegmentEditor :node-id="node.id" />
   </div>
   <div v-else class="no-selection">Select a mobile node to edit</div>
 </template>

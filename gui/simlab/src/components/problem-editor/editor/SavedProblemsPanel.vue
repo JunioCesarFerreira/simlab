@@ -9,7 +9,7 @@
             <span class="header-icon">💾</span>
             <h2 class="title">Problems</h2>
           </div>
-          <button class="close-btn" @click="$emit('close')" aria-label="Close">✕</button>
+          <button class="close-btn" aria-label="Close" @click="$emit('close')">✕</button>
         </div>
 
         <!-- ── SAVE SECTION ─────────────────────────────────────────────────── -->
@@ -28,7 +28,7 @@
 
           <div v-if="hasBackground" class="field-row checkbox-row">
             <label class="checkbox-label">
-              <input type="checkbox" v-model="includeBackground" />
+              <input v-model="includeBackground" type="checkbox" />
               Include background image
             </label>
           </div>
@@ -53,7 +53,7 @@
           <div class="section-title-row">
             <span class="section-title">Saved problems</span>
             <span v-if="!listLoading" class="count-badge">{{ problems.length }}</span>
-            <button class="refresh-btn" @click="loadList" :disabled="listLoading" title="Refresh list">↻</button>
+            <button class="refresh-btn" :disabled="listLoading" title="Refresh list" @click="loadList">↻</button>
           </div>
 
           <div v-if="listLoading" class="state-placeholder">Loading…</div>

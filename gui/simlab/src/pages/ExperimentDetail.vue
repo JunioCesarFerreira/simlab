@@ -46,7 +46,7 @@
                 ⬡ Synthetic — {{ syntheticBench }}
               </span>
               <span v-if="store.isRunning" class="live-pill">● LIVE</span>
-              <span class="meta-date" v-if="store.experiment.created_time">
+              <span v-if="store.experiment.created_time" class="meta-date">
                 Created {{ formatDate(store.experiment.created_time) }}
               </span>
             </div>
@@ -86,7 +86,7 @@
       </div>
 
       <!-- Timeline row -->
-      <div class="timeline-bar" v-if="store.experiment.start_time">
+      <div v-if="store.experiment.start_time" class="timeline-bar">
         <span>Start: {{ formatDate(store.experiment.start_time) }}</span>
         <template v-if="store.experiment.end_time">
           <span class="sep">→</span>
@@ -176,8 +176,8 @@
               Problem
               <button
                 class="viz-btn"
-                @click.prevent="showProblemViz = true"
                 title="Visualize problem"
+                @click.prevent="showProblemViz = true"
               >
                 ⬡ Visualize
               </button>

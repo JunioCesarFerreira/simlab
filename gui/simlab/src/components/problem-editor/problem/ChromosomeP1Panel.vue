@@ -17,16 +17,16 @@
       <input
         type="number"
         :value="r.x"
-        @change="update(r.id, 'x', +($event.target as HTMLInputElement).value)"
         title="x"
+        @change="update(r.id, 'x', +($event.target as HTMLInputElement).value)"
       />
       <input
         type="number"
         :value="r.y"
-        @change="update(r.id, 'y', +($event.target as HTMLInputElement).value)"
         title="y"
+        @change="update(r.id, 'y', +($event.target as HTMLInputElement).value)"
       />
-      <button class="remove" @click="problemStore.removeRelay(r.id)" title="Remover">✕</button>
+      <button class="remove" title="Remover" @click="problemStore.removeRelay(r.id)">✕</button>
     </div>
 
     <div v-if="hasError('chromosome.relays')" class="err-msg">

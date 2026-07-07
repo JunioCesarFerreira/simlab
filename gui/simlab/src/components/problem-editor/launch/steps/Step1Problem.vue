@@ -24,23 +24,23 @@
         <span class="label">Interference radius</span>
         <span class="value mono">{{ draft.radiusOfInter }} u</span>
       </div>
-      <div class="summary-item" v-if="draft.sink">
+      <div v-if="draft.sink" class="summary-item">
         <span class="label">Sink</span>
         <span class="value mono">({{ draft.sink.x }}, {{ draft.sink.y }})</span>
       </div>
-      <div class="summary-item" v-if="draft.candidates.length > 0">
+      <div v-if="draft.candidates.length > 0" class="summary-item">
         <span class="label">Candidates</span>
         <span class="value mono">{{ draft.candidates.length }}</span>
       </div>
-      <div class="summary-item" v-if="draft.targets.length > 0">
+      <div v-if="draft.targets.length > 0" class="summary-item">
         <span class="label">Targets</span>
         <span class="value mono">{{ draft.targets.length }}</span>
       </div>
-      <div class="summary-item" v-if="draft.mobileNodes.length > 0">
+      <div v-if="draft.mobileNodes.length > 0" class="summary-item">
         <span class="label">Mobile nodes</span>
         <span class="value mono">{{ draft.mobileNodes.length }}</span>
       </div>
-      <div class="summary-item" v-if="draft.name === 'problem1'">
+      <div v-if="draft.name === 'problem1'" class="summary-item">
         <span class="label">Num. sensors</span>
         <span class="value mono">{{ draft.numSensors }}</span>
       </div>

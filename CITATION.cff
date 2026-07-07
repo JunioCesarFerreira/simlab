@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use SimLab in academic work, please cite it using the metadata below. Please also cite the corresponding publication once it becomes available."
+title: "SimLab: A Distributed Framework for Large-Scale Multi-Objective WSN Simulation and Optimization"
+abstract: >-
+  SimLab is a distributed framework for managing and executing large-scale
+  multi-objective simulations of Wireless Sensor Networks. It couples a
+  multi-objective optimization engine (NSGA-II/III, Random Search) with a
+  Dockerized Cooja simulation backend, a REST API, and a web GUI, and supports
+  a synthetic benchmark mode (DTLZ2, ZDT1, SCH1) for validating the optimization
+  pipeline without running network simulations.
+type: software
+authors:
+  - family-names: Ferreira
+    given-names: Junio Cesar
+license: MIT
+version: v1.1.0
+repository-code: "https://github.com/JunioCesarFerreira/simlab"
+url: "https://github.com/JunioCesarFerreira/simlab"
+keywords:
+  - multi-objective optimization
+  - wireless sensor networks
+  - NSGA-III
+  - NSGA-II
+  - Cooja
+  - simulation
+  - reproducibility

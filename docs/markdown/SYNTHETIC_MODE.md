@@ -164,7 +164,30 @@ render the synthetic badge without fetching the full document.
 
 ---
 
-## 6. Verifying it works
+## 6. Convergence metrics against the true front
+
+Because the synthetic benchmarks have a Pareto front known in closed form,
+`pareto-analysis/compute_hv_gd.py` can measure **Generational Distance (GD)**
+against the analytical (true) front instead of the experiment's own final front
+(which would drive GD trivially to zero on the last generation):
+
+```bash
+python compute_hv_gd.py --expid <id> \
+  --objectives f1 f2 f3 --minimize true true true \
+  --true-front-bench DTLZ2 --true-front-m 3
+```
+
+Without `--true-front-bench` the behavior is unchanged (self-reference front).
+The analytical fronts live in `pareto-analysis/lib/true_fronts.py` (DTLZ2 =
+unit hypersphere segment; ZDT1 = `1 − √f₁`; SCH1 = `x²`/`(x−2)²`, `x∈[0,2]`).
+
+> GD here is the **RMS variant** `sqrt((1/N)·Σ dᵢ²)` (Schütze et al., 2012),
+> not Van Veldhuizen's classic `(1/N)·(Σ dᵢᵖ)^(1/p)`. HV uses the `moocore`
+> library with a reference point set to the worst feasible objective + margin.
+
+---
+
+## 7. Verifying it works
 
 1. **Logs** — `docker compose logs masternode` shows
    `Starting benchmark simulation <oid> (bench=… noise_std=…)` and *no* SSH/Cooja

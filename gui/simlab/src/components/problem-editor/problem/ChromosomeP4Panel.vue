@@ -27,7 +27,7 @@
         title="sojourn time"
         @change="setTime(i, +($event.target as HTMLInputElement).value)"
       />
-      <button class="remove" @click="removeStop(i)" title="Remover">✕</button>
+      <button class="remove" title="Remover" @click="removeStop(i)">✕</button>
     </div>
 
     <div v-if="hasError('chromosome.route')" class="err-msg">

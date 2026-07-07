@@ -1,6 +1,6 @@
-pymongo
-numpy
-pandas
-matplotlib
-deap
-pymoo
+pymongo==4.17.0
+numpy==2.4.4
+pandas==3.0.2
+matplotlib==3.10.9
+deap==1.4.4
+pymoo==0.6.1.6

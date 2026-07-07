@@ -76,7 +76,7 @@ function evalExpr(expr: string, t: number): number {
     .replace(/np\.exp/g, "Math.exp")
     .replace(/np\.log/g, "Math.log")
     .replace(/np\.abs/g, "Math.abs");
-  // eslint-disable-next-line no-new-func
+   
   return new Function("t", `return ${js}`)(t) as number;
 }
 

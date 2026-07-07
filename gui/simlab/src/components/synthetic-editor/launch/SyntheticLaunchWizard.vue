@@ -1,7 +1,8 @@
 <template>
   <Teleport to="body">
     <div class="backdrop">
-      <div class="modal" role="dialog" aria-modal="true"
+      <div
+class="modal" role="dialog" aria-modal="true"
         :aria-label="`Launch synthetic experiment — step ${currentStep} of ${TOTAL_STEPS}`">
 
         <!-- Header -->
@@ -13,7 +14,7 @@
               <p class="subtitle">{{ STEP_LABELS[currentStep - 1] }}</p>
             </div>
           </div>
-          <button class="close-btn" @click="requestClose" aria-label="Close">✕</button>
+          <button class="close-btn" aria-label="Close" @click="requestClose">✕</button>
         </div>
 
         <!-- Step indicator -->
@@ -42,7 +43,7 @@
             v-else-if="currentStep === 3"
             v-model="form.objectives"
             :show-validation="showValidation"
-            :M="store.draft.M"
+            :objective-count="store.draft.M"
           />
           <SLStep4Confirm
             v-else-if="currentStep === 4"
@@ -67,23 +68,23 @@
               <span v-if="submitError" class="submit-error">{{ submitError }}</span>
             </div>
             <div class="footer-actions">
-              <button v-if="currentStep > 1" class="btn-secondary" @click="prev" :disabled="submitting">
+              <button v-if="currentStep > 1" class="btn-secondary" :disabled="submitting" @click="prev">
                 ← Back
               </button>
-              <button class="btn-secondary" @click="requestClose" :disabled="submitting">Cancel</button>
+              <button class="btn-secondary" :disabled="submitting" @click="requestClose">Cancel</button>
               <button
                 v-if="currentStep < TOTAL_STEPS"
                 class="btn-primary"
-                @click="next"
                 :disabled="!canProceed"
+                @click="next"
               >
                 Next →
               </button>
               <button
                 v-else
                 class="btn-success"
-                @click="submit"
                 :disabled="!canProceed || submitting"
+                @click="submit"
               >
                 <span v-if="submitting">Creating…</span>
                 <span v-else>Create experiment</span>

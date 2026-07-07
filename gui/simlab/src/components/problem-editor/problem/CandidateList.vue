@@ -13,16 +13,16 @@
       <input
         type="number"
         :value="c.x"
-        @change="update(c.id, 'x', +($event.target as HTMLInputElement).value)"
         title="x"
+        @change="update(c.id, 'x', +($event.target as HTMLInputElement).value)"
       />
       <input
         type="number"
         :value="c.y"
-        @change="update(c.id, 'y', +($event.target as HTMLInputElement).value)"
         title="y"
+        @change="update(c.id, 'y', +($event.target as HTMLInputElement).value)"
       />
-      <button @click="problemStore.removeCandidate(c.id)" title="Remover">✕</button>
+      <button title="Remover" @click="problemStore.removeCandidate(c.id)">✕</button>
     </div>
   </div>
 </template>

@@ -1,5 +1,5 @@
-paramiko
-scp
-pymongo
-numpy
-pandas
+paramiko==3.5.1
+scp==0.15.0
+pymongo==4.17.0
+numpy==2.4.4
+pandas==3.0.2

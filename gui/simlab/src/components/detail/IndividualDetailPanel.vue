@@ -111,8 +111,8 @@
               <div v-if="hasFiles(sim)" class="file-links">
                 <button
                   v-for="field in fileFields"
-                  :key="field.key"
                   v-show="sim[field.key as keyof typeof sim]"
+                  :key="field.key"
                   class="file-btn"
                   @click="downloadSimFile(sim.id, field.key, field.ext)"
                 >

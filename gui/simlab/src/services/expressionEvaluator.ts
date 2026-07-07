@@ -25,7 +25,7 @@ const fnCache = new Map<string, (t: number) => number>()
 function compile(expr: string): (t: number) => number {
   if (fnCache.has(expr)) return fnCache.get(expr)!
   const js = toJs(expr)
-  // eslint-disable-next-line no-new-func
+   
   const fn = new Function('t', `"use strict"; return (${js})`) as (t: number) => number
   fnCache.set(expr, fn)
   return fn

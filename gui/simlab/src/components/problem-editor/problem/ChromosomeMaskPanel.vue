@@ -6,8 +6,8 @@
     <div class="list-header">
       <span>Mask ({{ activeCount }}/{{ candidates.length }} ativos)</span>
       <div class="bulk">
-        <button class="ghost" @click="setAll(1)" :disabled="candidates.length === 0">all</button>
-        <button class="ghost" @click="setAll(0)" :disabled="candidates.length === 0">none</button>
+        <button class="ghost" :disabled="candidates.length === 0" @click="setAll(1)">all</button>
+        <button class="ghost" :disabled="candidates.length === 0" @click="setAll(0)">none</button>
       </div>
     </div>
 

@@ -1,4 +1,9 @@
 __pycache__/
+*.pyc
+.pytest_cache/
+# Python virtual environments (per-module)
+.venv/
+venv/
 util/docker_stats.csv
 simlab-ui/node_modules
 simlab-ui/.vscode

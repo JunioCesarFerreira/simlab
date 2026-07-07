@@ -11,7 +11,7 @@
       <div class="selectors-row">
         <div class="sel-group">
           <label class="sel-label">Campaign</label>
-          <select class="sel" v-model="campaignId" @change="onCampaignChange">
+          <select v-model="campaignId" class="sel" @change="onCampaignChange">
             <option value="">Select campaign…</option>
             <option v-for="c in allCampaigns" :key="c.id" :value="c.id">{{ c.name }}</option>
           </select>
@@ -19,7 +19,7 @@
 
         <div class="sel-group">
           <label class="sel-label">Experiment A</label>
-          <select class="sel sel-a" v-model="exp1Id" :disabled="!doneExps.length">
+          <select v-model="exp1Id" class="sel sel-a" :disabled="!doneExps.length">
             <option value="">Select…</option>
             <option
               v-for="e in doneExps"
@@ -34,7 +34,7 @@
 
         <div class="sel-group">
           <label class="sel-label">Experiment B</label>
-          <select class="sel sel-b" v-model="exp2Id" :disabled="!doneExps.length">
+          <select v-model="exp2Id" class="sel sel-b" :disabled="!doneExps.length">
             <option value="">Select…</option>
             <option
               v-for="e in doneExps"
@@ -157,14 +157,14 @@
             <!-- 2D axis selectors (only in 2D when > 2 objectives) -->
             <div v-if="chartView === '2d' && sharedObjectives.length > 2" class="axis-sel-row">
               <label class="axis-label">X:
-                <select class="axis-sel" v-model="axisX" @change="renderParetoChart">
+                <select v-model="axisX" class="axis-sel" @change="renderParetoChart">
                   <option v-for="o in sharedObjectives" :key="o.metric_name" :value="o.metric_name">
                     {{ o.metric_name }}
                   </option>
                 </select>
               </label>
               <label class="axis-label">Y:
-                <select class="axis-sel" v-model="axisY" @change="renderParetoChart">
+                <select v-model="axisY" class="axis-sel" @change="renderParetoChart">
                   <option v-for="o in sharedObjectives" :key="o.metric_name" :value="o.metric_name">
                     {{ o.metric_name }}
                   </option>

@@ -63,24 +63,28 @@
     <div class="field-row">
       <div class="field-group">
         <label class="field-label">x min</label>
-        <input type="number" :value="draft.region[0]" step="1"
+        <input
+type="number" :value="draft.region[0]" step="1"
           @input="updateRegion(0, $event)" />
       </div>
       <div class="field-group">
         <label class="field-label">y min</label>
-        <input type="number" :value="draft.region[1]" step="1"
+        <input
+type="number" :value="draft.region[1]" step="1"
           @input="updateRegion(1, $event)" />
       </div>
     </div>
     <div class="field-row">
       <div class="field-group">
         <label class="field-label">x max</label>
-        <input type="number" :value="draft.region[2]" step="1"
+        <input
+type="number" :value="draft.region[2]" step="1"
           @input="updateRegion(2, $event)" />
       </div>
       <div class="field-group">
         <label class="field-label">y max</label>
-        <input type="number" :value="draft.region[3]" step="1"
+        <input
+type="number" :value="draft.region[3]" step="1"
           @input="updateRegion(3, $event)" />
       </div>
     </div>

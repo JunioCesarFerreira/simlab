@@ -85,31 +85,36 @@
       <div class="fields-row">
         <div class="field-group">
           <label class="field-label" for="prob-cx">Crossover prob.</label>
-          <input id="prob-cx" :value="modelValue.probCx" type="number" min="0" max="1" step="0.01"
+          <input
+id="prob-cx" :value="modelValue.probCx" type="number" min="0" max="1" step="0.01"
             @input="updateNum('probCx', ($event.target as HTMLInputElement).value, 'float')" />
         </div>
         <div class="field-group">
           <label class="field-label" for="prob-mt">Mutation prob.</label>
-          <input id="prob-mt" :value="modelValue.probMt" type="number" min="0" max="1" step="0.01"
+          <input
+id="prob-mt" :value="modelValue.probMt" type="number" min="0" max="1" step="0.01"
             @input="updateNum('probMt', ($event.target as HTMLInputElement).value, 'float')" />
         </div>
       </div>
       <div class="fields-row">
         <div class="field-group">
           <label class="field-label" for="per-gene-prob">Per-gene mutation prob.</label>
-          <input id="per-gene-prob" :value="modelValue.perGeneProb" type="number" min="0" max="1" step="0.01"
+          <input
+id="per-gene-prob" :value="modelValue.perGeneProb" type="number" min="0" max="1" step="0.01"
             @input="updateNum('perGeneProb', ($event.target as HTMLInputElement).value, 'float')" />
         </div>
         <div class="field-group">
           <label class="field-label" for="random-seed">Random seed</label>
-          <input id="random-seed" :value="modelValue.randomSeed" type="number" step="1"
+          <input
+id="random-seed" :value="modelValue.randomSeed" type="number" step="1"
             @input="updateNum('randomSeed', ($event.target as HTMLInputElement).value, 'int')" />
         </div>
       </div>
       <div class="fields-row">
         <div class="field-group">
           <label class="field-label" for="sel-method">Selection method</label>
-          <select id="sel-method" :value="modelValue.selectionMethod"
+          <select
+id="sel-method" :value="modelValue.selectionMethod"
             @change="update('selectionMethod', ($event.target as HTMLSelectElement).value)">
             <option value="tournament">tournament</option>
             <option value="roulette">roulette</option>
@@ -117,7 +122,8 @@
         </div>
         <div class="field-group">
           <label class="field-label" for="cx-method">Crossover method</label>
-          <select id="cx-method" :value="modelValue.crossoverMethod"
+          <select
+id="cx-method" :value="modelValue.crossoverMethod"
             @change="update('crossoverMethod', ($event.target as HTMLSelectElement).value)">
             <option value="uniform_mask">uniform_mask</option>
             <option value="sbx_with_radial_translate">sbx_with_radial_translate</option>
@@ -129,7 +135,8 @@
       <div class="fields-row half">
         <div class="field-group">
           <label class="field-label" for="mt-method">Mutation method</label>
-          <select id="mt-method" :value="modelValue.mutationMethod"
+          <select
+id="mt-method" :value="modelValue.mutationMethod"
             @change="update('mutationMethod', ($event.target as HTMLSelectElement).value)">
             <option value="bitflip">bitflip</option>
             <option value="polynomial">polynomial</option>
@@ -143,7 +150,8 @@
       <div class="fields-row half">
         <div class="field-group">
           <label class="field-label" for="random-seed">Random seed</label>
-          <input id="random-seed" :value="modelValue.randomSeed" type="number" step="1"
+          <input
+id="random-seed" :value="modelValue.randomSeed" type="number" step="1"
             @input="updateNum('randomSeed', ($event.target as HTMLInputElement).value, 'int')" />
         </div>
       </div>

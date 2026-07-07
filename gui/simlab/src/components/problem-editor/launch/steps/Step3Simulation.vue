@@ -22,7 +22,7 @@
         <div class="chips">
           <span v-for="(seed, i) in modelValue.randomSeeds" :key="i" class="chip">
             {{ seed }}
-            <button class="chip-remove" @click="removeSeed(i)" title="Remove seed">×</button>
+            <button class="chip-remove" title="Remove seed" @click="removeSeed(i)">×</button>
           </span>
           <span v-if="modelValue.randomSeeds.length === 0" class="empty-chips">No seeds added.</span>
         </div>
@@ -34,8 +34,8 @@
             placeholder="e.g. 42"
             @keydown.enter.prevent="addSeed"
           />
-          <button class="add-btn" @click="addSeed" :disabled="!canAdd">+ Add</button>
-          <button class="rand-btn" @click="addRandomSeed" title="Insert a random seed">⚄ Random</button>
+          <button class="add-btn" :disabled="!canAdd" @click="addSeed">+ Add</button>
+          <button class="rand-btn" title="Insert a random seed" @click="addRandomSeed">⚄ Random</button>
         </div>
       </div>
       <span v-if="showError" class="err">Add at least one seed.</span>

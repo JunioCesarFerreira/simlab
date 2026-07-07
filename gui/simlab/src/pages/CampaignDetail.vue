@@ -37,7 +37,7 @@
       </div>
 
       <!-- Stats row -->
-      <div class="stat-grid" v-if="campaign.experiments.length > 0">
+      <div v-if="campaign.experiments.length > 0" class="stat-grid">
         <div class="stat-card stat-card--running">
           <div class="stat-value">{{ countByStatus['Running'] ?? 0 }}</div>
           <div class="stat-label">Running</div>
@@ -168,9 +168,9 @@
               class="exp-checkbox-row"
             >
               <input
+                v-model="selectedIds"
                 type="checkbox"
                 :value="exp.id"
-                v-model="selectedIds"
                 class="checkbox"
               />
               <div class="exp-checkbox-info">

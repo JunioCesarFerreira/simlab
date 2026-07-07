@@ -17,8 +17,8 @@
             <span class="item-meta">{{ cfg.benchmark }} · M={{ cfg.M }} · n={{ cfg.nVars }}</span>
           </div>
           <div class="item-actions">
-            <button class="btn-load" @click="load(cfg)" title="Load">Load</button>
-            <button class="btn-del" @click="remove(i)" title="Delete">✕</button>
+            <button class="btn-load" title="Load" @click="load(cfg)">Load</button>
+            <button class="btn-del" title="Delete" @click="remove(i)">✕</button>
           </div>
         </div>
       </div>

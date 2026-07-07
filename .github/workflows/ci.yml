@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mo-engine:
+    name: mo-engine tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r mo-engine/requirements.txt pytest
+      - name: Run tests
+        working-directory: mo-engine
+        run: pytest -q
+
+  pylib:
+    name: pylib tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # statistics.py only needs numpy/pandas; reuse mo-engine's pinned set
+          pip install -r mo-engine/requirements.txt pytest
+      - name: Run tests
+        working-directory: pylib
+        run: pytest -q
+
+  master-node:
+    name: master-node tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r master-node/requirements.txt pytest
+      - name: Run tests
+        working-directory: master-node
+        run: pytest -q
+
+  rest-api:
+    name: rest-api tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r rest-api/requirements.txt -r rest-api/requirements-test.txt
+      - name: Run tests
+        working-directory: rest-api
+        run: pytest -q
+
+  pareto-analysis:
+    name: pareto-analysis tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r pareto-analysis/requirements.txt pytest
+      - name: Run tests
+        working-directory: pareto-analysis
+        run: pytest -q
+
+  frontend:
+    name: frontend build & tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gui/simlab
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: gui/simlab/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Type-check
+        run: npx vue-tsc --noEmit
+      - name: Lint
+        run: npm run lint
+      - name: Unit tests
+        run: npm run test
+      - name: Build
+        run: npm run build

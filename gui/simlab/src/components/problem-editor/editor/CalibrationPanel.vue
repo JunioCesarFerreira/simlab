@@ -1,5 +1,5 @@
 <template>
-  <div class="calibration-panel" v-if="hasImage">
+  <div v-if="hasImage" class="calibration-panel">
     <div class="section-title" @click="open = !open">
       <span>Calibração da imagem</span>
       <span class="chevron">{{ open ? '▴' : '▾' }}</span>
