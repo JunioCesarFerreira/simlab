@@ -52,13 +52,9 @@
         <div class="formula-panel">
           <div class="formula-title">{{ formulaData.title }}</div>
           <div class="formula-body">
-            <div
-              v-for="(line, i) in formulaData.lines"
-              :key="i"
-              class="formula-line"
-              v-html="line"
-            />
-            <div v-if="formulaData.domain" class="formula-domain" v-html="formulaData.domain" />
+            <div v-for="(line, i) in formulaData.lines" :key="i" class="formula-line" v-html="line" />
+            <div v-if="formulaData.gDef" class="formula-gdef" v-html="formulaData.gDef" />
+            <div class="formula-domain" v-html="formulaData.domain" />
           </div>
         </div>
       </div>
@@ -72,7 +68,8 @@
           <div class="formula-title">{{ formulaData.title }}</div>
           <div class="formula-body">
             <div v-for="(line, i) in formulaData.lines" :key="i" class="formula-line" v-html="line" />
-            <div v-if="formulaData.domain" class="formula-domain" v-html="formulaData.domain" />
+            <div v-if="formulaData.gDef" class="formula-gdef" v-html="formulaData.gDef" />
+            <div class="formula-domain" v-html="formulaData.domain" />
           </div>
         </div>
       </div>
@@ -91,7 +88,8 @@
           <div class="formula-title">{{ formulaData.title }}</div>
           <div class="formula-body">
             <div v-for="(line, i) in formulaData.lines" :key="i" class="formula-line formula-line--sm" v-html="line" />
-            <div v-if="formulaData.domain" class="formula-domain" v-html="formulaData.domain" />
+            <div v-if="formulaData.gDef" class="formula-gdef formula-gdef--sm" v-html="formulaData.gDef" />
+            <div class="formula-domain" v-html="formulaData.domain" />
           </div>
         </div>
       </div>
@@ -147,74 +145,72 @@ const frontDescription = computed(() => {
 })
 
 // --- Formula panels ---
-interface FormulaInfo { title: string; lines: string[]; domain?: string }
+interface FormulaInfo { title: string; lines: string[]; gDef?: string; domain: string }
 
-// Build angular parameter names for DTLZ2 (M-1 parameters)
-function dtlz2Params(M: number): string[] {
-  if (M === 2) return ['&theta;']
-  if (M === 3) return ['&alpha;', '&beta;']
-  return Array.from({ length: M - 1 }, (_, i) => `&theta;<sub>${i + 1}</sub>`)
-}
+const dot = '&thinsp;&middot;&thinsp;'
+const cx  = (i: number) => `cos(&pi;x<sub>${i}</sub>/2)`
+const sx  = (i: number) => `sin(&pi;x<sub>${i}</sub>/2)`
 
-// Build one explicit line: f_j(params) = cos θ₁·…·cos θ_{M-j}·sin θ_{M-j+1}
-// For j=1 all cosines; for j=M just sin θ₁
-function dtlz2Line(j: number, M: number, params: string[]): string {
-  const sub = `<sub>${j}</sub>`
-  const paramStr = params.join(', ')
-  const dot = '&thinsp;&middot;&thinsp;'
-
+// One explicit DTLZ2 objective line in terms of decision variables x
+function dtlz2ObjLine(j: number, M: number): string {
+  const parts: string[] = []
   if (j === 1) {
-    // product of all M-1 cosines
-    return `f${sub}(${paramStr}) = ${params.map(p => `cos ${p}`).join(dot)}`
+    for (let i = 1; i <= M - 1; i++) parts.push(cx(i))
+  } else {
+    for (let i = 1; i <= M - j; i++) parts.push(cx(i))
+    parts.push(sx(M - j + 1))
   }
-  // M - j cosines followed by one sine
-  const cosTerms = params.slice(0, M - j).map(p => `cos ${p}`).join(dot)
-  const sinTerm  = `sin ${params[M - j]!}`
-  return `f${sub}(${paramStr}) = ${cosTerms ? cosTerms + dot : ''}${sinTerm}`
+  parts.push('(1 + g)')
+  return `f<sub>${j}</sub>(x) = ${parts.join(dot)}`
 }
 
-function dtlz2Formula(M: number): FormulaInfo {
-  const params  = dtlz2Params(M)
-  const domain  = `${params.join(', ')} &isin; [0, &pi;/2]`
+function dtlz2Formula(M: number, n: number): FormulaInfo {
+  const gDef = `g(x) = &sum;<sub>i=${M}</sub><sup>n</sup>(x<sub>i</sub> &minus; 0.5)<sup>2</sup>`
+  const domain = `x &isin; [0,1]<sup>n</sup>,&ensp;n = ${n},&ensp;M = ${M}`
 
   if (M > 5) {
-    // General notation for many objectives
-    const n = M - 1
     return {
-      title: `Parametric form (M = ${M})`,
+      title: `Objectives (M = ${M})`,
       lines: [
-        `f<sub>1</sub> = &prod;<sub>i=1</sub><sup>${n}</sup> cos &theta;<sub>i</sub>`,
-        `f<sub>k</sub> = (&prod;<sub>i=1</sub><sup>M&minus;k</sup> cos &theta;<sub>i</sub>) sin &theta;<sub>M&minus;k+1</sub>`,
-        `f<sub>${M}</sub> = sin &theta;<sub>1</sub>`,
+        `f<sub>k</sub>(x) = (&prod;<sub>i=1</sub><sup>M&minus;k</sup>${cx(0).replace('x<sub>0</sub>', 'x<sub>i</sub>')})${dot}${sx(0).replace('x<sub>0</sub>', 'x<sub>M&minus;k+1</sub>')}${dot}(1+g)`,
+        `f<sub>${M}</sub>(x) = ${sx(1)}${dot}(1 + g)`,
       ],
-      domain: `&theta;<sub>i</sub> &isin; [0, &pi;/2],  k = 2&hellip;${M - 1}`,
+      gDef,
+      domain,
     }
   }
 
   return {
-    title: 'Parametric form',
-    lines: Array.from({ length: M }, (_, i) => dtlz2Line(i + 1, M, params)),
+    title: 'Objective functions',
+    lines: Array.from({ length: M }, (_, i) => dtlz2ObjLine(i + 1, M)),
+    gDef,
     domain,
   }
 }
 
 const formulaData = computed((): FormulaInfo => {
   const { benchmark, M } = draft.value
+  const n = 2 * nRelays.value   // genome size = number of decision variables
+
   switch (benchmark) {
     case 'ZDT1': return {
-      title: 'Pareto front',
-      lines: ['f<sub>2</sub> = 1 &minus; &radic;f<sub>1</sub>'],
-      domain: 'f<sub>1</sub> &isin; [0, 1]',
+      title: 'Objective functions',
+      lines: [
+        'f<sub>1</sub>(x) = x<sub>1</sub>',
+        'f<sub>2</sub>(x) = g(x) &thinsp;&middot;&thinsp; (1 &minus; &radic;(f<sub>1</sub>/g))',
+      ],
+      gDef: `g(x) = 1 + 9/(n&minus;1) &thinsp;&middot;&thinsp; &sum;<sub>i=2</sub><sup>n</sup>x<sub>i</sub>`,
+      domain: `x &isin; [0,1]<sup>n</sup>,&ensp;n = ${n}`,
     }
     case 'SCH1': return {
-      title: 'Parametric form',
+      title: 'Objective functions',
       lines: [
         'f<sub>1</sub>(x) = x<sup>2</sup>',
         'f<sub>2</sub>(x) = (x &minus; 2)<sup>2</sup>',
       ],
       domain: 'x &isin; [0, 2]',
     }
-    default: return dtlz2Formula(M)   // DTLZ2 — any M
+    default: return dtlz2Formula(M, n)
   }
 })
 
@@ -343,9 +339,20 @@ const svgPoints = computed((): string => {
 .formula-line--sm {
   font-size: 12px;
 }
+.formula-gdef {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--color-border);
+  font-size: 12px;
+  font-family: "Georgia", "Times New Roman", serif;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+.formula-gdef--sm { font-size: 11px; }
+
 .formula-domain {
   margin-top: 4px;
-  font-size: 12px;
+  font-size: 11px;
   font-family: "Georgia", "Times New Roman", serif;
   color: var(--color-text-muted);
   border-top: 1px solid var(--color-border);
