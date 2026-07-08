@@ -13,11 +13,24 @@
         xmlns="http://www.w3.org/2000/svg"
       >
         <!-- Axes -->
-        <line x1="20" y1="180" x2="190" y2="180" stroke="var(--color-border)" stroke-width="1"/>
-        <line x1="20" y1="180" x2="20"  y2="10"  stroke="var(--color-border)" stroke-width="1"/>
-        <!-- Axis labels -->
-        <text x="190" y="188" font-size="9" fill="var(--color-text-muted)" text-anchor="end">f₁</text>
-        <text x="14"  y="10"  font-size="9" fill="var(--color-text-muted)" text-anchor="middle">f₂</text>
+        <line x1="38" y1="176" x2="192" y2="176" stroke="var(--color-border)" stroke-width="1"/>
+        <line x1="38" y1="176" x2="38"  y2="8"   stroke="var(--color-border)" stroke-width="1"/>
+
+        <!-- X axis ticks & labels -->
+        <template v-for="v in [0, 0.25, 0.5, 0.75, 1]" :key="'xt'+v">
+          <line :x1="mapX(v)" y1="176" :x2="mapX(v)" y2="180" stroke="var(--color-border)" stroke-width="0.8"/>
+          <text :x="mapX(v)" y="188" font-size="7.5" fill="var(--color-text-muted)" text-anchor="middle">{{ v }}</text>
+        </template>
+
+        <!-- Y axis ticks & labels -->
+        <template v-for="v in [0, 0.25, 0.5, 0.75, 1]" :key="'yt'+v">
+          <line x1="38" :y1="mapY(v)" x2="34" :y2="mapY(v)" stroke="var(--color-border)" stroke-width="0.8"/>
+          <text x="32" :y="mapY(v)" font-size="7.5" fill="var(--color-text-muted)" text-anchor="end" dominant-baseline="middle">{{ v }}</text>
+        </template>
+
+        <!-- Axis titles -->
+        <text x="192" y="181" font-size="9" fill="var(--color-text-muted)" text-anchor="end">f₁</text>
+        <text x="32"  y="7"   font-size="9" fill="var(--color-text-muted)" text-anchor="middle">f₂</text>
 
         <!-- Pareto front curve -->
         <polyline
@@ -30,8 +43,8 @@
         />
 
         <!-- Ideal point -->
-        <circle cx="20" cy="10" r="3" fill="#10b981" opacity="0.6"/>
-        <text x="24" y="10" font-size="8" fill="#10b981" dominant-baseline="middle">ideal</text>
+        <circle :cx="mapX(0)" :cy="mapY(1)" r="3" fill="#10b981" opacity="0.6"/>
+        <text :x="mapX(0)+5" :y="mapY(1)" font-size="8" fill="#10b981" dominant-baseline="middle">ideal</text>
       </svg>
 
       <!-- DTLZ2 M=3: interactive 3D quarter-sphere surface -->
@@ -98,8 +111,8 @@ const frontDescription = computed(() => {
 
 // --- 2-D SVG sample points (M=2 only) ---
 // Coordinate mapping: f ∈ [0,1] → SVG [20,190] (x) and [10,180] (y, inverted)
-function mapX(f: number) { return 20 + f * 170 }
-function mapY(f: number) { return 180 - f * 170 }
+function mapX(f: number) { return 38 + f * 154 }
+function mapY(f: number) { return 176 - f * 168 }
 
 const svgPoints = computed((): string => {
   const N = 80
@@ -162,20 +175,22 @@ const svgPoints = computed((): string => {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 200px;
+  min-height: 300px;
 }
 .pareto-svg {
-  width: 100%;
-  max-width: 280px;
-  height: auto;
+  /* fill chart-area height, maintain square aspect ratio, never overflow width */
+  height: 100%;
+  width: auto;
+  max-width: 100%;
+  max-height: 100%;
   filter: drop-shadow(0 2px 6px rgba(0,0,0,0.06));
 }
 
 /* DTLZ2 M=3 surface */
 .surface-3d-wrap {
   width: 100%;
-  height: 300px;
-  flex-shrink: 0;
+  height: 100%;
+  min-height: 300px;
 }
 
 /* M≥3 placeholder */
