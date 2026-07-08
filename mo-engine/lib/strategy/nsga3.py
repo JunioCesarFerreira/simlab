@@ -759,19 +759,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         # Stop condition?
         if self._gen_index > self._max_gen:
             try:
-                all_objectives: list[list[float]] = []
-                pareto_items: list[dict] = []
-
-                for genome, objectives in self._map_genome_objectives.items():
-                    pareto_items.append({
-                        "chromosome": genome.to_dict(),
-                        "objectives": self._objectives_to_original(objectives),
-                    })
-                    all_objectives.append(objectives)
-
-                pareto_fronts = fast_nondominated_sort(all_objectives)
-                first_pareto_front = [pareto_items[idx] for idx in pareto_fronts[0]]
-
+                first_pareto_front = self._final_pareto_front()
             except Exception:
                 logger.exception("[NSGA-III] Could not compute final Pareto front.")
                 first_pareto_front = []
@@ -1000,6 +988,33 @@ class NSGA3LoopStrategy(EngineStrategy):
             os.remove(image_tmp_path)
 
         return topology_picture_id
+
+
+    def _final_pareto_front(self) -> list[dict]:
+        """Non-dominated front of the FINAL population (parents ∪ last offspring).
+
+        This is the clean result standard NSGA reports: ~pop_size well-converged,
+        well-distributed points. It deliberately excludes the whole archive
+        (every genome ever evaluated) — the archive's non-dominated set
+        accumulates near-front points from early, poorly-converged generations,
+        producing a thick/noisy front that does not match a reference plot.
+        """
+        final_population = list(dict.fromkeys(self._parents + self._current_population))
+        all_objectives: list[list[float]] = []
+        pareto_items: list[dict] = []
+        for genome in final_population:
+            objectives = self._map_genome_objectives.get(genome)
+            if objectives is None:
+                continue
+            pareto_items.append({
+                "chromosome": genome.to_dict(),
+                "objectives": self._objectives_to_original(objectives),
+            })
+            all_objectives.append(objectives)
+        if not all_objectives:
+            return []
+        fronts = fast_nondominated_sort(all_objectives)
+        return [pareto_items[idx] for idx in fronts[0]] if fronts else []
 
 
 # ---------------------------------------
