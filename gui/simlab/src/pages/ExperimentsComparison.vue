@@ -95,6 +95,16 @@
                 <td>{{ fmtObjectives(result.expA.parameters.objectives) }}</td>
                 <td>{{ fmtObjectives(result.expB.parameters.objectives) }}</td>
               </tr>
+              <tr>
+                <td>Seeds count</td>
+                <td>{{ seedsCount(result.expA) }}</td>
+                <td>{{ seedsCount(result.expB) }}</td>
+              </tr>
+              <tr>
+                <td>Sim. duration (s)</td>
+                <td>{{ fmtParam(result.expA.parameters.simulation?.['duration']) }}</td>
+                <td>{{ fmtParam(result.expB.parameters.simulation?.['duration']) }}</td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -764,6 +774,11 @@ function fmtParam(v: unknown): string {
 
 function fmtObjectives(objs: ObjectiveItem[]): string {
   return objs.map(o => `${o.metric_name} (${o.goal})`).join(', ');
+}
+
+function seedsCount(exp: ExperimentDto): string {
+  const raw = exp.parameters.simulation?.['random_seeds'];
+  return Array.isArray(raw) ? String(raw.length) : '—';
 }
 
 // ── Lifecycle & watchers ──────────────────────────────────────────────────────
