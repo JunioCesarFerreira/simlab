@@ -37,6 +37,12 @@
             <span class="marked-id" :title="markedId">📍 {{ markedId.slice(0, 14) }}…</span>
             <button class="clear-pin" title="Clear pin" @click="markedId = ''">✕</button>
           </div>
+          <button
+            v-if="isZoomed"
+            class="reset-zoom-btn"
+            title="Reset zoom to full view"
+            @click="resetZoom"
+          >↺ Reset zoom</button>
         </div>
       </div>
 
@@ -74,7 +80,14 @@ interface ChartPoint {
 }
 
 const chartEl = ref<HTMLElement | null>(null);
-const { setOption, ready, on } = useEChart(chartEl);
+const { setOption, ready, on, dispatch } = useEChart(chartEl);
+
+const isZoomed = ref(false);
+
+function resetZoom() {
+  dispatch({ type: 'dataZoom', dataZoomIndex: 0, start: 0, end: 100 });
+  isZoomed.value = false;
+}
 
 // Pin state
 const markMode = ref(false);
@@ -355,6 +368,7 @@ function buildOption() {
     ...(markedPoint.value ? ["Pinned"] : []),
   ];
 
+  isZoomed.value = false;
   setOption({
     tooltip: {
       trigger: "item",
@@ -381,6 +395,7 @@ function buildOption() {
       type: "value",
       splitLine: { lineStyle: { color: "#f0f0f0" } },
     },
+    dataZoom: [{ type: "inside", xAxisIndex: 0, yAxisIndex: 0, filterMode: "none" }],
     series,
   });
 }
@@ -401,6 +416,7 @@ onMounted(() => {
       emit("click-individual", id);
     }
   });
+  on("datazoom", () => { isZoomed.value = true; });
 });
 </script>
 
@@ -497,6 +513,23 @@ onMounted(() => {
 .marked-id {
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 10px;
+}
+
+.reset-zoom-btn {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.reset-zoom-btn:hover {
+  background: var(--color-primary);
+  color: #fff;
 }
 
 .clear-pin {

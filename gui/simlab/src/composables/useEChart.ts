@@ -34,5 +34,9 @@ export function useEChart(containerRef: Ref<HTMLElement | null>) {
     chart?.on(event, handler);
   }
 
-  return { ready, setOption, resize, on };
+  function dispatch(action: Record<string, unknown>) {
+    chart?.dispatchAction(action);
+  }
+
+  return { ready, setOption, resize, on, dispatch };
 }
