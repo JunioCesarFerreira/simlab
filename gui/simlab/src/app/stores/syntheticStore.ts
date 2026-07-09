@@ -54,8 +54,8 @@ export const useSyntheticStore = defineStore('synthetic', () => {
     if (draft.value.benchmark === 'ZDT1' && draft.value.nVars < 2) {
       draft.value.nVars = 2
     }
-    if (draft.value.benchmark === 'SCH1' && draft.value.nVars < 1) {
-      draft.value.nVars = 1
+    if (draft.value.benchmark === 'SCH1') {
+      draft.value.nVars = 1  // only x[0] is used; n is fixed at 1
     }
     save(draft.value)
   }

@@ -125,8 +125,9 @@ id="sel-method" :value="modelValue.selectionMethod"
           <select
 id="cx-method" :value="modelValue.crossoverMethod"
             @change="update('crossoverMethod', ($event.target as HTMLSelectElement).value)">
+            <option value="sbx">sbx (Cartesian)</option>
+            <option value="sbx_with_radial_translate">sbx_with_radial_translate (WSN)</option>
             <option value="uniform_mask">uniform_mask</option>
-            <option value="sbx_with_radial_translate">sbx_with_radial_translate</option>
             <option value="one_point">one_point</option>
             <option value="two_point">two_point</option>
           </select>

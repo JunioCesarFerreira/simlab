@@ -39,12 +39,16 @@
         <span class="hint">{{ activeBench?.n_min_formula }}</span>
       </div>
       <div class="field-group">
-        <label class="field-label">Variables (n)</label>
+        <label class="field-label">
+          Variables (n)
+          <span v-if="nLocked" class="locked-tag">locked</span>
+        </label>
         <input
           type="number" :value="draft.nVars" :min="nMin" max="100" step="1"
+          :disabled="nLocked"
           @input="set({ nVars: clampInt($event, nMin, 100) })"
         />
-        <span class="hint">n_relays = {{ nRelays }}</span>
+        <span class="hint">{{ nLocked ? 'SCH1 uses only x₀' : `n_relays = ${nRelays}` }}</span>
       </div>
     </div>
 
@@ -137,6 +141,7 @@ const activeBench = computed(() =>
 const mLocked = computed(() =>
   draft.value.benchmark === 'ZDT1' || draft.value.benchmark === 'SCH1'
 )
+const nLocked = computed(() => draft.value.benchmark === 'SCH1')
 const nMin = computed(() => {
   if (draft.value.benchmark === 'SCH1') return 1
   if (draft.value.benchmark === 'ZDT1') return 2

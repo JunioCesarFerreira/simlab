@@ -596,8 +596,11 @@ class NSGA2LoopStrategy(EngineStrategy):
                 }
                 self.mongo.individual_repo.insert(ind_doc)
                 self._inserted_genomes.add(genome_hash)
-                self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
-                self.mongo.genome_cache_repo.set_objectives(self._exp_id, genome_hash, penalty)
+                try:
+                    self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
+                    self.mongo.genome_cache_repo.set_objectives(self._exp_id, genome_hash, penalty)
+                except Exception:
+                    logger.warning("genome_cache write failed for %s; continuing without cache.", genome_hash)
                 self._genome_objectives_cache[genome_hash] = penalty
                 config_topo = self._convert_genome_to_sim_config(
                     genome=genome, gen_index=gen_index, ind_idx=i, seed=first_seed
@@ -627,7 +630,10 @@ class NSGA2LoopStrategy(EngineStrategy):
             }
             self.mongo.individual_repo.insert(ind_doc)
             self._inserted_genomes.add(genome_hash)
-            self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
+            try:
+                self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
+            except Exception:
+                logger.warning("genome_cache insert failed for %s; simulation will run uncached.", genome_hash)
 
             for seed in self._sim_rand_seeds:
                 config["randomSeed"] = seed
