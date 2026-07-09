@@ -52,9 +52,9 @@
         <div class="formula-panel">
           <div class="formula-title">{{ formulaData.title }}</div>
           <div class="formula-body">
-            <div v-for="(line, i) in formulaData.lines" :key="i" class="formula-line" v-html="line" />
-            <div v-if="formulaData.gDef" class="formula-gdef" v-html="formulaData.gDef" />
-            <div class="formula-domain" v-html="formulaData.domain" />
+            <FormulaHtml v-for="(line, i) in formulaData.lines" :key="i" class="formula-line" :expr="line" />
+            <FormulaHtml v-if="formulaData.gDef" class="formula-gdef" :expr="formulaData.gDef" />
+            <FormulaHtml class="formula-domain" :expr="formulaData.domain" />
           </div>
         </div>
       </div>
@@ -67,9 +67,9 @@
         <div class="formula-panel">
           <div class="formula-title">{{ formulaData.title }}</div>
           <div class="formula-body">
-            <div v-for="(line, i) in formulaData.lines" :key="i" class="formula-line" v-html="line" />
-            <div v-if="formulaData.gDef" class="formula-gdef" v-html="formulaData.gDef" />
-            <div class="formula-domain" v-html="formulaData.domain" />
+            <FormulaHtml v-for="(line, i) in formulaData.lines" :key="i" class="formula-line" :expr="line" />
+            <FormulaHtml v-if="formulaData.gDef" class="formula-gdef" :expr="formulaData.gDef" />
+            <FormulaHtml class="formula-domain" :expr="formulaData.domain" />
           </div>
         </div>
       </div>
@@ -87,9 +87,9 @@
         <div class="formula-panel">
           <div class="formula-title">{{ formulaData.title }}</div>
           <div class="formula-body">
-            <div v-for="(line, i) in formulaData.lines" :key="i" class="formula-line formula-line--sm" v-html="line" />
-            <div v-if="formulaData.gDef" class="formula-gdef formula-gdef--sm" v-html="formulaData.gDef" />
-            <div class="formula-domain" v-html="formulaData.domain" />
+            <FormulaHtml v-for="(line, i) in formulaData.lines" :key="i" class="formula-line formula-line--sm" :expr="line" />
+            <FormulaHtml v-if="formulaData.gDef" class="formula-gdef formula-gdef--sm" :expr="formulaData.gDef" />
+            <FormulaHtml class="formula-domain" :expr="formulaData.domain" />
           </div>
         </div>
       </div>
@@ -126,6 +126,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent } from 'vue'
 import { useSyntheticStore } from '../../app/stores/syntheticStore'
+import FormulaHtml from './FormulaHtml.vue'
 
 const Dtlz2Surface3D = defineAsyncComponent(
   () => import('./Dtlz2Surface3D.vue')
