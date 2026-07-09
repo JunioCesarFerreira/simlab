@@ -117,19 +117,15 @@ def _zdt1(x: list[float]) -> list[float]:
     return [f1, float(f2)]
 
 
-def _sch1(x01: list[float], region: tuple[float, float, float, float]) -> list[float]:
+def _sch1(x01: list[float]) -> list[float]:
     """SCH1 (Schaffer) — 2 objectives, 1 effective decision variable.
 
-    f1 = x², f2 = (x-2)²  where x is the first decision variable
-    mapped back to the original region scale.
-
-    Using the normalised x01[0] ∈ [0,1] mapped to the region's x-axis:
-      raw_x = x_min + x01[0] * (x_max - x_min)
-    This is consistent with DTLZ2/ZDT1 which also operate on normalised values.
+    f1 = x², f2 = (x-2)²  with x = 2·x01[0], mapping [0,1] → [0,2]
+    so the full Pareto-optimal set (x ∈ [0,2]) is reachable.
+    Operates on normalised coordinates like DTLZ2/ZDT1 — no region dependency.
     """
-    x_min, _, x_max, _ = region
-    raw_x = x_min + x01[0] * (x_max - x_min) if x01 else 0.0
-    return [float(raw_x ** 2), float((raw_x - 2.0) ** 2)]
+    x = x01[0] * 2.0 if x01 else 0.0
+    return [float(x ** 2), float((x - 2.0) ** 2)]
 
 
 def _eval_benchmark(
@@ -144,7 +140,7 @@ def _eval_benchmark(
     if bench_upper == "ZDT1":
         vals = _zdt1(x01)
     elif bench_upper == "SCH1":
-        vals = _sch1(x01, region)
+        vals = _sch1(x01)
     else:
         M = max(2, int(M))
         vals = _dtlz2(x01, M)

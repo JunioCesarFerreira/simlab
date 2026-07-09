@@ -102,13 +102,17 @@ class TestZDT1:
 # ── SCH1 ─────────────────────────────────────────────────────────────────────
 
 class TestSCH1:
-    def test_maps_to_region_x_axis(self):
-        # region [0,0,2,2], normalized x01=0.5 → raw_x = 1 → f1=1, f2=1
-        assert _sch1([0.5], (0.0, 0.0, 2.0, 2.0)) == [1.0, 1.0]
+    def test_midpoint(self):
+        # x01=0.5 → x = 0.5*2 = 1 → f1=1, f2=(1-2)²=1
+        assert _sch1([0.5]) == [1.0, 1.0]
 
     def test_vertex_f1_zero(self):
-        # raw_x = 0 → f1 = 0, f2 = 4
-        assert _sch1([0.0], (0.0, 0.0, 2.0, 2.0)) == [0.0, 4.0]
+        # x01=0 → x = 0 → f1=0, f2=4
+        assert _sch1([0.0]) == [0.0, 4.0]
+
+    def test_vertex_f2_zero(self):
+        # x01=1 → x = 2 → f1=4, f2=0
+        assert _sch1([1.0]) == [4.0, 0.0]
 
 
 # ── Integration through _eval_benchmark ──────────────────────────────────────
