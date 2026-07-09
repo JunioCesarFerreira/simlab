@@ -1,4 +1,5 @@
 import io
+import pytest
 from bson import ObjectId, errors as bson_errors
 
 from tests.conftest import (
@@ -198,3 +199,53 @@ class TestAttachAnalysisFile:
             files={"file": ("pareto.png", io.BytesIO(b"PNG"), "image/png")},
         )
         assert resp.status_code == 500
+
+
+# ── GET /{experiment_id}/hv-gd ────────────────────────────────────────────────
+class TestGetHvGd:
+    def _call(self, client, objectives=("f1", "f2")):
+        q = "&".join([f"objectives={o}" for o in objectives] + ["minimize=true"] * len(objectives))
+        return client.get(f"{BASE}/{EXP_ID}/hv-gd?{q}")
+
+    def _setup(self, mock_factory, doc, ind_objs):
+        mock_factory.experiment_repo.get.return_value = doc
+        mock_factory.generation_repo.find_by_experiment.return_value = [{"_id": ObjectId(GEN_ID), "index": 0}]
+        mock_factory.individual_repo.find_by_generation.return_value = [{"objectives": o} for o in ind_objs]
+
+    def test_synthetic_uses_true_front_and_returns_igd(self, client, mock_factory):
+        doc = sample_experiment()
+        doc["parameters"]["simulation"] = {"synthetic": {"enabled": True, "bench": "ZDT1"}}
+        # Population sits AT the stored final front but OFF the true ZDT1 front.
+        doc["pareto_front"] = [{"objectives": {"f1": 0.5, "f2": 0.5}}]
+        self._setup(mock_factory, doc, [[0.5, 0.5]])
+
+        data = self._call(client).json()
+        assert data["reference"] == "true_front"
+        assert data["igd"][0] is not None
+        # GD is measured against the TRUE front, so an off-front point has GD > 0
+        # (against the run's own final front it would trivially be 0).
+        assert data["gd"][0] > 0.1
+
+    def test_non_synthetic_uses_final_front_and_adds_igd(self, client, mock_factory):
+        doc = sample_experiment()  # no synthetic block → WSN behaviour preserved
+        doc["pareto_front"] = [{"objectives": {"f1": 0.5, "f2": 0.3}}]
+        self._setup(mock_factory, doc, [[0.5, 0.3]])
+
+        data = self._call(client).json()
+        assert data["reference"] == "final_front"
+        assert data["gd"][0] == pytest.approx(0.0, abs=1e-9)   # equals its own front
+        assert data["igd"][0] == pytest.approx(0.0, abs=1e-9)
+
+    def test_unknown_bench_falls_back_to_final_front(self, client, mock_factory):
+        doc = sample_experiment()
+        doc["parameters"]["simulation"] = {"synthetic": {"enabled": True, "bench": "NOPE"}}
+        doc["pareto_front"] = [{"objectives": {"f1": 0.5, "f2": 0.3}}]
+        self._setup(mock_factory, doc, [[0.5, 0.3]])
+        assert self._call(client).json()["reference"] == "final_front"
+
+    def test_empty_pareto_front_returns_empty_shape(self, client, mock_factory):
+        doc = sample_experiment()
+        doc["pareto_front"] = None
+        mock_factory.experiment_repo.get.return_value = doc
+        data = self._call(client).json()
+        assert data["generations"] == [] and data["igd"] == []

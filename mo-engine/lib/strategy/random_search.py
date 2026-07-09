@@ -22,6 +22,8 @@ from lib.util.build_input_sim_cooja import create_files
 from lib.nsga import fast_nondominated_sort
 from lib.problem.adapter import ProblemAdapter, Chromosome
 from lib.problem.resolve import build_adapter
+from .analytical import analytical_objectives
+from pylib import benchmarks
 
 
 logger = logging.getLogger(__name__)
@@ -77,6 +79,12 @@ class RandomSearchStrategy(EngineStrategy):
         self._is_synthetic: bool = bool(syn_cfg.get("enabled", False))
         if self._is_synthetic:
             logger.info("[RandomSearch] Synthetic mode enabled — skipping CSC/source-repo for simulations.")
+
+        # Analytical (in-process) evaluation config for P0 synthetic benchmarks.
+        self._bench: str = str(syn_cfg.get("bench", "DTLZ2"))
+        self._noise_std: float = float(syn_cfg.get("noise_std", 0.0))
+        _raw_domain = syn_cfg.get("sch1_domain")
+        self._sch1_domain = tuple(_raw_domain) if _raw_domain else benchmarks.SCH1_DEFAULT_DOMAIN
 
         # --- simulation and algorithm parameters ---
         self._sim_duration: int = int(simulation_config.get("duration", 120))
@@ -406,6 +414,38 @@ class RandomSearchStrategy(EngineStrategy):
             # --- Case B: same genome already inserted this session ---
             if genome_hash in self._inserted_genomes:
                 logger.info("[RandomSearch] Genome %s already inserted this session; skipping.", genome_hash)
+                continue
+
+            # --- Analytical fast-path: evaluate in-process, no simulation needed ---
+            if self._problem_adapter.is_analytical:
+                _, obj_min = analytical_objectives(
+                    self._problem_adapter, genome, genome_hash,
+                    bench=self._bench, noise_std=self._noise_std, sch1_domain=self._sch1_domain,
+                    seeds=self._sim_rand_seeds, n_obj=len(self._objective_keys),
+                    objective_goals=self._objective_goals,
+                )
+                self._map_genome_objectives[genome] = obj_min
+                self.mongo.individual_repo.insert({
+                    "experiment_id": exp_oid,
+                    "generation_id": gen_oid,
+                    "individual_id": genome_hash,
+                    "chromosome": genome.to_dict(),
+                    "objectives": self._objectives_list_to_original(obj_min),
+                    "topology_picture_id": None,
+                })
+                self._inserted_genomes.add(genome_hash)
+                self._genome_objectives_cache[genome_hash] = obj_min
+                try:
+                    self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
+                    self.mongo.genome_cache_repo.set_objectives(self._exp_id, genome_hash, obj_min)
+                except Exception:
+                    logger.warning("[RandomSearch] genome_cache write failed for %s; continuing.", genome_hash)
+                config_topo = self._convert_genome_to_sim_config(
+                    genome=genome, gen_index=gen_index, ind_idx=i, seed=first_seed,
+                )
+                self._upload_topology_async(
+                    exp_oid, gen_oid, gen_index, i, genome_hash, dict(config_topo),
+                )
                 continue
 
             # --- Case C: infeasible genome — apply penalty ---

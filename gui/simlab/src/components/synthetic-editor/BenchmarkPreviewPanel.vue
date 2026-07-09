@@ -208,7 +208,7 @@ const formulaData = computed((): FormulaInfo => {
         'f<sub>1</sub>(x) = x<sup>2</sup>',
         'f<sub>2</sub>(x) = (x &minus; 2)<sup>2</sup>',
       ],
-      domain: 'x &isin; [0, 2]',
+      domain: 'x &isin; [&minus;5, 5],&ensp;Pareto set [0, 2]',
     }
     default: return dtlz2Formula(M, n)
   }

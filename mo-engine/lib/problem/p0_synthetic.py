@@ -63,6 +63,16 @@ class Problem0SyntheticAdapter(ProblemAdapter):
         self._region: list[float] = [self._LB, self._LB, self._UB, self._UB]
 
     # ------------------------------------------------------------------
+    # In-process (analytical) evaluation — P0 is evaluated closed-form.
+    # ------------------------------------------------------------------
+    @property
+    def is_analytical(self) -> bool:
+        return True
+
+    def decision_vector(self, ind: ChromosomeP0) -> list[float]:
+        return list(ind.x)
+
+    # ------------------------------------------------------------------
     # Structural properties — overridden: P0 has no WSN radius/region.
     # ------------------------------------------------------------------
     @property

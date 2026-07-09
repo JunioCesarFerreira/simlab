@@ -157,6 +157,28 @@ class ProblemAdapter(ABC):
         """
         return None
 
+    # ------------------------------------------------------------------
+    # In-process (analytical) evaluation
+    # ------------------------------------------------------------------
+    @property
+    def is_analytical(self) -> bool:
+        """Whether individuals are evaluated *in process* (closed-form benchmark)
+        rather than through the Cooja/simulation pipeline.
+
+        Default ``False`` — simulation-based problems (P1–P4) keep going through
+        MongoDB Simulation documents. Analytical adapters (P0) return ``True`` so
+        the strategies evaluate the objectives directly and never enqueue a
+        simulation.
+        """
+        return False
+
+    def decision_vector(self, chromosome: Chromosome) -> list[float]:
+        """Return the decision vector fed to the analytical benchmark.
+
+        Only meaningful when ``is_analytical`` is True; the default raises.
+        """
+        raise NotImplementedError("decision_vector is only defined for analytical problems.")
+
     @abstractmethod
     def encode_simulation_input(self, ind: Chromosome) -> SimulationElements:
         """

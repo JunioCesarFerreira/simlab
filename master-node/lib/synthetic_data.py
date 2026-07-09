@@ -1,9 +1,9 @@
 import os
-import math
 import random
 import logging
 from typing import Mapping, Optional
 from bson import ObjectId
+from pylib import benchmarks
 from pylib.db import MongoRepository
 from pylib.db.models import Simulation
 
@@ -79,64 +79,18 @@ def _scale_to_unit(genome: list[float], region: tuple[float, float, float, float
 # Benchmark functions (minimisation)
 # ---------------------------------------------------------------------------
 
-def _dtlz2(x: list[float], M: int) -> list[float]:
-    """DTLZ2 — Pareto front is the unit hypersphere segment in the first orthant.
-
-    Reference: Deb, Thiele, Laumanns, Zitzler (2005).
-    n = len(x); k = n - (M-1).
-    f_m = (1+g) * prod_{i=0}^{M-2-m} cos(π/2·x_i) * (m>0 ? sin(π/2·x_{M-1-m}) : 1)
-    """
-    n = len(x)
-    k = max(1, n - (M - 1))
-    tail = x[n - k:] if k > 0 else []
-    g = sum((xi - 0.5) ** 2 for xi in tail)
-    f: list[float] = []
-    for m in range(M):
-        val = 1.0 + g
-        for i in range(0, M - 1 - m):
-            val *= math.cos(0.5 * math.pi * x[i])
-        if m > 0:
-            val *= math.sin(0.5 * math.pi * x[M - 1 - m])
-        f.append(float(val))
-    return f
-
-
-def _zdt1(x: list[float]) -> list[float]:
-    """ZDT1 — convex Pareto front, exactly 2 objectives.
-
-    Reference: Zitzler, Deb, Thiele (2000).
-    f1 = x[0]
-    g  = 1 + 9·sum(x[1:])/(n-1)
-    f2 = g·(1 - sqrt(f1/g))
-    """
-    if not x:
-        return [1.0, 1.0]
-    f1 = float(x[0])
-    g = 1.0 if len(x) == 1 else 1.0 + 9.0 * sum(x[1:]) / (len(x) - 1)
-    f2 = g * (1.0 - math.sqrt(max(0.0, f1 / g)))
-    return [f1, float(f2)]
-
-
-def _sch1(x01: list[float]) -> list[float]:
-    """SCH1 (Schaffer) — 2 objectives, 1 effective decision variable.
-
-    f1 = x², f2 = (x-2)²  with x = 2·x01[0], mapping [0,1] → [0,2]
-    so the full Pareto-optimal set (x ∈ [0,2]) is reachable.
-    Operates on normalised coordinates like DTLZ2/ZDT1 — no region dependency.
-    """
-    x = x01[0] * 2.0 if x01 else 0.0
-    return [float(x ** 2), float((x - 2.0) ** 2)]
+# The benchmark objective functions and true fronts live in the canonical
+# pylib.benchmarks module (single source of truth, shared with rest-api and the
+# in-process P0 adapter). These module-level aliases preserve the historical
+# import surface used by the tests.
+_dtlz2 = benchmarks.dtlz2
+_zdt1 = benchmarks.zdt1
+_sch1 = benchmarks.sch1
 
 
 def _benchmark_values(x01: list[float], bench: str, M: int) -> list[float]:
     """Evaluate the benchmark on an already-normalised vector x01 ∈ [0,1]^n."""
-    bench_upper = bench.upper()
-    if bench_upper == "ZDT1":
-        return _zdt1(x01)
-    if bench_upper == "SCH1":
-        return _sch1(x01)
-    M = max(2, int(M))
-    return _dtlz2(x01, M)
+    return benchmarks.evaluate(bench, x01, M)
 
 
 def _apply_noise(vals: list[float], noise_std: float) -> list[float]:
@@ -221,17 +175,36 @@ def run_synthetic_simulation(
     )
     M = len(objective_names)
 
+    # Optional SCH1 decision-domain override (default is the wide convergence
+    # domain defined in pylib.benchmarks). Ignored by the other benchmarks.
+    syn_cfg = ((params.get("simulation") or {}).get("synthetic") or {})
+    raw_domain = syn_cfg.get("sch1_domain")
+    sch1_domain = tuple(raw_domain) if raw_domain else benchmarks.SCH1_DEFAULT_DOMAIN
+
+    # Reproducible per-(seed, genome) observation noise: the same genome under the
+    # same simulation seed always yields the same objectives, so noisy synthetic
+    # runs are reproducible and the objective cache stays consistent (a cache hit
+    # returns exactly what a fresh evaluation would produce).
+    noise_rng = random.Random(f"{sim.get('random_seed', 0)}:{sim.get('individual_id', '')}")
+
     decision_vector = _decision_vector_from_sim(sim)
     if decision_vector is not None:
-        # P0 (pure synthetic): the decision vector is already in [0,1]^n. Evaluate
-        # directly — no fixedMotes, no region scaling. Clip defensively.
+        # P0 (pure synthetic): the decision vector is already in [0,1]^n; clip defensively.
         x01 = [min(1.0, max(0.0, v)) for v in decision_vector]
-        vals = _apply_noise(_benchmark_values(x01, bench, M), noise_std)
     else:
         # P1-encoded synthetic (legacy): reconstruct the genome from relay motes
         # and scale from the physical region to [0,1]^n.
-        genome_xy = _extract_genome_from_sim(sim)
-        vals = _eval_benchmark(genome_xy, region, bench=bench, M=M, noise_std=noise_std)
+        x01 = _scale_to_unit(_extract_genome_from_sim(sim), region)
+
+    try:
+        # evaluate_noisy validates dimensions (e.g. DTLZ2 needs n >= M-1, raising a
+        # clear ValueError instead of a latent IndexError) and clamps noisy
+        # non-negative objectives at 0 so HV/GD/IGD stay well-defined.
+        vals = benchmarks.evaluate_noisy(bench, x01, M, noise_std, noise_rng, sch1_domain=sch1_domain)
+    except ValueError as exc:
+        log.error("Invalid synthetic configuration for simulation %s: %s", sim_oid, exc)
+        mongo.simulation_repo.mark_error(sim_oid, str(exc))
+        return
 
     bench_upper = bench.upper()
     if bench_upper == "ZDT1":

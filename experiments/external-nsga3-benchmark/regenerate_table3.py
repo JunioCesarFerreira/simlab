@@ -37,6 +37,8 @@ from metrics import (
     generational_distance,
     hypervolume,
     inverted_generational_distance,
+    summary,
+    wilcoxon_pvalue,
 )
 from run_native import run_native
 
@@ -116,10 +118,16 @@ def main() -> None:
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Statistical significance is reported against the SimLab native method.
+    BASELINE = "nsga3_func"
+    KEYS = ("hv", "gd", "igd", "coverage")
+
     rows: list[dict] = []
     for M, k in TABLE3_GRID:
+        cell_rows: list[dict] = []
+        cell_igd: dict[str, list[float]] = {}   # per-seed IGD for the paired test
         for method, runner in runners.items():
-            method_metrics: list[dict[str, float]] = []
+            per_seed: dict[str, list[float]] = {key: [] for key in KEYS}
             t0 = time.time()
             for seed_offset in range(args.seeds):
                 front = runner(
@@ -129,23 +137,36 @@ def main() -> None:
                     divisions=args.divisions,
                     seed=42 + seed_offset,
                 )
-                method_metrics.append(evaluate_front(np.asarray(front), M))
+                m = evaluate_front(np.asarray(front), M)
+                for key in KEYS:
+                    per_seed[key].append(m[key])
             elapsed = time.time() - t0
-            mean = {key: float(np.mean([m[key] for m in method_metrics]))
-                    for key in ("hv", "gd", "igd", "coverage")}
-            rows.append({
+            cell_igd[method] = per_seed["igd"]
+            s = {key: summary(per_seed[key]) for key in KEYS}
+            cell_rows.append({
                 "M": M, "k": k, "method": method,
-                "mean_hv": round(mean["hv"], 3),
-                "mean_gd": round(mean["gd"], 4),
-                "mean_igd": round(mean["igd"], 4),
-                "coverage": round(mean["coverage"], 3),
+                "mean_hv": round(s["hv"]["mean"], 3), "std_hv": round(s["hv"]["std"], 3),
+                "mean_gd": round(s["gd"]["mean"], 4), "std_gd": round(s["gd"]["std"], 4),
+                "mean_igd": round(s["igd"]["mean"], 4), "std_igd": round(s["igd"]["std"], 4),
+                "mean_coverage": round(s["coverage"]["mean"], 3),
+                "std_coverage": round(s["coverage"]["std"], 3),
                 "elapsed_s": round(elapsed, 1),
                 "n_seeds": args.seeds,
             })
             print(f"({M},{k}) {method:18s} "
-                  f"HV={mean['hv']:.3f}  GD={mean['gd']:.4f}  "
-                  f"IGD={mean['igd']:.4f}  Cov={mean['coverage']:.3f}  "
-                  f"({elapsed:.1f}s)")
+                  f"HV={s['hv']['mean']:.3f}±{s['hv']['std']:.3f}  "
+                  f"GD={s['gd']['mean']:.4f}  "
+                  f"IGD={s['igd']['mean']:.4f}±{s['igd']['std']:.4f}  "
+                  f"Cov={s['coverage']['mean']:.3f}  ({elapsed:.1f}s)")
+
+        # Paired Wilcoxon (per-seed IGD) of each method vs the native baseline.
+        for row in cell_rows:
+            if BASELINE in cell_igd and row["method"] != BASELINE:
+                p = wilcoxon_pvalue(cell_igd[row["method"]], cell_igd[BASELINE])
+                row["igd_p_vs_native"] = round(p, 4) if p == p else float("nan")
+            else:
+                row["igd_p_vs_native"] = float("nan")
+        rows.extend(cell_rows)
 
     df = pd.DataFrame(rows)
     df.to_csv(out_path, index=False)

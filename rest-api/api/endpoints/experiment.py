@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from bson import ObjectId
 
+from pylib import benchmarks
 from pylib.db import MongoRepository
 from api.dependencies import get_factory
 from api.domain.experiment import ExperimentDto, ExperimentFullDto, ExperimentInfoDto
@@ -293,7 +294,7 @@ def get_hv_gd(
 
     stored_pf: list[dict] = doc.get("pareto_front") or []
     if not stored_pf:
-        return {"generations": [], "hv": [], "gd": [], "worst_point": {}}
+        return {"generations": [], "hv": [], "gd": [], "igd": [], "reference": None, "worst_point": {}}
 
     minimize_bools = [m.lower() == "true" for m in minimize]
 
@@ -316,48 +317,66 @@ def get_hv_gd(
         individuals_per_gen[gen_idx] = valid
 
     if not individuals_per_gen:
-        return {"generations": [], "hv": [], "gd": [], "worst_point": {}}
+        return {"generations": [], "hv": [], "gd": [], "igd": [], "reference": None, "worst_point": {}}
 
-    # ── Worst feasible point → HV reference (original space) ─────────────────
-    all_objs = [o for v in individuals_per_gen.values() for o in v]
-    worst = [
-        max(o[i] for o in all_objs) if minimize_bools[i]
-        else min(o[i] for o in all_objs)
-        for i in range(n_obj)
-    ]
-    worst_ref = [v + abs(v) * 0.05 + 1.0 for v in worst]
+    # ── Reference front (GD/IGD) + HV reference point ────────────────────────
+    # Synthetic experiments have a closed-form true Pareto front: use it as the
+    # GD/IGD reference (measuring convergence to the real optimum, not to the
+    # run's own final front) and a FIXED nadir as the HV reference so HV is
+    # comparable across runs of the same benchmark. WSN experiments keep the
+    # empirical references (own stored front + population-derived worst point).
+    syn = (((doc.get("parameters") or {}).get("simulation") or {}).get("synthetic") or {})
+    bench = syn.get("bench")
+    is_synthetic = bool(syn.get("enabled")) and bool(bench) and all(minimize_bools)
 
-    # ── GD reference: stored Pareto front in minimization space ──────────────
-    seen_ref: set[tuple] = set()
-    ref_min_rows: list[list[float]] = []
-    for p in stored_pf:
-        objs_dict: dict = p.get("objectives") or {}
-        row_min = tuple(
-            float(objs_dict.get(o, 0.0)) if minimize_bools[i]
-            else -float(objs_dict.get(o, 0.0))
-            for i, o in enumerate(objectives)
-        )
-        if row_min not in seen_ref:
-            seen_ref.add(row_min)
-            ref_min_rows.append(list(row_min))
-    final_front = np.array(ref_min_rows, dtype=float)
+    reference_kind = "final_front"
+    reference_front = None
+    hv_ref: list[float] = []
+    if is_synthetic:
+        try:
+            reference_front = benchmarks.true_front(bench, n_obj)
+            hv_ref = [v * 1.1 for v in benchmarks.nadir(bench, n_obj)]
+            reference_kind = "true_front"
+        except ValueError:
+            is_synthetic = False  # unknown benchmark → fall back to empirical
 
-    # ── Per-generation HV / GD ────────────────────────────────────────────────
+    if not is_synthetic:
+        all_objs = [o for v in individuals_per_gen.values() for o in v]
+        worst = [
+            max(o[i] for o in all_objs) if minimize_bools[i]
+            else min(o[i] for o in all_objs)
+            for i in range(n_obj)
+        ]
+        hv_ref = [v + abs(v) * 0.05 + 1.0 for v in worst]
+        seen_ref: set[tuple] = set()
+        ref_min_rows: list[list[float]] = []
+        for p in stored_pf:
+            objs_dict: dict = p.get("objectives") or {}
+            row_min = tuple(
+                float(objs_dict.get(o, 0.0)) if minimize_bools[i]
+                else -float(objs_dict.get(o, 0.0))
+                for i, o in enumerate(objectives)
+            )
+            if row_min not in seen_ref:
+                seen_ref.add(row_min)
+                ref_min_rows.append(list(row_min))
+        reference_front = np.array(ref_min_rows, dtype=float)
+
+    hv_ref_arr = np.array(hv_ref, dtype=float)
+
+    # ── Per-generation HV / GD / IGD ─────────────────────────────────────────
     generations_sorted = sorted(individuals_per_gen.keys())
     hv_values: list[float] = []
     gd_values: list[float | None] = []
+    igd_values: list[float | None] = []
 
     for gen_idx in generations_sorted:
         pop_objs = individuals_per_gen[gen_idx]
-        if not pop_objs:
-            hv_values.append(0.0)
-            gd_values.append(None)
-            continue
-
-        front_idx = _pareto_front(pop_objs, minimize_bools)
+        front_idx = _pareto_front(pop_objs, minimize_bools) if pop_objs else []
         if not front_idx:
             hv_values.append(0.0)
             gd_values.append(None)
+            igd_values.append(None)
             continue
 
         # Minimization space + dedup by objective tuple
@@ -373,16 +392,24 @@ def get_hv_gd(
                 pts_min_rows.append(list(key))
         pts_min = np.array(pts_min_rows, dtype=float)
 
-        hv_val = float(moocore.hypervolume(pts_min, ref=worst_ref))
-        diffs = pts_min[:, np.newaxis, :] - final_front[np.newaxis, :, :]
-        gd_val = float(np.sqrt((diffs ** 2).sum(axis=2)).min(axis=1).mean())
+        # HV: only points that strictly dominate the (fixed) reference contribute.
+        dominating = pts_min[np.all(pts_min < hv_ref_arr, axis=1)]
+        hv_val = float(moocore.hypervolume(dominating, ref=hv_ref)) if len(dominating) else 0.0
+
+        # Pairwise distances (population front × reference front), reused for GD/IGD.
+        dist = np.sqrt(((pts_min[:, None, :] - reference_front[None, :, :]) ** 2).sum(axis=2))
+        gd_val = float(dist.min(axis=1).mean())    # each pop point → nearest reference
+        igd_val = float(dist.min(axis=0).mean())   # each reference point → nearest pop
 
         hv_values.append(hv_val)
         gd_values.append(gd_val)
+        igd_values.append(igd_val)
 
     return {
         "generations": generations_sorted,
         "hv": hv_values,
         "gd": gd_values,
-        "worst_point": dict(zip(objectives, worst_ref)),
+        "igd": igd_values,
+        "reference": reference_kind,
+        "worst_point": dict(zip(objectives, hv_ref)),
     }

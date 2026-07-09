@@ -10,6 +10,7 @@ import pytest
 
 from lib.problem.resolve import build_adapter, build_test_adapter
 from lib.problem.chromosomes import ChromosomeP0, chromosome_from_dict
+from lib.strategy.analytical import analytical_objectives
 
 
 def _adapter(n: int = 6, seed: int = 0):
@@ -93,3 +94,36 @@ class TestChromosome:
         a = ChromosomeP0(x=[0.1, 0.2, 0.3])
         b = ChromosomeP0(x=[0.1, 0.2, 0.3 + 1e-9])
         assert a == b and hash(a) == hash(b) and a.get_hash() == b.get_hash()
+
+
+class TestAnalyticalEvaluation:
+    def test_p0_is_analytical(self):
+        ad = _adapter(n=3)
+        g = ad.random_individual_generator(1)[0]
+        assert ad.is_analytical is True
+        assert ad.decision_vector(g) == list(g.x)
+
+    def _eval(self, **kw):
+        ad = _adapter(n=6)
+        g = ad.random_individual_generator(1)[0]
+        defaults = dict(bench="ZDT1", noise_std=0.0, sch1_domain=(-5.0, 5.0),
+                        seeds=[1], n_obj=2, objective_goals=[1, 1])
+        defaults.update(kw)
+        return analytical_objectives(ad, g, "h", **defaults)
+
+    def test_reproducible_for_same_seed(self):
+        ad = _adapter(n=6)
+        g = ad.random_individual_generator(1)[0]
+        common = dict(bench="ZDT1", noise_std=0.5, sch1_domain=(-5.0, 5.0),
+                      seeds=[42], n_obj=2, objective_goals=[1, 1])
+        assert analytical_objectives(ad, g, "h", **common) == analytical_objectives(ad, g, "h", **common)
+
+    def test_multiseed_mean_deterministic_without_noise(self):
+        one = self._eval(seeds=[1])
+        many = self._eval(seeds=[1, 2, 3])
+        assert one[0] == pytest.approx(many[0])   # no noise → mean equals single eval
+
+    def test_minimization_space_applies_goals(self):
+        orig, minimization = self._eval(objective_goals=[1, -1])
+        assert minimization[0] == pytest.approx(orig[0])
+        assert minimization[1] == pytest.approx(-orig[1])

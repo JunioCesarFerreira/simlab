@@ -12,6 +12,8 @@ All metrics assume *minimisation* of every objective.
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 from deap.tools._hypervolume import hv as deap_hv
 
@@ -67,6 +69,58 @@ def coverage(front_a: np.ndarray, front_b: np.ndarray) -> float:
         if np.any(np.all(a <= bp, axis=1) & np.any(a < bp, axis=1)):
             dominated += 1
     return float(dominated) / float(len(b))
+
+
+# ── Multi-run statistics ─────────────────────────────────────────────────────
+# Standalone copies of the platform helpers in pareto-analysis/lib/stats.py: a
+# single run (or only the mean of several) cannot support "method A beats B".
+
+def summary(values) -> dict:
+    """Return ``{n, mean, std, ci95}`` (sample std, ddof=1; 95% CI half-width)."""
+    a = np.asarray(list(values), dtype=float)
+    a = a[np.isfinite(a)]
+    n = int(a.size)
+    if n == 0:
+        return {"n": 0, "mean": float("nan"), "std": float("nan"), "ci95": float("nan")}
+    std = float(a.std(ddof=1)) if n > 1 else 0.0
+    return {"n": n, "mean": float(a.mean()), "std": std,
+            "ci95": 1.96 * std / math.sqrt(n) if n > 1 else 0.0}
+
+
+def wilcoxon_pvalue(a, b) -> float:
+    """Two-sided paired Wilcoxon signed-rank p-value (scipy if available, else a
+    numpy-only normal approximation). ``nan`` for degenerate input."""
+    a = np.asarray(list(a), dtype=float)
+    b = np.asarray(list(b), dtype=float)
+    if a.shape != b.shape or a.size == 0:
+        return float("nan")
+    d = a - b
+    d = d[d != 0]
+    n = int(d.size)
+    if n == 0:
+        return float("nan")
+    try:
+        from scipy.stats import wilcoxon
+        return float(wilcoxon(a, b).pvalue)
+    except Exception:
+        pass
+    order = np.argsort(np.abs(d), kind="mergesort")
+    sx = np.abs(d)[order]
+    ranks = np.empty(n, dtype=float)
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and sx[j + 1] == sx[i]:
+            j += 1
+        ranks[order[i:j + 1]] = (i + j) / 2.0 + 1.0
+        i = j + 1
+    w_plus = float(ranks[d > 0].sum())
+    mean = n * (n + 1) / 4.0
+    var = n * (n + 1) * (2 * n + 1) / 24.0
+    if var <= 0:
+        return float("nan")
+    z = (w_plus - mean) / math.sqrt(var)
+    return float(math.erfc(abs(z) / math.sqrt(2.0)))
 
 
 def dtlz2_reference_front(M: int, n_points: int = 1000, rng: np.random.Generator | None = None) -> np.ndarray:
