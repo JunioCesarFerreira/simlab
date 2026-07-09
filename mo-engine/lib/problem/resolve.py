@@ -4,6 +4,7 @@ from typing import Any, Mapping
 from typing import Type
 
 from .adapter import ProblemAdapter
+from .p0_synthetic import Problem0SyntheticAdapter
 from .p1_continuous_mobility import Problem1ContinuousMobilityAdapter
 from .p2_discrete_mobility import Problem2DiscreteMobilityAdapter
 from .p3_target_coverage import Problem3TargetCoverageAdapter
@@ -11,6 +12,7 @@ from .p4_mobile_sink_collection import Problem4MobileSinkCollectionAdapter
 
 # Problem key -> adapter class
 PROBLEM_REGISTRY: dict[str, Type[ProblemAdapter]] = {
+    "problem0": Problem0SyntheticAdapter,
     "problem1": Problem1ContinuousMobilityAdapter,
     "problem2": Problem2DiscreteMobilityAdapter,
     "problem3": Problem3TargetCoverageAdapter,

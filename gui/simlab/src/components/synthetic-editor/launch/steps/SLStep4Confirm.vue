@@ -6,9 +6,8 @@
     <div class="kv-grid">
       <span class="kv-key">Function</span>   <span class="kv-val mono">{{ draft.benchmark }}</span>
       <span class="kv-key">Objectives M</span> <span class="kv-val mono">{{ draft.M }}</span>
-      <span class="kv-key">Variables n</span>  <span class="kv-val mono">{{ draft.nVars }} ({{ nRelays }} relay motes)</span>
+      <span class="kv-key">Variables n</span>  <span class="kv-val mono">{{ draft.nVars }} (x ∈ [0,1]ⁿ)</span>
       <span class="kv-key">Noise σ</span>     <span class="kv-val mono">{{ draft.noiseStd === 0 ? 'none' : draft.noiseStd }}</span>
-      <span class="kv-key">Region</span>       <span class="kv-val mono">{{ draft.region }}</span>
     </div>
 
     <div class="section-divider">Experiment</div>
@@ -50,7 +49,6 @@ defineProps<{
 
 const store = useSyntheticStore()
 const draft = computed(() => store.draft)
-const nRelays = computed(() => store.nRelays())
 </script>
 
 <style scoped>

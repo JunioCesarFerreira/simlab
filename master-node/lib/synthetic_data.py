@@ -128,6 +128,23 @@ def _sch1(x01: list[float]) -> list[float]:
     return [float(x ** 2), float((x - 2.0) ** 2)]
 
 
+def _benchmark_values(x01: list[float], bench: str, M: int) -> list[float]:
+    """Evaluate the benchmark on an already-normalised vector x01 ∈ [0,1]^n."""
+    bench_upper = bench.upper()
+    if bench_upper == "ZDT1":
+        return _zdt1(x01)
+    if bench_upper == "SCH1":
+        return _sch1(x01)
+    M = max(2, int(M))
+    return _dtlz2(x01, M)
+
+
+def _apply_noise(vals: list[float], noise_std: float) -> list[float]:
+    if noise_std > 0.0:
+        return [v + random.gauss(0.0, noise_std) for v in vals]
+    return vals
+
+
 def _eval_benchmark(
     genome_xy: list[float],
     region: tuple[float, float, float, float],
@@ -135,18 +152,25 @@ def _eval_benchmark(
     M: int,
     noise_std: float,
 ) -> list[float]:
+    """Physical-genome path (P1): scale relay coordinates from *region* to
+    [0,1]^n, then evaluate. Kept for backward compatibility with P1-encoded
+    synthetic experiments."""
     x01 = _scale_to_unit(genome_xy, region)
-    bench_upper = bench.upper()
-    if bench_upper == "ZDT1":
-        vals = _zdt1(x01)
-    elif bench_upper == "SCH1":
-        vals = _sch1(x01)
-    else:
-        M = max(2, int(M))
-        vals = _dtlz2(x01, M)
-    if noise_std > 0.0:
-        vals = [v + random.gauss(0.0, noise_std) for v in vals]
-    return vals
+    return _apply_noise(_benchmark_values(x01, bench, M), noise_std)
+
+
+def _decision_vector_from_sim(sim: dict) -> Optional[list[float]]:
+    """Return the analytical decision vector x ∈ [0,1]^n for a P0 synthetic
+    simulation, or ``None`` when the simulation encodes a physical (P1) genome.
+
+    P0 exposes the benchmark decision variables verbatim under
+    ``parameters.simulationElements.decisionVector`` — no motes, no scaling.
+    """
+    elements = (((sim or {}).get("parameters") or {}).get("simulationElements") or {})
+    dv = elements.get("decisionVector")
+    if dv is None:
+        return None
+    return [float(v) for v in dv]
 
 # ---------------------------------------------------------------------------
 # Public entry point
@@ -197,8 +221,17 @@ def run_synthetic_simulation(
     )
     M = len(objective_names)
 
-    genome_xy = _extract_genome_from_sim(sim)
-    vals = _eval_benchmark(genome_xy, region, bench=bench, M=M, noise_std=noise_std)
+    decision_vector = _decision_vector_from_sim(sim)
+    if decision_vector is not None:
+        # P0 (pure synthetic): the decision vector is already in [0,1]^n. Evaluate
+        # directly — no fixedMotes, no region scaling. Clip defensively.
+        x01 = [min(1.0, max(0.0, v)) for v in decision_vector]
+        vals = _apply_noise(_benchmark_values(x01, bench, M), noise_std)
+    else:
+        # P1-encoded synthetic (legacy): reconstruct the genome from relay motes
+        # and scale from the physical region to [0,1]^n.
+        genome_xy = _extract_genome_from_sim(sim)
+        vals = _eval_benchmark(genome_xy, region, bench=bench, M=M, noise_std=noise_std)
 
     bench_upper = bench.upper()
     if bench_upper == "ZDT1":

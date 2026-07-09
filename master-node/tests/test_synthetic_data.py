@@ -17,6 +17,8 @@ from lib.synthetic_data import (
     _zdt1,
     _sch1,
     _eval_benchmark,
+    _benchmark_values,
+    _decision_vector_from_sim,
     resolve_synthetic_settings,
 )
 
@@ -136,6 +138,38 @@ class TestEvalBenchmark:
         noisy = _eval_benchmark([10.0, 20.0], REGION, bench="ZDT1", M=2, noise_std=5.0)
         # with a large sigma the noisy result almost surely differs
         assert noisy != base
+
+
+# ── P0 decision-vector path (pure synthetic) ─────────────────────────────────
+
+class TestDecisionVectorP0:
+    def test_present_returns_vector(self):
+        sim = {"parameters": {"simulationElements": {
+            "fixedMotes": [], "mobileMotes": [], "decisionVector": [0.0, 0.5, 1.0],
+        }}}
+        assert _decision_vector_from_sim(sim) == [0.0, 0.5, 1.0]
+
+    def test_absent_returns_none(self):
+        # P1-encoded sim (relay motes, no decisionVector) → falls back to physical path
+        sim = {"parameters": {"simulationElements": {
+            "fixedMotes": [{"name": "sink", "position": [0.0, 0.0]}], "mobileMotes": [],
+        }}}
+        assert _decision_vector_from_sim(sim) is None
+
+    def test_missing_structure_returns_none(self):
+        assert _decision_vector_from_sim({}) is None
+
+    def test_sch1_full_range_reachable_directly(self):
+        # P0 evaluates directly on x ∈ [0,1]^n, so the full SCH1 Pareto range
+        # (0,4)→(4,0) is reachable — unlike the P1 centre-biased path that
+        # collapsed the front near (0,4)→(1,0).
+        assert _benchmark_values([0.0], "SCH1", 2) == [0.0, 4.0]
+        assert _benchmark_values([0.5], "SCH1", 2) == [1.0, 1.0]
+        assert _benchmark_values([1.0], "SCH1", 2) == [4.0, 0.0]
+
+    def test_dtlz2_on_sphere_directly(self):
+        f = _benchmark_values([0.5] * 6, "DTLZ2", 3)
+        assert math.sqrt(sum(v * v for v in f)) == pytest.approx(1.0, abs=1e-9)
 
 
 # ── Mode resolution (per-experiment vs env) ──────────────────────────────────

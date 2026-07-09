@@ -6,9 +6,8 @@ export type BenchmarkId = 'DTLZ2' | 'ZDT1' | 'SCH1'
 export interface BenchmarkDraft {
   benchmark: BenchmarkId
   M: number            // number of objectives
-  nVars: number        // decision variables (n_relays = ceil(nVars/2))
+  nVars: number        // decision variables — genome is x ∈ [0,1]^nVars
   noiseStd: number
-  region: [number, number, number, number]  // [xmin, ymin, xmax, ymax]
 }
 
 const STORAGE_KEY = 'simlab:synthetic-draft'
@@ -19,7 +18,6 @@ function defaultDraft(): BenchmarkDraft {
     M: 3,
     nVars: 10,
     noiseStd: 0.0,
-    region: [-100, -100, 100, 100],
   }
 }
 
@@ -65,10 +63,5 @@ export const useSyntheticStore = defineStore('synthetic', () => {
     save(draft.value)
   }
 
-  /** Number of relay motes needed to encode nVars decision variables. */
-  function nRelays(): number {
-    return Math.ceil(draft.value.nVars / 2)
-  }
-
-  return { draft, setDraft, reset, nRelays }
+  return { draft, setDraft, reset }
 })

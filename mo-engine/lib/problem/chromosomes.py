@@ -96,6 +96,11 @@ class ChromosomeBase:
 
 
 def chromosome_from_dict(problem_name: str, data: dict) -> "Chromosome":
+    if problem_name == "problem0":
+        return ChromosomeP0(
+            x=[float(v) for v in data.get("x", [])],
+        )
+
     if problem_name == "problem1":
         relays = [(float(pos["x"]), float(pos["y"])) for pos in data.get("relays", [])]
         return ChromosomeP1(
@@ -123,6 +128,53 @@ def chromosome_from_dict(problem_name: str, data: dict) -> "Chromosome":
         )
 
     raise ValueError(f"Unsupported problem name for chromosome restore: {problem_name!r}")
+
+
+@dataclass(frozen=True, slots=True)
+class ChromosomeP0(Chromosome):
+    """
+    Chromosome for Problem 0 (pure synthetic benchmark).
+
+    Represents a real-valued decision vector x ∈ [0,1]^n with no WSN semantics
+    (no MAC gene, no relays, no sink). It is used to validate the multi-objective
+    optimizers against analytical benchmarks (DTLZ2, ZDT1, SCH1) evaluated
+    directly on x, decoupled from the WSN topology machinery of P1–P4.
+
+    Genes:
+      - x: continuous decision variables, each in [0, 1].
+    """
+    x: list[float]
+
+    def to_dict(self) -> dict:
+        return {"x": list(self.x)}
+
+    def get_source_by_mac_protocol(
+        self, options: dict[str, ObjectId]
+    ) -> tuple["ChromosomeP0", ObjectId]:
+        # P0 is analytical-only: source-repository selection is never exercised
+        # in synthetic mode. Implemented for ABC completeness only.
+        if not options:
+            raise ValueError("ChromosomeP0 (synthetic) has no source repository options.")
+        return self, next(iter(options.values()))
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ChromosomeP0):
+            return NotImplemented
+        return (
+            tuple(round(v / EPS) for v in self.x)
+            ==
+            tuple(round(v / EPS) for v in other.x)
+        )
+
+    def __hash__(self) -> int:
+        return hash(tuple(round(v / EPS) for v in self.x))
+
+    def get_hash(self) -> str:
+        # Quantise x (same precision used in __eq__/__hash__) so chromosomes that
+        # compare equal produce the same persistent MongoDB key across restarts.
+        d = {"x": [round(v / EPS) for v in self.x]}
+        canonical = json.dumps(d, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha1(canonical.encode()).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)

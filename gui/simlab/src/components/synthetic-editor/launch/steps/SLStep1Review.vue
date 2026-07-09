@@ -17,24 +17,15 @@
       <span class="kv-val mono">{{ draft.M }}</span>
       <span class="kv-key">Variables n</span>
       <span class="kv-val mono">{{ draft.nVars }}</span>
-      <span class="kv-key">Relay motes</span>
-      <span class="kv-val mono">{{ nRelays }} (genome = {{ 2 * nRelays }} floats)</span>
+      <span class="kv-key">Genome</span>
+      <span class="kv-val mono">x ∈ [0,1]ⁿ ({{ draft.nVars }} floats)</span>
       <span class="kv-key">Noise σ</span>
       <span class="kv-val mono">{{ draft.noiseStd === 0 ? 'none' : draft.noiseStd }}</span>
     </div>
 
-    <div class="section-divider">Search region Ω</div>
-
-    <div class="kv-grid">
-      <span class="kv-key">x range</span>
-      <span class="kv-val mono">[ {{ draft.region[0] }}, {{ draft.region[2] }} ]</span>
-      <span class="kv-key">y range</span>
-      <span class="kv-val mono">[ {{ draft.region[1] }}, {{ draft.region[3] }} ]</span>
-    </div>
-
     <p class="note">
-      The benchmark receives the genome normalised to [0,1]ⁿ by the region bounding box.
-      Proceed to configure the optimization algorithm parameters.
+      The benchmark is evaluated directly on the decision vector x ∈ [0,1]ⁿ
+      (no region round-trip). Proceed to configure the optimization algorithm parameters.
     </p>
   </div>
 </template>
@@ -45,7 +36,6 @@ import { useSyntheticStore } from '../../../../app/stores/syntheticStore'
 
 const store = useSyntheticStore()
 const draft = computed(() => store.draft)
-const nRelays = computed(() => store.nRelays())
 </script>
 
 <style scoped>

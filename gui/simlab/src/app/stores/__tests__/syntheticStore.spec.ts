@@ -52,14 +52,6 @@ describe('syntheticStore', () => {
     expect(store.draft.nVars).toBe(1)
   })
 
-  it('computes nRelays as ceil(nVars/2)', () => {
-    const store = useSyntheticStore()
-    store.setDraft({ benchmark: 'DTLZ2', M: 2, nVars: 7 })
-    expect(store.nRelays()).toBe(4)
-    store.setDraft({ nVars: 8 })
-    expect(store.nRelays()).toBe(4)
-  })
-
   it('reset() restores the default draft', () => {
     const store = useSyntheticStore()
     store.setDraft({ benchmark: 'ZDT1', nVars: 20 })
@@ -69,7 +61,6 @@ describe('syntheticStore', () => {
       M: 3,
       nVars: 10,
       noiseStd: 0,
-      region: [-100, -100, 100, 100],
     })
   })
 

@@ -109,11 +109,11 @@
       </div>
       <div class="info-card">
         <span class="info-key">Decision vars</span>
-        <span class="info-val">{{ draft.nVars }} (genome: {{ 2 * nRelays }} floats)</span>
+        <span class="info-val">{{ draft.nVars }} (genome: {{ draft.nVars }} floats)</span>
       </div>
       <div class="info-card">
-        <span class="info-key">Normalised to</span>
-        <span class="info-val">[0,1]ⁿ via region Ω</span>
+        <span class="info-key">Domain</span>
+        <span class="info-val">x ∈ [0,1]ⁿ (evaluated directly)</span>
       </div>
       <div v-if="draft.noiseStd > 0" class="info-card info-card--warn">
         <span class="info-key">Noise</span>
@@ -133,7 +133,6 @@ const Dtlz2Surface3D = defineAsyncComponent(
 
 const store = useSyntheticStore()
 const draft = computed(() => store.draft)
-const nRelays = computed(() => store.nRelays())
 
 // --- Theoretical front descriptions ---
 const frontDescription = computed(() => {
@@ -190,7 +189,7 @@ function dtlz2Formula(M: number, n: number): FormulaInfo {
 
 const formulaData = computed((): FormulaInfo => {
   const { benchmark, M } = draft.value
-  const n = 2 * nRelays.value   // genome size = number of decision variables
+  const n = draft.value.nVars   // genome size = number of decision variables
 
   switch (benchmark) {
     case 'ZDT1': return {

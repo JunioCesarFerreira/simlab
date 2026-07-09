@@ -1,4 +1,4 @@
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 
 class BaseMote(TypedDict):
@@ -23,6 +23,9 @@ class MobileMote(BaseMote, TypedDict):
 class SimulationElements(TypedDict):
     fixedMotes: list[FixedMote]
     mobileMotes: list[MobileMote]
+    # Present only for analytical (synthetic) problems: the benchmark decision
+    # vector x ∈ [0,1]^n, evaluated directly by the master-node with no motes.
+    decisionVector: NotRequired[list[float]]
 
 
 class SimulationConfig(TypedDict):

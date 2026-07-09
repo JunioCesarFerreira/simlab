@@ -9,7 +9,6 @@ function makeDraft(overrides: Partial<BenchmarkDraft> = {}): BenchmarkDraft {
     M: 3,
     nVars: 10,
     noiseStd: 0,
-    region: [-100, -100, 100, 100],
     ...overrides,
   }
 }
@@ -38,21 +37,16 @@ describe('exportSyntheticExperiment', () => {
     expect(sim.synthetic).toEqual({ enabled: true, bench: 'DTLZ2', noise_std: 0 })
   })
 
-  it('encodes the problem as P1 (canonical name) with n_relays = ceil(nVars/2) and no mobile nodes', () => {
-    const dto = build(makeDraft({ nVars: 7 })) // ceil(7/2) = 4
+  it('encodes the problem as P0 (canonical name) with n = nVars and no WSN fields', () => {
+    const dto = build(makeDraft({ nVars: 7 }))
     const problem = dto.parameters.problem as Record<string, any>
     // MUST be the canonical key the mo-engine resolves the adapter by
-    expect(problem.name).toBe('problem1')
-    expect(problem.number_of_relays).toBe(4)
-    expect(problem.mobile_nodes).toEqual([])
-    expect(problem.min_coverage_percentage).toBe(0)
-  })
-
-  it('propagates the region and centers the sink', () => {
-    const dto = build(makeDraft({ region: [0, 0, 200, 100] }))
-    const problem = dto.parameters.problem as Record<string, any>
-    expect(problem.region).toEqual([0, 0, 200, 100])
-    expect(problem.sink).toEqual([100, 50]) // center of the bounding box
+    expect(problem.name).toBe('problem0')
+    expect(problem.n).toBe(7)
+    // Pure synthetic: no relays, sink, region or coverage in the problem doc
+    expect(problem.number_of_relays).toBeUndefined()
+    expect(problem.sink).toBeUndefined()
+    expect(problem.region).toBeUndefined()
   })
 
   it('builds direct data-conversion metrics keyed by objective name', () => {

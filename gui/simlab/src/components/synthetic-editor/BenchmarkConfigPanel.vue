@@ -48,7 +48,7 @@
           :disabled="nLocked"
           @input="set({ nVars: clampInt($event, nMin, 100) })"
         />
-        <span class="hint">{{ nLocked ? 'SCH1 uses only x₀' : `n_relays = ${nRelays}` }}</span>
+        <span class="hint">{{ nLocked ? 'SCH1 uses only x₀' : 'x ∈ [0,1]ⁿ' }}</span>
       </div>
     </div>
 
@@ -62,42 +62,10 @@
       <span class="hint">Added to each objective after evaluation. 0 = deterministic.</span>
     </div>
 
-    <div class="divider">Search region Ω ⊂ ℝ²</div>
-
-    <div class="field-row">
-      <div class="field-group">
-        <label class="field-label">x min</label>
-        <input
-type="number" :value="draft.region[0]" step="1"
-          @input="updateRegion(0, $event)" />
-      </div>
-      <div class="field-group">
-        <label class="field-label">y min</label>
-        <input
-type="number" :value="draft.region[1]" step="1"
-          @input="updateRegion(1, $event)" />
-      </div>
-    </div>
-    <div class="field-row">
-      <div class="field-group">
-        <label class="field-label">x max</label>
-        <input
-type="number" :value="draft.region[2]" step="1"
-          @input="updateRegion(2, $event)" />
-      </div>
-      <div class="field-group">
-        <label class="field-label">y max</label>
-        <input
-type="number" :value="draft.region[3]" step="1"
-          @input="updateRegion(3, $event)" />
-      </div>
-    </div>
-    <p v-if="regionErr" class="err">{{ regionErr }}</p>
-
     <div class="summary-box">
       <div class="summary-row">
         <span class="summary-key">Genome length</span>
-        <span class="summary-val">{{ 2 * nRelays }} floats ({{ nRelays }} relay pairs)</span>
+        <span class="summary-val">{{ draft.nVars }} floats (x ∈ [0,1]ⁿ)</span>
       </div>
       <div class="summary-row">
         <span class="summary-key">Benchmark</span>
@@ -118,7 +86,6 @@ import { getBenchmarks, type BenchmarkInfo } from '../../api/synthetic'
 
 const store = useSyntheticStore()
 const draft = computed(() => store.draft)
-const nRelays = computed(() => store.nRelays())
 
 const benchmarks = ref<BenchmarkInfo[]>([
   { id: 'DTLZ2', label: 'DTLZ2', min_objectives: 2, max_objectives: null,
@@ -147,13 +114,6 @@ const nMin = computed(() => {
   if (draft.value.benchmark === 'ZDT1') return 2
   return Math.max(1, draft.value.M - 1)
 })
-const regionErr = computed(() => {
-  const [x1, y1, x2, y2] = draft.value.region
-  if (x2 <= x1) return 'x max must be greater than x min.'
-  if (y2 <= y1) return 'y max must be greater than y min.'
-  return ''
-})
-
 function set(patch: Parameters<typeof store.setDraft>[0]) {
   store.setDraft(patch)
 }
@@ -166,14 +126,6 @@ function clampInt(ev: Event, min: number, max: number): number {
 function clampFloat(ev: Event, min: number): number {
   const v = parseFloat((ev.target as HTMLInputElement).value)
   return isNaN(v) ? min : Math.max(min, v)
-}
-
-function updateRegion(idx: number, ev: Event) {
-  const v = parseFloat((ev.target as HTMLInputElement).value)
-  if (isNaN(v)) return
-  const r: [number, number, number, number] = [...draft.value.region]
-  r[idx] = v
-  store.setDraft({ region: r })
 }
 </script>
 

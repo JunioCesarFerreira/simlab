@@ -1,6 +1,7 @@
 import random
 from abc import ABC, abstractmethod
 from .chromosomes import (
+    ChromosomeP0,
     ChromosomeP1,
     ChromosomeP2,
     ChromosomeP3,
@@ -11,7 +12,7 @@ from pylib.config.simulator import SimulationElements
 from pylib.config.algorithm import GeneticAlgorithmConfigDto
 
 # Type aliases for clarity
-Chromosome = ChromosomeP1 | ChromosomeP2 | ChromosomeP3 | ChromosomeP4
+Chromosome = ChromosomeP0 | ChromosomeP1 | ChromosomeP2 | ChromosomeP3 | ChromosomeP4
 
 Random = random.Random
 
