@@ -47,7 +47,7 @@ export function useEChart(containerRef: Ref<HTMLElement | null>) {
     chart?.on(event, handler);
   }
 
-  function dispatch(action: Record<string, unknown>) {
+  function dispatch(action: echarts.Payload) {
     chart?.dispatchAction(action);
   }
 
