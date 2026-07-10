@@ -47,8 +47,14 @@ def dtlz2(x: Sequence[float], M: int) -> list[float]:
     n = len(x)
     if n < M - 1:
         raise ValueError(f"DTLZ2 requires n >= M-1 = {M - 1} variables, got n={n} (M={M}).")
-    k = max(1, n - (M - 1))
-    g = sum((xi - 0.5) ** 2 for xi in x[n - k:])
+    # Standard DTLZ2 split: the first M-1 variables are position variables, the
+    # remaining k = n-(M-1) are distance variables. k may be 0 (n == M-1), in
+    # which case g ≡ 0 and every point lies exactly on the unit-sphere front —
+    # matching pymoo/Deb. (A previous max(1, ...) here forced k=1, making the
+    # last POSITION variable double as distance variable: with M=3, n=2 only
+    # solutions with x1=0.5 — the f1=f2 arc — could reach the sphere.)
+    k = n - (M - 1)
+    g = sum((xi - 0.5) ** 2 for xi in x[n - k:]) if k > 0 else 0.0
     f: list[float] = []
     for m in range(M):
         val = 1.0 + g

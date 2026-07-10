@@ -43,8 +43,8 @@ def _scale_to_unit(genome):
 
 def _dtlz2(x, m):
     n = len(x)
-    k = max(1, n - (m - 1))
-    g = sum((xi - 0.5) ** 2 for xi in x[n - k:])
+    k = n - (m - 1)  # k == 0 (n == m-1) means no distance vars: g ≡ 0
+    g = sum((xi - 0.5) ** 2 for xi in x[n - k:]) if k > 0 else 0.0
     f = []
     for j in range(m):
         val = 1.0 + g

@@ -26,8 +26,11 @@ def evaluate(x: Sequence[float], M: int) -> list[float]:
     parameterise it explicitly).
     """
     n = len(x)
-    k = max(1, n - (M - 1))
-    tail = x[n - k:]
+    # k may be 0 (n == M-1): no distance variables, g ≡ 0 (standard DTLZ2,
+    # matching pymoo/Deb — do NOT force k=1, which would reuse a position
+    # variable as distance variable and warp the front).
+    k = n - (M - 1)
+    tail = x[n - k:] if k > 0 else []
     g = sum((xi - 0.5) ** 2 for xi in tail)
     f: list[float] = []
     for m in range(M):
