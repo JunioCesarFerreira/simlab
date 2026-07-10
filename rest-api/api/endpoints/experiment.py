@@ -213,6 +213,14 @@ def plot_pareto_results(
         "--api-key", api_key,
     ]
 
+    # Synthetic experiments have a closed-form Pareto front: measure HV/GD
+    # against the benchmark's analytical front instead of the run's own
+    # empirical references (mirrors the /hv-gd endpoint).
+    syn = (((doc.get("parameters") or {}).get("simulation") or {}).get("synthetic") or {})
+    bench = str(syn.get("bench") or "").upper()
+    if syn.get("enabled") and bench in ("DTLZ2", "ZDT1", "SCH1") and all(body.minimize[:3]):
+        cmd += ["--true-front-bench", bench, "--true-front-m", str(len(body.objectives[:3]))]
+
     try:
         result = subprocess.run(
             cmd,

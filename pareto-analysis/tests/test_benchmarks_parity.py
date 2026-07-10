@@ -8,7 +8,13 @@ two from drifting apart (review finding #9).
 """
 import numpy as np
 
-from lib.true_fronts import dtlz2_front, zdt1_front, sch1_front, sample_true_front
+from lib.true_fronts import (
+    dtlz2_front,
+    zdt1_front,
+    sch1_front,
+    sample_true_front,
+    true_nadir,
+)
 from pylib import benchmarks as bm
 
 
@@ -29,3 +35,10 @@ def test_sample_dispatch_matches_canonical():
     assert np.array_equal(sample_true_front("dtlz2", 3), bm.true_front("DTLZ2", 3))
     assert np.array_equal(sample_true_front("zdt1", 2), bm.true_front("ZDT1", 2))
     assert np.array_equal(sample_true_front("sch1", 2), bm.true_front("SCH1", 2))
+
+
+def test_true_nadir_matches_canonical():
+    assert true_nadir("DTLZ2", 3) == bm.nadir("DTLZ2", 3)
+    assert true_nadir("DTLZ2", 5) == bm.nadir("DTLZ2", 5)
+    assert true_nadir("ZDT1", 2) == bm.nadir("ZDT1", 2)
+    assert true_nadir("SCH1", 2) == bm.nadir("SCH1", 2)

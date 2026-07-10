@@ -58,3 +58,21 @@ def sample_true_front(bench: str, m: int, n_points: int = 500) -> np.ndarray:
     if b == "SCH1":
         return sch1_front(n_points)
     raise ValueError(f"Unknown benchmark '{bench}'. Valid: DTLZ2, ZDT1, SCH1")
+
+
+def true_nadir(bench: str, m: int) -> list[float]:
+    """Worst-corner (nadir) of the analytical front, in the same minimization
+    space as :func:`sample_true_front`.
+
+    Used as a FIXED hypervolume reference point so HV is comparable across runs
+    of the same synthetic benchmark (instead of a population-derived worst point
+    that shifts from run to run). Mirrors ``pylib.benchmarks.nadir``.
+    """
+    b = bench.upper()
+    if b == "DTLZ2":
+        return [1.0] * m
+    if b == "ZDT1":
+        return [1.0, 1.0]
+    if b == "SCH1":
+        return [4.0, 4.0]
+    raise ValueError(f"Unknown benchmark '{bench}'. Valid: DTLZ2, ZDT1, SCH1")

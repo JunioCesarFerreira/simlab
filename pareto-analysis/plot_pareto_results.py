@@ -1311,7 +1311,24 @@ def main():
         default=("True", "True", "False"),
         metavar=("X", "Y", "Z")
     )
-    
+
+    parser.add_argument(
+        "--true-front-bench",
+        choices=["DTLZ2", "ZDT1", "SCH1"],
+        default=None,
+        help=(
+            "For synthetic experiments: measure HV and GD against the "
+            "benchmark's analytical Pareto front (convergence to the true "
+            "optimum) instead of the experiment's own empirical references."
+        ),
+    )
+    parser.add_argument(
+        "--true-front-m",
+        type=int,
+        default=None,
+        help="Number of objectives for the analytical front (default: len(objectives)).",
+    )
+
     args = parser.parse_args()
     
     args.minimize = [s.lower() == "true" for s in args.minimize]
@@ -1499,24 +1516,40 @@ def main():
     # ------------------------------------------------------------
     # HV and GD computation
     # ------------------------------------------------------------
-    # Reference point: worst feasible values + margin (no penalty contamination).
-    worst_point = compute_worst_point(
-        individuals_per_gen,
-        tuple(args.objectives),
-        minimize=args.minimize,
-    )
-    worst_point = [coord + abs(coord) * 0.05 + 1.0 for coord in worst_point]
+    # HV reference point + GD reference front.
+    # Synthetic experiments have a closed-form true Pareto front: use the
+    # benchmark's analytical front as the GD reference (convergence to the real
+    # optimum, not to the run's own final front) and its fixed nadir as the HV
+    # reference (so HV is comparable across runs). WSN experiments keep the
+    # empirical references (population-derived worst point + stored final front).
+    if args.true_front_bench:
+        from lib.true_fronts import sample_true_front, true_nadir
+        m = args.true_front_m or len(args.objectives)
+        true_front = sample_true_front(args.true_front_bench, m)
+        final_front = to_minimization_array(
+            true_front, objectives=args.objectives, minimize=args.minimize
+        )
+        worst_point = [v * 1.1 for v in true_nadir(args.true_front_bench, m)]
+    else:
+        # Reference point: worst feasible values + margin (no penalty contamination).
+        worst_point = compute_worst_point(
+            individuals_per_gen,
+            tuple(args.objectives),
+            minimize=args.minimize,
+        )
+        worst_point = [coord + abs(coord) * 0.05 + 1.0 for coord in worst_point]
 
-    # GD reference: unique objectives from the stored (authoritative) Pareto front.
-    stored_obj_matrix = np.array([
-        [p["objectives"][o] for o in args.objectives]
-        for p in stored_pareto
-    ])
-    stored_obj_unique = np.unique(stored_obj_matrix, axis=0)
-    final_front = to_minimization_array(
-        stored_obj_unique, objectives=args.objectives, minimize=args.minimize
-    )
+        # GD reference: unique objectives from the stored (authoritative) Pareto front.
+        stored_obj_matrix = np.array([
+            [p["objectives"][o] for o in args.objectives]
+            for p in stored_pareto
+        ])
+        stored_obj_unique = np.unique(stored_obj_matrix, axis=0)
+        final_front = to_minimization_array(
+            stored_obj_unique, objectives=args.objectives, minimize=args.minimize
+        )
 
+    worst_point_arr = np.asarray(worst_point, dtype=float)
     hv_values: list[float] = []
     gd_values: list[float] = []
 
@@ -1546,7 +1579,11 @@ def main():
             front_points, objectives=args.objectives, minimize=args.minimize
         )
 
-        hv_val = moocore.hypervolume(front_min, ref=worst_point)
+        # Only points that strictly dominate the reference contribute to HV.
+        # With the fixed analytical nadir a lagging front can sit outside the
+        # reference box, and moocore requires every point to dominate ``ref``.
+        dominating = front_min[np.all(front_min < worst_point_arr, axis=1)]
+        hv_val = float(moocore.hypervolume(dominating, ref=worst_point)) if len(dominating) else 0.0
         gd_val = compute_gd(front_min, final_front)
 
         hv_values.append(hv_val)

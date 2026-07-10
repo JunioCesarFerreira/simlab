@@ -249,3 +249,55 @@ class TestGetHvGd:
         mock_factory.experiment_repo.get.return_value = doc
         data = self._call(client).json()
         assert data["generations"] == [] and data["igd"] == []
+
+
+# ── POST /{experiment_id}/plot-pareto ─────────────────────────────────────────
+class TestPlotPareto:
+    _BODY = {"objectives": ["f1", "f2", "f3"], "minimize": [True, True, True]}
+
+    @staticmethod
+    def _patch_subprocess(monkeypatch):
+        """Capture the subprocess command instead of running the analysis script."""
+        from types import SimpleNamespace
+        import api.endpoints.experiment as mod
+        calls: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            calls["cmd"] = cmd
+            return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+        return calls
+
+    def test_synthetic_passes_true_front_flags(self, client, mock_factory, monkeypatch):
+        doc = sample_experiment()
+        doc["parameters"]["simulation"] = {"synthetic": {"enabled": True, "bench": "DTLZ2"}}
+        mock_factory.experiment_repo.get.return_value = doc
+        calls = self._patch_subprocess(monkeypatch)
+
+        resp = client.post(f"{BASE}/{EXP_ID}/plot-pareto", json=self._BODY)
+        assert resp.status_code == 200
+        cmd = calls["cmd"]
+        assert cmd[cmd.index("--true-front-bench") + 1] == "DTLZ2"
+        assert cmd[cmd.index("--true-front-m") + 1] == "3"
+
+    def test_non_synthetic_omits_true_front_flags(self, client, mock_factory, monkeypatch):
+        doc = sample_experiment()  # no synthetic block → empirical references
+        mock_factory.experiment_repo.get.return_value = doc
+        calls = self._patch_subprocess(monkeypatch)
+
+        resp = client.post(f"{BASE}/{EXP_ID}/plot-pareto", json=self._BODY)
+        assert resp.status_code == 200
+        assert "--true-front-bench" not in calls["cmd"]
+
+    def test_synthetic_with_maximize_objective_omits_flags(self, client, mock_factory, monkeypatch):
+        # A maximization objective has no closed-form analytical front here.
+        doc = sample_experiment()
+        doc["parameters"]["simulation"] = {"synthetic": {"enabled": True, "bench": "DTLZ2"}}
+        mock_factory.experiment_repo.get.return_value = doc
+        calls = self._patch_subprocess(monkeypatch)
+
+        body = {"objectives": ["f1", "f2", "f3"], "minimize": [True, True, False]}
+        resp = client.post(f"{BASE}/{EXP_ID}/plot-pareto", json=body)
+        assert resp.status_code == 200
+        assert "--true-front-bench" not in calls["cmd"]
