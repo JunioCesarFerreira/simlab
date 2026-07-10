@@ -2,6 +2,7 @@ import { ref, watch } from 'vue'
 
 interface ExperimentViewState {
   chartView: '2d' | '3d'
+  paretoScope: 'all' | 'last'
   paretoH: number
   hvgdH: number
   evolutionH: number
@@ -15,6 +16,7 @@ interface ExperimentViewState {
 
 const DEFAULTS: ExperimentViewState = {
   chartView: '2d',
+  paretoScope: 'all',
   paretoH: 420,
   hvgdH: 280,
   evolutionH: 380,

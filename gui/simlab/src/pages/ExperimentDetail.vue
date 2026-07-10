@@ -222,21 +222,33 @@
           <div class="card chart-card" :style="{ height: paretoH + 'px' }">
             <div class="section-title pareto-title">
               Pareto Front
-              <div v-if="has3Objectives" class="view-toggle">
-                <button
-                  :class="['vt-btn', { active: chartView === '2d' }]"
-                  @click="chartView = '2d'"
-                >2D</button>
-                <button
-                  :class="['vt-btn', { active: chartView === '3d' }]"
-                  @click="chartView = '3d'"
-                >3D</button>
+              <div class="pareto-toggles">
+                <div class="view-toggle" title="Scope of the displayed Pareto front">
+                  <button
+                    :class="['vt-btn', { active: paretoScope === 'all' }]"
+                    @click="paretoScope = 'all'"
+                  >All solutions</button>
+                  <button
+                    :class="['vt-btn', { active: paretoScope === 'last' }]"
+                    @click="paretoScope = 'last'"
+                  >Last generation</button>
+                </div>
+                <div v-if="has3Objectives" class="view-toggle">
+                  <button
+                    :class="['vt-btn', { active: chartView === '2d' }]"
+                    @click="chartView = '2d'"
+                  >2D</button>
+                  <button
+                    :class="['vt-btn', { active: chartView === '3d' }]"
+                    @click="chartView = '3d'"
+                  >3D</button>
+                </div>
               </div>
             </div>
             <ParetoFrontChart
               v-if="chartView === '2d'"
-              :pareto-front="store.experiment.pareto_front"
-              :generations="store.experiment.generations"
+              :pareto-front="displayedParetoFront"
+              :generations="paretoGenerations"
               :objective-names="store.objectiveNames"
               :objective-goals="store.objectiveGoals"
               :init-x="paretoXKey"
@@ -246,8 +258,8 @@
             />
             <ParetoFront3DChart
               v-else
-              :pareto-front="store.experiment.pareto_front"
-              :generations="store.experiment.generations"
+              :pareto-front="displayedParetoFront"
+              :generations="paretoGenerations"
               :objective-names="store.objectiveNames"
               :objective-goals="store.objectiveGoals"
               :strategy="store.experiment.parameters.strategy"
@@ -372,7 +384,9 @@ import ProblemVizModal from "../components/detail/ProblemVizModal.vue";
 import { downloadAnalysisZip, downloadTopologiesZip } from "../api/files";
 import { updateExperiment, plotParetoResults } from "../api/experiments";
 import { useResizable } from "../composables/useResizable";
-import type { IndividualDto, JsonObject } from "../types/simlab";
+import type { IndividualDto, JsonObject, ParetoFrontItemDto } from "../types/simlab";
+import { isPenalized } from "../types/simlab";
+import { computeRanks } from "../utils/nonDominatedSort";
 
 const props = defineProps<{ id: string }>();
 const store = useExperimentDetailStore();
@@ -394,6 +408,10 @@ const viewState = useExperimentViewState(props.id);
 
 const chartView = ref<"2d" | "3d">(viewState.value.chartView);
 watch(chartView, (v) => { viewState.value.chartView = v; });
+
+// Pareto front scope: over all explored solutions, or only the last generation
+const paretoScope = ref<"all" | "last">(viewState.value.paretoScope);
+watch(paretoScope, (v) => { viewState.value.paretoScope = v; });
 // Reset to 2D if objectives data loads and turns out there aren't 3
 watch(has3Objectives, (has3) => { if (!has3 && chartView.value === '3d') chartView.value = '2d'; });
 
@@ -433,6 +451,58 @@ function on3dAxisChange({ x, y, z }: { x: string; y: string; z: string }) {
 const sortedGenerations = computed(() =>
   [...(store.experiment?.generations ?? [])].sort((a, b) => a.index - b.index),
 );
+
+// ── Pareto front scope (all solutions vs. last generation) ────────────────────
+
+// Highest-index generation that actually has a population
+const lastGeneration = computed(() => {
+  const gens = sortedGenerations.value;
+  for (let i = gens.length - 1; i >= 0; i--) {
+    if ((gens[i]?.population.length ?? 0) > 0) return gens[i];
+  }
+  return undefined;
+});
+
+// Generations fed to the Pareto charts — restricted to the last one when scoped.
+// Both charts derive their non-dominated fronts and population from this list,
+// so limiting it to the last generation makes them show that generation only.
+const paretoGenerations = computed(() => {
+  if (paretoScope.value === "last") {
+    return lastGeneration.value ? [lastGeneration.value] : [];
+  }
+  return store.experiment?.generations ?? [];
+});
+
+// Pareto front points passed to the charts. For "all" this is the global front
+// computed server-side; for "last" it is the non-dominated set of the last
+// generation, recomputed client-side.
+const displayedParetoFront = computed<ParetoFrontItemDto[] | null | undefined>(() => {
+  if (paretoScope.value === "all") return store.experiment?.pareto_front;
+
+  const gen = lastGeneration.value;
+  if (!gen) return [];
+
+  const names = store.objectiveNames;
+  const goals = store.objectiveGoals;
+
+  const toItem = (ind: IndividualDto): ParetoFrontItemDto => ({
+    chromosome: ind.chromosome,
+    objectives: Object.fromEntries(
+      ind.objectives.map((v, i) => [names[i] ?? `obj${i}`, v]),
+    ),
+  });
+
+  const valid = gen.population.filter((ind) => !isPenalized(ind.objectives));
+  // Without goals domination can't be evaluated — fall back to all feasible points
+  if (goals.length === 0) return valid.map(toItem);
+
+  const minimize = goals.map((g) => g === "min");
+  const ranks = computeRanks(
+    valid.map((ind) => ({ id: ind.individual_id, objectives: ind.objectives })),
+    minimize,
+  );
+  return valid.filter((ind) => (ranks.get(ind.individual_id) ?? 0) === 0).map(toItem);
+});
 
 const finishedCount = computed(
   () =>
@@ -1023,6 +1093,13 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.pareto-toggles {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .view-toggle {
