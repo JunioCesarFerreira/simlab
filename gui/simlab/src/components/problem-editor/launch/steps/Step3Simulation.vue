@@ -48,50 +48,6 @@
       </button>
     </div>
 
-    <!-- Synthetic benchmark mode -->
-    <div class="section-divider synthetic-divider">Synthetic benchmark mode <span class="divider-optional">(optional)</span></div>
-
-    <div class="synthetic-toggle">
-      <label class="toggle-label">
-        <input
-          type="checkbox"
-          :checked="modelValue.synthetic.enabled"
-          @change="toggleSynthetic(($event.target as HTMLInputElement).checked)"
-        />
-        <span class="toggle-text">Enable synthetic evaluation (no Cooja required)</span>
-      </label>
-    </div>
-
-    <template v-if="modelValue.synthetic.enabled">
-      <div class="synthetic-note">
-        ⚠ When enabled the master-node evaluates a mathematical benchmark instead of running Cooja.
-        Duration and seeds are ignored.
-      </div>
-      <div class="fields-row">
-        <div class="field-group">
-          <label class="field-label" for="syn-bench">Benchmark function</label>
-          <select
-            id="syn-bench"
-            :value="modelValue.synthetic.bench"
-            @change="updateSyn('bench', ($event.target as HTMLSelectElement).value)"
-          >
-            <option value="DTLZ2">DTLZ2 — hypersphere front (scalable M)</option>
-            <option value="ZDT1">ZDT1 — convex front (M=2)</option>
-            <option value="SCH1">SCH1 — bilinear front (M=2)</option>
-          </select>
-        </div>
-        <div class="field-group">
-          <label class="field-label" for="syn-noise">Noise σ</label>
-          <input
-            id="syn-noise"
-            :value="modelValue.synthetic.noiseStd"
-            type="number" min="0" step="0.01"
-            @input="updateSyn('noiseStd', parseFloat(($event.target as HTMLInputElement).value) || 0)"
-          />
-        </div>
-      </div>
-    </template>
-
     <!-- Import / Export -->
     <div class="io-row">
       <span class="io-label">Seeds file:</span>
@@ -127,16 +83,9 @@
 <script setup lang="ts">
 import { ref, computed, onBeforeUnmount } from 'vue'
 
-export interface Step3SyntheticValue {
-  enabled: boolean
-  bench: string
-  noiseStd: number
-}
-
 export interface Step3Value {
   duration: number
   randomSeeds: number[]
-  synthetic: Step3SyntheticValue
 }
 
 const props = defineProps<{ modelValue: Step3Value; showValidation: boolean }>()
@@ -175,14 +124,6 @@ function removeSeed(i: number) {
 
 function applyPreset(seeds: number[]) {
   emit('update:modelValue', { ...props.modelValue, randomSeeds: seeds })
-}
-
-function toggleSynthetic(enabled: boolean) {
-  emit('update:modelValue', { ...props.modelValue, synthetic: { ...props.modelValue.synthetic, enabled } })
-}
-
-function updateSyn(field: keyof Step3SyntheticValue, value: string | number | boolean) {
-  emit('update:modelValue', { ...props.modelValue, synthetic: { ...props.modelValue.synthetic, [field]: value } })
 }
 
 function addRandomSeed() {
@@ -362,25 +303,4 @@ input:focus { border-color: var(--color-primary); }
 .io-feedback--err { color: #ef4444; }
 
 .hidden-input { display: none; }
-
-/* Synthetic section */
-.synthetic-divider { display: flex; align-items: center; gap: 6px; }
-.divider-optional { font-size: 10px; font-weight: 400; color: var(--color-text-muted); text-transform: none; letter-spacing: 0; }
-.synthetic-toggle { display: flex; align-items: center; }
-.toggle-label { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; }
-.toggle-label input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #f59e0b; }
-.toggle-text { color: var(--color-text); font-weight: 500; }
-.synthetic-note {
-  font-size: 11px; color: #d97706;
-  background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.25);
-  border-radius: var(--radius-sm); padding: 8px 12px; line-height: 1.5;
-}
-.fields-row { display: grid; grid-template-columns: 1fr 120px; gap: 12px; }
-.field-group { display: flex; flex-direction: column; gap: 4px; }
-select {
-  padding: 7px 10px; border: 1px solid var(--color-border); border-radius: var(--radius-sm);
-  font-size: 13px; color: var(--color-text); background: var(--color-surface); outline: none;
-  transition: border-color 0.12s; width: 100%;
-}
-select:focus { border-color: var(--color-primary); }
 </style>
