@@ -1,9 +1,10 @@
-import { defineStore } from "pinia";
+import { defineStore, acceptHMRUpdate } from "pinia";
 import { ref, computed } from "vue";
 import type { ExperimentInfoDto, ExperimentStatus } from "../../types/simlab";
 import {
   getAllExperiments,
   getExperimentsByStatus,
+  deleteExperiment,
 } from "../../api/experiments";
 
 export const useExperimentsStore = defineStore("experiments", () => {
@@ -54,6 +55,18 @@ export const useExperimentsStore = defineStore("experiments", () => {
     selectedStatus.value = status;
   }
 
+  /**
+   * Delete an experiment (and all its owned artifacts, server-side) and drop
+   * it from the local list on success.
+   */
+  async function remove(id: string): Promise<boolean> {
+    const ok = await deleteExperiment(id);
+    if (ok) {
+      experiments.value = experiments.value.filter((e) => e.id !== id);
+    }
+    return ok;
+  }
+
   return {
     experiments,
     loading,
@@ -64,5 +77,13 @@ export const useExperimentsStore = defineStore("experiments", () => {
     fetchAll,
     fetchByStatus,
     setFilter,
+    remove,
   };
 });
+
+// Keep the store in sync when it is hot-reloaded during development. Without
+// this, Vite HMR retains the previously instantiated store and newly added
+// actions (e.g. `remove`) appear missing until a full page reload.
+if (import.meta.hot) {
+  import.meta.hot.accept(acceptHMRUpdate(useExperimentsStore, import.meta.hot));
+}

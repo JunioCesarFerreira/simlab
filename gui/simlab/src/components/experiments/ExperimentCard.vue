@@ -7,6 +7,12 @@
           ⬡ {{ experiment.synthetic_bench ?? 'Synthetic' }}
         </span>
         <StatusBadge :status="experiment.status" />
+        <button
+          class="delete-btn"
+          title="Delete experiment"
+          :disabled="deleting"
+          @click.prevent.stop="$emit('delete')"
+        >🗑</button>
       </div>
     </div>
     <div v-if="experiment.system_message" class="message">
@@ -31,7 +37,8 @@
 import StatusBadge from "../common/StatusBadge.vue";
 import type { ExperimentInfoDto } from "../../types/simlab";
 
-defineProps<{ experiment: ExperimentInfoDto }>();
+defineProps<{ experiment: ExperimentInfoDto; deleting?: boolean }>();
+defineEmits<{ (e: "delete"): void }>();
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleString("en-US", {
@@ -69,6 +76,39 @@ function formatDate(iso: string): string {
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
+}
+
+.delete-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  font-size: 13px;
+  line-height: 1;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.experiment-card:hover .delete-btn,
+.delete-btn:focus-visible {
+  opacity: 1;
+}
+
+.delete-btn:hover:not(:disabled) {
+  background: #fee2e2;
+  color: var(--status-error);
+  border-color: #fecaca;
+}
+
+.delete-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .badge-synthetic {

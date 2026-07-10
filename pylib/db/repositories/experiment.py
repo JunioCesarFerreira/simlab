@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime
-from typing import Optional, Callable, Any
+from typing import Optional, Callable, Any, Iterable
+import gridfs
 from bson import ObjectId, errors
 
 from pylib.db.models.experiment import Experiment, DataConversionConfig
@@ -94,19 +95,53 @@ class ExperimentRepository:
 
         return doc.get("data_conversion_config") or {}
 
+    # GridFS artifacts owned exclusively by a single experiment. Source-code
+    # repositories (``source_repository_id`` / ``source_repository_options``)
+    # are shared across experiments and are intentionally excluded here.
+    _SIM_FILE_FIELDS = (
+        "pos_file_id", "csc_file_id",
+        "log_cooja_id", "runtime_log_id", "csv_log_id",
+    )
+
     def delete(self, experiment_id: str) -> dict[str, int]:
         """
-        Delete an experiment by _id and cascade-delete all related documents.
-        Returns counters for each collection affected.
+        Delete an experiment by _id and cascade-delete all related documents
+        and the GridFS artifacts they own (topology pictures, simulation
+        position/config/log/csv files and analysis files).
+
+        Shared artifacts such as source-code repositories are NOT touched.
+        Returns counters for each collection / artifact type affected.
         """
         try:
             exp_oid = ObjectId(experiment_id)
         except errors.InvalidId:
             log.error("Invalid ID")
             return {"deleted_experiments": 0, "deleted_generations": 0,
-                    "deleted_individuals": 0, "deleted_simulations": 0}
+                    "deleted_individuals": 0, "deleted_simulations": 0,
+                    "deleted_genome_cache": 0, "deleted_files": 0}
 
         with self.connection.connect() as db:
+            fs = gridfs.GridFS(db)
+
+            # Collect owned GridFS file ids before removing their documents.
+            file_ids: list[ObjectId] = []
+
+            for ind in db["individuals"].find(
+                {"experiment_id": exp_oid}, {"topology_picture_id": 1}
+            ):
+                file_ids.append(ind.get("topology_picture_id"))
+
+            sim_projection = {field: 1 for field in self._SIM_FILE_FIELDS}
+            for sim in db["simulations"].find({"experiment_id": exp_oid}, sim_projection):
+                for field in self._SIM_FILE_FIELDS:
+                    file_ids.append(sim.get(field))
+
+            exp_doc = db["experiments"].find_one({"_id": exp_oid}, {"analysis_files": 1})
+            if exp_doc:
+                file_ids.extend((exp_doc.get("analysis_files") or {}).values())
+
+            files_deleted = self._delete_files(fs, file_ids)
+
             sims_deleted = db["simulations"].delete_many({"experiment_id": exp_oid}).deleted_count
             inds_deleted = db["individuals"].delete_many({"experiment_id": exp_oid}).deleted_count
             gens_deleted = db["generations"].delete_many({"experiment_id": exp_oid}).deleted_count
@@ -119,7 +154,24 @@ class ExperimentRepository:
                 "deleted_individuals": int(inds_deleted),
                 "deleted_simulations": int(sims_deleted),
                 "deleted_genome_cache": int(cache_deleted),
+                "deleted_files": files_deleted,
             }
+
+    @staticmethod
+    def _delete_files(fs: gridfs.GridFS, file_ids: Iterable[Optional[ObjectId]]) -> int:
+        """Delete each valid, unique GridFS id, tolerating missing files."""
+        deleted = 0
+        seen: set[ObjectId] = set()
+        for fid in file_ids:
+            if not isinstance(fid, ObjectId) or fid in seen:
+                continue
+            seen.add(fid)
+            try:
+                fs.delete(fid)
+                deleted += 1
+            except Exception as e:  # pragma: no cover - defensive, missing file
+                log.warning("Failed to delete GridFS file %s: %s", fid, e)
+        return deleted
 
     def add_analysis_file_to_experiment(self,
             experiment_id: str,

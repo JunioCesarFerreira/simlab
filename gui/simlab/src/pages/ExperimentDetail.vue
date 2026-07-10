@@ -81,6 +81,13 @@
             >
               {{ downloading.topologies ? "Downloading…" : "Download topologies" }}
             </button>
+            <button
+              class="action-btn danger-btn"
+              :disabled="deleting"
+              @click="doDelete"
+            >
+              {{ deleting ? "Deleting…" : "Delete experiment" }}
+            </button>
           </div>
         </div>
       </div>
@@ -382,7 +389,8 @@ import ParetoParallelChart from "../components/charts/ParetoParallelChart.vue";
 import IndividualDetailPanel from "../components/detail/IndividualDetailPanel.vue";
 import ProblemVizModal from "../components/detail/ProblemVizModal.vue";
 import { downloadAnalysisZip, downloadTopologiesZip } from "../api/files";
-import { updateExperiment, plotParetoResults } from "../api/experiments";
+import { updateExperiment, plotParetoResults, deleteExperiment } from "../api/experiments";
+import { useRouter } from "vue-router";
 import { useResizable } from "../composables/useResizable";
 import type { IndividualDto, JsonObject, ParetoFrontItemDto } from "../types/simlab";
 import { isPenalized } from "../types/simlab";
@@ -390,6 +398,30 @@ import { computeRanks } from "../utils/nonDominatedSort";
 
 const props = defineProps<{ id: string }>();
 const store = useExperimentDetailStore();
+const router = useRouter();
+
+// Delete experiment (and all its owned artifacts, server-side)
+const deleting = ref(false);
+async function doDelete() {
+  const name = store.experiment?.name ?? "this experiment";
+  if (
+    !confirm(
+      `Delete experiment "${name}"?\n\nThis permanently removes the experiment and all its artifacts ` +
+        `(generations, individuals, simulations and their files). Shared source code is not affected. ` +
+        `This cannot be undone.`,
+    )
+  ) {
+    return;
+  }
+  deleting.value = true;
+  try {
+    await deleteExperiment(props.id);
+    router.push("/experiments");
+  } catch (e) {
+    alert(`Failed to delete experiment: ${e instanceof Error ? e.message : String(e)}`);
+    deleting.value = false;
+  }
+}
 
 // 2D / 3D toggle — only shown when there are ≥ 3 objectives
 const has3Objectives = computed(() => (store.objectiveNames?.length ?? 0) >= 3);
@@ -859,6 +891,10 @@ onBeforeUnmount(() => {
   border-color: var(--color-primary);
   color: var(--color-primary);
 }
+
+.danger-btn { color: var(--status-error); border-color: #fecaca; background: #fee2e2; }
+.danger-btn:hover:not(:disabled) { background: #fecaca; border-color: var(--status-error); color: var(--status-error); }
+.danger-btn:disabled { opacity: 0.5; cursor: default; }
 
 .pareto-btn { display: flex; align-items: center; gap: 6px; }
 .pareto-btn.pareto-running { border-color: var(--color-primary); color: var(--color-primary); opacity: 0.8; cursor: wait; }

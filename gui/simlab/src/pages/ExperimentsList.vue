@@ -30,21 +30,46 @@
         v-for="e in store.filtered"
         :key="e.id"
         :experiment="e"
+        :deleting="deletingId === e.id"
+        @delete="onDelete(e)"
       />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted } from "vue";
+import { onMounted, ref } from "vue";
 import { useExperimentsStore } from "../app/stores/experimentsStore";
 import FilterBar from "../components/experiments/FilterBar.vue";
 import ExperimentCard from "../components/experiments/ExperimentCard.vue";
+import type { ExperimentInfoDto } from "../types/simlab";
 
 const store = useExperimentsStore();
 
+const deletingId = ref<string | null>(null);
+
 async function load() {
   await store.fetchAll();
+}
+
+async function onDelete(exp: ExperimentInfoDto) {
+  if (
+    !confirm(
+      `Delete experiment "${exp.name}"?\n\nThis permanently removes the experiment and all its artifacts ` +
+        `(generations, individuals, simulations and their files). Shared source code is not affected. ` +
+        `This cannot be undone.`,
+    )
+  ) {
+    return;
+  }
+  deletingId.value = exp.id;
+  try {
+    await store.remove(exp.id);
+  } catch (e) {
+    alert(`Failed to delete experiment: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    deletingId.value = null;
+  }
 }
 
 onMounted(load);
