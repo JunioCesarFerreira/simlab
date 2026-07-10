@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import type { ExperimentFullDto } from "../../types/simlab";
 import { getExperimentFull } from "../../api/experiments";
+import { stableStringify } from "../../utils/stableStringify";
 
 export const useExperimentDetailStore = defineStore("experimentDetail", () => {
   const experiment = ref<ExperimentFullDto | null>(null);
@@ -22,6 +23,20 @@ export const useExperimentDetailStore = defineStore("experimentDetail", () => {
   const objectiveGoals = computed(
     () => experiment.value?.parameters?.objectives?.map((o) => o.goal) ?? [],
   );
+
+  // chromosome (stable-stringified) -> individual_id. `pareto_front` items only
+  // carry {chromosome, objectives} (no individual_id), so every chart needs this
+  // reverse lookup to resolve clicks/pins/tooltips. Computed once here instead
+  // of independently inside each of the 2D/3D/parallel-coordinates charts.
+  const chromosomeToIndividualId = computed<Map<string, string>>(() => {
+    const map = new Map<string, string>();
+    for (const gen of experiment.value?.generations ?? []) {
+      for (const ind of gen.population) {
+        map.set(stableStringify(ind.chromosome), ind.individual_id);
+      }
+    }
+    return map;
+  });
 
   async function fetch(id: string) {
     loading.value = true;
@@ -75,6 +90,7 @@ export const useExperimentDetailStore = defineStore("experimentDetail", () => {
     isRunning,
     objectiveNames,
     objectiveGoals,
+    chromosomeToIndividualId,
     fetch,
     refresh,
     startPolling,

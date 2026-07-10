@@ -13,13 +13,17 @@ import { ref, computed, watch, onMounted } from "vue";
 import { useEChart } from "../../composables/useEChart";
 import { useTheme } from "../../composables/useTheme";
 import { PENALTY_THRESHOLD } from "../../types/simlab";
-import type { ParetoFrontItemDto, GenerationDto, FloatMap } from "../../types/simlab";
+import type { ParetoFrontItemDto, FloatMap } from "../../types/simlab";
+import { stableStringify } from "../../utils/stableStringify";
 
 const props = defineProps<{
   paretoFront: ParetoFrontItemDto[] | null | undefined;
-  generations?: GenerationDto[];
   objectiveNames?: string[];
   objectiveGoals?: string[];
+  /** stable-stringified chromosome -> individual_id, hoisted to the store
+   *  (experimentDetailStore) and shared with the other Pareto charts instead
+   *  of each rebuilding its own copy from every generation's population. */
+  chromosomeMap?: Map<string, string>;
 }>();
 
 const emit = defineEmits<{
@@ -50,27 +54,6 @@ function goalFor(key: string): "min" | "max" {
 
 // ── Individual ID resolution ──────────────────────────────────────────────────
 
-function stableStringify(val: unknown): string {
-  if (Array.isArray(val)) return `[${val.map(stableStringify).join(",")}]`;
-  if (val !== null && typeof val === "object") {
-    const entries = Object.keys(val as object)
-      .sort()
-      .map((k) => `${JSON.stringify(k)}:${stableStringify((val as Record<string, unknown>)[k])}`);
-    return `{${entries.join(",")}}`;
-  }
-  return JSON.stringify(val);
-}
-
-const chromosomeMap = computed(() => {
-  const map = new Map<string, string>();
-  for (const gen of props.generations ?? []) {
-    for (const ind of gen.population) {
-      map.set(stableStringify(ind.chromosome), ind.individual_id);
-    }
-  }
-  return map;
-});
-
 interface ResolvedItem {
   individualId: string;
   objectives: FloatMap;
@@ -80,7 +63,7 @@ const resolvedItems = computed<ResolvedItem[]>(() =>
   (props.paretoFront ?? []).flatMap((item) => {
     if (Object.values(item.objectives).some((v) => v >= PENALTY_THRESHOLD)) return [];
     const individualId =
-      chromosomeMap.value.get(stableStringify(item.chromosome)) ?? "";
+      props.chromosomeMap?.get(stableStringify(item.chromosome)) ?? "";
     return [{ individualId, objectives: item.objectives }];
   }),
 );

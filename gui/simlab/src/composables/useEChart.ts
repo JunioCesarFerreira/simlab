@@ -8,7 +8,10 @@ export function useEChart(containerRef: Ref<HTMLElement | null>) {
 
   onMounted(() => {
     if (!containerRef.value) return;
-    chart = echarts.init(containerRef.value, null, { renderer: "svg" });
+    // canvas (not svg): with hundreds/thousands of Pareto/population points,
+    // svg pays one DOM node per point — canvas draws them as pixels instead,
+    // which is what keeps large scatter series responsive.
+    chart = echarts.init(containerRef.value, null, { renderer: "canvas" });
     ready.value = true;
     ro = new ResizeObserver(() => chart?.resize());
     ro.observe(containerRef.value);
@@ -21,8 +24,18 @@ export function useEChart(containerRef: Ref<HTMLElement | null>) {
     chart = null;
   });
 
-  function setOption(option: echarts.EChartsOption) {
-    chart?.setOption(option, true);
+  function setOption(
+    option: echarts.EChartsOption,
+    opts: boolean | echarts.SetOptionOpts = true,
+  ) {
+    // Narrowed to a single (non-union) type per branch so it matches one of
+    // ECharts' two setOption overloads — calling with the raw union type
+    // doesn't type-check even though either branch alone is valid.
+    if (typeof opts === "boolean") {
+      chart?.setOption(option, opts);
+    } else {
+      chart?.setOption(option, opts);
+    }
   }
 
   function resize() {

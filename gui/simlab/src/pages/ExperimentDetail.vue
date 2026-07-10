@@ -260,6 +260,8 @@
               :generations="paretoGenerations"
               :objective-names="store.objectiveNames"
               :objective-goals="store.objectiveGoals"
+              :rank-map="individualRankMap"
+              :chromosome-map="store.chromosomeToIndividualId"
               :init-x="paretoXKey"
               :init-y="paretoYKey"
               @click-individual="openIndividual"
@@ -271,6 +273,8 @@
               :generations="paretoGenerations"
               :objective-names="store.objectiveNames"
               :objective-goals="store.objectiveGoals"
+              :rank-map="individualRankMap"
+              :chromosome-map="store.chromosomeToIndividualId"
               :strategy="store.experiment.parameters.strategy"
               :reference-point-divisions="(store.experiment.parameters.algorithm?.['divisions'] as number | undefined)"
               :init-x="pareto3dXKey"
@@ -315,7 +319,7 @@
             <div class="section-title">Parallel coordinates — Pareto solutions</div>
             <ParetoParallelChart
               :pareto-front="store.experiment.pareto_front"
-              :generations="store.experiment.generations"
+              :chromosome-map="store.chromosomeToIndividualId"
               :objective-names="store.objectiveNames"
               :objective-goals="store.objectiveGoals"
               @click-individual="openIndividual"
@@ -397,7 +401,7 @@ import { useRouter } from "vue-router";
 import { useResizable } from "../composables/useResizable";
 import type { IndividualDto, JsonObject, ParetoFrontItemDto } from "../types/simlab";
 import { isPenalized } from "../types/simlab";
-import { computeRanks } from "../utils/nonDominatedSort";
+import { computeRanks, computeRanksWithDuplicates } from "../utils/nonDominatedSort";
 
 const props = defineProps<{ id: string }>();
 const store = useExperimentDetailStore();
@@ -506,6 +510,31 @@ const paretoGenerations = computed(() => {
     return lastGeneration.value ? [lastGeneration.value] : [];
   }
   return store.experiment?.generations ?? [];
+});
+
+// Non-dominated rank per individual (0 = best front), over the FULL objective
+// vector, computed from `paretoGenerations` (so it respects the all/last-gen
+// scope toggle above). This is O(n²) and used to be recomputed independently
+// inside BOTH ParetoFrontChart and ParetoFront3DChart — every poll tick while
+// the experiment is running, and again every time the user toggled between
+// the 2D/3D views (which unmounts one and throws its cached result away).
+// Computing it once here, in the parent that never unmounts across that
+// toggle, means it's shared by whichever chart is currently visible.
+const individualRankMap = computed<Map<string, number>>(() => {
+  const goals = store.objectiveGoals;
+  if (goals.length === 0) return new Map();
+  const minimize = goals.map((g) => g === "min");
+  const seen = new Set<string>();
+  const points: { id: string; objectives: number[] }[] = [];
+  for (const gen of paretoGenerations.value) {
+    for (const ind of gen.population) {
+      if (seen.has(ind.individual_id)) continue;
+      seen.add(ind.individual_id);
+      if (isPenalized(ind.objectives)) continue;
+      points.push({ id: ind.individual_id, objectives: ind.objectives });
+    }
+  }
+  return computeRanksWithDuplicates(points, minimize);
 });
 
 // Pareto front points passed to the charts. For "all" this is the global front

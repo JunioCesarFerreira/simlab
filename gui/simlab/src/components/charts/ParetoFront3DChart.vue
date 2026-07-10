@@ -77,7 +77,7 @@ import "echarts-gl";
 import { useTheme } from "../../composables/useTheme";
 import type { ParetoFrontItemDto, GenerationDto } from "../../types/simlab";
 import { isPenalized } from "../../types/simlab";
-import { computeRanksWithDuplicates } from "../../utils/nonDominatedSort";
+import { stableStringify } from "../../utils/stableStringify";
 
 const props = defineProps<{
   paretoFront: ParetoFrontItemDto[] | null | undefined;
@@ -89,6 +89,12 @@ const props = defineProps<{
   initX?: string;
   initY?: string;
   initZ?: string;
+  /** individual_id -> non-dominated rank (0 = best), over the full objective
+   *  vector. Computed once at the page level (experimentDetailStore) and
+   *  shared with the 2D chart — see that store for why this is hoisted. */
+  rankMap?: Map<string, number>;
+  /** stable-stringified chromosome -> individual_id, also hoisted to the store. */
+  chromosomeMap?: Map<string, string>;
 }>();
 
 const emit = defineEmits<{
@@ -221,29 +227,6 @@ const xIdx = computed(() => availableKeys.value.indexOf(xKey.value));
 const yIdx = computed(() => availableKeys.value.indexOf(yKey.value));
 const zIdx = computed(() => availableKeys.value.indexOf(zKey.value));
 
-// ── Chromosome → individual_id lookup ────────────────────────────────────────
-
-function stableStringify(val: unknown): string {
-  if (Array.isArray(val)) return `[${val.map(stableStringify).join(",")}]`;
-  if (val !== null && typeof val === "object") {
-    const entries = Object.keys(val as object)
-      .sort()
-      .map((k) => `${JSON.stringify(k)}:${stableStringify((val as Record<string, unknown>)[k])}`);
-    return `{${entries.join(",")}}`;
-  }
-  return JSON.stringify(val);
-}
-
-const chromosomeMap = computed(() => {
-  const map = new Map<string, string>();
-  for (const gen of props.generations ?? []) {
-    for (const ind of gen.population) {
-      map.set(stableStringify(ind.chromosome), ind.individual_id);
-    }
-  }
-  return map;
-});
-
 // ── Series data ───────────────────────────────────────────────────────────────
 
 const populationData = computed<Point3D[]>(() => {
@@ -273,7 +256,7 @@ const paretoData = computed<Point3D[]>(() =>
     if (x === undefined || y === undefined || z === undefined) return [];
     if (isNaN(x) || isNaN(y) || isNaN(z)) return [];
     const individualId =
-      chromosomeMap.value.get(stableStringify(item.chromosome)) ?? "";
+      props.chromosomeMap?.get(stableStringify(item.chromosome)) ?? "";
     return [{ value: [x, y, z], individualId, allObjectives: item.objectives }];
   }),
 );
@@ -293,19 +276,12 @@ const RANK_PALETTE = [
 
 const RANK_SIZES_3D = [6, 5, 5, 4, 4, 3] as const;
 
-const minimize3D = computed<boolean[]>(() =>
-  (props.objectiveGoals ?? []).map((g) => g === "min"),
-);
-
+/** Map individualId → 0-indexed rank, capped at MAX_LABELED_RANKS.
+ *  The expensive O(n²) dominance sort itself lives in the store
+ *  (individualRankMap) — this is just a cheap O(n) capping pass. */
 const rankMap = computed<Map<string, number>>(() => {
-  if (!props.objectiveGoals?.length || populationData.value.length === 0) {
-    return new Map();
-  }
-  const pts = populationData.value.map((p) => ({
-    id: p.individualId,
-    objectives: p.allObjectives as number[],
-  }));
-  const raw = computeRanksWithDuplicates(pts, minimize3D.value);
+  const raw = props.rankMap;
+  if (!raw || raw.size === 0) return new Map();
   const capped = new Map<string, number>();
   for (const [id, r] of raw) {
     capped.set(id, Math.min(r, MAX_LABELED_RANKS));

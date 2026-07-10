@@ -53,11 +53,12 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from "vue";
+import type * as echarts from "echarts";
 import type { TopLevelFormatterParams } from "echarts/types/dist/shared";
 import { useEChart } from "../../composables/useEChart";
 import type { ParetoFrontItemDto, GenerationDto } from "../../types/simlab";
 import { isPenalized } from "../../types/simlab";
-import { computeRanksWithDuplicates } from "../../utils/nonDominatedSort";
+import { stableStringify } from "../../utils/stableStringify";
 
 const props = defineProps<{
   paretoFront: ParetoFrontItemDto[] | null | undefined;
@@ -66,6 +67,12 @@ const props = defineProps<{
   objectiveGoals?: string[];
   initX?: string;
   initY?: string;
+  /** individual_id -> non-dominated rank (0 = best), over the full objective
+   *  vector. Computed once at the page level (experimentDetailStore) and
+   *  shared across charts — see that store for why this is hoisted. */
+  rankMap?: Map<string, number>;
+  /** stable-stringified chromosome -> individual_id, also hoisted to the store. */
+  chromosomeMap?: Map<string, string>;
 }>();
 
 const emit = defineEmits<{
@@ -81,6 +88,11 @@ interface ChartPoint {
 
 const chartEl = ref<HTMLElement | null>(null);
 const { setOption, ready, on, dispatch } = useEChart(chartEl);
+
+// True after the first successful setOption; later rebuilds use replaceMerge
+// so dataZoom (the user's current zoom) survives instead of resetting on
+// every pin/axis-change/new-generation rebuild.
+let chartInitialized = false;
 
 const isZoomed = ref(false);
 
@@ -120,31 +132,6 @@ watch([xKey, yKey], ([x, y]) => {
 const xIdx = computed(() => availableKeys.value.indexOf(xKey.value));
 const yIdx = computed(() => availableKeys.value.indexOf(yKey.value));
 
-// Stable serialization of objects to use as lookup key
-function stableStringify(val: unknown): string {
-  if (Array.isArray(val)) return `[${val.map(stableStringify).join(",")}]`;
-
-  if (val !== null && typeof val === "object") {
-    const entries = Object.keys(val as object)
-      .sort()
-      .map((k) => `${JSON.stringify(k)}:${stableStringify((val as Record<string, unknown>)[k])}`);
-    return `{${entries.join(",")}}`;
-  }
-
-  return JSON.stringify(val);
-}
-
-// Chromosome → individual_id map (built from all generations)
-const chromosomeMap = computed(() => {
-  const map = new Map<string, string>();
-  for (const gen of props.generations ?? []) {
-    for (const ind of gen.population) {
-      map.set(stableStringify(ind.chromosome), ind.individual_id);
-    }
-  }
-  return map;
-});
-
 const populationData = computed<ChartPoint[]>(() => {
   const seen = new Set<string>();
   const pts: ChartPoint[] = [];
@@ -178,7 +165,7 @@ const paretoData = computed<ChartPoint[]>(() =>
     if (x === undefined || y === undefined || isNaN(x) || isNaN(y)) return [];
 
     // Lookup by chromosome — independent of float precision or objective name differences
-    const individualId = chromosomeMap.value.get(stableStringify(item.chromosome)) ?? "";
+    const individualId = props.chromosomeMap?.get(stableStringify(item.chromosome)) ?? "";
 
     return [{
       value: [x, y],
@@ -204,21 +191,12 @@ const RANK_PALETTE = [
 
 const RANK_SIZES = [11, 10, 9, 8, 7, 6] as const;
 
-const minimize = computed<boolean[]>(() =>
-  (props.objectiveGoals ?? []).map((g) => g === "min"),
-);
-
-/** Map individualId → 0-indexed rank, capped at MAX_LABELED_RANKS */
+/** Map individualId → 0-indexed rank, capped at MAX_LABELED_RANKS.
+ *  The expensive O(n²) dominance sort itself lives in the store
+ *  (individualRankMap) — this is just a cheap O(n) capping pass. */
 const rankMap = computed<Map<string, number>>(() => {
-  if (!props.objectiveGoals?.length || populationData.value.length === 0) {
-    return new Map();
-  }
-  const pts = populationData.value.map((p) => ({
-    id: p.individualId,
-    objectives: p.allObjectives as number[],
-  }));
-  const raw = computeRanksWithDuplicates(pts, minimize.value);
-  // Cap so everything above rank 4 becomes MAX_LABELED_RANKS
+  const raw = props.rankMap;
+  if (!raw || raw.size === 0) return new Map();
   const capped = new Map<string, number>();
   for (const [id, r] of raw) {
     capped.set(id, Math.min(r, MAX_LABELED_RANKS));
@@ -301,6 +279,11 @@ function buildOption() {
         type: "scatter" as const,
         data,
         symbolSize: size,
+        // Canvas fast-path once a series crosses the threshold — draws points
+        // without per-symbol graphic elements, which is what keeps a large
+        // accumulated population (many generations) responsive.
+        large: true,
+        largeThreshold: 200,
         itemStyle: {
           color,
           borderColor: isOther ? "transparent" : "#fff",
@@ -319,6 +302,8 @@ function buildOption() {
         type: "scatter" as const,
         data: populationData.value,
         symbolSize: 7,
+        large: true,
+        largeThreshold: 200,
         itemStyle: {
           color: "#94a3b8",
           borderColor: "rgba(255,255,255,0.6)",
@@ -334,6 +319,8 @@ function buildOption() {
       type: "scatter" as const,
       data: paretoData.value.filter((p) => p.individualId !== markedId.value),
       symbolSize: 11,
+      large: true,
+      largeThreshold: 200,
       itemStyle: { color: "#3b82f6", borderColor: "#fff", borderWidth: 1.5 },
       emphasis: { itemStyle: { color: "#1d4ed8", borderColor: "#fff", borderWidth: 2 } },
       z: 2,
@@ -368,8 +355,7 @@ function buildOption() {
     ...(markedPoint.value ? ["Pinned"] : []),
   ];
 
-  isZoomed.value = false;
-  setOption({
+  const option: echarts.EChartsOption = {
     tooltip: {
       trigger: "item",
       formatter: formatTooltip,
@@ -397,7 +383,20 @@ function buildOption() {
     },
     dataZoom: [{ type: "inside", xAxisIndex: 0, yAxisIndex: 0, filterMode: "none" }],
     series,
-  });
+  };
+
+  if (!chartInitialized) {
+    // First render: full replace so every component (axes, dataZoom, legend…)
+    // starts from a clean slate.
+    isZoomed.value = false;
+    setOption(option, true);
+    chartInitialized = true;
+  } else {
+    // Later rebuilds (pin, axis swap, new generation…): only touch the series.
+    // Everything else — notably dataZoom — is left alone via default merge,
+    // so the user's current zoom survives instead of resetting every time.
+    setOption(option, { replaceMerge: ["series"] });
+  }
 }
 
 watch(
