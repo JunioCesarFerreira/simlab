@@ -14,6 +14,7 @@
       :individual="selectedIndividual"
       :objective-names="store.objectiveNames"
       :metric-columns="metricColumns"
+      :is-synthetic="isSynthetic"
       @close="selectedIndividual = null"
     />
 
@@ -75,6 +76,7 @@
               {{ downloading.analysis ? "Downloading…" : "Download analyses" }}
             </button>
             <button
+              v-if="!isSynthetic"
               class="action-btn"
               :disabled="downloading.topologies"
               @click="doDownloadTopologies"
@@ -357,6 +359,7 @@
             :generation="gen"
             :objective-names="store.objectiveNames"
             :default-open="gen.index === 0"
+            :is-synthetic="isSynthetic"
             @select="selectedIndividual = $event"
           />
         </div>

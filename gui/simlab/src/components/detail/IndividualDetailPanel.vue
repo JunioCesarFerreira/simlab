@@ -27,8 +27,8 @@
           </div>
         </section>
 
-        <!-- Topologia -->
-        <section v-if="individual.topology_picture_id" class="section">
+        <!-- Topologia (não aplicável a problemas sintéticos — sem topologia real) -->
+        <section v-if="!isSynthetic && individual.topology_picture_id" class="section">
           <div class="section-title">Topology</div>
           <div class="topology-wrap">
             <div v-if="loadingTopology" class="topology-placeholder">Loading…</div>
@@ -138,6 +138,7 @@ const props = defineProps<{
   individual: IndividualDto;
   objectiveNames: string[];
   metricColumns: string[]; // columns used in objective computation (data_conversion_config.metrics[].column)
+  isSynthetic?: boolean;
 }>();
 
 defineEmits<{ (e: "close"): void }>();
@@ -191,8 +192,8 @@ function formatGene(val: unknown): string {
 }
 
 onMounted(async () => {
-  // Carrega topologia inline
-  if (props.individual.topology_picture_id) {
+  // Carrega topologia inline (não aplicável a problemas sintéticos)
+  if (!props.isSynthetic && props.individual.topology_picture_id) {
     loadingTopology.value = true;
     try {
       topologyBlobUrl.value = await fetchBlobUrl(

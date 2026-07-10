@@ -30,7 +30,7 @@
         <span v-if="simCount !== null" class="sim-count">{{ simCount }}</span>
       </button>
       <button
-        v-if="individual.topology_picture_id"
+        v-if="!isSynthetic && individual.topology_picture_id"
         class="link-btn"
         :disabled="opening"
         title="View topology"
@@ -51,6 +51,7 @@ import { openTopology } from "../../api/files";
 const props = defineProps<{
   individual: IndividualDto;
   objectiveNames: string[];
+  isSynthetic?: boolean;
 }>();
 
 defineEmits<{ (e: "select", individual: IndividualDto): void }>();

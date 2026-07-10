@@ -36,6 +36,7 @@
             :key="ind.id"
             :individual="ind"
             :objective-names="objectiveNames"
+            :is-synthetic="isSynthetic"
             @select="$emit('select', $event)"
           />
         </tbody>
@@ -55,6 +56,7 @@ const props = defineProps<{
   generation: GenerationDto;
   objectiveNames: string[];
   defaultOpen?: boolean;
+  isSynthetic?: boolean;
 }>();
 
 defineEmits<{ (e: "select", individual: IndividualDto): void }>();
