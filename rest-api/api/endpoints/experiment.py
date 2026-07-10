@@ -349,12 +349,15 @@ def get_hv_gd(
             is_synthetic = False  # unknown benchmark → fall back to empirical
 
     if not is_synthetic:
-        all_objs = [o for v in individuals_per_gen.values() for o in v]
-        worst = [
-            max(o[i] for o in all_objs) if minimize_bools[i]
-            else min(o[i] for o in all_objs)
-            for i in range(n_obj)
+        # Reference point in MINIMIZATION space, consistent with pts_min below.
+        # Max objectives must be negated first: computing the worst value in raw
+        # space would place the reference on the wrong side of a maximized axis,
+        # inflating HV by a large constant and masking its per-generation growth.
+        all_min = [
+            [o[i] if minimize_bools[i] else -o[i] for i in range(n_obj)]
+            for v in individuals_per_gen.values() for o in v
         ]
+        worst = [max(row[i] for row in all_min) for i in range(n_obj)]
         hv_ref = [v + abs(v) * 0.05 + 1.0 for v in worst]
         seen_ref: set[tuple] = set()
         ref_min_rows: list[list[float]] = []

@@ -250,6 +250,33 @@ class TestGetHvGd:
         data = self._call(client).json()
         assert data["generations"] == [] and data["igd"] == []
 
+    def test_max_objective_hv_reference_in_min_space(self, client, mock_factory):
+        # Regression: with a MAXimized objective the HV reference must be built in
+        # minimization space. Two generations, each a single individual; gen 1
+        # improves only on the maximized f2 (5 → 8).
+        doc = sample_experiment()
+        doc["pareto_front"] = [{"objectives": {"f1": 5.0, "f2": 5.0}}]
+        mock_factory.experiment_repo.get.return_value = doc
+        mock_factory.generation_repo.find_by_experiment.return_value = [
+            {"_id": ObjectId(GEN_ID), "index": 0},
+            {"_id": ObjectId(IND_ID), "index": 1},
+        ]
+        mock_factory.individual_repo.find_by_generation.side_effect = [
+            [{"objectives": [5.0, 5.0]}],   # gen 0
+            [{"objectives": [5.0, 8.0]}],   # gen 1 (better f2)
+        ]
+
+        q = "objectives=f1&objectives=f2&minimize=true&minimize=false"
+        data = client.get(f"{BASE}/{EXP_ID}/hv-gd?{q}").json()
+
+        # worst (min-space) = [max f1, max(-f2)] = [5, -5]
+        # ref = [5 + 5*0.05 + 1, -5 + 5*0.05 + 1] = [6.25, -3.75]
+        # HV gen0 = (6.25-5)*(-3.75-(-5)) = 1.25 * 1.25   = 1.5625
+        # HV gen1 = (6.25-5)*(-3.75-(-8)) = 1.25 * 4.25   = 5.3125
+        assert data["hv"][0] == pytest.approx(1.5625, rel=1e-6)
+        assert data["hv"][1] == pytest.approx(5.3125, rel=1e-6)
+        assert data["hv"][1] > data["hv"][0]  # HV grows as the front improves
+
 
 # ── POST /{experiment_id}/plot-pareto ─────────────────────────────────────────
 class TestPlotPareto:
