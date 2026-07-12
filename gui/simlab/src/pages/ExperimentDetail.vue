@@ -286,7 +286,7 @@
             <div
               class="resize-handle"
               title="Arrastar para redimensionar"
-              @mousedown="startParetoResize"
+              @pointerdown="startParetoResize"
             />
           </div>
           <div class="card chart-card" :style="{ height: hvgdH + 'px' }">
@@ -299,7 +299,7 @@
             <div
               class="resize-handle"
               title="Arrastar para redimensionar"
-              @mousedown="startHvGdResize"
+              @pointerdown="startHvGdResize"
             />
           </div>
           <div class="card chart-card" :style="{ height: evolutionH + 'px' }">
@@ -312,7 +312,7 @@
             <div
               class="resize-handle"
               title="Arrastar para redimensionar"
-              @mousedown="startEvoResize"
+              @pointerdown="startEvoResize"
             />
           </div>
           <div class="card chart-card" :style="{ height: parallelH + 'px' }">
@@ -327,7 +327,7 @@
             <div
               class="resize-handle"
               title="Arrastar para redimensionar"
-              @mousedown="startParallelResize"
+              @pointerdown="startParallelResize"
             />
           </div>
         </div>
@@ -1130,6 +1130,7 @@ onBeforeUnmount(() => {
   height: 10px;
   margin: 4px -16px -16px;  /* bleed to card edges, absorb card padding-bottom */
   cursor: ns-resize;
+  touch-action: none;  /* pointer-capture drag: don't let touch scroll steal it */
   display: flex;
   align-items: center;
   justify-content: center;

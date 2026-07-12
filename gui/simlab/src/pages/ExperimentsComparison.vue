@@ -211,7 +211,7 @@
         <div
           class="resize-handle"
           title="Drag to resize"
-          @mousedown="startParetoResize"
+          @pointerdown="startParetoResize"
         />
       </div>
 
@@ -235,7 +235,7 @@
         <div
           class="resize-handle"
           title="Drag to resize"
-          @mousedown="startConvergenceResize"
+          @pointerdown="startConvergenceResize"
         />
       </div>
     </template>
@@ -930,6 +930,7 @@ watch(chartView, async (view) => {
   height: 10px;
   margin: 4px -22px -20px; /* bleed to card edges, absorb card bottom padding */
   cursor: ns-resize;
+  touch-action: none;  /* pointer-capture drag: don't let touch scroll steal it */
   display: flex;
   align-items: center;
   justify-content: center;

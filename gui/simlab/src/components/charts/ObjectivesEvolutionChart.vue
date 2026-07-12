@@ -169,7 +169,9 @@ onMounted(buildOption);
 
 .chart {
   flex: 1;
-  min-height: 200px;
+  /* no rigid min-height: the hosting card is user-resizable with overflow
+     hidden, and content taller than the card clips the resize handle away */
+  min-height: 0;
 }
 
 .empty {

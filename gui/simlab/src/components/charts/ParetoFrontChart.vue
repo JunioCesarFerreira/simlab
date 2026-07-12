@@ -421,8 +421,12 @@ onMounted(() => {
 
 <style scoped>
 .chart-wrap {
+  /* flex + min-height 0 (not height: 100%): the card that hosts this chart is
+     user-resizable with overflow hidden — a rigid min-height here pushes the
+     card's resize handle out of the clipped area, making it unreachable. */
+  flex: 1;
+  min-height: 0;
   width: 100%;
-  height: 100%;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -430,7 +434,7 @@ onMounted(() => {
 
 .chart {
   flex: 1;
-  min-height: 300px;
+  min-height: 0;
 }
 
 .empty {

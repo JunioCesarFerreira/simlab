@@ -70,7 +70,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
+import { ref, computed, watch, onBeforeUnmount } from "vue";
 import * as echarts from "echarts";
 // Side-effect import registers scatter3D, grid3D, xAxis3D, yAxis3D, zAxis3D
 import "echarts-gl";
@@ -113,34 +113,49 @@ let ro: ResizeObserver | null = null;
 // to preserve the user's camera state (zoom, rotation, pan).
 let cameraInitialized = false;
 
-onMounted(() => {
-  if (!chartEl.value) return;
-  // echarts-gl requires canvas (WebGL) renderer — never use svg here
-  chart = echarts.init(chartEl.value);
-  ro = new ResizeObserver(() => chart?.resize());
-  ro.observe(chartEl.value);
-  buildOption();
-  chart.on("click", (params: Record<string, unknown>) => {
-    const data = params.data as Point3D | undefined;
-    if (!data?.individualId) return;
-    if (markMode.value) {
-      markedId.value = markedId.value === data.individualId ? "" : data.individualId;
-    } else if (dominanceMode.value) {
-      dominancePoint.value =
-        dominancePoint.value?.individualId === data.individualId ? null : data;
-    } else {
-      emit("click-individual", data.individualId);
-    }
-  });
-});
+function onChartClick(params: Record<string, unknown>) {
+  const data = params.data as Point3D | undefined;
+  if (!data?.individualId) return;
+  if (markMode.value) {
+    markedId.value = markedId.value === data.individualId ? "" : data.individualId;
+  } else if (dominanceMode.value) {
+    dominancePoint.value =
+      dominancePoint.value?.individualId === data.individualId ? null : data;
+  } else {
+    emit("click-individual", data.individualId);
+  }
+}
 
-onBeforeUnmount(() => {
+function teardownChart() {
   ro?.disconnect();
   ro = null;
   chart?.dispose();
   chart = null;
   cameraInitialized = false;
-});
+}
+
+// Watch the element (not onMounted): chartEl lives under v-if, so it can be
+// created after mount or destroyed and recreated when the data flips between
+// empty and sufficient — a chart bound to the detached old node stays blank.
+watch(
+  chartEl,
+  (el) => {
+    teardownChart();
+    if (!el) return;
+    // echarts-gl requires canvas (WebGL) renderer — never use svg here
+    chart = echarts.init(el);
+    ro = new ResizeObserver(() => {
+      // Skip collapsed/hidden passes — resizing the canvas to 0×0 blanks it.
+      if (el.clientWidth > 0 && el.clientHeight > 0) chart?.resize();
+    });
+    ro.observe(el);
+    buildOption();
+    chart.on("click", onChartClick);
+  },
+  { immediate: true, flush: "post" },
+);
+
+onBeforeUnmount(teardownChart);
 
 // ── Data types ───────────────────────────────────────────────────────────────
 
@@ -711,8 +726,12 @@ watch(
 
 <style scoped>
 .chart-wrap {
+  /* flex + min-height 0 (not height: 100%): the card that hosts this chart is
+     user-resizable with overflow hidden — a rigid min-height here pushes the
+     card's resize handle out of the clipped area, making it unreachable. */
+  flex: 1;
+  min-height: 0;
   width: 100%;
-  height: 100%;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -720,7 +739,7 @@ watch(
 
 .chart {
   flex: 1;
-  min-height: 340px;
+  min-height: 0;
 }
 
 .chart--pan {

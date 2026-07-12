@@ -208,8 +208,9 @@ function initCharts() {
   gdChart = echarts.init(gdEl.value, null, { renderer: "svg" });
 
   ro = new ResizeObserver(() => {
-    hvChart?.resize();
-    gdChart?.resize();
+    // Skip collapsed/hidden passes — resizing to 0×0 blanks the chart.
+    if (hvEl.value && hvEl.value.clientHeight > 0) hvChart?.resize();
+    if (gdEl.value && gdEl.value.clientHeight > 0) gdChart?.resize();
   });
   ro.observe(hvEl.value);
   ro.observe(gdEl.value);

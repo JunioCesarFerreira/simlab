@@ -10,25 +10,34 @@ export function useResizable(options: ResizableOptions = {}) {
   const { initial = 420, min = 180, max = 1400 } = options;
   const height = ref(initial);
 
-  function startResize(e: MouseEvent) {
+  // Bind with @pointerdown (not @mousedown). Pointer capture routes every
+  // subsequent pointer event to the handle — including a release outside the
+  // browser window — so a drag can never leak a document-level listener that
+  // keeps resizing after the button is up (symptom: the chart follows the
+  // cursor / collapses until refresh).
+  function startResize(e: PointerEvent) {
+    const handle = e.currentTarget as HTMLElement;
     const startY = e.clientY;
     const startH = height.value;
 
-    function onMove(ev: MouseEvent) {
+    function onMove(ev: PointerEvent) {
       height.value = Math.max(min, Math.min(max, startH + (ev.clientY - startY)));
     }
 
-    function onUp() {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
+    function onEnd() {
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onEnd);
+      handle.removeEventListener("pointercancel", onEnd);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     }
 
+    handle.setPointerCapture(e.pointerId);
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onEnd);
+    handle.addEventListener("pointercancel", onEnd);
     document.body.style.cursor = "ns-resize";
     document.body.style.userSelect = "none";
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
     e.preventDefault();
   }
 
