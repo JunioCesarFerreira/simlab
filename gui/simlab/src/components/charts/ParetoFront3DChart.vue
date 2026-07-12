@@ -64,17 +64,18 @@
         </div>
       </div>
 
-      <div ref="chartEl" :class="['chart', { 'chart--pan': panMode }]" />
+      <div ref="chartEl" :class="['chart', { 'chart--pan': panMode }]" role="img" aria-label="3D Pareto front chart" />
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch, onBeforeUnmount } from "vue";
-import * as echarts from "echarts";
+import * as echarts from "../../lib/echarts";
 // Side-effect import registers scatter3D, grid3D, xAxis3D, yAxis3D, zAxis3D
 import "echarts-gl";
 import { useTheme } from "../../composables/useTheme";
+import { gl3dAxis, gl3dColors } from "../../services/chartTheme";
 import type { ParetoFrontItemDto, GenerationDto } from "../../types/simlab";
 import { isPenalized } from "../../types/simlab";
 import { stableStringify } from "../../utils/stableStringify";
@@ -107,7 +108,7 @@ const { isDark } = useTheme();
 // ── Chart lifecycle ─────────────────────────────────────────────────────────
 
 const chartEl = ref<HTMLElement | null>(null);
-let chart: echarts.ECharts | null = null;
+let chart: echarts.EChartsType | null = null;
 let ro: ResizeObserver | null = null;
 // True after the first successful setOption; subsequent calls use replaceMerge
 // to preserve the user's camera state (zoom, rotation, pan).
@@ -364,23 +365,9 @@ function buildOption() {
 
   const dark = isDark.value;
 
-  const axisColor  = dark ? "#45475a" : "#c0cad8";
-  const labelColor = dark ? "#7f849c" : "#64748b";
-  const nameColor  = dark ? "#a6adc8" : "#374151";
-  const splitColor = dark ? "#313244" : "#dde3eb";
-  const bgColor    = dark ? "#181825" : "#ffffff";
-  const envColor   = dark ? "#181825" : "#ffffff";
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const axisConfig = (name: string): any => ({
-    name,
-    nameTextStyle: { color: nameColor, fontSize: 12, fontWeight: 600 },
-    type: "value",
-    axisLine: { lineStyle: { color: axisColor, width: 1.5 } },
-    axisTick: { lineStyle: { color: axisColor } },
-    axisLabel: { color: labelColor, fontSize: 11 },
-    splitLine: { lineStyle: { color: splitColor, opacity: 0.6 } },
-  });
+  const { axis: axisColor, label: labelColor, split: splitColor, bg: bgColor, env: envColor } =
+    gl3dColors(dark);
+  const axisConfig = (name: string) => gl3dAxis(name, dark);
 
   const useRanks = rankedGroups.value.length > 0;
   const series = [];

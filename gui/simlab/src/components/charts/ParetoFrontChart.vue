@@ -46,7 +46,7 @@
         </div>
       </div>
 
-      <div ref="chartEl" class="chart" />
+      <div ref="chartEl" class="chart" role="img" aria-label="Pareto front scatter chart" />
     </template>
   </div>
 </template>

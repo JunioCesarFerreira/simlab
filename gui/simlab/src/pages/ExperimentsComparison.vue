@@ -102,8 +102,8 @@
               </tr>
               <tr>
                 <td>Sim. duration (s)</td>
-                <td>{{ fmtParam(result.expA.parameters.simulation?.['duration']) }}</td>
-                <td>{{ fmtParam(result.expB.parameters.simulation?.['duration']) }}</td>
+                <td>{{ fmtParam(result.expA.parameters.simulation?.duration) }}</td>
+                <td>{{ fmtParam(result.expB.parameters.simulation?.duration) }}</td>
               </tr>
             </tbody>
           </table>
@@ -156,10 +156,11 @@
       </div>
 
       <!-- ── Pareto front ─────────────────────────────────────────────────── -->
-      <div
+      <ResizableChartCard
         v-if="sharedObjectives.length >= 2"
-        class="card chart-card"
-        :style="{ height: paretoH + 'px' }"
+        v-model="paretoH"
+        class="cmp-chart-card"
+        label="Pareto front comparison chart"
       >
         <div class="section-title pareto-title">
           Pareto Front
@@ -208,18 +209,14 @@
           :objectives="sharedObjectives"
         />
 
-        <div
-          class="resize-handle"
-          title="Drag to resize"
-          @pointerdown="startParetoResize"
-        />
-      </div>
+      </ResizableChartCard>
 
       <!-- ── Convergence charts ────────────────────────────────────────────── -->
-      <div
+      <ResizableChartCard
         v-if="result.hvgdA || result.hvgdB"
-        class="card chart-card"
-        :style="{ height: convergenceH + 'px' }"
+        v-model="convergenceH"
+        class="cmp-chart-card"
+        label="Convergence charts"
       >
         <div class="section-title">Convergence</div>
         <div class="evo-row">
@@ -232,22 +229,19 @@
             <div ref="gdEl" class="chart-fill" />
           </div>
         </div>
-        <div
-          class="resize-handle"
-          title="Drag to resize"
-          @pointerdown="startConvergenceResize"
-        />
-      </div>
+      </ResizableChartCard>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, defineAsyncComponent } from 'vue';
+import { ref, computed, watch, onMounted, nextTick, defineAsyncComponent } from 'vue';
 import { RouterLink } from 'vue-router';
-import * as echarts from 'echarts';
+import type * as echarts from 'echarts';
+import { useEChart } from '../composables/useEChart';
 import { useTheme } from '../composables/useTheme';
-import { useResizable } from '../composables/useResizable';
+import { chartPalette } from '../services/chartTheme';
+import ResizableChartCard from '../components/common/ResizableChartCard.vue';
 import { getAllCampaigns, getCampaignFull } from '../api/campaigns';
 import { getExperiment } from '../api/experiments';
 import client from '../api/client';
@@ -286,25 +280,11 @@ interface MetricRow {
 
 const { isDark } = useTheme();
 
-function palette(dark: boolean) {
-  return {
-    bg: 'transparent',
-    text: dark ? '#cdd6f4' : '#334155',
-    muted: dark ? '#6c7086' : '#94a3b8',
-    grid: dark ? '#313244' : '#e2e8f0',
-    tooltip: dark ? '#1e1e2e' : '#ffffff',
-    tooltipBorder: dark ? '#313244' : '#e2e8f0',
-    colorA: dark ? '#89b4fa' : '#3b82f6',
-    colorB: dark ? '#fab387' : '#f97316',
-    areaA: dark ? 'rgba(137,180,250,0.12)' : 'rgba(59,130,246,0.10)',
-    areaB: dark ? 'rgba(250,179,135,0.12)' : 'rgba(249,115,22,0.10)',
-  };
-}
 
 // ── Resizable cards ──────────────────────────────────────────────────────────
 
-const { height: paretoH, startResize: startParetoResize } = useResizable({ initial: 420 });
-const { height: convergenceH, startResize: startConvergenceResize } = useResizable({ initial: 300 });
+const paretoH = ref(420);
+const convergenceH = ref(300);
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -529,45 +509,21 @@ async function runComparison() {
 }
 
 // ── Charts ────────────────────────────────────────────────────────────────────
+// useEChart owns init/dispose, element recreation across v-if toggles (the 2D
+// pareto chart is destroyed while the 3D view is shown) and resize handling.
 
 const paretoEl = ref<HTMLElement | null>(null);
 const hvEl = ref<HTMLElement | null>(null);
 const gdEl = ref<HTMLElement | null>(null);
-let paretoChart: echarts.ECharts | null = null;
-let hvChart: echarts.ECharts | null = null;
-let gdChart: echarts.ECharts | null = null;
-let ro: ResizeObserver | null = null;
-
-function ensureRo(el: HTMLElement) {
-  if (!ro) {
-    ro = new ResizeObserver(() => {
-      paretoChart?.resize();
-      hvChart?.resize();
-      gdChart?.resize();
-    });
-  }
-  ro.observe(el);
-}
-
-function getOrInit(el: HTMLElement | null, existing: echarts.ECharts | null): echarts.ECharts | null {
-  if (!el) return null;
-  // Reuse only when the chart is still bound to the same DOM element.
-  // After a v-if toggle the ref points to a new element; reusing the old
-  // chart would render into the detached node and leave the new one blank.
-  if (existing && !existing.isDisposed() && existing.getDom() === el) return existing;
-  existing?.dispose();
-  return echarts.init(el, null, { renderer: 'svg' });
-}
+const paretoChart = useEChart(paretoEl);
+const hvChart = useEChart(hvEl);
+const gdChart = useEChart(gdEl);
 
 function renderParetoChart() {
-  if (!result.value || !paretoEl.value) return;
-  paretoChart = getOrInit(paretoEl.value, paretoChart);
-  if (!paretoChart) return;
-
-  ensureRo(paretoEl.value);
+  if (!result.value) return;
 
   const dark = isDark.value;
-  const c = palette(dark);
+  const c = chartPalette(dark);
   const objs = sharedObjectives.value;
   const xi = objs.findIndex(o => o.metric_name === axisX.value);
   const yi = objs.findIndex(o => o.metric_name === axisY.value);
@@ -649,7 +605,7 @@ function buildEvoOption(
   seriesName: string,
   dark: boolean,
 ): echarts.EChartsOption {
-  const c = palette(dark);
+  const c = chartPalette(dark);
   return {
     backgroundColor: c.bg,
     legend: {
@@ -714,44 +670,21 @@ function renderEvolutionCharts() {
   const nameA = expA.name;
   const nameB = expB.name;
 
-  if (hvEl.value) {
-    hvChart = getOrInit(hvEl.value, hvChart);
-    ensureRo(hvEl.value);
-    if (hvChart) {
-      const dataA: [number, number][] = hvgdA
-        ? hvgdA.generations.map((g, i) => [g, hvgdA.hv[i]!])
-        : [];
-      const dataB: [number, number][] = hvgdB
-        ? hvgdB.generations.map((g, i) => [g, hvgdB.hv[i]!])
-        : [];
-      hvChart.setOption(buildEvoOption(nameA, nameB, dataA, dataB, 'HV', dark), true);
-    }
-  }
+  const hvA: [number, number][] = hvgdA
+    ? hvgdA.generations.map((g, i) => [g, hvgdA.hv[i]!])
+    : [];
+  const hvB: [number, number][] = hvgdB
+    ? hvgdB.generations.map((g, i) => [g, hvgdB.hv[i]!])
+    : [];
+  hvChart.setOption(buildEvoOption(nameA, nameB, hvA, hvB, 'HV', dark), true);
 
-  if (gdEl.value) {
-    gdChart = getOrInit(gdEl.value, gdChart);
-    ensureRo(gdEl.value);
-    if (gdChart) {
-      const dataA: [number, number][] = hvgdA
-        ? hvgdA.generations.map((g, i) => [g, hvgdA.gd[i]!])
-        : [];
-      const dataB: [number, number][] = hvgdB
-        ? hvgdB.generations.map((g, i) => [g, hvgdB.gd[i]!])
-        : [];
-      gdChart.setOption(buildEvoOption(nameA, nameB, dataA, dataB, 'GD', dark), true);
-    }
-  }
-}
-
-function destroyCharts() {
-  ro?.disconnect();
-  ro = null;
-  paretoChart?.dispose();
-  hvChart?.dispose();
-  gdChart?.dispose();
-  paretoChart = null;
-  hvChart = null;
-  gdChart = null;
+  const gdA: [number, number][] = hvgdA
+    ? hvgdA.generations.map((g, i) => [g, hvgdA.gd[i]!])
+    : [];
+  const gdB: [number, number][] = hvgdB
+    ? hvgdB.generations.map((g, i) => [g, hvgdB.gd[i]!])
+    : [];
+  gdChart.setOption(buildEvoOption(nameA, nameB, gdA, gdB, 'GD', dark), true);
 }
 
 // ── Formatters ────────────────────────────────────────────────────────────────
@@ -777,14 +710,13 @@ function fmtObjectives(objs: ObjectiveItem[]): string {
 }
 
 function seedsCount(exp: ExperimentDto): string {
-  const raw = exp.parameters.simulation?.['random_seeds'];
+  const raw = exp.parameters.simulation?.random_seeds;
   return Array.isArray(raw) ? String(raw.length) : '—';
 }
 
 // ── Lifecycle & watchers ──────────────────────────────────────────────────────
 
 onMounted(loadCampaigns);
-onBeforeUnmount(destroyCharts);
 
 watch(isDark, () => {
   if (!result.value) return;
@@ -844,12 +776,11 @@ watch(chartView, async (view) => {
   padding: 20px 22px;
 }
 
-/* Chart cards: flex column so children fill height; resize handle bleeds out */
-.chart-card {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  /* height controlled by :style binding — min enforced by useResizable */
+/* Chart cards (ResizableChartCard): this page's .card padding differs from the
+   16px global default, so tell the handle how far to bleed. */
+.cmp-chart-card {
+  --card-pad-x: 22px;
+  --card-pad-b: 20px;
 }
 
 .card-title {
@@ -921,38 +852,6 @@ watch(chartView, async (view) => {
   background: var(--color-surface);
   color: var(--color-primary);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-}
-
-/* ── Resize handle ────────────────────────────────────────────────────────── */
-
-.resize-handle {
-  flex-shrink: 0;
-  height: 10px;
-  margin: 4px -22px -20px; /* bleed to card edges, absorb card bottom padding */
-  cursor: ns-resize;
-  touch-action: none;  /* pointer-capture drag: don't let touch scroll steal it */
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-top: 1px solid var(--color-border);
-  background: transparent;
-  transition: background 0.15s;
-}
-
-.resize-handle::after {
-  content: '';
-  width: 36px;
-  height: 3px;
-  border-radius: 99px;
-  background: var(--color-border);
-  transition: background 0.15s, transform 0.15s;
-}
-
-.resize-handle:hover { background: var(--color-surface-hover); }
-
-.resize-handle:hover::after {
-  background: var(--color-text-muted);
-  transform: scaleX(1.25);
 }
 
 /* ── Selectors ────────────────────────────────────────────────────────────── */

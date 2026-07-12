@@ -4,14 +4,14 @@
 
 <script setup lang="ts">
 import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
-import * as echarts from 'echarts'
+import * as echarts from '../../lib/echarts'
 import 'echarts-gl'
 import { useTheme } from '../../composables/useTheme'
 
 const { isDark } = useTheme()
 
 const containerEl = ref<HTMLElement | null>(null)
-let chart: echarts.ECharts | null = null
+let chart: echarts.EChartsType | null = null
 let ro: ResizeObserver | null = null
 
 // DTLZ2 M=3 Pareto front is the unit quarter-sphere in the positive orthant:

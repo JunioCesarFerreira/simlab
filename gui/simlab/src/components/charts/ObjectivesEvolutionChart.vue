@@ -1,7 +1,7 @@
 <template>
   <div class="chart-wrap">
     <div v-if="!hasData" class="empty">No generation data to display</div>
-    <div v-else ref="chartEl" class="chart" />
+    <div v-else ref="chartEl" class="chart" role="img" aria-label="Objectives evolution line chart" />
   </div>
 </template>
 

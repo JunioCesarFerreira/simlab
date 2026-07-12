@@ -11,16 +11,18 @@
       No reference front available yet.
     </div>
     <div v-else class="hvgd-charts">
-      <div ref="hvEl" class="hvgd-chart" />
-      <div ref="gdEl" class="hvgd-chart" />
+      <div ref="hvEl" class="hvgd-chart" role="img" aria-label="Hypervolume per generation chart" />
+      <div ref="gdEl" class="hvgd-chart" role="img" aria-label="Generational distance per generation chart" />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, watch, onMounted, onBeforeUnmount } from "vue";
-import * as echarts from "echarts";
+import * as echarts from "../../lib/echarts";
+import type { EChartsOption, DefaultLabelFormatterCallbackParams } from "echarts";
 import { useTheme } from "../../composables/useTheme";
+import { chartPalette } from "../../services/chartTheme";
 import client from "../../api/client";
 
 const props = defineProps<{
@@ -47,8 +49,8 @@ const data = ref<HvGdData | null>(null);
 // ── chart instances ─────────────────────────────────────────────────────────
 const hvEl = ref<HTMLElement | null>(null);
 const gdEl = ref<HTMLElement | null>(null);
-let hvChart: echarts.ECharts | null = null;
-let gdChart: echarts.ECharts | null = null;
+let hvChart: echarts.EChartsType | null = null;
+let gdChart: echarts.EChartsType | null = null;
 let ro: ResizeObserver | null = null;
 
 // ── fetch ───────────────────────────────────────────────────────────────────
@@ -80,23 +82,9 @@ async function fetchData() {
 }
 
 // ── chart init & rendering ──────────────────────────────────────────────────
-function palette(dark: boolean) {
-  return {
-    bg: "transparent",
-    text: dark ? "#cdd6f4" : "#334155",
-    muted: dark ? "#6c7086" : "#94a3b8",
-    grid: dark ? "#313244" : "#e2e8f0",
-    hv: dark ? "#89b4fa" : "#2563eb",
-    gd: dark ? "#f38ba8" : "#dc2626",
-    hvArea: dark ? "rgba(137,180,250,0.12)" : "rgba(37,99,235,0.08)",
-    gdArea: dark ? "rgba(243,139,168,0.12)" : "rgba(220,38,38,0.08)",
-    tooltip: dark ? "#1e1e2e" : "#ffffff",
-    tooltipBorder: dark ? "#313244" : "#e2e8f0",
-  };
-}
 
-function buildHvOption(d: HvGdData, dark: boolean): echarts.EChartsOption {
-  const c = palette(dark);
+function buildHvOption(d: HvGdData, dark: boolean): EChartsOption {
+  const c = chartPalette(dark);
   const xLabels = d.generations.map((g) => `Gen ${g}`);
 
   return {
@@ -107,7 +95,7 @@ function buildHvOption(d: HvGdData, dark: boolean): echarts.EChartsOption {
       borderColor: c.tooltipBorder,
       textStyle: { color: c.text, fontSize: 12 },
       formatter: (params) => {
-        const list = params as Array<echarts.DefaultLabelFormatterCallbackParams & { axisValueLabel?: string }>;
+        const list = params as Array<DefaultLabelFormatterCallbackParams & { axisValueLabel?: string }>;
         const p = list[0];
         if (!p) return "";
         return `${p.axisValueLabel ?? p.name}<br/><b>HV</b>: ${(p.value as number).toExponential(3)}`;
@@ -152,8 +140,8 @@ function buildHvOption(d: HvGdData, dark: boolean): echarts.EChartsOption {
   };
 }
 
-function buildGdOption(d: HvGdData, dark: boolean): echarts.EChartsOption {
-  const c = palette(dark);
+function buildGdOption(d: HvGdData, dark: boolean): EChartsOption {
+  const c = chartPalette(dark);
   const xLabels = d.generations.map((g) => `Gen ${g}`);
 
   return {
@@ -164,7 +152,7 @@ function buildGdOption(d: HvGdData, dark: boolean): echarts.EChartsOption {
       borderColor: c.tooltipBorder,
       textStyle: { color: c.text, fontSize: 12 },
       formatter: (params) => {
-        const list = params as Array<echarts.DefaultLabelFormatterCallbackParams & { axisValueLabel?: string }>;
+        const list = params as Array<DefaultLabelFormatterCallbackParams & { axisValueLabel?: string }>;
         const p = list[0];
         if (!p) return "";
         const v = p.value as number;

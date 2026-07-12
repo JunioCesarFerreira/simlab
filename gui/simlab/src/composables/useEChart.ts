@@ -1,15 +1,18 @@
 import { ref, watch, onBeforeUnmount, type Ref } from "vue";
-import * as echarts from "echarts";
+import * as echarts from "../lib/echarts";
+// Types come from the full package (echarts/core doesn't re-export them);
+// type-only imports cost nothing at runtime.
+import type { EChartsOption, SetOptionOpts } from "echarts";
 
 export function useEChart(containerRef: Ref<HTMLElement | null>) {
-  let chart: echarts.ECharts | null = null;
+  let chart: echarts.EChartsType | null = null;
   let ro: ResizeObserver | null = null;
   const ready = ref(false);
 
   // Replayed onto a fresh instance whenever the container element is
   // recreated by v-if (empty state ↔ data state): without this the chart
   // stays bound to the detached old node and renders blank until refresh.
-  let lastOption: echarts.EChartsOption | null = null;
+  let lastOption: EChartsOption | null = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handlers: Array<[string, (params: any) => void]> = [];
 
@@ -52,8 +55,8 @@ export function useEChart(containerRef: Ref<HTMLElement | null>) {
   onBeforeUnmount(teardown);
 
   function setOption(
-    option: echarts.EChartsOption,
-    opts: boolean | echarts.SetOptionOpts = true,
+    option: EChartsOption,
+    opts: boolean | SetOptionOpts = true,
   ) {
     lastOption = option;
     // Narrowed to a single (non-union) type per branch so it matches one of

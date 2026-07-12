@@ -4,7 +4,7 @@
       <span v-if="!paretoFront?.length">Pareto front not available</span>
       <span v-else>At least 2 objectives are required for visualization</span>
     </div>
-    <div v-show="hasSufficientData" ref="chartEl" class="chart" />
+    <div v-show="hasSufficientData" ref="chartEl" class="chart" role="img" aria-label="Parallel coordinates chart" />
   </div>
 </template>
 

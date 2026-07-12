@@ -41,10 +41,11 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
-import * as echarts from 'echarts';
+import * as echarts from '../../lib/echarts';
 // Side-effect import registers scatter3D, grid3D, xAxis3D, yAxis3D, zAxis3D
 import 'echarts-gl';
 import { useTheme } from '../../composables/useTheme';
+import { chartPalette, gl3dAxis, gl3dColors } from '../../services/chartTheme';
 import type { ParetoFrontItemDto, ObjectiveItem } from '../../types/simlab';
 
 const props = defineProps<{
@@ -60,7 +61,7 @@ const { isDark } = useTheme();
 // ── Chart lifecycle ──────────────────────────────────────────────────────────
 
 const chartEl = ref<HTMLElement | null>(null);
-let chart: echarts.ECharts | null = null;
+let chart: echarts.EChartsType | null = null;
 let ro: ResizeObserver | null = null;
 // Preserved across re-renders so the user's camera position is not reset
 let cameraInitialized = false;
@@ -152,13 +153,8 @@ function buildOption() {
   if (!chart || !hasSufficientData.value) return;
 
   const dark = isDark.value;
-  const colorA = dark ? '#89b4fa' : '#3b82f6';
-  const colorB = dark ? '#fab387' : '#f97316';
-  const axisColor  = dark ? '#45475a' : '#c0cad8';
-  const labelColor = dark ? '#7f849c' : '#64748b';
-  const nameColor  = dark ? '#a6adc8' : '#374151';
-  const splitColor = dark ? '#313244' : '#dde3eb';
-  const bgColor    = dark ? '#181825' : '#ffffff';
+  const { colorA, colorB } = chartPalette(dark);
+  const { axis: axisColor, label: labelColor, split: splitColor, bg: bgColor } = gl3dColors(dark);
 
   const xObj = props.objectives.find((o) => o.metric_name === xKey.value);
   const yObj = props.objectives.find((o) => o.metric_name === yKey.value);
@@ -166,16 +162,7 @@ function buildOption() {
   const axisLabel = (o: ObjectiveItem | undefined) =>
     o ? `${o.metric_name} (${o.goal === 'min' ? '↓' : '↑'})` : '';
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const axisConfig = (name: string): any => ({
-    name,
-    nameTextStyle: { color: nameColor, fontSize: 12, fontWeight: 600 },
-    type: 'value',
-    axisLine: { lineStyle: { color: axisColor, width: 1.5 } },
-    axisTick: { lineStyle: { color: axisColor } },
-    axisLabel: { color: labelColor, fontSize: 11 },
-    splitLine: { lineStyle: { color: splitColor, opacity: 0.6 } },
-  });
+  const axisConfig = (name: string) => gl3dAxis(name, dark);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const option: any = {

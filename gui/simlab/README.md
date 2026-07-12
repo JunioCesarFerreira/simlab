@@ -15,8 +15,16 @@ algorithm (MOEA) experiments, and analysing the resulting Pareto fronts.
 | Build | Vite |
 | State | Pinia |
 | Routing | Vue Router |
-| Charts | Apache ECharts 5 + echarts-gl (WebGL 3-D) |
+| Charts | Apache ECharts 6 + echarts-gl (WebGL 3-D) |
 | HTTP | Axios |
+
+> **Known version mismatch — echarts-gl.** `echarts-gl@2.x` officially declares
+> `echarts@^5` as its peer dependency, but this project runs `echarts@6`. The
+> combination works in practice for the 3-D scatter/surface charts we use, and
+> no echarts-gl release supporting ECharts 6 exists yet. If a 3-D chart breaks
+> after an `echarts` minor upgrade, suspect this first: either pin `echarts`
+> to the last working 6.x version or check whether echarts-gl gained ECharts 6
+> support. The 2-D charts are unaffected.
 
 ---
 
