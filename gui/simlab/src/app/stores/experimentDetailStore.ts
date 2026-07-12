@@ -9,6 +9,19 @@ export const useExperimentDetailStore = defineStore("experimentDetail", () => {
   const loading = ref(false);
   const error = ref<string | null>(null);
   let _pollInterval: ReturnType<typeof setInterval> | null = null;
+  // Serialized form of the last payload assigned to `experiment`. Polling
+  // replaces the whole object every tick; when the backend returns identical
+  // data that would still invalidate every computed downstream (including the
+  // O(n²) non-dominated sort) and re-render all charts. Comparing the raw
+  // JSON first makes an idle poll tick cost one stringify instead.
+  let _lastPayload = "";
+
+  function setExperiment(data: ExperimentFullDto): void {
+    const payload = JSON.stringify(data);
+    if (payload === _lastPayload) return;
+    _lastPayload = payload;
+    experiment.value = data;
+  }
 
   const isRunning = computed(
     () =>
@@ -42,7 +55,7 @@ export const useExperimentDetailStore = defineStore("experimentDetail", () => {
     loading.value = true;
     error.value = null;
     try {
-      experiment.value = await getExperimentFull(id);
+      setExperiment(await getExperimentFull(id));
     } catch (e: unknown) {
       error.value = e instanceof Error ? e.message : String(e);
     } finally {
@@ -52,7 +65,7 @@ export const useExperimentDetailStore = defineStore("experimentDetail", () => {
 
   async function refresh(id: string) {
     try {
-      experiment.value = await getExperimentFull(id);
+      setExperiment(await getExperimentFull(id));
     } catch {
       // silently ignore polling errors
     }
@@ -81,6 +94,7 @@ export const useExperimentDetailStore = defineStore("experimentDetail", () => {
     experiment.value = null;
     error.value = null;
     loading.value = false;
+    _lastPayload = "";
   }
 
   return {

@@ -25,11 +25,28 @@ function triggerDownload(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
-async function openBlob(blob: Blob): Promise<void> {
-  const url = URL.createObjectURL(blob);
-  window.open(url, "_blank");
-  // Revoke after a delay to give the browser time to open the URL
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+/**
+ * Open a tab NOW, while still inside the user-gesture call stack, and point it
+ * at the blob once the download finishes. Calling window.open after an await
+ * loses the gesture and gets blocked by popup blockers.
+ */
+async function openAsWindow(fetching: Promise<Blob>): Promise<void> {
+  const win = window.open("about:blank", "_blank");
+  try {
+    const blob = await fetching;
+    const url = URL.createObjectURL(blob);
+    if (win) {
+      win.location = url;
+    } else {
+      // Opening was blocked anyway (e.g. triggered outside a user gesture).
+      window.open(url, "_blank");
+    }
+    // Revoke after a delay to give the browser time to load the URL
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  } catch (e) {
+    win?.close();
+    throw e;
+  }
 }
 
 // -------------------------------------------------------
@@ -43,8 +60,7 @@ export async function fetchBlobUrl(path: string): Promise<string> {
 
 export async function openTopology(individualTopologyPictureId: ID): Promise<void> {
   const url = `${baseUrl}/files/${individualTopologyPictureId}/as/png`;
-  const blob = await fetchBlob(url);
-  await openBlob(blob);
+  await openAsWindow(fetchBlob(url));
 }
 
 export async function downloadFile(fileId: ID, extension: string): Promise<void> {
