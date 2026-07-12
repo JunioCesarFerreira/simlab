@@ -13,7 +13,10 @@
             <span v-if="mobileNodeCount > 0" class="pill pill--green">{{ mobileNodeCount }} mobile nodes</span>
           </div>
         </div>
-        <button class="close-btn" @click="$emit('close')">✕</button>
+        <div class="header-actions">
+          <ChartExportButton @click="handleExportImage" />
+          <button class="close-btn" @click="$emit('close')">✕</button>
+        </div>
       </div>
       <div ref="chartEl" class="chart" />
     </div>
@@ -25,6 +28,8 @@ import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 import type { TopLevelFormatterParams } from "echarts/types/dist/shared";
 import { useEChart } from "../../composables/useEChart";
 import type { JsonObject } from "../../types/simlab";
+import { chartExportFilename } from "../../utils/chartExport";
+import ChartExportButton from "../charts/ChartExportButton.vue";
 
 const props = defineProps<{
   problem: JsonObject;
@@ -33,7 +38,11 @@ const props = defineProps<{
 defineEmits<{ (e: "close"): void }>();
 
 const chartEl = ref<HTMLElement | null>(null);
-const { setOption, ready, resize } = useEChart(chartEl);
+const { setOption, ready, resize, exportImage } = useEChart(chartEl);
+
+function handleExportImage() {
+  exportImage(chartExportFilename(`problem-${problemName.value || "topology"}`));
+}
 
 // -------------------------------------------------------
 // Parsed problem fields
@@ -391,6 +400,13 @@ onBeforeUnmount(() => {
   background: #d1fae5;
   border-color: #a7f3d0;
   color: #065f46;
+}
+
+.header-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .close-btn {

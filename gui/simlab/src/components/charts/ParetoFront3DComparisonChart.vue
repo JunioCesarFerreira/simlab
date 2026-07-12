@@ -33,6 +33,7 @@
         >
           ✋ {{ panMode ? 'Panning' : 'Pan' }}
         </button>
+        <ChartExportButton @click="handleExportImage" />
       </div>
       <div ref="chartEl" :class="['chart', { 'chart--pan': panMode }]" />
     </template>
@@ -47,6 +48,8 @@ import 'echarts-gl';
 import { useTheme } from '../../composables/useTheme';
 import { chartPalette, gl3dAxis, gl3dColors } from '../../services/chartTheme';
 import type { ParetoFrontItemDto, ObjectiveItem } from '../../types/simlab';
+import { exportChartImage, chartExportFilename } from '../../utils/chartExport';
+import ChartExportButton from './ChartExportButton.vue';
 
 const props = defineProps<{
   frontA: ParetoFrontItemDto[];
@@ -82,6 +85,12 @@ onBeforeUnmount(() => {
   chart = null;
   cameraInitialized = false;
 });
+
+function handleExportImage() {
+  exportChartImage(chart, chartExportFilename('pareto-front-3d-comparison'), {
+    backgroundColor: gl3dColors(isDark.value).bg,
+  });
+}
 
 // ── Pan mode ─────────────────────────────────────────────────────────────────
 

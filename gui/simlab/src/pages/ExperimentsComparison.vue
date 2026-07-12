@@ -193,6 +193,8 @@
                 @click="chartView = '3d'"
               >3D</button>
             </div>
+            <!-- The 3D view (ParetoFront3DComparisonChart) carries its own export button -->
+            <ChartExportButton v-if="chartView === '2d'" @click="handleExportParetoImage" />
           </div>
         </div>
 
@@ -221,11 +223,17 @@
         <div class="section-title">Convergence</div>
         <div class="evo-row">
           <div class="evo-block">
-            <div class="evo-label">Hypervolume (HV)</div>
+            <div class="evo-label-row">
+              <span class="evo-label">Hypervolume (HV)</span>
+              <ChartExportButton @click="handleExportEvoImage('hv')" />
+            </div>
             <div ref="hvEl" class="chart-fill" />
           </div>
           <div class="evo-block">
-            <div class="evo-label">Generational Distance (GD)</div>
+            <div class="evo-label-row">
+              <span class="evo-label">Generational Distance (GD)</span>
+              <ChartExportButton @click="handleExportEvoImage('gd')" />
+            </div>
             <div ref="gdEl" class="chart-fill" />
           </div>
         </div>
@@ -240,13 +248,15 @@ import { RouterLink } from 'vue-router';
 import type * as echarts from 'echarts';
 import { useEChart } from '../composables/useEChart';
 import { useTheme } from '../composables/useTheme';
-import { chartPalette } from '../services/chartTheme';
+import { chartPalette, chartExportBackground } from '../services/chartTheme';
 import ResizableChartCard from '../components/common/ResizableChartCard.vue';
+import ChartExportButton from '../components/charts/ChartExportButton.vue';
 import { getAllCampaigns, getCampaignFull } from '../api/campaigns';
 import { getExperiment } from '../api/experiments';
 import client from '../api/client';
 import type { CampaignInfoDto, ExperimentDto, ObjectiveItem } from '../types/simlab';
 import { extractFront, coverage, epsilonIndicator, igdPlus, spacing } from '../utils/comparisonMetrics';
+import { chartExportFilename } from '../utils/chartExport';
 
 const ParetoFront3DComparisonChart = defineAsyncComponent(
   () => import('../components/charts/ParetoFront3DComparisonChart.vue'),
@@ -518,6 +528,19 @@ const gdEl = ref<HTMLElement | null>(null);
 const paretoChart = useEChart(paretoEl);
 const hvChart = useEChart(hvEl);
 const gdChart = useEChart(gdEl);
+
+function handleExportParetoImage() {
+  paretoChart.exportImage(chartExportFilename('pareto-front-comparison'), {
+    backgroundColor: chartExportBackground(isDark.value),
+  });
+}
+
+function handleExportEvoImage(kind: 'hv' | 'gd') {
+  const target = kind === 'hv' ? hvChart : gdChart;
+  target.exportImage(chartExportFilename(kind === 'hv' ? 'hv-comparison' : 'gd-comparison'), {
+    backgroundColor: chartExportBackground(isDark.value),
+  });
+}
 
 function renderParetoChart() {
   if (!result.value) return;
@@ -1073,6 +1096,14 @@ watch(chartView, async (view) => {
   flex-direction: column;
   gap: 6px;
   min-height: 0;
+}
+
+.evo-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .evo-label {

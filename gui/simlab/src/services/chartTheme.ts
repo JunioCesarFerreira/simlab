@@ -26,6 +26,17 @@ export function chartPalette(dark: boolean) {
   };
 }
 
+/**
+ * Solid background used when exporting a chart to a PNG. The on-screen canvas
+ * of most 2-D charts is transparent (relying on the card underneath), which
+ * would produce an unreadable image once pasted onto a plain page — so image
+ * export always bakes in an explicit, theme-matching background instead.
+ * Same dark tone as the echarts-gl scenes' `bg` (Catppuccin Mocha "Mantle").
+ */
+export function chartExportBackground(dark: boolean): string {
+  return dark ? "#181825" : "#ffffff";
+}
+
 /** Color tokens for the echarts-gl 3-D scenes. */
 export function gl3dColors(dark: boolean) {
   return {

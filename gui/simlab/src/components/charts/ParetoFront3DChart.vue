@@ -61,6 +61,7 @@
             <span class="marked-id" :title="markedId">📍 {{ markedId.slice(0, 14) }}…</span>
             <button class="clear-pin" title="Clear pin" @click="markedId = ''">✕</button>
           </div>
+          <ChartExportButton @click="handleExportImage" />
         </div>
       </div>
 
@@ -79,6 +80,8 @@ import { gl3dAxis, gl3dColors } from "../../services/chartTheme";
 import type { ParetoFrontItemDto, GenerationDto } from "../../types/simlab";
 import { isPenalized } from "../../types/simlab";
 import { stableStringify } from "../../utils/stableStringify";
+import { exportChartImage, chartExportFilename } from "../../utils/chartExport";
+import ChartExportButton from "./ChartExportButton.vue";
 
 const props = defineProps<{
   paretoFront: ParetoFrontItemDto[] | null | undefined;
@@ -133,6 +136,12 @@ function teardownChart() {
   chart?.dispose();
   chart = null;
   cameraInitialized = false;
+}
+
+function handleExportImage() {
+  exportChartImage(chart, chartExportFilename("pareto-front-3d"), {
+    backgroundColor: gl3dColors(isDark.value).bg,
+  });
 }
 
 // Watch the element (not onMounted): chartEl lives under v-if, so it can be

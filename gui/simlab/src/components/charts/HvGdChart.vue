@@ -11,8 +11,18 @@
       No reference front available yet.
     </div>
     <div v-else class="hvgd-charts">
-      <div ref="hvEl" class="hvgd-chart" role="img" aria-label="Hypervolume per generation chart" />
-      <div ref="gdEl" class="hvgd-chart" role="img" aria-label="Generational distance per generation chart" />
+      <div class="hvgd-col">
+        <div class="controls-bar">
+          <ChartExportButton @click="handleExportImage('hv')" />
+        </div>
+        <div ref="hvEl" class="hvgd-chart" role="img" aria-label="Hypervolume per generation chart" />
+      </div>
+      <div class="hvgd-col">
+        <div class="controls-bar">
+          <ChartExportButton @click="handleExportImage('gd')" />
+        </div>
+        <div ref="gdEl" class="hvgd-chart" role="img" aria-label="Generational distance per generation chart" />
+      </div>
     </div>
   </div>
 </template>
@@ -22,8 +32,10 @@ import { ref, watch, onMounted, onBeforeUnmount } from "vue";
 import * as echarts from "../../lib/echarts";
 import type { EChartsOption, DefaultLabelFormatterCallbackParams } from "echarts";
 import { useTheme } from "../../composables/useTheme";
-import { chartPalette } from "../../services/chartTheme";
+import { chartPalette, chartExportBackground } from "../../services/chartTheme";
 import client from "../../api/client";
+import { exportChartImage, chartExportFilename } from "../../utils/chartExport";
+import ChartExportButton from "./ChartExportButton.vue";
 
 const props = defineProps<{
   experimentId: string;
@@ -52,6 +64,13 @@ const gdEl = ref<HTMLElement | null>(null);
 let hvChart: echarts.EChartsType | null = null;
 let gdChart: echarts.EChartsType | null = null;
 let ro: ResizeObserver | null = null;
+
+function handleExportImage(kind: "hv" | "gd") {
+  const chart = kind === "hv" ? hvChart : gdChart;
+  exportChartImage(chart, chartExportFilename(kind === "hv" ? "hypervolume" : "generational-distance"), {
+    backgroundColor: chartExportBackground(isDark.value),
+  });
+}
 
 // ── fetch ───────────────────────────────────────────────────────────────────
 async function fetchData() {
@@ -267,10 +286,23 @@ watch(
   min-height: 0;
 }
 
+.hvgd-col {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
 .hvgd-chart {
   flex: 1;
   min-width: 0;
   min-height: 0;
+}
+
+.controls-bar {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .hvgd-placeholder {

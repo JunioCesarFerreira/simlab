@@ -3,6 +3,7 @@ import * as echarts from "../lib/echarts";
 // Types come from the full package (echarts/core doesn't re-export them);
 // type-only imports cost nothing at runtime.
 import type { EChartsOption, SetOptionOpts } from "echarts";
+import { exportChartImage, type ExportChartImageOptions } from "../utils/chartExport";
 
 export function useEChart(containerRef: Ref<HTMLElement | null>) {
   let chart: echarts.EChartsType | null = null;
@@ -83,5 +84,9 @@ export function useEChart(containerRef: Ref<HTMLElement | null>) {
     chart?.dispatchAction(action);
   }
 
-  return { ready, setOption, resize, on, dispatch };
+  function exportImage(filename: string, opts?: ExportChartImageOptions) {
+    exportChartImage(chart, filename, opts);
+  }
+
+  return { ready, setOption, resize, on, dispatch, exportImage };
 }

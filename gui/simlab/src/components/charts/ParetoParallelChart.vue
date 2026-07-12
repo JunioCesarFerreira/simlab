@@ -4,6 +4,9 @@
       <span v-if="!paretoFront?.length">Pareto front not available</span>
       <span v-else>At least 2 objectives are required for visualization</span>
     </div>
+    <div v-show="hasSufficientData" class="controls-bar">
+      <ChartExportButton @click="handleExportImage" />
+    </div>
     <div v-show="hasSufficientData" ref="chartEl" class="chart" role="img" aria-label="Parallel coordinates chart" />
   </div>
 </template>
@@ -15,6 +18,9 @@ import { useTheme } from "../../composables/useTheme";
 import { PENALTY_THRESHOLD } from "../../types/simlab";
 import type { ParetoFrontItemDto, FloatMap } from "../../types/simlab";
 import { stableStringify } from "../../utils/stableStringify";
+import { chartExportFilename } from "../../utils/chartExport";
+import { chartExportBackground } from "../../services/chartTheme";
+import ChartExportButton from "./ChartExportButton.vue";
 
 const props = defineProps<{
   paretoFront: ParetoFrontItemDto[] | null | undefined;
@@ -33,7 +39,13 @@ const emit = defineEmits<{
 const { isDark } = useTheme();
 
 const chartEl = ref<HTMLElement | null>(null);
-const { setOption, ready, on } = useEChart(chartEl);
+const { setOption, ready, on, exportImage } = useEChart(chartEl);
+
+function handleExportImage() {
+  exportImage(chartExportFilename("parallel-coordinates"), {
+    backgroundColor: chartExportBackground(isDark.value),
+  });
+}
 
 // ── Derived keys & goals ──────────────────────────────────────────────────────
 
@@ -266,5 +278,10 @@ onMounted(() => {
   font-size: 13px;
   font-style: italic;
   min-height: 200px;
+}
+
+.controls-bar {
+  display: flex;
+  justify-content: flex-end;
 }
 </style>

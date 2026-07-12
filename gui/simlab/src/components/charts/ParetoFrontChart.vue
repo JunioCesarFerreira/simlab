@@ -43,6 +43,7 @@
             title="Reset zoom to full view"
             @click="resetZoom"
           >↺ Reset zoom</button>
+          <ChartExportButton @click="handleExportImage" />
         </div>
       </div>
 
@@ -59,6 +60,8 @@ import { useEChart } from "../../composables/useEChart";
 import type { ParetoFrontItemDto, GenerationDto } from "../../types/simlab";
 import { isPenalized } from "../../types/simlab";
 import { stableStringify } from "../../utils/stableStringify";
+import { chartExportFilename } from "../../utils/chartExport";
+import ChartExportButton from "./ChartExportButton.vue";
 
 const props = defineProps<{
   paretoFront: ParetoFrontItemDto[] | null | undefined;
@@ -87,7 +90,11 @@ interface ChartPoint {
 }
 
 const chartEl = ref<HTMLElement | null>(null);
-const { setOption, ready, on, dispatch } = useEChart(chartEl);
+const { setOption, ready, on, dispatch, exportImage } = useEChart(chartEl);
+
+function handleExportImage() {
+  exportImage(chartExportFilename("pareto-front"));
+}
 
 // True after the first successful setOption; later rebuilds use replaceMerge
 // so dataZoom (the user's current zoom) survives instead of resetting on

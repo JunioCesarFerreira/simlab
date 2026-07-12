@@ -1,7 +1,12 @@
 <template>
   <div class="chart-wrap">
     <div v-if="!hasData" class="empty">No generation data to display</div>
-    <div v-else ref="chartEl" class="chart" role="img" aria-label="Objectives evolution line chart" />
+    <template v-else>
+      <div class="controls-bar">
+        <ChartExportButton @click="handleExportImage" />
+      </div>
+      <div ref="chartEl" class="chart" role="img" aria-label="Objectives evolution line chart" />
+    </template>
   </div>
 </template>
 
@@ -10,6 +15,8 @@ import { ref, computed, watch, onMounted } from "vue";
 import type { TopLevelFormatterParams } from "echarts/types/dist/shared";
 import { useEChart } from "../../composables/useEChart";
 import type { GenerationDto } from "../../types/simlab";
+import { chartExportFilename } from "../../utils/chartExport";
+import ChartExportButton from "./ChartExportButton.vue";
 
 const props = defineProps<{
   generations: GenerationDto[];
@@ -25,7 +32,11 @@ interface TooltipPoint {
 }
 
 const chartEl = ref<HTMLElement | null>(null);
-const { setOption, ready } = useEChart(chartEl);
+const { setOption, ready, exportImage } = useEChart(chartEl);
+
+function handleExportImage() {
+  exportImage(chartExportFilename("objectives-evolution"));
+}
 
 const finishedGens = computed(() =>
   props.generations
@@ -182,5 +193,10 @@ onMounted(buildOption);
   color: var(--color-text-muted);
   font-size: 13px;
   font-style: italic;
+}
+
+.controls-bar {
+  display: flex;
+  justify-content: flex-end;
 }
 </style>
