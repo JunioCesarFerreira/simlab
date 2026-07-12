@@ -24,9 +24,15 @@ const routes: RouteRecordRaw[] = [
     props: true,
   },
   { path: "/compare", component: () => import("../../pages/ExperimentsComparison.vue") },
+  // Catch-all: unknown URLs render a 404 page instead of a blank shell
+  { path: "/:pathMatch(.*)*", component: () => import("../../pages/NotFound.vue") },
 ];
 
 export default createRouter({
   history: createWebHistory(),
   routes,
+  scrollBehavior(_to, _from, savedPosition) {
+    // Restore the scroll position on back/forward, start at the top otherwise
+    return savedPosition ?? { top: 0 };
+  },
 });
