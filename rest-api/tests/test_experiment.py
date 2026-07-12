@@ -82,6 +82,31 @@ class TestCreateExperiment:
         assert resp.status_code == 500
 
 
+# ── GET / (list all) ───────────────────────────────────────────────────────────
+class TestGetAllExperiments:
+    def test_returns_list_with_status(self, client, mock_factory):
+        exp = sample_experiment()
+        exp["status"] = "Running"
+        mock_factory.experiment_repo.find_all_info.return_value = [exp]
+        resp = client.get(f"{BASE}/")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["name"] == "Test Experiment"
+        assert data[0]["status"] == "Running"
+
+    def test_empty_list(self, client, mock_factory):
+        mock_factory.experiment_repo.find_all_info.return_value = []
+        resp = client.get(f"{BASE}/")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_repo_error_returns_500(self, client, mock_factory):
+        mock_factory.experiment_repo.find_all_info.side_effect = RuntimeError("db error")
+        resp = client.get(f"{BASE}/")
+        assert resp.status_code == 500
+
+
 # ── GET /by-status/{status} ────────────────────────────────────────────────────
 class TestGetExperimentsByStatus:
     def test_returns_list(self, client, mock_factory):

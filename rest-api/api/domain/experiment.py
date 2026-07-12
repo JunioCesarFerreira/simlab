@@ -61,6 +61,9 @@ class ExperimentFullDto(TypedDict):
 class ExperimentInfoDto(TypedDict, total=False):
     id: Optional[str]
     name: str
+    # Present in GET /experiments/ responses; omitted by /by-status/{status},
+    # where the status is implied by the route.
+    status: Optional[str]
     system_message: Optional[str]
     start_time: Optional[datetime]
     end_time: Optional[datetime]

@@ -7,8 +7,6 @@ import type {
   ExperimentStatus,
 } from "../types/simlab";
 
-const ALL_STATUSES: ExperimentStatus[] = ["Waiting", "Running", "Done", "Error"];
-
 type BackendExperimentInfo = Omit<ExperimentInfoDto, "status">;
 
 export async function getExperimentsByStatus(
@@ -21,10 +19,10 @@ export async function getExperimentsByStatus(
 }
 
 export async function getAllExperiments(): Promise<ExperimentInfoDto[]> {
-  const results = await Promise.all(
-    ALL_STATUSES.map((s) => getExperimentsByStatus(s)),
-  );
-  return results.flat();
+  // Single listing endpoint: the status comes from the backend, so experiments
+  // never silently vanish if a new status value is introduced server-side.
+  const { data } = await client.get<ExperimentInfoDto[]>("/experiments/");
+  return data;
 }
 
 export async function getExperiment(id: string): Promise<ExperimentDto> {

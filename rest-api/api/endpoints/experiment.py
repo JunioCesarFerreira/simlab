@@ -40,6 +40,18 @@ def create_experiment(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/", response_model=list[ExperimentInfoDto])
+def get_all_experiments(
+    factory: MongoRepository = Depends(get_factory)
+) -> list[ExperimentInfoDto]:
+    """Lightweight listing of every experiment, status included."""
+    try:
+        docs = factory.experiment_repo.find_all_info()
+        return [experiment_info_from_mongo(d) for d in docs]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/by-status/{status}", response_model=list[ExperimentInfoDto])
 def get_experiments_by_status(
     status: str,

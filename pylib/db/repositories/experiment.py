@@ -27,6 +27,15 @@ class ExperimentRepository:
                  "parameters.simulation.synthetic": 1}
             ))
 
+    def find_all_info(self) -> list[dict[str, Any]]:
+        """Lightweight listing of every experiment, status included."""
+        with self.connection.connect() as db:
+            return list(db["experiments"].find(
+                {},
+                {"_id": 1, "name": 1, "status": 1, "system_message": 1, "start_time": 1,
+                 "end_time": 1, "parameters.simulation.synthetic": 1}
+            ))
+
     def find_startable_by_status(self, status: EnumStatus) -> list[dict[str, Any]]:
         with self.connection.connect() as db:
             return list(db["experiments"].find({"status": status}))

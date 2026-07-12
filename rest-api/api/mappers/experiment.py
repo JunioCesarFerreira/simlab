@@ -57,7 +57,7 @@ def experiment_info_from_mongo(doc: dict) -> ExperimentInfoDto:
     id_str, d = pop_id(doc)
     syn_cfg: dict = ((d.get("parameters") or {}).get("simulation") or {}).get("synthetic") or {}
     is_synthetic: bool = bool(syn_cfg.get("enabled", False))
-    return {
+    info: ExperimentInfoDto = {
         "id": id_str,
         "name": d.get("name", ""),
         "system_message": d.get("system_message", ""),
@@ -66,6 +66,11 @@ def experiment_info_from_mongo(doc: dict) -> ExperimentInfoDto:
         "is_synthetic": is_synthetic,
         "synthetic_bench": syn_cfg.get("bench") if is_synthetic else None,
     }
+    # Only present when the query projected it (find_all_info); the by-status
+    # listing omits it because the route already implies the status.
+    if "status" in d:
+        info["status"] = d["status"]
+    return info
 
 
 def experiment_to_mongo(dto: ExperimentDto) -> Experiment:
