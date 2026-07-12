@@ -46,14 +46,20 @@ export function useExperimentViewState(experimentId: string) {
 
   const state = ref<ExperimentViewState>(saved)
 
+  // Debounced: a resize drag mutates the state dozens of times per second;
+  // one write shortly after the burst settles is enough.
+  let saveTimer: ReturnType<typeof setTimeout> | null = null
   watch(
     state,
     (s) => {
-      try {
-        sessionStorage.setItem(storageKey(experimentId), JSON.stringify(s))
-      } catch {
-        // ignore quota / security errors
-      }
+      if (saveTimer) clearTimeout(saveTimer)
+      saveTimer = setTimeout(() => {
+        try {
+          sessionStorage.setItem(storageKey(experimentId), JSON.stringify(s))
+        } catch {
+          // ignore quota / security errors
+        }
+      }, 300)
     },
     { deep: true },
   )

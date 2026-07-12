@@ -228,7 +228,7 @@
 
         <!-- Charts panel -->
         <div class="charts-panel">
-          <div class="card chart-card" :style="{ height: paretoH + 'px' }">
+          <ResizableChartCard v-model="paretoH" label="Pareto front chart">
             <div class="section-title pareto-title">
               Pareto Front
               <div class="pareto-toggles">
@@ -276,46 +276,31 @@
               :rank-map="individualRankMap"
               :chromosome-map="store.chromosomeToIndividualId"
               :strategy="store.experiment.parameters.strategy"
-              :reference-point-divisions="(store.experiment.parameters.algorithm?.['divisions'] as number | undefined)"
+              :reference-point-divisions="store.experiment.parameters.algorithm?.divisions"
               :init-x="pareto3dXKey"
               :init-y="pareto3dYKey"
               :init-z="pareto3dZKey"
               @click-individual="openIndividual"
               @axis-change="on3dAxisChange"
             />
-            <div
-              class="resize-handle"
-              title="Arrastar para redimensionar"
-              @pointerdown="startParetoResize"
-            />
-          </div>
-          <div class="card chart-card" :style="{ height: hvgdH + 'px' }">
+          </ResizableChartCard>
+          <ResizableChartCard v-model="hvgdH" label="HV and GD chart">
             <div class="section-title">HV &amp; GD per generation</div>
             <HvGdChart
               :experiment-id="props.id"
               :objective-names="store.objectiveNames"
               :objective-goals="store.objectiveGoals"
             />
-            <div
-              class="resize-handle"
-              title="Arrastar para redimensionar"
-              @pointerdown="startHvGdResize"
-            />
-          </div>
-          <div class="card chart-card" :style="{ height: evolutionH + 'px' }">
+          </ResizableChartCard>
+          <ResizableChartCard v-model="evolutionH" label="Objectives evolution chart">
             <div class="section-title">Objectives evolution (best per generation)</div>
             <ObjectivesEvolutionChart
               :generations="store.experiment.generations"
               :objective-names="store.objectiveNames"
               :objective-goals="store.objectiveGoals"
             />
-            <div
-              class="resize-handle"
-              title="Arrastar para redimensionar"
-              @pointerdown="startEvoResize"
-            />
-          </div>
-          <div class="card chart-card" :style="{ height: parallelH + 'px' }">
+          </ResizableChartCard>
+          <ResizableChartCard v-model="parallelH" label="Parallel coordinates chart" :max="800">
             <div class="section-title">Parallel coordinates — Pareto solutions</div>
             <ParetoParallelChart
               :pareto-front="store.experiment.pareto_front"
@@ -324,12 +309,7 @@
               :objective-goals="store.objectiveGoals"
               @click-individual="openIndividual"
             />
-            <div
-              class="resize-handle"
-              title="Arrastar para redimensionar"
-              @pointerdown="startParallelResize"
-            />
-          </div>
+          </ResizableChartCard>
         </div>
       </div>
 
@@ -398,7 +378,9 @@ import ProblemVizModal from "../components/detail/ProblemVizModal.vue";
 import { downloadAnalysisZip, downloadTopologiesZip } from "../api/files";
 import { updateExperiment, plotParetoResults, deleteExperiment } from "../api/experiments";
 import { useRouter } from "vue-router";
-import { useResizable } from "../composables/useResizable";
+import ResizableChartCard from "../components/common/ResizableChartCard.vue";
+import { confirmDialog } from "../composables/useConfirm";
+import { reportRuntimeError } from "../composables/useRuntimeError";
 import type { IndividualDto, JsonObject, ParetoFrontItemDto } from "../types/simlab";
 import { isPenalized } from "../types/simlab";
 import { computeRanks, computeRanksWithDuplicates } from "../utils/nonDominatedSort";
@@ -411,21 +393,22 @@ const router = useRouter();
 const deleting = ref(false);
 async function doDelete() {
   const name = store.experiment?.name ?? "this experiment";
-  if (
-    !confirm(
-      `Delete experiment "${name}"?\n\nThis permanently removes the experiment and all its artifacts ` +
-        `(generations, individuals, simulations and their files). Shared source code is not affected. ` +
-        `This cannot be undone.`,
-    )
-  ) {
-    return;
-  }
+  const ok = await confirmDialog({
+    title: `Delete experiment "${name}"?`,
+    message:
+      "This permanently removes the experiment and all its artifacts " +
+      "(generations, individuals, simulations and their files). Shared source code is not affected. " +
+      "This cannot be undone.",
+    confirmLabel: "Delete",
+    danger: true,
+  });
+  if (!ok) return;
   deleting.value = true;
   try {
     await deleteExperiment(props.id);
     router.push("/experiments");
   } catch (e) {
-    alert(`Failed to delete experiment: ${e instanceof Error ? e.message : String(e)}`);
+    reportRuntimeError(e, "Failed to delete experiment");
     deleting.value = false;
   }
 }
@@ -433,48 +416,44 @@ async function doDelete() {
 // 2D / 3D toggle — only shown when there are ≥ 3 objectives
 const has3Objectives = computed(() => (store.objectiveNames?.length ?? 0) >= 3);
 
-const isSynthetic = computed(() => {
-  const syn = (store.experiment?.parameters?.simulation as Record<string, unknown> | undefined)
-  return Boolean((syn?.['synthetic'] as Record<string, unknown> | undefined)?.['enabled'])
-})
-const syntheticBench = computed(() => {
-  const syn = (store.experiment?.parameters?.simulation as Record<string, unknown> | undefined)
-  return ((syn?.['synthetic'] as Record<string, unknown> | undefined)?.['bench'] as string | undefined) ?? 'Synthetic'
-})
+const isSynthetic = computed(
+  () => store.experiment?.parameters?.simulation?.synthetic?.enabled ?? false,
+);
+const syntheticBench = computed(
+  () => store.experiment?.parameters?.simulation?.synthetic?.bench ?? "Synthetic",
+);
 
 // Persistent per-experiment view state (survives navigation away and back)
 const viewState = useExperimentViewState(props.id);
 
-const chartView = ref<"2d" | "3d">(viewState.value.chartView);
-watch(chartView, (v) => { viewState.value.chartView = v; });
+// Two-way binding into the persisted view state: reads come from (and writes
+// go straight to) `viewState`, so no ref+watch pair per field is needed.
+function persisted<K extends keyof typeof viewState.value>(key: K) {
+  return computed({
+    get: () => viewState.value[key],
+    set: (v: (typeof viewState.value)[K]) => { viewState.value[key] = v; },
+  });
+}
+
+const chartView = persisted("chartView");
 
 // Pareto front scope: over all explored solutions, or only the last generation
-const paretoScope = ref<"all" | "last">(viewState.value.paretoScope);
-watch(paretoScope, (v) => { viewState.value.paretoScope = v; });
+const paretoScope = persisted("paretoScope");
 // Reset to 2D if objectives data loads and turns out there aren't 3
 watch(has3Objectives, (has3) => { if (!has3 && chartView.value === '3d') chartView.value = '2d'; });
 
-// Per-card resizable height (initialized from saved state)
-const { height: paretoH, startResize: startParetoResize } = useResizable({ initial: viewState.value.paretoH });
-const { height: hvgdH, startResize: startHvGdResize } = useResizable({ initial: viewState.value.hvgdH });
-const { height: evolutionH, startResize: startEvoResize } = useResizable({ initial: viewState.value.evolutionH });
-const { height: parallelH, startResize: startParallelResize } = useResizable({ initial: viewState.value.parallelH, min: 180, max: 800 });
-watch(paretoH, (v) => { viewState.value.paretoH = v; });
-watch(hvgdH, (v) => { viewState.value.hvgdH = v; });
-watch(evolutionH, (v) => { viewState.value.evolutionH = v; });
-watch(parallelH, (v) => { viewState.value.parallelH = v; });
+// Per-card resizable height
+const paretoH = persisted("paretoH");
+const hvgdH = persisted("hvgdH");
+const evolutionH = persisted("evolutionH");
+const parallelH = persisted("parallelH");
 
-// Axis selections — persisted and passed to chart components as initial values
-const paretoXKey = ref(viewState.value.paretoXKey);
-const paretoYKey = ref(viewState.value.paretoYKey);
-const pareto3dXKey = ref(viewState.value.pareto3dXKey);
-const pareto3dYKey = ref(viewState.value.pareto3dYKey);
-const pareto3dZKey = ref(viewState.value.pareto3dZKey);
-watch(paretoXKey, (v) => { viewState.value.paretoXKey = v; });
-watch(paretoYKey, (v) => { viewState.value.paretoYKey = v; });
-watch(pareto3dXKey, (v) => { viewState.value.pareto3dXKey = v; });
-watch(pareto3dYKey, (v) => { viewState.value.pareto3dYKey = v; });
-watch(pareto3dZKey, (v) => { viewState.value.pareto3dZKey = v; });
+// Axis selections — passed to chart components as initial values
+const paretoXKey = persisted("paretoXKey");
+const paretoYKey = persisted("paretoYKey");
+const pareto3dXKey = persisted("pareto3dXKey");
+const pareto3dYKey = persisted("pareto3dYKey");
+const pareto3dZKey = persisted("pareto3dZKey");
 
 function onParetoAxisChange({ x, y }: { x: string; y: string }) {
   paretoXKey.value = x;
@@ -575,7 +554,7 @@ const finishedCount = computed(
 
 const totalGenerations = computed(
   () =>
-    (store.experiment?.parameters?.algorithm?.["number_of_generations"] as number | undefined) ??
+    store.experiment?.parameters?.algorithm?.number_of_generations ??
     store.experiment?.generations.length ??
     0,
 );
@@ -595,10 +574,9 @@ const metricColumns = computed(() =>
 );
 
 // Simulation parameters derived view
-const simulationSeeds = computed<number[]>(() => {
-  const raw = store.experiment?.parameters?.simulation?.["random_seeds"];
-  return Array.isArray(raw) ? raw.map((v) => Number(v)) : [];
-});
+const simulationSeeds = computed<number[]>(
+  () => store.experiment?.parameters?.simulation?.random_seeds ?? [],
+);
 
 const simulationOtherParams = computed(() => {
   const sim = store.experiment?.parameters?.simulation ?? {};
@@ -623,12 +601,10 @@ const totalSimulations = computed(() => {
 const expectedSimulations = computed<number | null>(() => {
   const exp = store.experiment;
   if (!exp) return null;
-  const popSize = Number(exp.parameters.algorithm?.["population_size"]);
-  const numGens = Number(exp.parameters.algorithm?.["number_of_generations"]);
+  const popSize = exp.parameters.algorithm?.population_size ?? 0;
+  const numGens = exp.parameters.algorithm?.number_of_generations ?? 0;
   const seedsCount =
-    simulationSeeds.value.length ||
-    Number(exp.parameters.simulation?.["random_seeds_count"]) ||
-    0;
+    simulationSeeds.value.length || exp.parameters.simulation?.random_seeds_count || 0;
   if (!popSize || !numGens || !seedsCount) return null;
   return popSize * numGens * seedsCount;
 });
@@ -657,7 +633,7 @@ async function saveEdit() {
     store.experiment!.name = draftName.value.trim();
     editing.value = false;
   } catch (e) {
-    console.error("Failed to update experiment name:", e);
+    reportRuntimeError(e, "Failed to rename experiment");
   } finally {
     savingName.value = false;
   }
@@ -742,6 +718,9 @@ function formatParamVal(val: unknown): string {
 }
 
 onMounted(async () => {
+  // Drop whichever experiment the singleton store still holds from a previous
+  // visit, so the page shows a loading state instead of stale data.
+  store.clear();
   await store.fetch(props.id);
   store.startPolling(props.id);
 });
@@ -1118,44 +1097,7 @@ onBeforeUnmount(() => {
   gap: 16px;
 }
 
-.chart-card {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  /* height controlled by :style binding — min enforced by useResizable */
-}
-
-.resize-handle {
-  flex-shrink: 0;
-  height: 10px;
-  margin: 4px -16px -16px;  /* bleed to card edges, absorb card padding-bottom */
-  cursor: ns-resize;
-  touch-action: none;  /* pointer-capture drag: don't let touch scroll steal it */
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-top: 1px solid var(--color-border);
-  background: transparent;
-  transition: background 0.15s;
-}
-
-.resize-handle::after {
-  content: '';
-  width: 36px;
-  height: 3px;
-  border-radius: 99px;
-  background: var(--color-border);
-  transition: background 0.15s, transform 0.15s;
-}
-
-.resize-handle:hover {
-  background: var(--color-surface-hover);
-}
-
-.resize-handle:hover::after {
-  background: var(--color-text-muted);
-  transform: scaleX(1.25);
-}
+/* card chrome + resize handle live in ResizableChartCard */
 
 .pareto-title {
   display: flex;
