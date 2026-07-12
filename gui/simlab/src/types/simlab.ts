@@ -55,10 +55,46 @@ export interface DataConversionConfigDto {
   metrics: MetricItem[];
 }
 
+/**
+ * Algorithm parameters as built by the launch wizards. All optional because
+ * strategies differ (random_search has no evolutionary operators, only NSGA-III
+ * has divisions); the index signature tolerates strategy-specific extras.
+ */
+export interface AlgorithmParamsDto {
+  population_size?: number;
+  number_of_generations?: number;
+  random_seed?: number;
+  divisions?: number;
+  prob_cx?: number;
+  prob_mt?: number;
+  per_gene_prob?: number;
+  selection_method?: string;
+  crossover_method?: string;
+  mutation_method?: string;
+  // `unknown` (not JsonValue): the recursive JsonValue union inside an index
+  // signature blows up Vue's deep ref-unwrapping type instantiation (TS2589).
+  [k: string]: unknown;
+}
+
+export interface SyntheticConfigDto {
+  enabled: boolean;
+  bench?: string;
+  noise_std?: number;
+}
+
+export interface SimulationParamsDto {
+  duration?: number;
+  random_seeds?: number[];
+  random_seeds_count?: number;
+  synthetic?: SyntheticConfigDto;
+  // See AlgorithmParamsDto for why this is `unknown`.
+  [k: string]: unknown;
+}
+
 export interface ParametersDto {
   strategy: string;
-  algorithm: JsonObject;
-  simulation: JsonObject;
+  algorithm: AlgorithmParamsDto;
+  simulation: SimulationParamsDto;
   problem: JsonObject;
   objectives: ObjectiveItem[];
 }

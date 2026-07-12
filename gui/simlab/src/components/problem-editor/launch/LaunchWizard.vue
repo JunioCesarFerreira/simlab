@@ -156,6 +156,10 @@ onMounted(async () => {
 // Derive initial MAC protocol from the chromosome draft
 const initMacProtocol = problemStore.draft.chromosome?.macProtocol ?? 'csma'
 
+// Default experiment name derived from the problem being edited (the strategy
+// in the name matches the default strategy selected below).
+const initName = `Performing optimization with NSGA-III on ${problemStore.draft.name || 'problem'}`
+
 // Defaults from post-nsga3-experiment-p2.json
 const form = reactive<{
   experiment: Step2Value
@@ -164,7 +168,7 @@ const form = reactive<{
   dataConversion: DataConversionConfigDto
 }>({
   experiment: {
-    name: 'Performing optimization with NSGA-III on problem P2',
+    name: initName,
     strategy: 'nsga3',
     sourceOptions: [{ protocol: initMacProtocol, repoId: '' }],
     populationSize: 50,
