@@ -87,3 +87,29 @@ Input shape (subset relevant to this strategy):
 Use cases: reproducible benchmarks, validating a specific Pareto set found by
 another strategy, or executing a user-curated candidate list without any
 evolutionary search.
+
+> Note: `batch` is the only strategy **without** the analytical fast-path
+> described below — synthetic batch experiments are evaluated by the
+> master-node (`master-node/lib/synthetic_data.py`), not in-process.
+
+## Analytical fast-path (`analytical.py`)
+
+For analytical problems (P0 synthetic benchmarks — DTLZ2/ZDT1/SCH1) the
+objectives are a closed-form function of the decision vector, so the evaluation
+map $f : X \rightarrow Y$ is computed **directly in the mo-engine process**
+instead of being delegated to simulation:
+
+- During `_generation_enqueue`, when `ProblemAdapter.is_analytical` is `True`,
+  the strategy calls `analytical_objectives()` and inserts the `Individual`
+  with its objectives already filled — **no `Simulation` document is created**
+  and the master-node is never involved.
+- The benchmark is evaluated once per simulation seed and averaged (mean),
+  mirroring the multi-seed aggregation used for simulation-based problems.
+- Observation noise is reproducible: the RNG is seeded per
+  `(seed, genome_hash)` pair, so re-evaluations and genome-cache hits are
+  always consistent.
+
+Supported by `nsga2`, `nsga3`, `random_search` and, by inheritance, all
+DEAP/pymoo variants. See
+[docs/markdown/SYNTHETIC_MODE.md](../../../docs/markdown/SYNTHETIC_MODE.md)
+for the complete guide to synthetic mode.

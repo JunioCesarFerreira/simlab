@@ -312,7 +312,7 @@ All raw outputs, logs, and metadata are stored in MongoDB/GridFS for reproducibi
 ### 6. Additional Resources
 
 * **Synthetic Problems Guide**
-  A detailed usage guide for running synthetic benchmark problems (DTLZ2, ZDT1, SCH1) without requiring Cooja is available in the [documentation directory](./docs/markdown/SYNTHETIC_MODE.md). Synthetic instances can be defined visually from the **Synthetic Instances** page in the GUI (sidebar → *Synthetic*), or enabled per-experiment via the Launch Wizard toggle.
+  A detailed usage guide for running synthetic benchmark problems (DTLZ2, ZDT1, SCH1) without requiring Cooja is available in the [documentation directory](./docs/markdown/SYNTHETIC_MODE.md). Synthetic instances are defined visually from the **Synthetic Instances** page in the GUI (sidebar → *Synthetic*) and encoded as the analytical problem P0, which the mo-engine evaluates **in-process** — no simulation jobs are created and the master-node is not involved (the master-node retains a synthetic fallback for the `batch` strategy, legacy experiments, and the `ENABLE_DATA_SYNTHETIC` override).
 
 * **Changelog**
   Recent updates and feature additions are documented in the [`CHANGELOG.md`](./CHANGELOG.md) file.
@@ -412,7 +412,10 @@ When contributing, please make sure changes are consistent with this modular arc
   cd debug/local
   docker-compose up --build
   ```
-* Run synthetic mode for validation without Cooja:
+* Run synthetic mode for validation without Cooja — either launch a P0
+  experiment from the GUI *Synthetic Instances* page (evaluated in-process by
+  the mo-engine, no master-node needed), or force the master-node fallback for
+  experiments without a per-experiment `synthetic` block:
 
   ```bash
   export ENABLE_DATA_SYNTHETIC=true

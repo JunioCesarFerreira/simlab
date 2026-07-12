@@ -1,13 +1,57 @@
 # Overview of the Problems
 
-The four problems considered in this current version are:
+The five problems considered in this current version are:
 
+0. **Pure analytical benchmark (algorithm validation)** — no WSN semantics.
 1. **Continuous placement of fixed motes to cover mobile motes, with a fixed sink.**
 2. **Selection of candidate positions for fixed motes to cover mobile motes, with a fixed sink.**
 3. **Selection of candidate positions for fixed motes to cover sensing targets, with a fixed sink.**
 4. **Route and stop planning for a mobile sink to collect data in an initially disconnected sensor network.**
 
 Each problem is formally defined below.
+
+---
+
+## Problem 0 — Pure Analytical Benchmark
+
+**Description.**
+A synthetic problem used to validate the *algorithmic* behaviour of the
+multi-objective optimizers (NSGA-II / NSGA-III and variants, Random Search)
+against classical test problems — **DTLZ2**, **ZDT1** and **SCH1** — fully
+decoupled from the WSN topology machinery of Problems 1–4.
+
+**Given:**
+
+* A number of decision variables $n \ge 1$;
+* A benchmark function $f : [0,1]^n \rightarrow \mathbb{R}^M$ with a Pareto
+  front known in closed form (see `pylib/benchmarks.py`).
+
+**Representation.**
+The chromosome is the decision vector itself:
+
+$$
+x = (x_0, \ldots, x_{n-1}), \qquad x_i \in [0, 1].
+$$
+
+There is no MAC gene, no sink, no relays and no connectivity/coverage repair.
+The genetic operators are the textbook real-coded pair — Simulated Binary
+Crossover (SBX) and Polynomial Mutation — applied independently per variable
+over the unit interval.
+
+**Evaluation.**
+Because the objectives are a closed-form function of $x$, the adapter exposes
+`is_analytical = True` and the strategies evaluate individuals **in-process**
+(`lib/strategy/analytical.py`): no `Simulation` document is created and the
+master-node is never involved. The only exception is the `batch` strategy,
+which lacks the analytical fast-path and delegates evaluation to the
+master-node's synthetic module. See
+[docs/markdown/SYNTHETIC_MODE.md](../../../docs/markdown/SYNTHETIC_MODE.md)
+for the full description of the two evaluation paths.
+
+**Purpose.**
+Fast, reproducible validation of selection/variation operators and convergence
+metrics (HV, GD, IGD) against known Pareto fronts, without the cost of network
+simulation.
 
 ---
 

@@ -7,7 +7,9 @@ import type { ExperimentCreateDto, ObjectiveItem } from '../types/simlab'
  * The "problem" is encoded as P0 — a pure analytical benchmark. The genome is a
  * flat real-valued decision vector x ∈ [0,1]ⁿ (genome length = n): no relays,
  * no sink, no region round-trip. The mo-engine drives it with textbook SBX +
- * polynomial mutation and the master-node evaluates the benchmark directly on x.
+ * polynomial mutation and evaluates the benchmark in-process (analytical
+ * fast-path — no Simulation documents; only the batch strategy falls back to
+ * the master-node's synthetic evaluator).
  */
 export function exportSyntheticExperiment(params: {
   draft: BenchmarkDraft

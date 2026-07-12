@@ -75,19 +75,36 @@ Thin wrappers around Paramiko and SCP:
 
 ### `lib/synthetic_data.py`
 
-Optional execution mode that replaces actual Cooja runs with benchmark functions.
-Supported benchmarks: **DTLZ2** (default), **ZDT1**, **SCH1**.
-Useful for testing the optimization pipeline without launching the simulator.
+Fallback execution mode that replaces actual Cooja runs with benchmark functions
+(**DTLZ2** — default, **ZDT1**, **SCH1**), useful for testing the pipeline
+without launching the simulator.
+
+> **Note — most synthetic experiments never reach this module.** Experiments
+> encoded as `problem0` (the current GUI *Synthetic Instances* flow) are
+> evaluated **in-process by the mo-engine** (analytical fast-path in
+> `mo-engine/lib/strategy/analytical.py`): no `Simulation` documents are
+> created, so the master-node stays idle. This module is only exercised by:
+>
+> 1. **`batch` strategy** experiments — `BatchStrategy` has no analytical
+>    fast-path and always enqueues simulations;
+> 2. **Legacy P1-encoded synthetic experiments** — benchmark variables encoded
+>    as relay coordinates of a `problem1` instance;
+> 3. **The global env-var override** (`ENABLE_DATA_SYNTHETIC=true`), which
+>    turns any incoming simulation into a synthetic one.
+>
+> Keep this module in place while any of these paths is supported.
 
 Two ways to enable it, with the per-experiment config taking precedence over the
 environment variables:
 
 - **Per-experiment** — `parameters.simulation.synthetic = { enabled, bench, noise_std }`,
-  set through the GUI *Synthetic Instances* editor or the Launch Wizard toggle.
+  set through the GUI *Synthetic Instances* editor.
 - **Global fallback** — `ENABLE_DATA_SYNTHETIC=true` (+ `BENCH`, `NOISE_STD`).
 
-The genome (relay coordinates, excluding the fixed sink) is normalized to `[0,1]ⁿ`
-via `parameters.problem.region`; objectives are written keyed by
+Both chromosome encodings are supported: the P0 decision vector is read verbatim
+from `simulationElements.decisionVector`, while the legacy P1 genome (relay
+coordinates, excluding the fixed sink) is normalized to `[0,1]ⁿ` via
+`parameters.problem.region`. Objectives are written keyed by
 `parameters.objectives[].metric_name`. See
 [docs/markdown/SYNTHETIC_MODE.md](../docs/markdown/SYNTHETIC_MODE.md) for the full guide.
 
@@ -109,7 +126,7 @@ flowchart TD
     MARK_RUN_GEN --> QUEUE[(Shared simulation queue)]
 
     %% worker path
-    QUEUE -->|sim dequeued| SYNTH{ENABLE_DATA\nSYNTHETIC?}
+    QUEUE -->|sim dequeued| SYNTH{synthetic mode?\nper-experiment config,\nelse ENABLE_DATA_SYNTHETIC}
     SYNTH -->|yes| BENCH[Run benchmark function\nDTLZ2 / ZDT1 / SCH1]
     BENCH --> DONE_SIM
 
@@ -162,7 +179,7 @@ stateDiagram-v2
 | `IS_DOCKER` | `false` | If `true`, hostnames are `cooja1..coojaΝ` on port 22; otherwise `localhost` on ports `2231+i` |
 | `NUMBER_OF_CONTAINERS` | `3` | Number of Cooja containers (= number of worker threads) |
 | `SIM_TIMEOUT_SEC` | `3600` | SSH command timeout and stuck-simulation cutoff in seconds. Set to `0` to disable recovery |
-| `ENABLE_DATA_SYNTHETIC` | `false` | Replace Cooja execution with a benchmark function |
+| `ENABLE_DATA_SYNTHETIC` | `false` | Replace Cooja execution with a benchmark function for experiments without a per-experiment `synthetic` block (only affects simulations that reach the master-node — P0 experiments are evaluated in-process by the mo-engine) |
 | `BENCH` | `DTLZ2` | Benchmark to use in synthetic mode: `DTLZ2`, `ZDT1`, or `SCH1` |
 | `NOISE_STD` | `0.0` | Standard deviation of Gaussian noise added to synthetic objectives |
 

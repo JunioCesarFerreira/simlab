@@ -45,12 +45,14 @@ The engine never directly communicates with the Cooja simulator. Instead, it wri
 │  ├── nsga3.py         NSGA3LoopStrategy  ──────┐  native NDS+niching │
 │  ├── nsga3_deap.py    NSGA3DeapStrategy  ──────┤  DEAP selNSGA3      │
 │  ├── nsga3_pymoo.py   NSGA3PymooStrategy ──────┘  pymoo survival     │
-│  ├── nsga2.py         NSGA2LoopStrategy                              │
+│  ├── nsga2.py         NSGA2LoopStrategy (+ deap/pymoo variants)      │
 │  ├── batch.py         BatchStrategy                                  │
-│  └── random_search.py RandomSearchStrategy                           │
+│  ├── random_search.py RandomSearchStrategy                           │
+│  └── analytical.py    in-process evaluation of P0 benchmarks         │
 │                                                                      │
 │  lib/problem/                                                        │
 │  ├── adapter.py       ProblemAdapter (ABC)                           │
+│  ├── p0_synthetic.py  analytical benchmarks (evaluated in-process)   │
 │  └── p1..p4_*.py      problem-specific logic (chromosome, GA ops)    │
 └──────────────────────────────┬───────────────────────────────────────┘
                                │ reads / writes
@@ -73,16 +75,33 @@ The engine never directly communicates with the Cooja simulator. Instead, it wri
 
 ## Available Strategies
 
-| `parameters.strategy` | Class | Selection mechanism | External deps |
-|---|---|---|---|
-| `nsga3` | `NSGA3LoopStrategy` | Native NDS + NSGA-III niching | — |
-| `nsga3_deap` | `NSGA3DeapStrategy` | DEAP `tools.selNSGA3` | `deap >= 1.3` |
-| `nsga3_pymoo` | `NSGA3PymooStrategy` | pymoo `ReferenceDirectionSurvival` | `pymoo >= 0.6` |
-| `nsga2` | `NSGA2LoopStrategy` | Native NDS + crowding distance | — |
-| `batch` | `BatchStrategy` | No evolution — evaluates one generation | — |
-| `random_search` | `RandomSearchStrategy` | Uniform random sampling, no crossover | — |
+| `parameters.strategy` | Class | Selection mechanism | Analytical fast-path (P0) | External deps |
+|---|---|---|---|---|
+| `nsga3` | `NSGA3LoopStrategy` | Native NDS + NSGA-III niching | ✅ | — |
+| `nsga3_deap` | `NSGA3DeapStrategy` | DEAP `tools.selNSGA3` | ✅ (inherited) | `deap >= 1.3` |
+| `nsga3_pymoo` | `NSGA3PymooStrategy` | pymoo `ReferenceDirectionSurvival` | ✅ (inherited) | `pymoo >= 0.6` |
+| `nsga2` | `NSGA2LoopStrategy` | Native NDS + crowding distance | ✅ | — |
+| `nsga2_deap` | `NSGA2DeapStrategy` | DEAP `tools.selNSGA2` | ✅ (inherited) | `deap >= 1.3` |
+| `nsga2_pymoo` | `NSGA2PymooStrategy` | pymoo `RankAndCrowdingSurvival` | ✅ (inherited) | `pymoo >= 0.6` |
+| `batch` | `BatchStrategy` | No evolution — evaluates one generation | ❌ (relies on master-node) | — |
+| `random_search` | `RandomSearchStrategy` | Uniform random sampling, no crossover | ✅ | — |
 
-`NSGA3DeapStrategy` and `NSGA3PymooStrategy` share **all** SimLab infrastructure with `NSGA3LoopStrategy` (Change Streams, Genome Cache, ProblemAdapter operators, resume capability) and differ only in the environmental-selection step. They are designed to reproduce **Table 3** of the companion article (HV / GD / IGD / Coverage comparison on DTLZ2).
+The DEAP and pymoo variants share **all** SimLab infrastructure with their native base classes (Change Streams, Genome Cache, ProblemAdapter operators, resume capability) and differ only in the environmental-selection step. They are designed to reproduce **Table 3** of the companion article (HV / GD / IGD / Coverage comparison on DTLZ2).
+
+### Analytical fast-path (P0 synthetic benchmarks)
+
+For analytical problems (`problem0` — DTLZ2/ZDT1/SCH1 benchmarks) the objectives
+are a closed-form function of the decision vector, so the strategies evaluate
+them **in-process** via [lib/strategy/analytical.py](lib/strategy/analytical.py)
+instead of enqueuing `Simulation` documents. This skips the MongoDB round-trip
+and the master-node hop entirely: the generation completes through the
+"no simulations pending → mark DONE" path.
+
+`BatchStrategy` is the exception — it has no analytical fast-path and always
+enqueues simulations, which the **master-node** then evaluates synthetically
+(`master-node/lib/synthetic_data.py`). See
+[docs/markdown/SYNTHETIC_MODE.md](../docs/markdown/SYNTHETIC_MODE.md) for the
+full picture of the two evaluation paths.
 
 ### Aggregator parameter (`Ψa`)
 
@@ -134,11 +153,14 @@ flowchart TD
     subgraph enqueue ["_generation_enqueue (runs each generation)"]
         J --> K{genome in\nobjectives cache?}
         K -- yes --> L[reuse cached objectives\ninsert Individual only]
-        K -- no --> M[insert Individual\n+ Simulations to MongoDB]
-        L --> N{all genomes\ncached?}
+        K -- no --> AN{problem is\nanalytical? P0}
+        AN -- yes --> AE[evaluate benchmark\nin-process\ninsert Individual only]
+        AN -- no --> M[insert Individual\n+ Simulations to MongoDB]
+        L --> N{any simulation\nenqueued?}
+        AE --> N
         M --> N
-        N -- yes --> O[insert Generation\nas DONE]
-        N -- no --> P[insert Generation\nas Waiting]
+        N -- no --> O[insert Generation\nas DONE]
+        N -- yes --> P[insert Generation\nas Waiting]
     end
 
     O --> Q[open Change Stream\non generations]
@@ -169,6 +191,7 @@ flowchart TD
 | **Change Streams instead of polling** | The engine reacts immediately when a generation finishes without holding a thread in a tight loop. |
 | **Polling fallback** | If a Change Stream event is missed during a reconnection gap, a periodic poll (`BATCH_POLL_INTERVAL`) catches the terminal status. |
 | **Genome cache (`genome_cache` collection)** | Objectives computed for a chromosome are persisted to MongoDB. If the same chromosome re-appears in a later generation, its objectives are reused immediately — no simulation is re-queued. This also survives mo-engine restarts. |
+| **Analytical fast-path for P0** | When `ProblemAdapter.is_analytical` is true (P0 synthetic benchmarks), objectives are computed in-process (`lib/strategy/analytical.py`) and no `Simulation` document is ever enqueued — the master-node is bypassed entirely. Only `BatchStrategy` lacks this path and still relies on the master-node's synthetic evaluator. |
 | **All-cached generation → DONE at insert** | When every genome in a generation has cached objectives, there is nothing for the master-node to execute. The generation document is inserted with `status=DONE` directly, so the Change Stream fires immediately and the algorithm advances. |
 | **`_gen_index` incremented before generation insert** | The Change Stream callback runs on a separate thread. Incrementing the index before inserting avoids a race where the callback fires and reads a stale index. |
 | **Worst-objective fallback for errors** | If a simulation fails, the chromosome receives `[+∞, …]` as objectives. This keeps the evolutionary loop running without deadlock, though it biases the front. |
@@ -189,14 +212,18 @@ mo-engine/
 │   │   ├── nsga3_deap.py        # NSGA-III via DEAP selNSGA3 (optional dep)
 │   │   ├── nsga3_pymoo.py       # NSGA-III via pymoo ReferenceDirectionSurvival (optional dep)
 │   │   ├── nsga2.py             # NSGA-II (crowding distance)
+│   │   ├── nsga2_deap.py        # NSGA-II via DEAP selNSGA2 (optional dep)
+│   │   ├── nsga2_pymoo.py       # NSGA-II via pymoo RankAndCrowdingSurvival (optional dep)
 │   │   ├── batch.py             # Batch evaluation (no evolution)
 │   │   ├── random_search.py     # Uniform random search (baseline strategy)
+│   │   ├── analytical.py        # In-process evaluation of P0 benchmarks (no simulations)
 │   │   └── simulation_seeds.py  # Seed utilities
 │   │
 │   ├── problem/
-│   │   ├── adapter.py           # ProblemAdapter ABC
-│   │   ├── chromosomes.py       # Chromosome types (P1–P4) + get_hash()
+│   │   ├── adapter.py           # ProblemAdapter ABC (incl. is_analytical hook)
+│   │   ├── chromosomes.py       # Chromosome types (P0–P4) + get_hash()
 │   │   ├── resolve.py           # PROBLEM_REGISTRY + build_adapter()
+│   │   ├── p0_synthetic.py      # P0: pure analytical benchmark (DTLZ2/ZDT1/SCH1)
 │   │   ├── p1_continuous_mobility.py
 │   │   ├── p2_discrete_mobility.py
 │   │   ├── p3_target_coverage.py

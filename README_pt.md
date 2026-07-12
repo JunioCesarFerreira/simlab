@@ -306,7 +306,7 @@ Todos os arquivos e metadados permanecem armazenados no MongoDB/GridFS, garantin
 * **Guia de Problemas Sintéticos**
   Um guia detalhado para execução de benchmarks sintéticos (DTLZ2, ZDT1, SCH1) sem necessidade do Cooja está disponível em:
   [docs/markdown/SYNTHETIC_MODE.md](./docs/markdown/SYNTHETIC_MODE.md).
-  As instâncias sintéticas podem ser definidas visualmente na página **Synthetic Instances** da GUI (menu lateral → *Synthetic*), ou ativadas por experimento através do toggle no Launch Wizard.
+  As instâncias sintéticas são definidas visualmente na página **Synthetic Instances** da GUI (menu lateral → *Synthetic*) e codificadas como o problema analítico P0, avaliado **no próprio processo do mo-engine** — nenhuma simulação é criada e o master-node não participa (o master-node mantém um fallback sintético para a estratégia `batch`, experimentos legados e a variável `ENABLE_DATA_SYNTHETIC`).
 
 * **Changelog**
   Atualizações e novas funcionalidades estão documentadas em [`CHANGELOG.md`](./CHANGELOG.md).
