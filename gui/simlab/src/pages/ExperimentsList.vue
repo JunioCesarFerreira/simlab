@@ -42,6 +42,8 @@ import { onMounted, ref } from "vue";
 import { useExperimentsStore } from "../app/stores/experimentsStore";
 import FilterBar from "../components/experiments/FilterBar.vue";
 import ExperimentCard from "../components/experiments/ExperimentCard.vue";
+import { confirmDialog } from "../composables/useConfirm";
+import { reportRuntimeError } from "../composables/useRuntimeError";
 import type { ExperimentInfoDto } from "../types/simlab";
 
 const store = useExperimentsStore();
@@ -53,20 +55,21 @@ async function load() {
 }
 
 async function onDelete(exp: ExperimentInfoDto) {
-  if (
-    !confirm(
-      `Delete experiment "${exp.name}"?\n\nThis permanently removes the experiment and all its artifacts ` +
-        `(generations, individuals, simulations and their files). Shared source code is not affected. ` +
-        `This cannot be undone.`,
-    )
-  ) {
-    return;
-  }
+  const ok = await confirmDialog({
+    title: `Delete experiment "${exp.name}"?`,
+    message:
+      "This permanently removes the experiment and all its artifacts " +
+      "(generations, individuals, simulations and their files). Shared source code is not affected. " +
+      "This cannot be undone.",
+    confirmLabel: "Delete",
+    danger: true,
+  });
+  if (!ok) return;
   deletingId.value = exp.id;
   try {
     await store.remove(exp.id);
   } catch (e) {
-    alert(`Failed to delete experiment: ${e instanceof Error ? e.message : String(e)}`);
+    reportRuntimeError(e, "Failed to delete experiment");
   } finally {
     deletingId.value = null;
   }

@@ -211,6 +211,7 @@ import { getAllExperiments } from "../api/experiments";
 import type { CampaignFullDto, ExperimentInfoDto } from "../types/simlab";
 import ExperimentCard from "../components/experiments/ExperimentCard.vue";
 import StatusBadge from "../components/common/StatusBadge.vue";
+import { confirmDialog } from "../composables/useConfirm";
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
@@ -351,7 +352,13 @@ async function removeExperiment(experimentId: string) {
 }
 
 async function confirmDelete() {
-  if (!confirm(`Delete campaign "${campaign.value?.name}"? This will not delete the experiments.`)) return;
+  const ok = await confirmDialog({
+    title: `Delete campaign "${campaign.value?.name}"?`,
+    message: "This will not delete the experiments.",
+    confirmLabel: "Delete",
+    danger: true,
+  });
+  if (!ok) return;
   deleting.value = true;
   try {
     await deleteCampaign(props.id);
