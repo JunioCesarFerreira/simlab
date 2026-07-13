@@ -73,6 +73,95 @@ class ExperimentRepository:
             )
             return result.modified_count > 0
 
+    # ------------------------------
+    # Runtime (computational) telemetry
+    # ------------------------------
+    def claim_runtime_metrics_collection(
+        self, experiment_id: str, started_at: datetime, finished_at: datetime
+    ) -> bool:
+        """Atomically claim telemetry collection for an experiment.
+
+        Only succeeds when no ``runtime_metrics`` block exists yet, so exactly
+        one collector processes each experiment even with concurrent triggers.
+        """
+        with self.connection.connect() as db:
+            result = db["experiments"].update_one(
+                {"_id": ObjectId(experiment_id), "runtime_metrics": {"$exists": False}},
+                {"$set": {"runtime_metrics": {
+                    "status": "collecting",
+                    "started_at": started_at,
+                    "finished_at": finished_at,
+                }}}
+            )
+            return result.modified_count > 0
+
+    def set_runtime_metrics(self, experiment_id: str, block: dict) -> bool:
+        with self.connection.connect() as db:
+            result = db["experiments"].update_one(
+                {"_id": ObjectId(experiment_id)},
+                {"$set": {"runtime_metrics": block}}
+            )
+            return result.modified_count > 0
+
+    def get_runtime_metrics(self, experiment_id: str) -> Optional[dict]:
+        try:
+            oid = ObjectId(experiment_id)
+        except errors.InvalidId:
+            log.error("Invalid ID: %s", experiment_id)
+            return None
+        with self.connection.connect() as db:
+            doc = db["experiments"].find_one({"_id": oid}, {"runtime_metrics": 1})
+            if doc is None:
+                return None
+            return doc.get("runtime_metrics") or {}
+
+    def release_stale_runtime_metrics_claims(self) -> int:
+        """Drop 'collecting' blocks left behind by a crashed collector.
+
+        Startup-only: a single mo-engine instance owns telemetry collection,
+        so at process start no collection can legitimately be in flight and
+        any remaining claim is stale. Releasing it lets the backfill sweep
+        retry the experiment.
+        """
+        with self.connection.connect() as db:
+            result = db["experiments"].update_many(
+                {"runtime_metrics.status": "collecting"},
+                {"$unset": {"runtime_metrics": ""}}
+            )
+            return result.modified_count
+
+    def find_finished_missing_runtime_metrics(self, finished_after: datetime) -> list[dict[str, Any]]:
+        """Finished experiments (Done/Error) still lacking telemetry — used by
+        the startup backfill sweep, bounded to recent runs."""
+        with self.connection.connect() as db:
+            return list(db["experiments"].find(
+                {
+                    "status": {"$in": [EnumStatus.DONE, EnumStatus.ERROR]},
+                    "start_time": {"$ne": None},
+                    "end_time": {"$gte": finished_after},
+                    "runtime_metrics": {"$exists": False},
+                },
+                {"_id": 1, "start_time": 1, "end_time": 1}
+            ))
+
+    def watch_status_finished(self, on_change: Callable[[dict], None]):
+        log.info("[ExperimentRepository] Watching finished experiments...")
+        pipeline = [
+            {
+                "$match": {
+                    "operationType": {"$in": ["update", "replace"]},
+                    "fullDocument.status": {"$in": [EnumStatus.DONE, EnumStatus.ERROR]},
+                    "fullDocument.runtime_metrics": {"$exists": False},
+                }
+            }
+        ]
+        self.connection.watch_collection(
+            "experiments",
+            pipeline,
+            on_change,
+            full_document="updateLookup"
+        )
+
     def get(self, experiment_id: str) -> Experiment:
         try:
             oid = ObjectId(experiment_id)
@@ -116,7 +205,8 @@ class ExperimentRepository:
         """
         Delete an experiment by _id and cascade-delete all related documents
         and the GridFS artifacts they own (topology pictures, simulation
-        position/config/log/csv files and analysis files).
+        position/config/log/csv files, analysis files and the runtime
+        telemetry artifact).
 
         Shared artifacts such as source-code repositories are NOT touched.
         Returns counters for each collection / artifact type affected.
@@ -145,9 +235,15 @@ class ExperimentRepository:
                 for field in self._SIM_FILE_FIELDS:
                     file_ids.append(sim.get(field))
 
-            exp_doc = db["experiments"].find_one({"_id": exp_oid}, {"analysis_files": 1})
+            exp_doc = db["experiments"].find_one(
+                {"_id": exp_oid},
+                {"analysis_files": 1, "runtime_metrics.artifact.file_id": 1},
+            )
             if exp_doc:
                 file_ids.extend((exp_doc.get("analysis_files") or {}).values())
+                file_ids.append(
+                    ((exp_doc.get("runtime_metrics") or {}).get("artifact") or {}).get("file_id")
+                )
 
             files_deleted = self._delete_files(fs, file_ids)
 

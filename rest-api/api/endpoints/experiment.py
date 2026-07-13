@@ -181,6 +181,110 @@ async def attach_analysis_file(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Runtime (computational) telemetry ────────────────────────────────────────
+
+def _downsample_points(points: list[list[float]], max_points: int) -> list[list[float]]:
+    """Bucket-average a [[ts, value], ...] series down to at most max_points.
+
+    Keeps the chart payload small; exact extremes remain available in the
+    stored summary and in the raw GridFS artifact.
+    """
+    n = len(points)
+    if n <= max_points:
+        return points
+    bucket = -(-n // max_points)  # ceil division
+    out: list[list[float]] = []
+    for i in range(0, n, bucket):
+        chunk = points[i:i + bucket]
+        out.append([
+            sum(p[0] for p in chunk) / len(chunk),
+            sum(p[1] for p in chunk) / len(chunk),
+        ])
+    return out
+
+
+@router.get("/{experiment_id}/runtime-metrics")
+def get_experiment_runtime_metrics(
+    experiment_id: str,
+    max_points: int = Query(1000, ge=10, le=20000),
+    factory: MongoRepository = Depends(get_factory),
+) -> dict:
+    """Full runtime-metrics time series of an experiment.
+
+    Loads the raw telemetry artifact from GridFS, reconstructs every series
+    and downsamples each one to at most ``max_points`` samples. The summary
+    block is returned by GET /experiments/{id}; this endpoint exists so the
+    heavy series are only transferred on demand.
+    """
+    from pylib.telemetry.artifact import deserialize_samples
+
+    doc = factory.experiment_repo.get(experiment_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    rm: dict = doc.get("runtime_metrics") or {}
+    if not rm:
+        raise HTTPException(
+            status_code=404,
+            detail="Runtime metrics not available for this experiment",
+        )
+
+    base = {
+        "status": rm.get("status"),
+        "started_at": rm.get("started_at"),
+        "finished_at": rm.get("finished_at"),
+        "summary": rm.get("summary") or {},
+        "series": [],
+        "downsampled": False,
+        "total_samples": 0,
+    }
+
+    artifact: dict = rm.get("artifact") or {}
+    file_id = artifact.get("file_id")
+    if rm.get("status") != "completed" or not file_id:
+        # collecting / no_data / failed — nothing to plot yet
+        return base
+
+    try:
+        data = factory.fs_handler.read_file_content(str(file_id))
+        samples = deserialize_samples(data, artifact.get("content_type", ""))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to read telemetry artifact: {e}"
+        )
+
+    # Rebuild the original series: one per (metric, scope, label-set)
+    grouped: dict[tuple, dict] = {}
+    for s in samples:
+        labels: dict = s.get("labels") or {}
+        key = (s["metric"], s["scope"], json.dumps(labels, sort_keys=True))
+        entry = grouped.setdefault(key, {
+            "metric": s["metric"],
+            "scope": s["scope"],
+            "unit": s.get("unit", ""),
+            "labels": labels,
+            "name": labels.get("name") or s["scope"],
+            "points": [],
+        })
+        entry["points"].append([float(s["timestamp"]), float(s["value"])])
+
+    downsampled = False
+    series = []
+    for entry in grouped.values():
+        entry["points"].sort(key=lambda p: p[0])
+        reduced = _downsample_points(entry["points"], max_points)
+        downsampled = downsampled or len(reduced) < len(entry["points"])
+        series.append({**entry, "points": reduced})
+    series.sort(key=lambda e: (e["metric"], e["scope"], e["name"]))
+
+    return {
+        **base,
+        "series": series,
+        "downsampled": downsampled,
+        "total_samples": len(samples),
+    }
+
+
 class ParetoPlotRequest(BaseModel):
     objectives: list[str]
     minimize: list[bool]

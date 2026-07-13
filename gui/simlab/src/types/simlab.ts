@@ -109,6 +109,64 @@ export interface ParetoFrontItemDto {
 }
 
 /* -------------------------------------------------------
+ * Runtime (computational) telemetry
+ * Summary comes embedded in ExperimentDto; the full series
+ * are fetched on demand via GET /experiments/{id}/runtime-metrics.
+ * ----------------------------------------------------- */
+
+export type RuntimeMetricsStatus =
+  | "collecting"
+  | "completed"
+  | "no_data"
+  | "failed";
+
+export interface RuntimeMetricsSummaryDto {
+  duration_seconds?: number;
+  cpu?: { average_percent: number; maximum_percent: number };
+  memory?: { average_bytes: number; maximum_bytes: number };
+}
+
+export interface RuntimeMetricsArtifactDto {
+  storage: string;
+  file_id: ID;
+  filename: string;
+  content_type: string;
+  compression: string;
+  size_bytes: number;
+  sha256: string;
+  schema_version: number;
+}
+
+export interface RuntimeMetricsDto {
+  status: RuntimeMetricsStatus;
+  started_at?: ISODateTime | null;
+  finished_at?: ISODateTime | null;
+  collection_finished_at?: ISODateTime | null;
+  summary?: RuntimeMetricsSummaryDto;
+  artifact?: RuntimeMetricsArtifactDto;
+  error?: string;
+}
+
+export interface RuntimeMetricsSeriesDto {
+  metric: string; // "cpu_percent" | "memory_bytes" | future metrics
+  scope: string; // "aggregate" | "container"
+  unit: string;
+  labels: Record<string, string>;
+  name: string; // container name, or the scope for aggregates
+  points: [number, number][]; // [epoch seconds, value]
+}
+
+export interface RuntimeMetricsSeriesResponseDto {
+  status: RuntimeMetricsStatus;
+  started_at?: ISODateTime | null;
+  finished_at?: ISODateTime | null;
+  summary: RuntimeMetricsSummaryDto;
+  series: RuntimeMetricsSeriesDto[];
+  downsampled: boolean;
+  total_samples: number;
+}
+
+/* -------------------------------------------------------
  * Individual (dentro de uma geração)
  * ----------------------------------------------------- */
 
@@ -163,6 +221,7 @@ export interface ExperimentDto {
   data_conversion_config: DataConversionConfigDto;
   pareto_front?: ParetoFrontItemDto[] | null;
   analysis_files?: Record<string, ID>;
+  runtime_metrics?: RuntimeMetricsDto | null;
 }
 
 export interface ExperimentFullDto extends ExperimentDto {

@@ -5,6 +5,40 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Runtime (computational) telemetry per experiment
+
+### Added — runtime metrics collection, persistence and visualization
+
+- **`pylib/telemetry`**: new module that, when an experiment finishes
+  (Done/Error), queries Prometheus/cAdvisor over the exact
+  `[start_time, end_time]` window, normalizes every time series
+  (timestamp, metric, value, unit, scope, labels) and preserves them
+  integrally as an **immutable GridFS artifact** — Parquet/snappy preferred,
+  CSV.gz fallback when pyarrow is unavailable. The experiment document gains
+  only a small `runtime_metrics` block: collection status, artifact reference
+  (`file_id`, sha256, size, schema version) and a summary (duration, CPU
+  average/peak %, memory average/peak bytes) computed over all aggregate
+  samples of the window. Collection is idempotent (atomic claim) and new
+  metric summaries can be added without breaking changes.
+- **mo-engine**: starts a runtime-metrics watcher (Change Stream on finished
+  experiments + startup backfill sweep bounded by `TELEMETRY_BACKFILL_HOURS`).
+  Tunables: `PROMETHEUS_URL`, `TELEMETRY_ENABLED`, `TELEMETRY_QUERY_STEP`,
+  `TELEMETRY_COLLECTION_DELAY_SECONDS`, `TELEMETRY_CONTAINER_FILTER`.
+- **REST API**: `GET /experiments/{id}` now embeds the `runtime_metrics`
+  summary; new `GET /experiments/{id}/runtime-metrics?max_points=N`
+  reconstructs the full series from the GridFS artifact on demand, with
+  bucket-average downsampling.
+- **GUI**: new **Runtime Metrics** section on the experiment detail page —
+  summary tiles (duration, CPU avg/peak, memory avg/peak) shown immediately,
+  full CPU/memory time-series charts (aggregate + per-container) loaded only
+  when the user clicks *Show charts*.
+- **docker-compose**: `moengine` joins `monitoring-net` and receives
+  `PROMETHEUS_URL` so it can reach Prometheus.
+- Experiment cascade delete now also removes the telemetry artifact from
+  GridFS.
+
+---
+
 ## [Unreleased] — Phase 1 of the implementation plan
 
 ### Added — synthetic benchmark instances (GUI + per-experiment config)

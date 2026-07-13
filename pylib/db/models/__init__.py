@@ -11,6 +11,8 @@ from pylib.db.models.experiment import (
     SyntheticConfig,
     Parameters,
     ParetoFrontItem,
+    RuntimeMetricsArtifact,
+    RuntimeMetrics,
     Experiment,
 )
 from pylib.db.models.campaign import Campaign
@@ -29,6 +31,8 @@ __all__ = [
     "SyntheticConfig",
     "Parameters",
     "ParetoFrontItem",
+    "RuntimeMetricsArtifact",
+    "RuntimeMetrics",
     "Experiment",
     "Campaign",
 ]
