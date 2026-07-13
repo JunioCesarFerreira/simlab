@@ -313,6 +313,13 @@
         </div>
       </div>
 
+      <!-- Runtime (computational) metrics of the execution -->
+      <RuntimeMetricsSection
+        v-if="store.experiment.runtime_metrics"
+        :experiment-id="props.id"
+        :metrics="store.experiment.runtime_metrics"
+      />
+
       <!-- Progress bar for running experiments -->
       <div v-if="store.isRunning" class="progress-section card">
         <div class="progress-header">
@@ -374,6 +381,7 @@ import ObjectivesEvolutionChart from "../components/charts/ObjectivesEvolutionCh
 import HvGdChart from "../components/charts/HvGdChart.vue";
 import ParetoParallelChart from "../components/charts/ParetoParallelChart.vue";
 import IndividualDetailPanel from "../components/detail/IndividualDetailPanel.vue";
+import RuntimeMetricsSection from "../components/detail/RuntimeMetricsSection.vue";
 import ProblemVizModal from "../components/detail/ProblemVizModal.vue";
 import { downloadAnalysisZip, downloadTopologiesZip } from "../api/files";
 import { updateExperiment, plotParetoResults, deleteExperiment } from "../api/experiments";
@@ -688,6 +696,51 @@ async function doPlotPareto() {
     setTimeout(() => { plotParetoState.value = "idle"; }, 6000);
   }
 }
+
+// ── runtime telemetry refresh ────────────────────────────────────────────────
+// The regular store polling stops as soon as the experiment leaves Running,
+// but telemetry is collected shortly AFTER that (the collector waits for the
+// final Prometheus scrape). Keep a slow refresh while the block is absent or
+// still "collecting", bounded to recently finished runs so experiments that
+// predate the feature (and will never get metrics) don't poll forever.
+const TELEMETRY_WAIT_WINDOW_MS = 10 * 60 * 1000;
+let telemetryTimer: ReturnType<typeof setInterval> | null = null;
+
+const telemetryPending = computed(() => {
+  const exp = store.experiment;
+  if (!exp || exp.status === "Waiting" || exp.status === "Running") return false;
+  if (!exp.end_time) return false;
+  const rm = exp.runtime_metrics;
+  if (rm && rm.status !== "collecting") return false;
+  return Date.now() - new Date(exp.end_time).getTime() < TELEMETRY_WAIT_WINDOW_MS;
+});
+
+watch(
+  telemetryPending,
+  (pending) => {
+    if (pending && !telemetryTimer) {
+      // Self-terminating: identical poll payloads don't retrigger the
+      // reactive graph, so the deadline check must live inside the timer.
+      const deadline = Date.now() + TELEMETRY_WAIT_WINDOW_MS;
+      telemetryTimer = setInterval(() => {
+        if (Date.now() > deadline) {
+          clearInterval(telemetryTimer!);
+          telemetryTimer = null;
+          return;
+        }
+        store.refresh(props.id);
+      }, 5000);
+    } else if (!pending && telemetryTimer) {
+      clearInterval(telemetryTimer);
+      telemetryTimer = null;
+    }
+  },
+  { immediate: true },
+);
+
+onBeforeUnmount(() => {
+  if (telemetryTimer) clearInterval(telemetryTimer);
+});
 
 const totalDuration = computed(() => {
   const exp = store.experiment;

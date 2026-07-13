@@ -3,7 +3,13 @@ from typing import Any, Optional
 from bson import ObjectId
 
 from pylib.db.models import Experiment
-from api.domain.experiment import ExperimentDto, ExperimentFullDto, ExperimentInfoDto, ParetoFrontItemDto
+from api.domain.experiment import (
+    ExperimentDto,
+    ExperimentFullDto,
+    ExperimentInfoDto,
+    ParetoFrontItemDto,
+    RuntimeMetricsDto,
+)
 from api.domain.generation import GenerationDto
 from api.mappers.helpers import oid_to_str, str_to_oid, pop_id, dict_oid_to_str, dict_str_to_oid
 
@@ -30,6 +36,26 @@ def _analysis_files_to_oid(d: dict) -> dict[str, ObjectId]:
     return {k: str_to_oid(v) for k, v in (d or {}).items() if str_to_oid(v) is not None}
 
 
+def _runtime_metrics_from_mongo(rm: Optional[dict]) -> Optional[RuntimeMetricsDto]:
+    """Summary block only — the raw series stay in GridFS. The internal
+    ``collection`` metadata (queries, urls) is not exposed to clients."""
+    if not rm:
+        return None
+    dto: RuntimeMetricsDto = {
+        "status": rm.get("status", ""),
+        "started_at": rm.get("started_at"),
+        "finished_at": rm.get("finished_at"),
+        "collection_finished_at": rm.get("collection_finished_at"),
+        "summary": rm.get("summary") or {},
+    }
+    artifact = rm.get("artifact")
+    if artifact:
+        dto["artifact"] = {**artifact, "file_id": oid_to_str(artifact.get("file_id"))}
+    if rm.get("error"):
+        dto["error"] = rm["error"]
+    return dto
+
+
 def experiment_from_mongo(doc: dict) -> ExperimentDto:
     id_str, d = pop_id(doc)
     return {
@@ -45,6 +71,7 @@ def experiment_from_mongo(doc: dict) -> ExperimentDto:
         "data_conversion_config": d.get("data_conversion_config", {}),
         "pareto_front": _pareto_from_mongo(d.get("pareto_front")),
         "analysis_files": _analysis_files_to_str(d.get("analysis_files", {})),
+        "runtime_metrics": _runtime_metrics_from_mongo(d.get("runtime_metrics")),
     }
 
 

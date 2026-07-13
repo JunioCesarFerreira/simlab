@@ -49,6 +49,35 @@ class ParetoFrontItem(TypedDict):
     objectives: dict[str, float]
 
 
+class RuntimeMetricsArtifact(TypedDict):
+    """Reference to the immutable raw-telemetry artifact stored in GridFS."""
+    storage: str        # "gridfs"
+    file_id: ObjectId
+    filename: str
+    content_type: str   # parquet or gzip (CSV fallback)
+    compression: str
+    size_bytes: int
+    sha256: str
+    schema_version: int
+
+
+class RuntimeMetrics(TypedDict, total=False):
+    """Summary + artifact reference for the computational telemetry of a run.
+
+    The full time series live only in the GridFS artifact; this block stays
+    small on purpose. New per-metric summaries may be added alongside ``cpu``
+    and ``memory`` without breaking existing documents.
+    """
+    status: str  # "collecting" | "completed" | "no_data" | "failed"
+    started_at: datetime
+    finished_at: datetime
+    collection_finished_at: datetime
+    collection: dict[str, Any]   # source, prometheus_url, query_step, ...
+    artifact: RuntimeMetricsArtifact
+    summary: dict[str, Any]      # duration_seconds, cpu{...}, memory{...}
+    error: str
+
+
 class Experiment(TypedDict):
     id: str
     name: str
@@ -62,3 +91,4 @@ class Experiment(TypedDict):
     data_conversion_config: DataConversionConfig
     pareto_front: Optional[list[ParetoFrontItem]]
     analysis_files: dict[str, ObjectId]
+    runtime_metrics: Optional[RuntimeMetrics]

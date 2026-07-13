@@ -6,6 +6,7 @@ if project_path not in sys.path:
     sys.path.insert(0, project_path)
 
 from pylib.db import create_mongo_repository_factory, EnumStatus
+from pylib.telemetry import start_runtime_metrics_watcher
 from lib.strategy.base import EngineStrategy
 from lib.strategy.nsga3 import NSGA3LoopStrategy
 from lib.strategy.nsga2 import NSGA2LoopStrategy
@@ -99,6 +100,10 @@ def main() -> None:
     log.info(f"env:\n\tMONGO_URI: {MONGO_URI}\n\tDB_NAME: {DB_NAME}")
     exp_repo = mongo.experiment_repo
     exp_repo.connection.waiting_ping()
+
+    # Collects Prometheus telemetry for each experiment as it finishes and
+    # persists the raw series (GridFS) + summary on the experiment document.
+    start_runtime_metrics_watcher(mongo)
 
     pending = exp_repo.find_startable_by_status(EnumStatus.WAITING)
 

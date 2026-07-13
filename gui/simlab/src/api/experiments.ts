@@ -5,6 +5,7 @@ import type {
   ExperimentFullDto,
   ExperimentInfoDto,
   ExperimentStatus,
+  RuntimeMetricsSeriesResponseDto,
 } from "../types/simlab";
 
 type BackendExperimentInfo = Omit<ExperimentInfoDto, "status">;
@@ -56,6 +57,17 @@ export async function createExperiment(
   payload: ExperimentCreateDto,
 ): Promise<string> {
   const { data } = await client.post<string>("/experiments/", payload);
+  return data;
+}
+
+export async function getRuntimeMetricsSeries(
+  id: string,
+  maxPoints = 1000,
+): Promise<RuntimeMetricsSeriesResponseDto> {
+  const { data } = await client.get<RuntimeMetricsSeriesResponseDto>(
+    `/experiments/${id}/runtime-metrics`,
+    { params: { max_points: maxPoints } },
+  );
   return data;
 }
 

@@ -164,6 +164,14 @@ services:
       - MONGO_URI=mongodb://mongodb:27017/?replicaSet=rs0
       - TEMPLATE_XML=/app/mo-engine/simulation_template.xml
       - IS_DOCKER=True
+      # Runtime telemetry: Prometheus is queried over [start_time, end_time]
+      # when each experiment finishes; raw series go to GridFS, summary to the
+      # experiment document.
+      - PROMETHEUS_URL=http://prometheus:9090
+      # TELEMETRY_ENABLED=True                 → set False to disable
+      # TELEMETRY_QUERY_STEP=15s               → query_range resolution
+      # TELEMETRY_COLLECTION_DELAY_SECONDS=30  → wait for the final scrape
+      # TELEMETRY_BACKFILL_HOURS=6             → startup sweep window
     ports:
       - "2219:22"
     labels:
@@ -181,6 +189,7 @@ services:
         condition: service_healthy
     networks:
       - mongo-net
+      - monitoring-net
 
   masternode:
     build:
