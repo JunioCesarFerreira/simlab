@@ -7,7 +7,14 @@ from pylib.config.algorithm import GeneticAlgorithmConfigDto
 
 from lib.util.random_network import stochastic_reachability_mask
 from lib.util.connectivity import repair_connectivity_to_sink
-from lib.util.trajectory_sampling import CoverageMatrix, sample_trajectories, build_coverage_matrix, check_coverage
+from lib.util.trajectory_sampling import (
+    CoverageMatrix,
+    sample_trajectories,
+    build_coverage_matrix,
+    build_candidate_cover_bits,
+    check_coverage,
+    greedy_coverage_repair_mask,
+)
 
 from lib.genetic_operators.crossover.uniform_crossover_mask import uniform_crossover_mask
 from lib.genetic_operators.mutation.bitflip_mutation import bitflip_mutation
@@ -53,6 +60,9 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
         self._coverage_matrix: CoverageMatrix = build_coverage_matrix(
             sampled, self.problem.candidates, R
         )
+        self._candidate_cover_bits: list[int] = build_candidate_cover_bits(
+            self._coverage_matrix, len(self.problem.candidates)
+        )
         log.info(f"[P2] Coverage matrix built: {len(sampled)} sampled points x {len(self.problem.candidates)} candidates.")
 
 
@@ -89,9 +99,48 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
         return [penalty] * n_objectives
 
 
-    def set_ga_operator_configs(self, rng: Random, parameters: GeneticAlgorithmConfigDto):    
+    def set_ga_operator_configs(self, rng: Random, parameters: GeneticAlgorithmConfigDto):
         self._p_bit_mut = float(parameters.get("per_gene_prob", 0.1))
+        self._apply_coverage_repair = bool(parameters.get("apply_coverage_repair", True))
+        self._repair_coverage_budget = int(parameters.get("repair_coverage_budget", 8))
         self._rng = rng
+
+
+    def _repair_mask(self, mask: list[int]) -> list[int]:
+        """
+        Coverage repair for a connected mask, gated by ``apply_coverage_repair``.
+
+        Greedily activates candidates until the trajectory coverage reaches
+        ``min_coverage_percentage``, then restores global connectivity to the
+        sink (activations may land outside the connected component).  If the
+        connectivity repair fails, the pre-repair mask is returned unchanged —
+        it was already connected, and penalty_objectives remains the safety
+        net for its insufficient coverage.
+        """
+        if not self._apply_coverage_repair:
+            return mask
+
+        threshold = self.problem.min_coverage_percentage
+        if check_coverage(self._coverage_matrix, mask) >= threshold:
+            return mask
+
+        repaired = greedy_coverage_repair_mask(
+            self._coverage_matrix,
+            self._candidate_cover_bits,
+            mask,
+            threshold,
+            self._repair_coverage_budget,
+        )
+        if repaired == mask:
+            return mask
+
+        err, connected = repair_connectivity_to_sink(
+            self.problem.candidates, repaired, self.problem.sink, self.problem.radius_of_reach
+        )
+        if err:
+            log.warning("[P2] Coverage repair discarded: connectivity repair failed.")
+            return mask
+        return connected
 
 
     def random_individual_generator(self, size: int) -> list[ChromosomeP2]:
@@ -101,8 +150,8 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
 
         pop: list[ChromosomeP2] = []
         for _ in range(size):
-            mask = stochastic_reachability_mask(Q, S, R, self._rng)
-            chrm = ChromosomeP2(                
+            mask = self._repair_mask(stochastic_reachability_mask(Q, S, R, self._rng))
+            chrm = ChromosomeP2(
                 mac_protocol = self._rng.randint(0, 1),
                 mask=mask
             )
@@ -122,10 +171,14 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
         if err:
             log.error(f"[P2] Repair failed. c1 crossover.")
             c1 = p1.mask
+        else:
+            c1 = self._repair_mask(c1)
         err, c2 = repair_connectivity_to_sink(Q, c2, S, R)
         if err:
             log.error(f"[P2] Repair failed. c2 crossover.")
             c2 = p2.mask
+        else:
+            c2 = self._repair_mask(c2)
                 
         # MAC gene inheritance (simple uniform choice)
         mac1 = p1.mac_protocol if self._rng.random() < 0.5 else p2.mac_protocol
@@ -148,6 +201,8 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
         if err:
             log.error(f"[P2] Repair failed. mutation.")
             out = mask
+        else:
+            out = self._repair_mask(out)
                     
         # MAC mutation (bit-flip)
         mac = chromosome.mac_protocol

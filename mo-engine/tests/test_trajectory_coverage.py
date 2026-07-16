@@ -208,6 +208,31 @@ def test_p1_low_budget_repair_improves_coverage_and_keeps_sink_connected():
     assert is_connected([adapter.problem.sink, *repaired], adapter.problem.radius_of_reach)
 
 
+def test_p1_repair_relays_skips_coverage_stage_when_toggle_off():
+    adapter = build_test_adapter(_p1_problem(min_pct=100.0))
+    adapter.set_ga_operator_configs(
+        random.Random(7),
+        {
+            "crossover_method": "sbx_with_radial_translate",
+            "mutation_method": "polynomial",
+            "apply_coverage_repair": False,
+            "repair_coverage_budget": 2,
+            "repair_coverage_candidates": 4,
+            "repair_coverage_relay_candidates": 3,
+        },
+    )
+
+    relays = [(10.0, 0.0), (10.0, 0.0), (10.0, 0.0)]
+    before = adapter.coverage_score(relays)
+    repaired = adapter._repair_relays(relays)
+    after = adapter.coverage_score(repaired)
+
+    # Coverage stage skipped: score must not improve beyond what the
+    # (always-on) connectivity repair alone produces on already-connected relays.
+    assert after == pytest.approx(before)
+    assert is_connected([adapter.problem.sink, *repaired], adapter.problem.radius_of_reach)
+
+
 def test_p1_penalty_monotonic_with_deficit():
     adapter = build_test_adapter(_p1_problem(min_pct=100.0))
 

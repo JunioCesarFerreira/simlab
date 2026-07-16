@@ -181,6 +181,7 @@ const form = reactive<{
     crossoverMethod: 'uniform_mask',
     mutationMethod: 'bitflip',
     divisions: 10,
+    applyCoverageRepair: true,
   },
   simulation: {
     duration: 180,
@@ -307,6 +308,7 @@ async function submit() {
             selection_method: form.experiment.selectionMethod,
             crossover_method: form.experiment.crossoverMethod,
             mutation_method:  form.experiment.mutationMethod,
+            apply_coverage_repair: form.experiment.applyCoverageRepair,
           }),
         },
         simulation: {

@@ -388,7 +388,21 @@ This guarantees that mutation never produces infeasible individuals.
 
 
 
-### P2.4. Design Rationale
+### P2.4. Coverage Repair (optional)
+
+In addition to connectivity, Problem P2 carries a **trajectory coverage constraint**: the active candidates must cover at least `min_coverage_percentage` of the sampled trajectory points, otherwise the individual is penalized by `penalty_objectives` and skips simulation.
+
+When the algorithm parameter `apply_coverage_repair` is enabled (default `true`), a **greedy set-cover repair** is applied after every connectivity repair (random generation, crossover, and mutation):
+
+1. The per-candidate coverage bitsets are precomputed once per problem instance (`build_candidate_cover_bits`), transposing the bitset coverage matrix.
+2. While the coverage is below the threshold and at most `repair_coverage_budget` activations (default 8) have been spent, the inactive candidate covering the most still-uncovered points is activated (ties break on the lowest index — fully deterministic, activation-only, never deactivates genes).
+3. If any candidate was activated, [**Connectivity Repair via Rooted Growth**](./docs/Connectivity%20Repair%20via%20Rooted%20Growth.md) reconnects the mask to the sink; if that fails, the pre-repair (connected) mask is kept.
+
+Individuals the repair cannot fix — or any individual when `apply_coverage_repair` is `false` — remain subject to the coverage penalty, which acts as the safety net. The same `apply_coverage_repair` flag also gates the greedy coverage repair stage of Problem P1 (`_greedy_coverage_repair`); P1's connectivity repair always runs regardless.
+
+
+
+### P2.5. Design Rationale
 
 The combination of **growth-based initialization** and **repair-based variation** yields several advantages:
 
@@ -402,20 +416,23 @@ Together, these operators define a robust evolutionary pipeline for Problem P2, 
 
 
 
-### P2.5. Summary of Operator Flow
+### P2.6. Summary of Operator Flow
 
 ```
 Random generation:
     stochastic_reachability_mask → feasible connected individual
+        → coverage repair (if apply_coverage_repair)
 
 Crossover:
     uniform mask crossover
         → connectivity repair
+        → coverage repair (if apply_coverage_repair)
     uniform MAC inheritance
 
 Mutation:
     bit-flip mask mutation
         → connectivity repair
+        → coverage repair (if apply_coverage_repair)
     bit-flip MAC mutation
 ```
 

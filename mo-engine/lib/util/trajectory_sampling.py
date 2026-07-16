@@ -143,6 +143,124 @@ def build_coverage_matrix(
     return matrix
 
 
+def build_candidate_cover_bits(matrix: CoverageMatrix, n_candidates: int) -> list[int]:
+    """
+    Transpose a coverage matrix into per-candidate point bitsets.
+
+    Element j of the result is a Python int whose i-th bit is 1 iff candidate j
+    covers sampled point i:
+
+        bit_i( cover_bits[j] ) = 1  <==>  bit_j( matrix[i] ) = 1
+
+    Building this once per problem instance lets greedy coverage repair score
+    each candidate with a single AND + popcount instead of re-scanning the
+    matrix rows on every call.
+
+    Parameters
+    ----------
+    matrix : CoverageMatrix
+        Output of ``build_coverage_matrix`` — N bitset rows, one per
+        sampled trajectory point.
+    n_candidates : int
+        Number of candidate positions m (bit width of each matrix row).
+
+    Returns
+    -------
+    list[int]
+        m integers; the i-th bit of element j encodes coverage of sample
+        point i by candidate j.
+    """
+    cover_bits = [0] * n_candidates
+
+    for i, row in enumerate(matrix):
+        point_bit = 1 << i
+        j = 0
+        while row:
+            if row & 1:
+                cover_bits[j] |= point_bit
+            row >>= 1
+            j += 1
+
+    return cover_bits
+
+
+def greedy_coverage_repair_mask(
+    matrix: CoverageMatrix,
+    cover_bits: list[int],
+    mask: list[int],
+    min_pct: float,
+    budget: int,
+) -> list[int]:
+    """
+    Repair a P2 chromosome by greedily activating candidates until the
+    trajectory coverage reaches ``min_pct`` or ``budget`` activations are spent.
+
+    Classic greedy set-cover restricted to activation only: existing 1-bits are
+    never cleared, so the parent's genetic material is preserved.  At each step
+    the inactive candidate covering the most still-uncovered points is
+    activated; ties break on the lowest index, making the repair fully
+    deterministic (no RNG involved).  The loop stops early when no inactive
+    candidate covers any uncovered point (irreparable scenario — the caller's
+    penalty mechanism remains the safety net).
+
+    Parameters
+    ----------
+    matrix : CoverageMatrix
+        Output of ``build_coverage_matrix`` — N bitset rows.
+    cover_bits : list[int]
+        Output of ``build_candidate_cover_bits`` for the same matrix.
+    mask : list[int]
+        Binary chromosome of the P2 problem — m bits, one per candidate.
+        Not mutated; a repaired copy is returned.
+    min_pct : float
+        Target coverage percentage in [0, 100].
+    budget : int
+        Maximum number of candidates to activate.
+
+    Returns
+    -------
+    list[int]
+        Repaired copy of ``mask`` (equal to the input when the mask is already
+        feasible, the budget is non-positive, or no activation helps).
+    """
+    n_points = len(matrix)
+    if n_points == 0 or budget <= 0:
+        return mask[:]
+
+    out = mask[:]
+
+    covered = 0
+    for j, bit in enumerate(out):
+        if bit:
+            covered |= cover_bits[j]
+
+    all_points = (1 << n_points) - 1
+    uncovered = all_points & ~covered
+    required = math.ceil(min_pct / 100.0 * n_points)
+
+    for _ in range(budget):
+        if n_points - uncovered.bit_count() >= required:
+            break
+
+        best_j = -1
+        best_gain = 0
+        for j, bit in enumerate(out):
+            if bit:
+                continue
+            gain = (cover_bits[j] & uncovered).bit_count()
+            if gain > best_gain:
+                best_gain = gain
+                best_j = j
+
+        if best_j < 0:
+            break  # no inactive candidate covers any uncovered point
+
+        out[best_j] = 1
+        uncovered &= ~cover_bits[best_j]
+
+    return out
+
+
 def check_coverage(matrix: CoverageMatrix, mask: list[int]) -> float:
     """
     Score how well a P2 chromosome covers the sampled trajectory points.

@@ -16,6 +16,8 @@ class GeneticAlgorithmConfigDto(TypedDict):
     eta_mt: float    # polynomial
     pm_tau: float    # route mutation prob P4
     sigma_tau: float  # standard deviation of Gaussian distribution tau mutation P4
+    apply_coverage_repair: bool  # enable trajectory coverage repair (P1/P2), default True
+    repair_coverage_budget: int  # max relay moves (P1) / candidate activations (P2) per repair
 
 
 class NsgaIIIConfigDto(GeneticAlgorithmConfigDto):

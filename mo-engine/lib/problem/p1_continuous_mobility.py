@@ -103,6 +103,7 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         self._per_gene_prob = float(parameters.get("per_gene_prob", 1.0 / N))
         self._crossover_method = str(parameters.get("crossover_method"))
         self._mutation_method = str(parameters.get("mutation_method"))
+        self._apply_coverage_repair = bool(parameters.get("apply_coverage_repair", True))
         self._coverage_repair_budget = int(parameters.get("repair_coverage_budget", parameters.get("coverage_repair_budget", 2)))
         self._coverage_repair_candidates = int(parameters.get("repair_coverage_candidates", parameters.get("coverage_repair_candidates", 4)))
         self._coverage_repair_relay_candidates = int(parameters.get("repair_coverage_relay_candidates", parameters.get("coverage_repair_relay_candidates", 3)))
@@ -264,7 +265,11 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
 
 
     def _repair_relays(self, relays: list[Position]) -> list[Position]:
+        # Connectivity repair is a structural feasibility requirement and always
+        # runs; only the coverage stage is gated by apply_coverage_repair.
         repaired = self._repair_connectivity_to_sink(relays)
+        if not self._apply_coverage_repair:
+            return repaired
         repaired = self._greedy_coverage_repair(repaired)
         return self._repair_connectivity_to_sink(repaired)
 

@@ -215,6 +215,24 @@
           </select>
         </div>
       </div>
+
+      <div class="fields-row half">
+        <div class="field-group">
+          <label class="checkbox-label" for="apply-coverage-repair">
+            <input
+              id="apply-coverage-repair"
+              type="checkbox"
+              :checked="modelValue.applyCoverageRepair"
+              @change="updateBool('applyCoverageRepair', ($event.target as HTMLInputElement).checked)"
+            />
+            Apply coverage repair
+          </label>
+          <span class="hint-small">
+            Repair individuals whose trajectory coverage falls below the problem threshold
+            (P1/P2). When disabled, infeasible individuals are only penalized.
+          </span>
+        </div>
+      </div>
     </template>
 
     <template v-else>
@@ -256,6 +274,7 @@ export interface Step2Value {
   crossoverMethod: string
   mutationMethod: string
   divisions: number
+  applyCoverageRepair: boolean
 }
 
 const NSGA3_STRATEGIES = ['nsga3', 'nsga3_deap', 'nsga3_pymoo']
@@ -296,6 +315,10 @@ function updateNum(field: keyof Step2Value, raw: string, kind: 'int' | 'float') 
   emit('update:modelValue', { ...props.modelValue, [field]: v })
 }
 
+function updateBool(field: keyof Step2Value, value: boolean) {
+  emit('update:modelValue', { ...props.modelValue, [field]: value })
+}
+
 function updateSourceOpt(i: number, field: keyof SourceOption, value: string) {
   const sourceOptions = props.modelValue.sourceOptions.map((o, idx) =>
     idx === i ? { ...o, [field]: value } : o
@@ -330,6 +353,11 @@ function addSourceOpt() {
 .fields-row.half { display: grid; grid-template-columns: 1fr; }
 .field-group { display: flex; flex-direction: column; gap: 4px; }
 .field-label { font-size: 12px; font-weight: 500; color: var(--color-text); }
+.checkbox-label {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; font-weight: 500; color: var(--color-text); cursor: pointer;
+}
+.checkbox-label input[type="checkbox"] { width: auto; margin: 0; cursor: pointer; }
 .required { color: var(--color-primary); }
 
 /* Source repo rows */
