@@ -24,7 +24,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from "vue";
+import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
 import type { TopLevelFormatterParams } from "echarts/types/dist/shared";
 import { useEChart } from "../../composables/useEChart";
 import type { JsonObject } from "../../types/simlab";
@@ -317,8 +317,16 @@ function onResize() {
   buildOption(); // recalculate equal-scale ranges for the new dimensions
 }
 
+// The chart instance is created by useEChart's post-flush watcher, which runs
+// AFTER this component's mounted hook (template refs and mounted hooks share
+// the first post-flush batch; the watcher lands in the next one). Building on
+// `ready` instead of onMounted guarantees the option is applied once the
+// instance exists — with static props there is no later data change to retry.
+watch(ready, (r) => {
+  if (r) buildOption();
+}, { immediate: true });
+
 onMounted(() => {
-  buildOption();
   window.addEventListener("resize", onResize);
 });
 
