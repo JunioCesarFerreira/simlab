@@ -62,7 +62,11 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
         self.problem: ProblemP3 = ProblemP3.cast(problem)
 
 
-    def set_ga_operator_configs(self, rng: Random, parameters: GeneticAlgorithmConfigDto): 
+    # Operators are fixed by design: uniform mask crossover + bit-flip mutation,
+    # both followed by connectivity repair (no coverage repair in P3).
+    CONSUMED_GA_KEYS = frozenset({"per_gene_prob"})
+
+    def set_ga_operator_configs(self, rng: Random, parameters: GeneticAlgorithmConfigDto):
         self._p_bit_mut = float(parameters.get("per_gene_prob", 0.1))
         self._rng = rng
 

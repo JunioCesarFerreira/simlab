@@ -157,7 +157,11 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
         self.problem: ProblemP4 = ProblemP4.cast(problem)
 
 
-    def set_ga_operator_configs(self, rng: Random, parameters: GeneticAlgorithmConfigDto):  
+    # Operators are fixed by design: route splice crossover with repair + tau
+    # blend; mutation combines route perturbation and Gaussian tau mutation.
+    CONSUMED_GA_KEYS = frozenset({"per_gene_prob", "pm_tau", "sigma_tau"})
+
+    def set_ga_operator_configs(self, rng: Random, parameters: GeneticAlgorithmConfigDto):
         self._p_bit_mut = float(parameters.get("per_gene_prob", 0.1))
         self._pm_tau = float(parameters.get("pm_tau", 0.5))
         self._sigma_tau = float(parameters.get("sigma_tau", 5.0))

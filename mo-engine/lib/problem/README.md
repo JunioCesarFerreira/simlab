@@ -437,3 +437,29 @@ Mutation:
 ```
 
 ---
+
+# GA Parameter Consumption per Problem
+
+Each adapter declares the problem-specific GA keys it reads in its
+`CONSUMED_GA_KEYS` class attribute; `resolve.build_adapter` logs a warning for
+any key sent by the launcher that the problem ignores. Strategy-level keys
+(`population_size`, `number_of_generations`, `random_seed`, `divisions`,
+`prob_cx`, `prob_mt`, `selection_method`) are consumed by `lib/strategy/*`
+for every problem — note that `selection_method` is accepted but fixed:
+all strategies currently use tournament selection.
+
+| Key | P0 | P1 | P2 | P3 | P4 |
+|---|---|---|---|---|---|
+| `per_gene_prob` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `crossover_method` | — | ✓ (`sbx_with_radial_translate` default, `rand_network`) | — | — | — |
+| `eta_cx`, `eta_mt` | ✓ | ✓ | — | — | — |
+| `apply_coverage_repair`, `repair_coverage_budget` | — | ✓ | ✓ | — | — |
+| `pm_tau`, `sigma_tau` | — | — | — | — | ✓ |
+
+Crossover/mutation operators are **fixed by design** everywhere except P1's
+crossover: feasibility-preserving pipelines (connectivity/coverage repair)
+are part of each problem's formulation, not tunable knobs. The GUI mirrors
+this table in `gui/simlab/src/lib/problemCapabilities.ts` — keep both in
+sync when an adapter starts consuming a new key.
+
+---

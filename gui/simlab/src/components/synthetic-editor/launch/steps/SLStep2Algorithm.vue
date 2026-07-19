@@ -112,37 +112,28 @@ id="random-seed" :value="modelValue.randomSeed" type="number" step="1"
       </div>
       <div class="fields-row">
         <div class="field-group">
-          <label class="field-label" for="sel-method">Selection method</label>
-          <select
-id="sel-method" :value="modelValue.selectionMethod"
-            @change="update('selectionMethod', ($event.target as HTMLSelectElement).value)">
-            <option value="tournament">tournament</option>
-            <option value="roulette">roulette</option>
-          </select>
+          <label class="field-label" for="eta-cx">SBX distribution index (η_cx)</label>
+          <input
+id="eta-cx" :value="modelValue.etaCx" type="number" min="1" max="200" step="1"
+            @input="updateNum('etaCx', ($event.target as HTMLInputElement).value, 'float')" />
+          <span class="hint-small">Higher values keep offspring closer to the parents.</span>
         </div>
         <div class="field-group">
-          <label class="field-label" for="cx-method">Crossover method</label>
-          <select
-id="cx-method" :value="modelValue.crossoverMethod"
-            @change="update('crossoverMethod', ($event.target as HTMLSelectElement).value)">
-            <option value="sbx">sbx (Cartesian)</option>
-            <option value="sbx_with_radial_translate">sbx_with_radial_translate (WSN)</option>
-            <option value="uniform_mask">uniform_mask</option>
-            <option value="one_point">one_point</option>
-            <option value="two_point">two_point</option>
-          </select>
+          <label class="field-label" for="eta-mt">Polynomial mutation index (η_mt)</label>
+          <input
+id="eta-mt" :value="modelValue.etaMt" type="number" min="1" max="200" step="1"
+            @input="updateNum('etaMt', ($event.target as HTMLInputElement).value, 'float')" />
+          <span class="hint-small">Higher values produce smaller mutation steps.</span>
         </div>
       </div>
       <div class="fields-row half">
         <div class="field-group">
-          <label class="field-label" for="mt-method">Mutation method</label>
-          <select
-id="mt-method" :value="modelValue.mutationMethod"
-            @change="update('mutationMethod', ($event.target as HTMLSelectElement).value)">
-            <option value="bitflip">bitflip</option>
-            <option value="polynomial">polynomial</option>
-            <option value="gaussian">gaussian</option>
-          </select>
+          <label class="field-label">Genetic operators</label>
+          <div class="fixed-op">
+            tournament selection · SBX crossover · polynomial mutation
+            <span class="fixed-tag">fixed</span>
+          </div>
+          <span class="hint-small">P0 uses the textbook real-coded operator pair; only the indices above are tunable.</span>
         </div>
       </div>
     </template>
@@ -172,9 +163,8 @@ export interface SLStep2Value {
   probCx: number
   probMt: number
   perGeneProb: number
-  selectionMethod: string
-  crossoverMethod: string
-  mutationMethod: string
+  etaCx: number
+  etaMt: number
   divisions: number
 }
 
@@ -212,6 +202,16 @@ function updateNum(field: keyof SLStep2Value, raw: string, kind: 'int' | 'float'
 .field-label { font-size: 12px; font-weight: 500; color: var(--color-text); }
 .required { color: var(--color-primary); }
 .hint-small { font-size: 11px; color: var(--color-text-muted); }
+.fixed-op {
+  padding: 7px 10px; border: 1px dashed var(--color-border); border-radius: var(--radius-sm);
+  font-size: 12px; color: var(--color-text-muted); background: var(--color-bg);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.fixed-tag {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--color-text-muted); border: 1px solid var(--color-border);
+  border-radius: 999px; padding: 1px 7px; flex-shrink: 0;
+}
 input, select {
   padding: 7px 10px; border: 1px solid var(--color-border);
   border-radius: var(--radius-sm); font-size: 13px;

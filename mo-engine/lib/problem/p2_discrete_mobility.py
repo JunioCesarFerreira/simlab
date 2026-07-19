@@ -99,6 +99,12 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
         return [penalty] * n_objectives
 
 
+    # Operators are fixed by design: uniform mask crossover + bit-flip mutation,
+    # both followed by connectivity (and optional coverage) repair.
+    CONSUMED_GA_KEYS = frozenset({
+        "per_gene_prob", "apply_coverage_repair", "repair_coverage_budget",
+    })
+
     def set_ga_operator_configs(self, rng: Random, parameters: GeneticAlgorithmConfigDto):
         self._p_bit_mut = float(parameters.get("per_gene_prob", 0.1))
         self._apply_coverage_repair = bool(parameters.get("apply_coverage_repair", True))

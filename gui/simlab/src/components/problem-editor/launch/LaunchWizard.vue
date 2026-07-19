@@ -39,6 +39,7 @@
           <Step2Experiment
             v-else-if="currentStep === 2"
             v-model="form.experiment"
+            :problem-name="problemStore.draft.name"
             :repositories="repositories"
             :repositories-loading="repositoriesLoading"
             :show-validation="showValidation"
@@ -102,6 +103,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useProblemStore } from '../../../app/stores/problemStore'
+import { capabilitiesFor, defaultExtraParams } from '../../../lib/problemCapabilities'
 import { exportProblem } from '../../../services/exportProblemJson'
 import { createExperiment } from '../../../api/experiments'
 import { getAllRepositories } from '../../../api/repositories'
@@ -160,6 +162,9 @@ const initMacProtocol = problemStore.draft.chromosome?.macProtocol ?? 'csma'
 // in the name matches the default strategy selected below).
 const initName = `Performing optimization with NSGA-III on ${problemStore.draft.name || 'problem'}`
 
+// GA knobs this problem actually consumes (see lib/problemCapabilities.ts)
+const problemCaps = capabilitiesFor(problemStore.draft.name)
+
 // Defaults from post-nsga3-experiment-p2.json
 const form = reactive<{
   experiment: Step2Value
@@ -177,11 +182,10 @@ const form = reactive<{
     probCx: 0.8,
     probMt: 0.15,
     perGeneProb: 0.1,
-    selectionMethod: 'tournament',
-    crossoverMethod: 'uniform_mask',
-    mutationMethod: 'bitflip',
+    crossoverMethod: problemCaps.defaultCrossoverMethod ?? '',
     divisions: 10,
     applyCoverageRepair: true,
+    extraParams: defaultExtraParams(problemCaps),
   },
   simulation: {
     duration: 180,
@@ -301,14 +305,18 @@ async function submit() {
           number_of_generations: form.experiment.numberOfGenerations,
           random_seed:           form.experiment.randomSeed,
           ...(isNsga3 && { divisions: form.experiment.divisions }),
+          // Only the keys this problem's adapter consumes (problemCapabilities.ts)
           ...(isEvolutionary && {
-            prob_cx:          form.experiment.probCx,
-            prob_mt:          form.experiment.probMt,
-            per_gene_prob:    form.experiment.perGeneProb,
-            selection_method: form.experiment.selectionMethod,
-            crossover_method: form.experiment.crossoverMethod,
-            mutation_method:  form.experiment.mutationMethod,
-            apply_coverage_repair: form.experiment.applyCoverageRepair,
+            prob_cx:       form.experiment.probCx,
+            prob_mt:       form.experiment.probMt,
+            per_gene_prob: form.experiment.perGeneProb,
+            ...(problemCaps.crossoverMethods.length > 0 && {
+              crossover_method: form.experiment.crossoverMethod,
+            }),
+            ...(problemCaps.supportsCoverageRepair && {
+              apply_coverage_repair: form.experiment.applyCoverageRepair,
+            }),
+            ...form.experiment.extraParams,
           }),
         },
         simulation: {

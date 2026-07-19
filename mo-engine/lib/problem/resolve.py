@@ -1,4 +1,5 @@
 import random
+import logging
 
 from typing import Any, Mapping
 from typing import Type
@@ -10,6 +11,8 @@ from .p2_discrete_mobility import Problem2DiscreteMobilityAdapter
 from .p3_target_coverage import Problem3TargetCoverageAdapter
 from .p4_mobile_sink_collection import Problem4MobileSinkCollectionAdapter
 
+log = logging.getLogger(__name__)
+
 # Problem key -> adapter class
 PROBLEM_REGISTRY: dict[str, Type[ProblemAdapter]] = {
     "problem0": Problem0SyntheticAdapter,
@@ -18,6 +21,24 @@ PROBLEM_REGISTRY: dict[str, Type[ProblemAdapter]] = {
     "problem3": Problem3TargetCoverageAdapter,
     "problem4": Problem4MobileSinkCollectionAdapter,
 }
+
+# GA parameter keys consumed by the strategies themselves (lib/strategy/*),
+# regardless of the problem. Problem-specific keys are declared per adapter
+# in CONSUMED_GA_KEYS. selection_method is accepted-but-fixed: every strategy
+# currently uses tournament selection.
+STRATEGY_GA_KEYS = frozenset({
+    "population_size", "number_of_generations", "random_seed",
+    "divisions", "prob_cx", "prob_mt", "selection_method",
+})
+
+
+def _warn_ignored_ga_keys(key: str, adapter_cls: Type[ProblemAdapter], ga_parameter: Mapping[str, Any]) -> None:
+    ignored = set(ga_parameter) - STRATEGY_GA_KEYS - adapter_cls.CONSUMED_GA_KEYS
+    if ignored:
+        log.warning(
+            "[%s] GA parameter(s) ignored by this problem: %s",
+            key, ", ".join(sorted(ignored)),
+        )
 
 
 def resolve_problem_key(problem: Mapping[str, Any]) -> str:
@@ -78,8 +99,9 @@ def build_adapter(
         raise ValueError(f"Unknown problem name='{key}'. Known: {known}")
 
     adptr = adapter_cls(problem)
-    
+
     if len(ga_parameter) > 0:
+      _warn_ignored_ga_keys(key, adapter_cls, ga_parameter)
       adptr.set_ga_operator_configs(rng, ga_parameter)
-      
+
     return adptr

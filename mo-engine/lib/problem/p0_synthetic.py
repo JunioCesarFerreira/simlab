@@ -90,6 +90,9 @@ class Problem0SyntheticAdapter(ProblemAdapter):
     # ------------------------------------------------------------------
     # Genetic algorithm configuration
     # ------------------------------------------------------------------
+    # Operators are fixed by design: textbook SBX + polynomial mutation.
+    CONSUMED_GA_KEYS = frozenset({"eta_cx", "eta_mt", "per_gene_prob"})
+
     def set_ga_operator_configs(self, rng: Random, parameters: GeneticAlgorithmConfigDto) -> None:
         self._eta_cx = float(parameters.get("eta_cx", 20.0))
         self._eta_mt = float(parameters.get("eta_mt", 20.0))
