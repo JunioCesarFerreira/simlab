@@ -52,3 +52,8 @@ def test_p3_encode_basic():
 
     assert sim["fixedMotes"][2]["name"] == "relay_2"
     assert sim["fixedMotes"][2]["position"] == [30.0, 0.0]
+
+    # -------------------------------------------------
+    # Sensing targets (drawn in topology plots; ignored by the Cooja builder)
+    # -------------------------------------------------
+    assert sim["targets"] == [[15.0, 10.0]]

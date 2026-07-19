@@ -26,6 +26,10 @@ class SimulationElements(TypedDict):
     # Present only for analytical (synthetic) problems: the benchmark decision
     # vector x ∈ [0,1]^n, evaluated directly by the master-node with no motes.
     decisionVector: NotRequired[list[float]]
+    # Present only for P3: sensing target positions [x, y]. Targets are not
+    # motes — the Cooja builder ignores them; they exist so topology plots can
+    # draw the sensing goals alongside the deployed network.
+    targets: NotRequired[list[list[float]]]
 
 
 class SimulationConfig(TypedDict):

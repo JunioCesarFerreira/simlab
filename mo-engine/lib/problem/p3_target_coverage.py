@@ -230,4 +230,5 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
         return {
             "fixedMotes": fixed,
             "mobileMotes": [],
+            "targets": [list(t) for t in self.problem.targets],
         }
