@@ -288,6 +288,46 @@ function hitRelay(cx: number, cy: number): string | null {
   return null
 }
 
+function distToSegmentPx(cx: number, cy: number, x1: number, y1: number, x2: number, y2: number): number {
+  const dx = x2 - x1, dy = y2 - y1
+  const len2 = dx * dx + dy * dy
+  const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((cx - x1) * dx + (cy - y1) * dy) / len2))
+  return Math.hypot(cx - (x1 + t * dx), cy - (y1 + t * dy))
+}
+
+/** Hit-test the dashed trajectory paths of mobile nodes (line/ellipse/custom segments). */
+function hitPathSegment(cx: number, cy: number): { nodeId: string; segIndex: number } | null {
+  for (const node of problemStore.draft.mobileNodes) {
+    for (let i = 0; i < node.segments.length; i++) {
+      const seg = node.segments[i]!
+      if (seg.type === 'line') {
+        const [x1, y1] = worldToCanvas(seg.start[0], seg.start[1])
+        const [x2, y2] = worldToCanvas(seg.end[0], seg.end[1])
+        if (distToSegmentPx(cx, cy, x1, y1, x2, y2) <= HIT_PX) return { nodeId: node.id, segIndex: i }
+      } else if (seg.type === 'ellipse') {
+        const [cpx, cpy] = worldToCanvas(seg.center[0], seg.center[1])
+        const [ex] = worldToCanvas(seg.center[0] + seg.radiusX, seg.center[1])
+        const [, ey] = worldToCanvas(seg.center[0], seg.center[1] + seg.radiusY)
+        const rx = Math.abs(ex - cpx), ry = Math.abs(ey - cpy)
+        if (rx < 1 || ry < 1) continue
+        // distance to the boundary, approximated on the normalized ellipse
+        const nr = Math.hypot((cx - cpx) / rx, (cy - cpy) / ry)
+        if (Math.abs(nr - 1) * Math.min(rx, ry) <= HIT_PX) return { nodeId: node.id, segIndex: i }
+      } else if (seg.type === 'custom') {
+        const pts = sampleCustomSegment(seg.exprX, seg.exprY, 80)
+        if (!pts || pts.length < 2) continue
+        const canvasPts = pts.map(([wx, wy]) => worldToCanvas(wx, wy))
+        for (let j = 1; j < canvasPts.length; j++) {
+          const [x1, y1] = canvasPts[j - 1]!
+          const [x2, y2] = canvasPts[j]!
+          if (distToSegmentPx(cx, cy, x1, y1, x2, y2) <= HIT_PX) return { nodeId: node.id, segIndex: i }
+        }
+      }
+    }
+  }
+  return null
+}
+
 const canvasCursor = computed(() => {
   if (regionDrag.value) return HANDLE_CURSORS[regionDrag.value.handle]
   if (hoveredHandle.value) return HANDLE_CURSORS[hoveredHandle.value]
@@ -354,7 +394,7 @@ const toolHint = computed(() => {
     return 'Selecione um problema p2/p3/p4 para usar esta ferramenta'
   }
   const hints: Record<string, string> = {
-    'select': 'Clique para selecionar · arraste para mover · Del para remover · clique direito para remover',
+    'select': 'Clique para selecionar · arraste para mover · Del para remover · clique direito remove elemento ou caminho',
     'place-sink': 'Clique para posicionar o sink  [K]',
     'place-candidate': 'Clique para adicionar candidato  [C]  ·  clique direito para remover',
     'place-target': 'Clique para adicionar alvo  [T]  ·  clique direito para remover',
@@ -1100,7 +1140,10 @@ function handleRightClick(e: MouseEvent) {
   if (tid) { problemStore.removeTarget(tid); editorStore.setSelected(null); return }
   if (hitSink(cx, cy)) { problemStore.setSink(null); editorStore.setSelected(null); return }
   const rid = hitRelay(cx, cy)
-  if (rid) { problemStore.removeRelay(rid); editorStore.setSelected(null) }
+  if (rid) { problemStore.removeRelay(rid); editorStore.setSelected(null); return }
+  // Dashed trajectory paths: tested last so point elements always win the click
+  const seg = hitPathSegment(cx, cy)
+  if (seg) problemStore.removeSegmentFromNode(seg.nodeId, seg.segIndex)
 }
 
 function handleMouseLeave() { hover.value = null }
