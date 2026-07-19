@@ -18,6 +18,42 @@ services:
       - "mongo_data:/data/db"
       - "mongo_config:/data/configdb"
 
+  # Monitoring pair for runtime telemetry when mo-engine runs on the host:
+  # Prometheus is published on localhost:9090 (the collector's local default).
+  # The simlab.group labels on the cooja services are required — the telemetry
+  # container filter selects group "simulation|backend".
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: cadvisor
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+    command:
+      - --docker=unix:///var/run/docker.sock
+    ports:
+      - "8080:8080"
+    networks:
+      - monitoring-net
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    volumes:
+      - ../../../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - cadvisor
+    networks:
+      - monitoring-net
+
   cooja1:
     image: juniocesarferreira/simulation-cooja:v1.1
     container_name: cooja1
@@ -26,6 +62,11 @@ services:
       - "2231:22"
     networks:
       - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=1"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
 
   cooja2:
     image: juniocesarferreira/simulation-cooja:v1.1
@@ -35,6 +76,11 @@ services:
       - "2232:22"
     networks:
       - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=2"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
 
   cooja3:
     image: juniocesarferreira/simulation-cooja:v1.1
@@ -44,6 +90,11 @@ services:
       - "2233:22"
     networks:
       - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=3"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
 
   cooja4:
     image: juniocesarferreira/simulation-cooja:v1.1
@@ -53,6 +104,11 @@ services:
       - "2234:22"
     networks:
       - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=4"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
 
   cooja5:
     image: juniocesarferreira/simulation-cooja:v1.1
@@ -62,6 +118,11 @@ services:
       - "2235:22"
     networks:
       - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=5"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
 
   cooja6:
     image: juniocesarferreira/simulation-cooja:v1.1
@@ -71,11 +132,19 @@ services:
       - "2236:22"
     networks:
       - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=6"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
 
 networks:
   cooja-net:
     driver: bridge
-    
+  monitoring-net:
+    driver: bridge
+
 volumes:
   mongo_data:
   mongo_config:
+  prometheus-data:

@@ -103,9 +103,17 @@ CPU / memory line charts (aggregate emphasized, one thin line per container).
 
 | variable                             | default                  | purpose                          |
 | ------------------------------------ | ------------------------ | -------------------------------- |
-| `PROMETHEUS_URL`                     | `http://prometheus:9090` | Prometheus base URL              |
+| `PROMETHEUS_URL`                     | see below                | Prometheus base URL              |
 | `TELEMETRY_ENABLED`                  | `True`                   | disable collection entirely      |
 | `TELEMETRY_QUERY_STEP`               | `15s`                    | `query_range` resolution         |
 | `TELEMETRY_COLLECTION_DELAY_SECONDS` | `30`                     | wait for the final scrape        |
 | `TELEMETRY_BACKFILL_HOURS`           | `6`                      | startup sweep window             |
 | `TELEMETRY_CONTAINER_FILTER`         | simlab group filter      | PromQL label selector            |
+
+When `PROMETHEUS_URL` is unset, the default depends on where the process runs:
+`http://prometheus:9090` inside Docker (`IS_DOCKER=True`) and
+`http://localhost:9090` on the host (matching the port published by both the
+main stack and `debug/docker/mongo-cooja`). Before collecting, the client
+checks Prometheus's health endpoint; if unreachable, collection is skipped
+with a single warning and nothing is persisted, so a later backfill sweep can
+retry once the monitoring stack is up.
