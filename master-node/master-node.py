@@ -18,7 +18,7 @@ if project_path not in sys.path:
     sys.path.insert(0, project_path)
 
 # lib master-node
-from lib.sshscp import create_ssh_client, send_files_scp
+from lib.sshscp import create_ssh_client, send_files_scp, cleanup_remote_files
 from lib.synthetic_data import run_synthetic_simulation, resolve_synthetic_settings
 
 # pylib
@@ -197,11 +197,15 @@ def run_cooja_simulation(
     port: int,
     hostname: str,
     mongo: MongoRepository,
+    remote_files: list[str] | None = None,
 ) -> None:
     """
     Executes the simulation in the container via SSH, monitors logs, and stores results in GridFS.
+    Per-run files (remote artifacts and local log/csv) are always removed before returning.
     """
     sim_oid = ObjectId(sim["_id"]) if not isinstance(sim["_id"], ObjectId) else sim["_id"]
+    log_path = f"{SET.local_log_dir}/sim_{sim_oid}.log"
+    csv_path = f"{SET.local_log_dir}/sim_{sim_oid}.csv"
     ssh: SSHClient = create_ssh_client(hostname, port, "root", "root")
     try:
         log.info("[port=%s host=%s] Starting simulation %s", port, hostname, sim_oid)
@@ -228,7 +232,6 @@ def run_cooja_simulation(
                     log.error("[ssh][%s][stderr] %s", hostname if SET.is_docker else port, err)
             time.sleep(0.1)
 
-        log_path = f"{SET.local_log_dir}/sim_{sim_oid}.log"
         with SCPClient(ssh.get_transport()) as scp:
             remote_log = f"{SET.remote_dir}/COOJA.testlog"
             log.info("[port=%s] Copying log to %s", port, log_path)
@@ -237,7 +240,6 @@ def run_cooja_simulation(
         log_id = mongo.fs_handler.upload_file(log_path, "sim_result.log")
         log.info("[port=%s] Log saved with ID: %s", port, log_id)
 
-        csv_path = f"{SET.local_log_dir}/sim_{sim_oid}.csv"
         cooja_files.convert_cooja_log_to_csv(log_path, csv_path)
         csv_id = mongo.fs_handler.upload_file(csv_path, "sim_result.csv")
         log.info("[port=%s] Log converted CSV and saved with ID: %s", port, csv_id)
@@ -254,12 +256,6 @@ def run_cooja_simulation(
             log.warning("[port=%s] CSV file is missing or empty for simulation %s", port, sim_oid)
             mongo.simulation_repo.mark_error(sim_oid, "CSV file is missing or empty after conversion")
 
-        for path in (log_path, csv_path):
-            try:
-                Path(path).unlink(missing_ok=True)
-            except Exception as ex:
-                log.warning("Failed to remove temp file %s: %s", path, ex)
-
         if sim.get("generation_id"):
             _check_and_close_generation(sim["generation_id"], mongo)
 
@@ -272,7 +268,13 @@ def run_cooja_simulation(
         if sim.get("generation_id"):
             _check_and_close_generation(sim["generation_id"], mongo)
     finally:
+        cleanup_remote_files(ssh, SET.remote_dir, remote_files)
         ssh.close()
+        for path in (log_path, csv_path):
+            try:
+                Path(path).unlink(missing_ok=True)
+            except Exception as ex:
+                log.warning("Failed to remove temp file %s: %s", path, ex)
 
 
 def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostname: str) -> None:
@@ -285,6 +287,7 @@ def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostnam
     while True:
         sim_id = sim_queue.get()
         sim = None
+        local_files: list[str] = []
         try:
             if sim_id is None:
                 return
@@ -332,17 +335,14 @@ def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostnam
 
             ssh = create_ssh_client(hostname, port, "root", "root")
             try:
+                # Defensive: clear artifacts left behind if a previous run
+                # crashed before its own cleanup could execute.
+                cleanup_remote_files(ssh, SET.remote_dir)
                 send_files_scp(ssh, SET.local_dir, SET.remote_dir, local_files, remote_files)
             finally:
                 ssh.close()
 
-            run_cooja_simulation(sim, port, hostname, mongo)
-
-            for f in local_files:
-                try:
-                    Path(f).unlink(missing_ok=True)
-                except Exception as ex:
-                    log.warning("Failed to remove temp file %s: %s", f, ex)
+            run_cooja_simulation(sim, port, hostname, mongo, remote_files)
 
         except Exception as e:
             log.exception("[port=%s host=%s] General ERROR: %s", port, hostname, e)
@@ -354,6 +354,11 @@ def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostnam
             if sim and sim.get("generation_id"):
                 _check_and_close_generation(sim["generation_id"], mongo)
         finally:
+            for f in local_files:
+                try:
+                    Path(f).unlink(missing_ok=True)
+                except Exception as ex:
+                    log.warning("Failed to remove temp file %s: %s", f, ex)
             sim_queue.task_done()
 
 
