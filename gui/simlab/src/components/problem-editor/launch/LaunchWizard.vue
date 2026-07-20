@@ -40,6 +40,7 @@
             v-else-if="currentStep === 2"
             v-model="form.experiment"
             :problem-name="problemStore.draft.name"
+            :objectives-count="form.objectives.length"
             :repositories="repositories"
             :repositories-loading="repositoriesLoading"
             :show-validation="showValidation"

@@ -78,6 +78,21 @@
           @input="updateNum('divisions', ($event.target as HTMLInputElement).value, 'int')"
         />
         <span class="hint-small">Das-Dennis reference points for NSGA-III niching.</span>
+        <div class="h-calc" :class="{ warn: refPointsExceedPop }">
+          <span>
+            H = C(M+p−1, p) = C({{ objectivesCount + modelValue.divisions - 1 }}, {{ modelValue.divisions }}) =
+            <strong>{{ refPoints }}</strong> reference points
+            <span class="h-calc-detail">(M = {{ objectivesCount }} objectives, p = {{ modelValue.divisions }})</span>
+          </span>
+          <button
+            v-if="refPointsExceedPop"
+            class="h-calc-apply"
+            title="NSGA-III niching needs population_size ≥ H"
+            @click="updateNum('populationSize', String(suggestedPop), 'int')"
+          >
+            set population to {{ suggestedPop }}
+          </button>
+        </div>
       </div>
     </div>
 
@@ -153,6 +168,7 @@ id="random-seed" :value="modelValue.randomSeed" type="number" step="1"
 
 <script setup lang="ts">
 import { reactive, computed } from 'vue'
+import { referencePointCount, suggestedPopulationSize } from '../../../../lib/nsga3'
 
 export interface SLStep2Value {
   name: string
@@ -171,11 +187,15 @@ export interface SLStep2Value {
 const NSGA3_STRATEGIES = ['nsga3', 'nsga3_deap', 'nsga3_pymoo']
 const EVOLUTIONARY_STRATEGIES = ['nsga2', 'nsga2_deap', 'nsga2_pymoo', 'nsga3', 'nsga3_deap', 'nsga3_pymoo']
 
-const props = defineProps<{ modelValue: SLStep2Value; showValidation: boolean }>()
+const props = defineProps<{ modelValue: SLStep2Value; objectivesCount: number; showValidation: boolean }>()
 const emit = defineEmits<{ 'update:modelValue': [v: SLStep2Value] }>()
 
 const isNsga3 = computed(() => NSGA3_STRATEGIES.includes(props.modelValue.strategy))
 const isEvolutionary = computed(() => EVOLUTIONARY_STRATEGIES.includes(props.modelValue.strategy))
+
+const refPoints = computed(() => referencePointCount(props.objectivesCount, props.modelValue.divisions))
+const suggestedPop = computed(() => suggestedPopulationSize(refPoints.value))
+const refPointsExceedPop = computed(() => refPoints.value > 0 && props.modelValue.populationSize < refPoints.value)
 
 const touched = reactive({ name: false, populationSize: false, numberOfGenerations: false })
 function touch(field: keyof typeof touched) { touched[field] = true }
@@ -212,6 +232,21 @@ function updateNum(field: keyof SLStep2Value, raw: string, kind: 'int' | 'float'
   color: var(--color-text-muted); border: 1px solid var(--color-border);
   border-radius: 999px; padding: 1px 7px; flex-shrink: 0;
 }
+.h-calc {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+  margin-top: 2px; padding: 6px 10px; border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm); background: var(--color-bg);
+  font-size: 11px; color: var(--color-text-muted);
+}
+.h-calc.warn { border-color: #fbbf24; }
+.h-calc strong { color: var(--color-text); }
+.h-calc-detail { color: var(--color-text-muted); }
+.h-calc-apply {
+  padding: 3px 8px; border: 1px solid #fbbf24; border-radius: var(--radius-sm);
+  background: #fef3c7; color: #92400e; font-size: 11px; font-weight: 600;
+  cursor: pointer; flex-shrink: 0;
+}
+.h-calc-apply:hover { background: #fde68a; }
 input, select {
   padding: 7px 10px; border: 1px solid var(--color-border);
   border-radius: var(--radius-sm); font-size: 13px;

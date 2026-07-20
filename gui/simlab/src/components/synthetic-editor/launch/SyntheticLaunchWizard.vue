@@ -37,6 +37,7 @@ class="modal" role="dialog" aria-modal="true"
           <SLStep2Algorithm
             v-else-if="currentStep === 2"
             v-model="form.algorithm"
+            :objectives-count="form.objectives.length"
             :show-validation="showValidation"
           />
           <SLStep3Objectives
