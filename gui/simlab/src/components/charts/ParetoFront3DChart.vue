@@ -52,14 +52,20 @@
           </button>
           <button
             :class="['pin-btn', { active: markMode }]"
-            :title="markMode ? 'Exit pin mode' : 'Enter pin mode — click a Pareto point to pin it'"
+            :title="markMode ? 'Exit pin mode' : 'Enter pin mode — click Pareto points to pin them'"
             @click="markMode = !markMode"
           >
             📌 {{ markMode ? 'Pinning…' : 'Pin' }}
           </button>
-          <div v-if="markedId" class="marked-badge">
-            <span class="marked-id" :title="markedId">📍 {{ markedId.slice(0, 14) }}…</span>
-            <button class="clear-pin" title="Clear pin" @click="markedId = ''">✕</button>
+          <div v-if="markedIds.length > 0" class="marked-badges">
+            <div v-for="(id, i) in markedIds" :key="id" class="marked-badge">
+              <span class="pin-swatch" :style="{ background: pinColorAt(i) }" />
+              <span class="marked-id" :title="id">{{ id.slice(0, 10) }}…</span>
+              <button class="clear-pin" title="Unpin" @click="unpin(id)">✕</button>
+            </div>
+            <button v-if="markedIds.length > 1" class="clear-all-btn" title="Clear all pins" @click="clearPins">
+              Clear all
+            </button>
           </div>
           <ChartExportButton @click="handleExportImage" />
         </div>
@@ -76,6 +82,7 @@ import * as echarts from "../../lib/echarts";
 // Side-effect import registers scatter3D, grid3D, xAxis3D, yAxis3D, zAxis3D
 import "echarts-gl";
 import { useTheme } from "../../composables/useTheme";
+import { usePinnedPoints, pinColorAt } from "../../composables/usePinnedPoints";
 import { gl3dAxis, gl3dColors } from "../../services/chartTheme";
 import type { ParetoFrontItemDto, GenerationDto } from "../../types/simlab";
 import { isPenalized } from "../../types/simlab";
@@ -121,7 +128,7 @@ function onChartClick(params: Record<string, unknown>) {
   const data = params.data as Point3D | undefined;
   if (!data?.individualId) return;
   if (markMode.value) {
-    markedId.value = markedId.value === data.individualId ? "" : data.individualId;
+    togglePin(data.individualId);
   } else if (dominanceMode.value) {
     dominancePoint.value =
       dominancePoint.value?.individualId === data.individualId ? null : data;
@@ -205,9 +212,10 @@ function dassDennisRefPoints(m: number, p: number): number[][] {
 const panMode = ref(false);
 
 // ── Pin state ─────────────────────────────────────────────────────────────────
+// See usePinnedPoints — pinned points are never filtered out of their source
+// series, which is what keeps them from disappearing once pinned.
 
-const markMode = ref(false);
-const markedId = ref("");
+const { markMode, markedIds, togglePin, unpin, clearPins } = usePinnedPoints();
 
 // ── Dominance region ──────────────────────────────────────────────────────────
 
@@ -324,13 +332,22 @@ const rankedGroups = computed<Point3D[][]>(() => {
   return groups;
 });
 
-const markedPoint = computed<Point3D | null>(() => {
-  if (!markedId.value) return null;
-  const all = rankedGroups.value.length > 0
-    ? rankedGroups.value.flat()
-    : paretoData.value;
-  return all.find((p) => p.individualId === markedId.value) ?? null;
+const pointsById = computed<Map<string, Point3D>>(() => {
+  const map = new Map<string, Point3D>();
+  const base = rankedGroups.value.length > 0 ? rankedGroups.value.flat() : populationData.value;
+  for (const p of base) if (p.individualId) map.set(p.individualId, p);
+  for (const p of paretoData.value) if (p.individualId && !map.has(p.individualId)) map.set(p.individualId, p);
+  return map;
 });
+
+// Every currently-pinned point that still resolves on the current axes, in
+// pin order (order = badge/color order).
+const markedPoints = computed<Point3D[]>(() =>
+  markedIds.value.flatMap((id) => {
+    const p = pointsById.value.get(id);
+    return p ? [p] : [];
+  }),
+);
 
 // ── Tooltip ───────────────────────────────────────────────────────────────────
 
@@ -361,7 +378,7 @@ function formatTooltip(params: Record<string, unknown>): string {
   }
 
   const hint = markMode.value
-    ? `<div style="margin-top:6px;font-size:10px;color:${mutedColor};border-top:1px solid ${sepColor};padding-top:4px">${markedId.value === d.individualId ? "Click to unpin" : "Click to pin"}</div>`
+    ? `<div style="margin-top:6px;font-size:10px;color:${mutedColor};border-top:1px solid ${sepColor};padding-top:4px">${markedIds.value.includes(d.individualId) ? "Click to unpin" : "Click to pin"}</div>`
     : "";
 
   return `${idHtml}<table style="font-size:12px;border-spacing:0">${objRows}</table>${hint}`;
@@ -391,12 +408,13 @@ function buildOption() {
       const name  = isOther ? "Other" : `Front ${r + 1}`;
       const color = RANK_PALETTE[r] ?? RANK_PALETTE[RANK_PALETTE.length - 1];
       const size  = RANK_SIZES_3D[r] ?? RANK_SIZES_3D[RANK_SIZES_3D.length - 1];
-      const data  = g.filter((p) => p.individualId !== markedId.value);
 
       series.push({
         name,
         type: "scatter3D",
-        data,
+        // Pinned points stay in their rank group (see usePinnedPoints) so
+        // they never disappear; "Pinned" below only adds a highlight marker.
+        data: g,
         symbolSize: size,
         itemStyle: {
           color,
@@ -422,21 +440,28 @@ function buildOption() {
     series.push({
       name: "Pareto Front",
       type: "scatter3D",
-      data: paretoData.value.filter((p) => p.individualId !== markedId.value),
+      data: paretoData.value,
       symbolSize: 6,
       itemStyle: { color: "#3b82f6", opacity: 0.92 },
       emphasis: { itemStyle: { color: "#1d4ed8", opacity: 1 }, label: { show: false } },
     });
   }
 
-  if (markedPoint.value) {
+  // Pinned points — larger, per-pin-colored markers drawn on top of the
+  // point's own series above (never a replacement for it), one color per
+  // pin cycled from PIN_COLORS so multiple simultaneous pins stay distinct.
+  if (markedPoints.value.length > 0) {
     series.push({
       name: "Pinned",
       type: "scatter3D",
-      data: [markedPoint.value],
-      symbolSize: 10,
-      itemStyle: { color: "#f59e0b", opacity: 1 },
-      emphasis: { itemStyle: { color: "#d97706", opacity: 1 } },
+      data: markedPoints.value.map((p, i) => ({
+        ...p,
+        symbolSize: 11,
+        itemStyle: { color: pinColorAt(i), opacity: 1 },
+      })),
+      symbolSize: 11,
+      itemStyle: { opacity: 1 },
+      emphasis: { itemStyle: { opacity: 1 } },
     });
   }
 
@@ -611,7 +636,7 @@ function buildOption() {
           ...(populationData.value.length > 0 ? ["Population"] : []),
           "Pareto Front",
         ]),
-    ...(markedPoint.value ? ["Pinned"] : []),
+    ...(markedPoints.value.length > 0 ? ["Pinned"] : []),
   ];
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -709,7 +734,7 @@ watch(
     () => props.strategy,
     () => props.referencePointDivisions,
     xKey, yKey, zKey,
-    markedPoint,
+    markedPoints,
     showNicheLines,
     dominancePoint,
     panMode,
@@ -836,11 +861,18 @@ watch(
   color: #92400e;
 }
 
+.marked-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .marked-badge {
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 2px 8px 2px 10px;
+  padding: 2px 8px 2px 8px;
   background: #fef3c7;
   border: 1px solid #fcd34d;
   border-radius: var(--radius-sm);
@@ -848,9 +880,34 @@ watch(
   color: #92400e;
 }
 
+.pin-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+
 .marked-id {
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 10px;
+}
+
+.clear-all-btn {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.clear-all-btn:hover {
+  background: var(--color-bg);
+  color: var(--color-text);
 }
 
 .clear-pin {

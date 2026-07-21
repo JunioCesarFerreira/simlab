@@ -28,14 +28,20 @@
         <div class="pin-controls">
           <button
             :class="['pin-btn', { active: markMode }]"
-            :title="markMode ? 'Exit pin mode' : 'Enter pin mode — click a Pareto point to pin it'"
+            :title="markMode ? 'Exit pin mode' : 'Enter pin mode — click Pareto points to pin them'"
             @click="markMode = !markMode"
           >
             📌 {{ markMode ? 'Pinning…' : 'Pin' }}
           </button>
-          <div v-if="markedId" class="marked-badge">
-            <span class="marked-id" :title="markedId">📍 {{ markedId.slice(0, 14) }}…</span>
-            <button class="clear-pin" title="Clear pin" @click="markedId = ''">✕</button>
+          <div v-if="markedIds.length > 0" class="marked-badges">
+            <div v-for="(id, i) in markedIds" :key="id" class="marked-badge">
+              <span class="pin-swatch" :style="{ background: pinColorAt(i) }" />
+              <span class="marked-id" :title="id">{{ id.slice(0, 10) }}…</span>
+              <button class="clear-pin" title="Unpin" @click="unpin(id)">✕</button>
+            </div>
+            <button v-if="markedIds.length > 1" class="clear-all-btn" title="Clear all pins" @click="clearPins">
+              Clear all
+            </button>
           </div>
           <button
             v-if="isZoomed"
@@ -57,6 +63,7 @@ import { ref, computed, watch, onMounted } from "vue";
 import type * as echarts from "echarts";
 import type { TopLevelFormatterParams } from "echarts/types/dist/shared";
 import { useEChart } from "../../composables/useEChart";
+import { usePinnedPoints, pinColorAt } from "../../composables/usePinnedPoints";
 import type { ParetoFrontItemDto, GenerationDto } from "../../types/simlab";
 import { isPenalized } from "../../types/simlab";
 import { stableStringify } from "../../utils/stableStringify";
@@ -108,9 +115,9 @@ function resetZoom() {
   isZoomed.value = false;
 }
 
-// Pin state
-const markMode = ref(false);
-const markedId = ref("");
+// Pin state — see usePinnedPoints for why pinned points are never filtered
+// out of their source series (that is what used to make them "disappear").
+const { markMode, markedIds, togglePin, unpin, clearPins } = usePinnedPoints();
 
 const availableKeys = computed<string[]>(() => {
   if (props.objectiveNames && props.objectiveNames.length >= 2) return props.objectiveNames;
@@ -222,15 +229,26 @@ const rankedGroups = computed<ChartPoint[][]>(() => {
   return groups;
 });
 
-// The currently pinned point re-projected onto the current axes
-const markedPoint = computed<ChartPoint | null>(() => {
-  if (!markedId.value) return null;
-  // Check in rank-0 group first (most likely location), then all others
-  const all = rankedGroups.value.length > 0
-    ? rankedGroups.value.flat()
-    : paretoData.value;
-  return all.find((p) => p.individualId === markedId.value) ?? null;
+// All points, keyed by individualId, re-projected onto the current axes.
+// Population data is preferred (covers every generation); paretoData fills
+// in ids that are on the front but weren't matched in populationData (e.g.
+// no `generations` prop supplied).
+const pointsById = computed<Map<string, ChartPoint>>(() => {
+  const map = new Map<string, ChartPoint>();
+  const base = rankedGroups.value.length > 0 ? rankedGroups.value.flat() : populationData.value;
+  for (const p of base) if (p.individualId) map.set(p.individualId, p);
+  for (const p of paretoData.value) if (p.individualId && !map.has(p.individualId)) map.set(p.individualId, p);
+  return map;
 });
+
+// Every currently-pinned point that still resolves on the current axes, in
+// pin order (order = badge/color order).
+const markedPoints = computed<ChartPoint[]>(() =>
+  markedIds.value.flatMap((id) => {
+    const p = pointsById.value.get(id);
+    return p ? [p] : [];
+  }),
+);
 
 function formatTooltip(params: TopLevelFormatterParams): string {
   const point = (Array.isArray(params) ? params[0] : params) as { data?: ChartPoint };
@@ -256,7 +274,7 @@ function formatTooltip(params: TopLevelFormatterParams): string {
   }
 
   const hint = markMode.value
-    ? `<div style="margin-top:6px;font-size:10px;color:#9ca3af;border-top:1px solid #f3f4f6;padding-top:4px">${markedId.value === d.individualId ? "Click to unpin" : "Click to pin"}</div>`
+    ? `<div style="margin-top:6px;font-size:10px;color:#9ca3af;border-top:1px solid #f3f4f6;padding-top:4px">${markedIds.value.includes(d.individualId) ? "Click to unpin" : "Click to pin"}</div>`
     : "";
 
   return `${idHtml}<table style="font-size:12px;border-spacing:0">${objRows}</table>${hint}`;
@@ -279,12 +297,14 @@ function buildOption() {
       const name = isOther ? "Other" : `Front ${r + 1}`;
       const color = RANK_PALETTE[r] ?? RANK_PALETTE[RANK_PALETTE.length - 1];
       const size  = RANK_SIZES[r]  ?? RANK_SIZES[RANK_SIZES.length - 1];
-      const data  = g.filter((p) => p.individualId !== markedId.value);
 
       series.push({
         name,
         type: "scatter" as const,
-        data,
+        // Pinned points stay in their rank group — see usePinnedPoints — so
+        // they never disappear; the "Pinned" series below only adds a ring
+        // highlight on top of the point that's already drawn here.
+        data: g,
         symbolSize: size,
         // Canvas fast-path once a series crosses the threshold — draws points
         // without per-symbol graphic elements, which is what keeps a large
@@ -324,7 +344,7 @@ function buildOption() {
     series.push({
       name: "Pareto Front",
       type: "scatter" as const,
-      data: paretoData.value.filter((p) => p.individualId !== markedId.value),
+      data: paretoData.value,
       symbolSize: 11,
       large: true,
       largeThreshold: 200,
@@ -334,17 +354,21 @@ function buildOption() {
     });
   }
 
-  // Pinned point — always rendered on top as a gold pin symbol
-  if (markedPoint.value) {
+  // Pinned points — a hollow ring drawn on top of each pinned point, one
+  // color per pin (cycled from PIN_COLORS). The ring never replaces the
+  // point's own marker in its source series above, so the point itself never
+  // disappears; the ring is purely an additive highlight, click-to-unpin.
+  if (markedPoints.value.length > 0) {
     series.push({
       name: "Pinned",
       type: "scatter" as const,
-      data: [markedPoint.value],
-      symbol: "pin",
-      symbolSize: 28,
-      symbolOffset: [0, "-50%"],
-      itemStyle: { color: "#f59e0b", borderColor: "#fff", borderWidth: 2 },
-      emphasis: { itemStyle: { color: "#d97706", borderColor: "#fff", borderWidth: 2 } },
+      symbol: "circle",
+      data: markedPoints.value.map((p, i) => ({
+        ...p,
+        symbolSize: 20,
+        itemStyle: { color: "transparent", borderColor: pinColorAt(i), borderWidth: 3 },
+        emphasis: { itemStyle: { borderWidth: 4 } },
+      })),
       z: 10,
     });
   }
@@ -359,7 +383,7 @@ function buildOption() {
           ...(populationData.value.length > 0 ? ["Population"] : []),
           "Pareto Front",
         ]),
-    ...(markedPoint.value ? ["Pinned"] : []),
+    ...(markedPoints.value.length > 0 ? ["Pinned"] : []),
   ];
 
   const option: echarts.EChartsOption = {
@@ -406,8 +430,11 @@ function buildOption() {
   }
 }
 
+// markedPoints is a computed that returns a fresh array on every recompute
+// (flatMap), so plain reference comparison already catches every pin change
+// — no need for a deep watch here (would also deep-traverse `generations`).
 watch(
-  [ready, () => props.paretoFront, () => props.generations, () => props.objectiveGoals, xKey, yKey, markedPoint],
+  [ready, () => props.paretoFront, () => props.generations, () => props.objectiveGoals, xKey, yKey, markedPoints],
   buildOption,
 );
 
@@ -417,7 +444,7 @@ onMounted(() => {
     const id = params.data?.individualId;
     if (!id) return;
     if (markMode.value) {
-      markedId.value = markedId.value === id ? "" : id;
+      togglePin(id);
     } else {
       emit("click-individual", id);
     }
@@ -508,11 +535,18 @@ onMounted(() => {
   color: #92400e;
 }
 
+.marked-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .marked-badge {
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 2px 8px 2px 10px;
+  padding: 2px 8px 2px 8px;
   background: #fef3c7;
   border: 1px solid #fcd34d;
   border-radius: var(--radius-sm);
@@ -520,9 +554,34 @@ onMounted(() => {
   color: #92400e;
 }
 
+.pin-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+
 .marked-id {
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 10px;
+}
+
+.clear-all-btn {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.clear-all-btn:hover {
+  background: var(--color-bg);
+  color: var(--color-text);
 }
 
 .reset-zoom-btn {
