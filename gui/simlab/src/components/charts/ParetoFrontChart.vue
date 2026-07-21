@@ -90,6 +90,13 @@ const emit = defineEmits<{
   (e: "axis-change", axes: { x: string; y: string }): void;
 }>();
 
+// Pin state models — bound by the parent to the SAME two refs passed to
+// ParetoFront3DChart, so pins (and pin mode) survive the 2D/3D toggle
+// instead of resetting when this component unmounts. Falls back to local,
+// unbound defaults when no parent v-model is provided.
+const markMode = defineModel<boolean>("markMode", { default: false });
+const markedIds = defineModel<string[]>("markedIds", { default: () => [] });
+
 interface ChartPoint {
   value: [number, number];
   individualId: string;
@@ -115,9 +122,10 @@ function resetZoom() {
   isZoomed.value = false;
 }
 
-// Pin state — see usePinnedPoints for why pinned points are never filtered
-// out of their source series (that is what used to make them "disappear").
-const { markMode, markedIds, togglePin, unpin, clearPins } = usePinnedPoints();
+// Pin logic over the markMode/markedIds models above — see usePinnedPoints
+// for why pinned points are never filtered out of their source series (that
+// is what used to make them "disappear").
+const { togglePin, unpin, clearPins } = usePinnedPoints(markMode, markedIds);
 
 const availableKeys = computed<string[]>(() => {
   if (props.objectiveNames && props.objectiveNames.length >= 2) return props.objectiveNames;

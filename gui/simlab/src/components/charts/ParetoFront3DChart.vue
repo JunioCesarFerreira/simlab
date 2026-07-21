@@ -113,6 +113,13 @@ const emit = defineEmits<{
   (e: "axis-change", axes: { x: string; y: string; z: string }): void;
 }>();
 
+// Pin state models — bound by the parent to the SAME two refs passed to
+// ParetoFrontChart, so pins (and pin mode) survive the 2D/3D toggle instead
+// of resetting when this component unmounts. Falls back to local, unbound
+// defaults when no parent v-model is provided.
+const markMode = defineModel<boolean>("markMode", { default: false });
+const markedIds = defineModel<string[]>("markedIds", { default: () => [] });
+
 const { isDark } = useTheme();
 
 // ── Chart lifecycle ─────────────────────────────────────────────────────────
@@ -212,10 +219,11 @@ function dassDennisRefPoints(m: number, p: number): number[][] {
 const panMode = ref(false);
 
 // ── Pin state ─────────────────────────────────────────────────────────────────
-// See usePinnedPoints — pinned points are never filtered out of their source
-// series, which is what keeps them from disappearing once pinned.
+// Logic over the markMode/markedIds models declared above — see
+// usePinnedPoints for why pinned points are never filtered out of their
+// source series, which is what keeps them from disappearing once pinned.
 
-const { markMode, markedIds, togglePin, unpin, clearPins } = usePinnedPoints();
+const { togglePin, unpin, clearPins } = usePinnedPoints(markMode, markedIds);
 
 // ── Dominance region ──────────────────────────────────────────────────────────
 

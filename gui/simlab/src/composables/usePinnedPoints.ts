@@ -1,7 +1,14 @@
-import { ref } from "vue";
+import type { Ref } from "vue";
 
 /**
- * Multi-point pin state shared by ParetoFrontChart and ParetoFront3DChart.
+ * Multi-point pin logic shared by ParetoFrontChart and ParetoFront3DChart.
+ *
+ * `markMode`/`markedIds` are owned by the caller (a `defineModel` in each
+ * chart, normally bound to the same two refs in the parent page) rather than
+ * created here — that is what keeps the same pins showing when the page
+ * swaps the 2D chart for the 3D one: both charts read/write the identical
+ * shared state instead of each holding its own local copy that resets on
+ * mount.
  *
  * Pinned ids are tracked in an array (pin order = badge/color order) and
  * mutated immutably so Vue's reactivity always picks up the change. Callers
@@ -11,10 +18,7 @@ import { ref } from "vue";
  * ever disappearing: pinning only adds a decoration, it never removes the
  * original marker.
  */
-export function usePinnedPoints() {
-  const markMode = ref(false);
-  const markedIds = ref<string[]>([]);
-
+export function usePinnedPoints(markMode: Ref<boolean>, markedIds: Ref<string[]>) {
   function isPinned(id: string): boolean {
     return markedIds.value.includes(id);
   }
