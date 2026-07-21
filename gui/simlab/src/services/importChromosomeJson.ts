@@ -18,12 +18,12 @@ export function importChromosomeJson(json: string): ChromosomeImportResult {
   try {
     parsed = JSON.parse(json)
   } catch (e) {
-    return { ok: false, error: `JSON inválido: ${e}` }
+    return { ok: false, error: `Invalid JSON: ${e}` }
   }
 
   const file = parsed as ExportedChromosomeFile
   if (!file?.problem_name || !file?.chromosome) {
-    return { ok: false, error: 'JSON deve conter "problem_name" e "chromosome"' }
+    return { ok: false, error: 'JSON must contain "problem_name" and "chromosome"' }
   }
 
   const c = file.chromosome as Record<string, unknown>
@@ -66,5 +66,5 @@ export function importChromosomeJson(json: string): ChromosomeImportResult {
     }
   }
 
-  return { ok: false, error: `problem_name desconhecido: ${file.problem_name}` }
+  return { ok: false, error: `Unknown problem_name: ${file.problem_name}` }
 }

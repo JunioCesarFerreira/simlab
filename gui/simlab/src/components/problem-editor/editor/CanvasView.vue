@@ -21,21 +21,21 @@
 
   <Teleport to="body">
     <div v-if="scaleCalibrateState?.locked" class="scale-input-overlay">
-      <div class="scale-label">Comprimento real do segmento:</div>
-      <div class="scale-dist-hint">Distância atual: {{ scaleCalibrateWorldDist.toFixed(2) }} u</div>
+      <div class="scale-label">Real length of the segment:</div>
+      <div class="scale-dist-hint">Current distance: {{ scaleCalibrateWorldDist.toFixed(2) }} u</div>
       <input
         ref="scaleInputRef"
         v-model="scaleRealLength"
         type="number"
         min="0.001"
         step="any"
-        placeholder="ex: 50.0"
+        placeholder="e.g. 50.0"
         @keydown.enter.stop="applyScaleCalibration"
         @keydown.escape.stop="cancelScaleCalibration"
       />
       <div class="scale-btns">
-        <button class="apply" @mousedown.prevent="applyScaleCalibration">Aplicar</button>
-        <button class="cancel" @mousedown.prevent="cancelScaleCalibration">Cancelar</button>
+        <button class="apply" @mousedown.prevent="applyScaleCalibration">Apply</button>
+        <button class="cancel" @mousedown.prevent="cancelScaleCalibration">Cancel</button>
       </div>
     </div>
   </Teleport>
@@ -142,7 +142,7 @@ function applyScaleCalibration() {
   scaleCalibrateState.value = null
   scaleRealLength.value = ''
   if (toastTimer) clearTimeout(toastTimer)
-  calibrationToast.value = `Escala aplicada — fator ${factor.toFixed(4)}×  |  nova região: [${problemStore.draft.region.map(v => v.toFixed(1)).join(', ')}]`
+  calibrationToast.value = `Scale applied — factor ${factor.toFixed(4)}×  |  new region: [${problemStore.draft.region.map(v => v.toFixed(1)).join(', ')}]`
   toastTimer = setTimeout(() => { calibrationToast.value = null }, 4000)
 }
 
@@ -352,52 +352,52 @@ const isToolWarn = computed(() => {
 const toolHint = computed(() => {
   const t = editorStore.activeTool
   if (t === 'draw-line') {
-    if (!editorStore.activeNodeId) return '⚠ Selecione um nó móvel na aba Nodes antes de desenhar'
+    if (!editorStore.activeNodeId) return '⚠ Select a mobile node in the Nodes tab before drawing'
     const n = polylinePoints.value.length
     return n === 0
-      ? 'Clique para iniciar polilinha  ·  Esc cancela'
-      : `${n} ponto(s)  ·  clique para continuar  ·  duplo-clique ou clique direito para finalizar`
+      ? 'Click to start polyline  ·  Esc cancels'
+      : `${n} point(s)  ·  click to continue  ·  double-click or right-click to finish`
   }
   if (t === 'draw-ellipse') {
-    if (!editorStore.activeNodeId) return '⚠ Selecione um nó móvel na aba Nodes antes de desenhar'
-    return ellipseDrag.value ? 'Solte para confirmar a elipse' : 'Arraste para definir centro e raios da elipse'
+    if (!editorStore.activeNodeId) return '⚠ Select a mobile node in the Nodes tab before drawing'
+    return ellipseDrag.value ? 'Release to confirm the ellipse' : 'Drag to define the ellipse center and radii'
   }
   if (t === 'measure') {
-    if (!measureState.value) return 'Arraste para medir distância  [M]  ·  Esc cancela'
-    if (!measureState.value.locked) return 'Solte para fixar a medição  ·  Esc cancela'
+    if (!measureState.value) return 'Drag to measure distance  [M]  ·  Esc cancels'
+    if (!measureState.value.locked) return 'Release to lock the measurement  ·  Esc cancels'
     const d = measureDistance()
-    return `Distância: ${d.toFixed(1)} u  ·  clique ou Esc para limpar`
+    return `Distance: ${d.toFixed(1)} u  ·  click or Esc to clear`
   }
   if (t === 'scale-calibrate') {
-    if (!scaleCalibrateState.value) return 'Arraste um segmento de comprimento conhecido  [R]  ·  Esc cancela'
-    if (!scaleCalibrateState.value.locked) return 'Solte para fixar o segmento  ·  Esc cancela'
-    return 'Digite o comprimento real e pressione Enter para recalibrar a escala'
+    if (!scaleCalibrateState.value) return 'Drag a segment of known length  [R]  ·  Esc cancels'
+    if (!scaleCalibrateState.value.locked) return 'Release to lock the segment  ·  Esc cancels'
+    return 'Type the real length and press Enter to recalibrate the scale'
   }
   if (t === 'place-relay') {
     const chrom = problemStore.draft.chromosome
     const n = (chrom && chrom.kind === 'problem1') ? chrom.relays.length : 0
     const lim = problemStore.draft.numSensors
-    if (n >= lim) return `⚠ Limite atingido (${n}/${lim}) — ajuste "Number of Sensors"`
-    return `Clique para adicionar relay  [N]  ·  ${n}/${lim}  ·  clique direito para remover`
+    if (n >= lim) return `⚠ Limit reached (${n}/${lim}) — adjust "Number of Sensors"`
+    return `Click to add relay  [N]  ·  ${n}/${lim}  ·  right-click to remove`
   }
   if (t === 'chromosome-pick') {
     const name = problemStore.draft.name
     const chrom = problemStore.draft.chromosome
     if (name === 'problem2' || name === 'problem3') {
       const n = (chrom && (chrom.kind === 'problem2' || chrom.kind === 'problem3')) ? chrom.mask.filter(b => b === 1).length : 0
-      return `Clique no candidato para ativar/desativar  [X]  ·  ${n} ativo(s)  ·  clique direito desativa`
+      return `Click the candidate to activate/deactivate  [X]  ·  ${n} active  ·  right-click deactivates`
     }
     if (name === 'problem4') {
       const n = (chrom && chrom.kind === 'problem4') ? chrom.route.length : 0
-      return `Clique no candidato para adicionar à rota  [X]  ·  ${n} stop(s)  ·  clique direito remove último`
+      return `Click the candidate to add to the route  [X]  ·  ${n} stop(s)  ·  right-click removes the last one`
     }
-    return 'Selecione um problema p2/p3/p4 para usar esta ferramenta'
+    return 'Select a p2/p3/p4 problem to use this tool'
   }
   const hints: Record<string, string> = {
-    'select': 'Clique para selecionar · arraste para mover · Del para remover · clique direito remove elemento ou caminho',
-    'place-sink': 'Clique para posicionar o sink  [K]',
-    'place-candidate': 'Clique para adicionar candidato  [C]  ·  clique direito para remover',
-    'place-target': 'Clique para adicionar alvo  [T]  ·  clique direito para remover',
+    'select': 'Click to select · drag to move · Del to remove · right-click removes element or path',
+    'place-sink': 'Click to place the sink  [K]',
+    'place-candidate': 'Click to add candidate  [C]  ·  right-click to remove',
+    'place-target': 'Click to add target  [T]  ·  right-click to remove',
   }
   return hints[t] ?? ''
 })

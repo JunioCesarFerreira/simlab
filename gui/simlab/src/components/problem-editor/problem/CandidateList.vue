@@ -5,7 +5,7 @@
     </div>
 
     <div v-if="candidates.length === 0" class="empty">
-      Nenhum candidato — use a ferramenta ● no canvas
+      No candidates yet — use the ● tool on the canvas
     </div>
 
     <div v-for="c in candidates" :key="c.id" class="candidate-row">
@@ -22,7 +22,7 @@
         title="y"
         @change="update(c.id, 'y', +($event.target as HTMLInputElement).value)"
       />
-      <button title="Remover" @click="problemStore.removeCandidate(c.id)">✕</button>
+      <button title="Remove" @click="problemStore.removeCandidate(c.id)">✕</button>
     </div>
   </div>
 </template>

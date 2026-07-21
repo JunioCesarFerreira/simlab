@@ -1,14 +1,14 @@
 <template>
   <div v-if="hasImage" class="calibration-panel">
     <div class="section-title" @click="open = !open">
-      <span>Calibração da imagem</span>
+      <span>Image calibration</span>
       <span class="chevron">{{ open ? '▴' : '▾' }}</span>
     </div>
 
     <div v-if="open" class="body">
       <p class="hint">
-        Defina quais coordenadas mundo a imagem cobre.
-        Deixe em branco para ajuste automático sem deformação.
+        Define which world coordinates the image covers.
+        Leave blank for automatic adjustment without distortion.
       </p>
 
       <label class="row-label">
@@ -29,15 +29,15 @@
       </label>
 
       <div class="actions">
-        <button @click="alignToRegion">Alinhar à região</button>
-        <button class="danger" @click="clear">Limpar</button>
+        <button @click="alignToRegion">Align to region</button>
+        <button class="danger" @click="clear">Clear</button>
       </div>
 
       <div v-if="editorStore.imageWorldBounds" class="status ok">
-        ✓ Calibrado: [{{ editorStore.imageWorldBounds.map(v => Math.round(v)).join(', ') }}]
+        ✓ Calibrated: [{{ editorStore.imageWorldBounds.map(v => Math.round(v)).join(', ') }}]
       </div>
       <div v-else class="status">
-        Auto (sem deformação, sem alinhamento)
+        Auto (no distortion, no alignment)
       </div>
     </div>
   </div>

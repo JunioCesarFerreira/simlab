@@ -16,19 +16,19 @@ export function importProblemJson(json: string): ImportResult {
   try {
     parsed = JSON.parse(json)
   } catch (e) {
-    return { ok: false, error: `JSON inválido: ${e}` }
+    return { ok: false, error: `Invalid JSON: ${e}` }
   }
 
   const file = parsed as ExportedProblemFile
-  if (!file?.problem) return { ok: false, error: 'Campo "problem" não encontrado' }
+  if (!file?.problem) return { ok: false, error: 'Field "problem" not found' }
 
   const p = file.problem
 
-  if (typeof p.name !== 'string') return { ok: false, error: '"name" deve ser string' }
-  if (typeof p.radius_of_reach !== 'number') return { ok: false, error: '"radius_of_reach" deve ser número' }
-  if (typeof p.radius_of_inter !== 'number') return { ok: false, error: '"radius_of_inter" deve ser número' }
-  if (!Array.isArray(p.region) || p.region.length !== 4) return { ok: false, error: '"region" deve ser array de 4 números' }
-  if (!Array.isArray(p.sink) || p.sink.length !== 2) return { ok: false, error: '"sink" deve ser [x, y]' }
+  if (typeof p.name !== 'string') return { ok: false, error: '"name" must be a string' }
+  if (typeof p.radius_of_reach !== 'number') return { ok: false, error: '"radius_of_reach" must be a number' }
+  if (typeof p.radius_of_inter !== 'number') return { ok: false, error: '"radius_of_inter" must be a number' }
+  if (!Array.isArray(p.region) || p.region.length !== 4) return { ok: false, error: '"region" must be an array of 4 numbers' }
+  if (!Array.isArray(p.sink) || p.sink.length !== 2) return { ok: false, error: '"sink" must be [x, y]' }
 
   const draft: ProblemDraft = {
     name: p.name,

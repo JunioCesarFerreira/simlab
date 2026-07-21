@@ -15,7 +15,7 @@ export function isPenalized(objectives: number[]): boolean {
 }
 
 /* -------------------------------------------------------
- * Primitivos
+ * Primitives
  * ----------------------------------------------------- */
 
 export type ID = string;
@@ -33,7 +33,7 @@ export type GenerationStatus = "Waiting" | "Running" | "Done" | "Error";
 export type SimulationStatus = "Waiting" | "Running" | "Done" | "Error";
 
 /* -------------------------------------------------------
- * Parameters (alinhado com pylib/db/models/experiment.py)
+ * Parameters (aligned with pylib/db/models/experiment.py)
  * ----------------------------------------------------- */
 
 export interface ObjectiveItem {
@@ -176,14 +176,14 @@ export interface RuntimeMetricsSeriesResponseDto {
 }
 
 /* -------------------------------------------------------
- * Individual (dentro de uma geração)
+ * Individual (within a generation)
  * ----------------------------------------------------- */
 
 export interface IndividualDto {
   id: ID;
-  individual_id: string;       // hash do cromossomo
+  individual_id: string;       // chromosome hash
   chromosome: JsonObject;
-  objectives: number[];        // indexed; usar parameters.objectives[i].metric_name para nome
+  objectives: number[];        // indexed; use parameters.objectives[i].metric_name for the name
   topology_picture_id: ID | null;
   simulations_ids?: ID[];
 }
@@ -203,7 +203,7 @@ export interface GenerationDto {
 }
 
 /* -------------------------------------------------------
- * Experiment (base e info)
+ * Experiment (base and info)
  * ----------------------------------------------------- */
 
 export interface ExperimentInfoDto {
@@ -212,7 +212,7 @@ export interface ExperimentInfoDto {
   system_message?: string | null;
   start_time?: ISODateTime | null;
   end_time?: ISODateTime | null;
-  status: ExperimentStatus; // adicionado client-side (vem do endpoint by-status)
+  status: ExperimentStatus; // added client-side (comes from the by-status endpoint)
   is_synthetic?: boolean;
   synthetic_bench?: string | null;
 }
