@@ -21,6 +21,10 @@
         <span class="nav-icon">⊙</span>
         Problems
       </RouterLink>
+      <RouterLink to="/models" class="nav-link">
+        <span class="nav-icon">∑</span>
+        Models
+      </RouterLink>
       <RouterLink to="/synthetic" class="nav-link nav-link--synthetic">
         <span class="nav-icon">⬡</span>
         Synthetic

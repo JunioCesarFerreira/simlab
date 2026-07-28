@@ -6,3 +6,4 @@ class EnumStatus(str, Enum):
     RUNNING = "Running"
     DONE = "Done"
     ERROR = "Error"
+    CANCELLED = "Cancelled"

@@ -16,6 +16,17 @@ const routes: RouteRecordRaw[] = [
     props: true,
   },
   { path: "/problems", component: () => import("../../pages/ProblemEditor.vue"), meta: { fullScreen: true } },
+  { path: "/models", component: () => import("../../pages/ModelsList.vue") },
+  {
+    path: "/models/:modelKey",
+    component: () => import("../../pages/ModelDetail.vue"),
+    props: true,
+  },
+  {
+    path: "/milp-sweeps/:id",
+    component: () => import("../../pages/MilpSweepDetail.vue"),
+    props: true,
+  },
   { path: "/synthetic", component: () => import("../../pages/SyntheticEditor.vue"), meta: { fullScreen: true } },
   { path: "/sources", component: () => import("../../pages/SourceRepositoriesList.vue") },
   {

@@ -1,0 +1,19 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY ./milp-engine /app/milp-engine
+COPY ./pylib /app/pylib
+
+RUN pip install --no-cache-dir -r /app/milp-engine/requirements.txt \
+    && mkdir -p /opt/gurobi
+
+ENV PYTHONPATH=/app:/app/pylib
+ENV DB_NAME=simlab
+ENV MONGO_URI=mongodb://mongodb:27017/?replicaSet=rs0
+ENV PYTHONUNBUFFERED=1
+# Preferred solver backend: gurobi | highs. When Gurobi has no usable license
+# the engine falls back to HiGHS automatically (sweep solver.allow_fallback).
+ENV MILP_SOLVER=gurobi
+
+CMD ["python", "/app/milp-engine/engine.py"]

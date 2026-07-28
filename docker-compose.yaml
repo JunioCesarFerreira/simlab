@@ -223,8 +223,49 @@ services:
       - mongo-net
       - cooja-net
 
+  milpengine:
+    build:
+      context: .
+      dockerfile: Dockerfile.milp-engine
+    container_name: milp_engine
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      - PYTHONPATH=/app:/app/pylib
+      - DB_NAME=simlab
+      - MONGO_URI=mongodb://mongodb:27017/?replicaSet=rs0
+      - IS_DOCKER=True
+      # Preferred solver: gurobi | highs (falls back to HiGHS without license)
+      - MILP_SOLVER=gurobi
+      # Gurobi licensing for containers (see docs/markdown/MILP_MODULE.md):
+      # Option A — WLS/Compute Server/Token Server license file (uncomment the
+      # volume below as well):
+      #- GRB_LICENSE_FILE=/opt/gurobi/gurobi.lic
+      # Option B — WLS credentials directly via environment:
+      #- GRB_WLSACCESSID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+      #- GRB_WLSSECRET=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+      #- GRB_LICENSEID=000000
+    # Uncomment to mount a license file (Option A):
+    #volumes:
+    #  - ./gurobi.lic:/opt/gurobi/gurobi.lic:ro
+    labels:
+      - "simlab.type=milp"
+      - "simlab.role=solver"
+      - "simlab.group=backend"
+    healthcheck:
+      test: ["CMD", "pgrep", "python"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - mongo-net
 
-# Attention! When modifying the number of Cooja containers, 
+
+# Attention! When modifying the number of Cooja containers,
 # remember to modify the masternode's NUMBER_OF_CONTAINERS environment variable.
 
   cooja1:

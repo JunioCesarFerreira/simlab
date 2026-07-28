@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from api.endpoints import experiment, simulation, generation, source, files, campaign, problems, synthetic
+from api.endpoints import experiment, simulation, generation, source, files, campaign, problems, synthetic, milp
 from api.auth import get_api_key
 
 api_router = APIRouter(dependencies=[Depends(get_api_key)])
@@ -11,3 +11,4 @@ api_router.include_router(simulation.router, prefix="/simulations", tags=["simul
 api_router.include_router(files.router, prefix="/files", tags=["files"])
 api_router.include_router(problems.router, prefix="/problems", tags=["problems"])
 api_router.include_router(synthetic.router, prefix="/synthetic", tags=["synthetic"])
+api_router.include_router(milp.router, prefix="/milp", tags=["milp"])

@@ -5,6 +5,44 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — MILP models integration
+
+### Added — milp-engine (MILP parameter sweeps → batch experiments)
+
+- **New `milp-engine/` module and container** (`Dockerfile.milp-engine`,
+  `milpengine` service): watches the `milp_sweeps` collection via change
+  streams, solves the MILP design model over a cartesian parameter grid,
+  deduplicates solutions by genotype (bit *i* = `candidates[i]`, the
+  `ChromosomeP2.mask` convention) and hands the unique topologies off as a
+  `strategy: "batch"` experiment — the existing mo-engine/master-node/GUI
+  pipeline runs unchanged. Per-combination checkpointing makes interrupted
+  sweeps resumable (including sweeps orphaned by an engine crash), and
+  cancellation is cooperative.
+- **Solver abstraction** (`milp-engine/lib/solver/`): unified MILP IR with
+  **Gurobi** (container-friendly licensing: WLS via mounted `gurobi.lic` or
+  `GRB_WLS*` env vars, Compute/Token Server, pip trial) and **HiGHS** (open
+  source) backends; automatic fallback when the preferred backend has no
+  usable license. License/solver state is published to `milp_engine_status`.
+- **P2 mobile-coverage model** (`milp-engine/lib/models/p2_mobile.py`), ported
+  from the `wsn-milp` / `wsn-milp-nsga3-p2` repositories to consume the SimLab
+  `ProblemP2` format directly. Mobile trajectories are discretized exactly
+  like the simulator's `positions.dat` generator so MILP topologies and Cooja
+  metrics stay consistent (`milp-engine/lib/trajectory.py`).
+- **Model catalog** in `pylib/config/milp_models.py` (single source for the
+  API and the engine) and `MilpSweepRepository` in `pylib/db`.
+- **REST API** `/milp/*`: model catalog (`GET /milp/models[/{key}]`), engine
+  status (`GET /milp/status`), sweep CRUD with grid validation and a
+  `MILP_MAX_COMBINATIONS` guardrail, cooperative cancel.
+- **GUI**: new **Models** sidebar entry — model cards with engine/license
+  status, sweep launch form (problem draft selection with client-side export,
+  per-parameter fixed/sweep grid builder with live combination count, solver
+  and batch-experiment options) and a sweep detail page (live progress,
+  per-combination solutions table, link to the generated batch experiment).
+- Docs: `docs/markdown/MILP_MODULE.md` (architecture, licensing, usage) and
+  `docs/markdown/MILP_INTEGRATION_PLAN.md` (design analysis and plan).
+
+---
+
 ## [Unreleased] — Phase 1 of the implementation plan
 
 ### Added — synthetic benchmark instances (GUI + per-experiment config)
