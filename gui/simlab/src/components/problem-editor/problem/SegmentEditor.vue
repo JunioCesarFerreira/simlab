@@ -45,7 +45,7 @@
         <span v-if="exprYErr" class="err-msg">{{ exprYErr }}</span>
       </label>
       <div class="custom-hint">
-        Funções: <code>np.cos</code>, <code>np.sin</code>, <code>np.pi</code>, <code>np.sqrt</code>
+        Functions: <code>np.cos</code>, <code>np.sin</code>, <code>np.pi</code>, <code>np.sqrt</code>
       </div>
     </div>
 

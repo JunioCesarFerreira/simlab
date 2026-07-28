@@ -41,9 +41,13 @@ SPECS = [
 class FakePrometheusClient:
     """Maps PromQL query → canned /query_range matrix result."""
 
-    def __init__(self, results: dict[str, list[dict]], fail: bool = False):
+    def __init__(self, results: dict[str, list[dict]], fail: bool = False, available: bool = True):
         self.results = results
         self.fail = fail
+        self.available = available
+
+    def is_available(self, timeout: float = 5.0) -> bool:
+        return self.available
 
     def query_range(self, query, start, end, step="15s"):
         if self.fail:
@@ -233,6 +237,34 @@ class TestCollectAndStore:
         block = fake_mongo.experiment_repo.blocks[EXP_ID]
         assert block["status"] == "failed"
         assert "prometheus unreachable" in block["error"]
+
+    def test_unreachable_prometheus_skips_without_claiming(self, fake_mongo, monkeypatch):
+        """Local run without the monitoring stack: one warning, nothing persisted,
+        and no claim — so a later backfill sweep can still collect."""
+        client = FakePrometheusClient(_fake_results(), available=False)
+        assert self._run(fake_mongo, monkeypatch, client) == "unavailable"
+        assert EXP_ID not in fake_mongo.experiment_repo.blocks
+        assert fake_mongo.fs_handler.uploads == []
+        # Prometheus comes back → collection succeeds on retry
+        client.available = True
+        assert self._run(fake_mongo, monkeypatch, client) == "completed"
+
+
+class TestDefaultPrometheusUrl:
+    def test_env_var_wins(self, monkeypatch):
+        monkeypatch.setenv("PROMETHEUS_URL", "http://custom:9999")
+        monkeypatch.setenv("IS_DOCKER", "True")
+        assert collector_mod.default_prometheus_url() == "http://custom:9999"
+
+    def test_docker_uses_service_name(self, monkeypatch):
+        monkeypatch.delenv("PROMETHEUS_URL", raising=False)
+        monkeypatch.setenv("IS_DOCKER", "True")
+        assert collector_mod.default_prometheus_url() == "http://prometheus:9090"
+
+    def test_local_uses_localhost(self, monkeypatch):
+        monkeypatch.delenv("PROMETHEUS_URL", raising=False)
+        monkeypatch.delenv("IS_DOCKER", raising=False)
+        assert collector_mod.default_prometheus_url() == "http://localhost:9090"
 
 
 class TestDefaultMetricSpecs:

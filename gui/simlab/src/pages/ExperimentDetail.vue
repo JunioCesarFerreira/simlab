@@ -256,6 +256,8 @@
             </div>
             <ParetoFrontChart
               v-if="chartView === '2d'"
+              v-model:mark-mode="paretoMarkMode"
+              v-model:marked-ids="paretoPinnedIds"
               :pareto-front="displayedParetoFront"
               :generations="paretoGenerations"
               :objective-names="store.objectiveNames"
@@ -269,6 +271,8 @@
             />
             <ParetoFront3DChart
               v-else
+              v-model:mark-mode="paretoMarkMode"
+              v-model:marked-ids="paretoPinnedIds"
               :pareto-front="displayedParetoFront"
               :generations="paretoGenerations"
               :objective-names="store.objectiveNames"
@@ -473,6 +477,14 @@ function on3dAxisChange({ x, y, z }: { x: string; y: string; z: string }) {
   pareto3dYKey.value = y;
   pareto3dZKey.value = z;
 }
+
+// Pin state — bound to BOTH ParetoFrontChart and ParetoFront3DChart via
+// v-model, so the pinned individuals (and pin mode) survive toggling between
+// the 2D and 3D views instead of resetting when one chart unmounts and the
+// other mounts. Pins persist across reloads like the rest of viewState;
+// mark mode itself is deliberately not persisted (transient interaction).
+const paretoMarkMode = ref(false);
+const paretoPinnedIds = persisted("pinnedIds");
 
 const sortedGenerations = computed(() =>
   [...(store.experiment?.generations ?? [])].sort((a, b) => a.index - b.index),

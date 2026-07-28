@@ -37,6 +37,7 @@ class="modal" role="dialog" aria-modal="true"
           <SLStep2Algorithm
             v-else-if="currentStep === 2"
             v-model="form.algorithm"
+            :objectives-count="form.objectives.length"
             :show-validation="showValidation"
           />
           <SLStep3Objectives
@@ -147,9 +148,8 @@ const form = reactive<{ algorithm: SLStep2Value; objectives: ObjectiveItem[] }>(
     probCx: 0.9,
     probMt: 0.1,
     perGeneProb: 0.05,
-    selectionMethod: 'tournament',
-    crossoverMethod: 'sbx_with_radial_translate',
-    mutationMethod: 'polynomial',
+    etaCx: 20,
+    etaMt: 20,
     divisions: 10,
   },
   objectives: buildDefaultObjectives(store.draft.M),
@@ -197,13 +197,13 @@ async function submit() {
     population_size: form.algorithm.populationSize,
     number_of_generations: form.algorithm.numberOfGenerations,
     ...(isNsga3 && { divisions: form.algorithm.divisions }),
+    // P0 consumes eta_cx/eta_mt/per_gene_prob; operators are fixed (SBX + polynomial)
     ...(isEvolutionary && {
       prob_cx: form.algorithm.probCx,
       prob_mt: form.algorithm.probMt,
       per_gene_prob: form.algorithm.perGeneProb,
-      selection_method: form.algorithm.selectionMethod,
-      crossover_method: form.algorithm.crossoverMethod,
-      mutation_method: form.algorithm.mutationMethod,
+      eta_cx: form.algorithm.etaCx,
+      eta_mt: form.algorithm.etaMt,
     }),
   }
 

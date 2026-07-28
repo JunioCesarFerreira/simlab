@@ -4,7 +4,7 @@
     <MacProtocolField />
 
     <div class="list-header">
-      <span>Mask ({{ activeCount }}/{{ candidates.length }} ativos)</span>
+      <span>Mask ({{ activeCount }}/{{ candidates.length }} active)</span>
       <div class="bulk">
         <button class="ghost" :disabled="candidates.length === 0" @click="setAll(1)">all</button>
         <button class="ghost" :disabled="candidates.length === 0" @click="setAll(0)">none</button>
@@ -12,7 +12,7 @@
     </div>
 
     <div v-if="candidates.length === 0" class="empty">
-      Adicione candidates no canvas primeiro
+      Add candidates on the canvas first
     </div>
 
     <div v-for="(c, i) in candidates" :key="c.id" class="row">

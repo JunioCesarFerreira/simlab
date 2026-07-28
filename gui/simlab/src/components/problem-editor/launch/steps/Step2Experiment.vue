@@ -128,6 +128,21 @@
           @input="updateNum('divisions', ($event.target as HTMLInputElement).value, 'int')"
         />
         <span class="hint-small">Partitions per objective axis for NSGA-III niching (das-Dennis).</span>
+        <div class="h-calc" :class="{ warn: refPointsExceedPop }">
+          <span>
+            H = C(M+p−1, p) = C({{ objectivesCount + modelValue.divisions - 1 }}, {{ modelValue.divisions }}) =
+            <strong>{{ refPoints }}</strong> reference points
+            <span class="h-calc-detail">(M = {{ objectivesCount }} objectives, p = {{ modelValue.divisions }})</span>
+          </span>
+          <button
+            v-if="refPointsExceedPop"
+            class="h-calc-apply"
+            title="NSGA-III niching needs population_size ≥ H"
+            @click="updateNum('populationSize', String(suggestedPop), 'int')"
+          >
+            set population to {{ suggestedPop }}
+          </button>
+        </div>
       </div>
     </div>
 
@@ -174,49 +189,36 @@
         </div>
       </div>
 
+      <div class="section-divider">Genetic operators — {{ problemName }}</div>
+
       <div class="fields-row">
         <div class="field-group">
-          <label class="field-label" for="selection-method">Selection method</label>
-          <select
-            id="selection-method"
-            :value="modelValue.selectionMethod"
-            @change="update('selectionMethod', ($event.target as HTMLSelectElement).value)"
-          >
-            <option value="tournament">tournament</option>
-            <option value="roulette">roulette</option>
-          </select>
+          <label class="field-label">Selection method</label>
+          <div class="fixed-op">tournament <span class="fixed-tag">fixed</span></div>
+          <span class="hint-small">All strategies currently use tournament selection.</span>
         </div>
         <div class="field-group">
           <label class="field-label" for="crossover-method">Crossover method</label>
           <select
+            v-if="caps.crossoverMethods.length"
             id="crossover-method"
             :value="modelValue.crossoverMethod"
             @change="update('crossoverMethod', ($event.target as HTMLSelectElement).value)"
           >
-            <option value="uniform_mask">uniform_mask</option>
-            <option value="sbx_with_radial_translate">sbx_with_radial_translate</option>
-            <option value="one_point">one_point</option>
-            <option value="two_point">two_point</option>
+            <option v-for="m in caps.crossoverMethods" :key="m" :value="m">{{ m }}</option>
           </select>
+          <div v-else class="fixed-op">{{ caps.fixedCrossoverLabel }} <span class="fixed-tag">fixed</span></div>
         </div>
       </div>
 
       <div class="fields-row half">
         <div class="field-group">
-          <label class="field-label" for="mutation-method">Mutation method</label>
-          <select
-            id="mutation-method"
-            :value="modelValue.mutationMethod"
-            @change="update('mutationMethod', ($event.target as HTMLSelectElement).value)"
-          >
-            <option value="bitflip">bitflip</option>
-            <option value="polynomial">polynomial</option>
-            <option value="gaussian">gaussian</option>
-          </select>
+          <label class="field-label">Mutation method</label>
+          <div class="fixed-op">{{ caps.fixedMutationLabel }} <span class="fixed-tag">fixed</span></div>
         </div>
       </div>
 
-      <div class="fields-row half">
+      <div v-if="caps.supportsCoverageRepair" class="fields-row half">
         <div class="field-group">
           <label class="checkbox-label" for="apply-coverage-repair">
             <input
@@ -228,11 +230,28 @@
             Apply coverage repair
           </label>
           <span class="hint-small">
-            Repair individuals whose trajectory coverage falls below the problem threshold
-            (P1/P2). When disabled, infeasible individuals are only penalized.
+            Repair individuals whose trajectory coverage falls below the problem threshold.
+            When disabled, infeasible individuals are only penalized.
           </span>
         </div>
       </div>
+
+      <template v-if="caps.extraParams.length">
+        <div class="section-divider">Problem-specific parameters</div>
+        <div class="fields-row extras">
+          <div v-for="p in caps.extraParams" :key="p.key" class="field-group">
+            <label class="field-label" :for="`extra-${p.key}`">{{ p.label }}</label>
+            <input
+              :id="`extra-${p.key}`"
+              type="number"
+              :min="p.min" :max="p.max" :step="p.step"
+              :value="modelValue.extraParams[p.key]"
+              @input="updateExtra(p.key, ($event.target as HTMLInputElement).value)"
+            />
+            <span v-if="p.hint" class="hint-small">{{ p.hint }}</span>
+          </div>
+        </div>
+      </template>
     </template>
 
     <template v-else>
@@ -254,6 +273,8 @@
 <script setup lang="ts">
 import { reactive, computed } from 'vue'
 import type { SourceRepositoryDto } from '../../../../types/simlab'
+import { capabilitiesFor } from '../../../../lib/problemCapabilities'
+import { referencePointCount, suggestedPopulationSize } from '../../../../lib/nsga3'
 
 export interface SourceOption {
   protocol: string
@@ -270,11 +291,11 @@ export interface Step2Value {
   probCx: number
   probMt: number
   perGeneProb: number
-  selectionMethod: string
   crossoverMethod: string
-  mutationMethod: string
   divisions: number
   applyCoverageRepair: boolean
+  /** Problem-specific numeric hyperparameters (see problemCapabilities.ts). */
+  extraParams: Record<string, number>
 }
 
 const NSGA3_STRATEGIES = ['nsga3', 'nsga3_deap', 'nsga3_pymoo']
@@ -292,12 +313,19 @@ const STRATEGY_HINTS: Record<string, string> = {
 
 const props = defineProps<{
   modelValue: Step2Value
+  problemName: string
+  objectivesCount: number
   repositories: SourceRepositoryDto[]
   repositoriesLoading: boolean
   showValidation: boolean
 }>()
 const emit = defineEmits<{ 'update:modelValue': [v: Step2Value] }>()
 
+const refPoints = computed(() => referencePointCount(props.objectivesCount, props.modelValue.divisions))
+const suggestedPop = computed(() => suggestedPopulationSize(refPoints.value))
+const refPointsExceedPop = computed(() => refPoints.value > 0 && props.modelValue.populationSize < refPoints.value)
+
+const caps = computed(() => capabilitiesFor(props.problemName))
 const isNsga3 = computed(() => NSGA3_STRATEGIES.includes(props.modelValue.strategy))
 const isEvolutionary = computed(() => EVOLUTIONARY_STRATEGIES.includes(props.modelValue.strategy))
 const strategyHint = computed(() => STRATEGY_HINTS[props.modelValue.strategy] ?? '')
@@ -317,6 +345,11 @@ function updateNum(field: keyof Step2Value, raw: string, kind: 'int' | 'float') 
 
 function updateBool(field: keyof Step2Value, value: boolean) {
   emit('update:modelValue', { ...props.modelValue, [field]: value })
+}
+
+function updateExtra(key: string, raw: string) {
+  const extraParams = { ...props.modelValue.extraParams, [key]: parseFloat(raw) || 0 }
+  emit('update:modelValue', { ...props.modelValue, extraParams })
 }
 
 function updateSourceOpt(i: number, field: keyof SourceOption, value: string) {
@@ -359,6 +392,32 @@ function addSourceOpt() {
 }
 .checkbox-label input[type="checkbox"] { width: auto; margin: 0; cursor: pointer; }
 .required { color: var(--color-primary); }
+.fixed-op {
+  padding: 7px 10px; border: 1px dashed var(--color-border); border-radius: var(--radius-sm);
+  font-size: 12px; color: var(--color-text-muted); background: var(--color-bg);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.fixed-tag {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--color-text-muted); border: 1px solid var(--color-border);
+  border-radius: 999px; padding: 1px 7px; flex-shrink: 0;
+}
+.fields-row.extras { grid-template-columns: 1fr 1fr; }
+.h-calc {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+  margin-top: 2px; padding: 6px 10px; border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm); background: var(--color-bg);
+  font-size: 11px; color: var(--color-text-muted);
+}
+.h-calc.warn { border-color: #fbbf24; }
+.h-calc strong { color: var(--color-text); }
+.h-calc-detail { color: var(--color-text-muted); }
+.h-calc-apply {
+  padding: 3px 8px; border: 1px solid #fbbf24; border-radius: var(--radius-sm);
+  background: #fef3c7; color: #92400e; font-size: 11px; font-weight: 600;
+  cursor: pointer; flex-shrink: 0;
+}
+.h-calc-apply:hover { background: #fde68a; }
 
 /* Source repo rows */
 .repo-list { display: flex; flex-direction: column; gap: 8px; }

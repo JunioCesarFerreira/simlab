@@ -10,6 +10,7 @@ import os
 from dataclasses import dataclass, asdict
 from datetime import datetime
 
+from pylib.service_settings import env_to_bool
 from pylib.telemetry.artifact import ARTIFACT_SCHEMA_VERSION, serialize_samples
 from pylib.telemetry.prometheus import PrometheusClient
 
@@ -26,6 +27,23 @@ STATUS_COLLECTING = "collecting"
 STATUS_COMPLETED = "completed"
 STATUS_NO_DATA = "no_data"
 STATUS_FAILED = "failed"
+STATUS_UNAVAILABLE = "unavailable"
+
+
+def default_prometheus_url() -> str:
+    """Resolve the Prometheus base URL for this process.
+
+    PROMETHEUS_URL always wins; otherwise the compose service name only makes
+    sense inside the Docker network (IS_DOCKER), and a local run (mo-engine
+    started on the host) must target the port published by the monitoring
+    stack on localhost.
+    """
+    url = os.getenv("PROMETHEUS_URL")
+    if url:
+        return url
+    if env_to_bool(os.getenv("IS_DOCKER"), False):
+        return "http://prometheus:9090"
+    return "http://localhost:9090"
 
 
 @dataclass(frozen=True)
@@ -120,13 +138,24 @@ def collect_and_store(
     """Collect telemetry for one finished experiment and persist it.
 
     Returns the final ``runtime_metrics.status`` ("completed", "no_data",
-    "failed") or "skipped" when another collector already owns the block.
+    "failed"), "skipped" when another collector already owns the block, or
+    "unavailable" when Prometheus is unreachable (nothing is persisted, so a
+    later backfill sweep can retry once the monitoring stack is up).
     """
-    prometheus_url = prometheus_url or os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
+    prometheus_url = prometheus_url or default_prometheus_url()
     step = step or os.getenv("TELEMETRY_QUERY_STEP", "15s")
     specs = specs or default_metric_specs(
         os.getenv("TELEMETRY_CONTAINER_FILTER", DEFAULT_CONTAINER_FILTER)
     )
+
+    client = PrometheusClient(prometheus_url)
+    if not client.is_available():
+        logger.warning(
+            "[telemetry] Prometheus unreachable at %s — skipping runtime metrics for "
+            "experiment %s (start the monitoring stack or set PROMETHEUS_URL)",
+            prometheus_url, experiment_id,
+        )
+        return STATUS_UNAVAILABLE
 
     if not mongo.experiment_repo.claim_runtime_metrics_collection(
         experiment_id, started_at, finished_at
@@ -146,7 +175,6 @@ def collect_and_store(
         },
     }
     try:
-        client = PrometheusClient(prometheus_url)
         samples = collect_samples(client, specs, started_at, finished_at, step)
         summary = summarize_samples(samples, started_at, finished_at)
         base["collection"]["sample_count"] = len(samples)

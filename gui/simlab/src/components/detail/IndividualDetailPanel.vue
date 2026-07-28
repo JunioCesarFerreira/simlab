@@ -12,7 +12,7 @@
       </div>
 
       <div class="panel-body">
-        <!-- Objetivos -->
+        <!-- Objectives -->
         <section class="section">
           <div class="section-title">Objectives</div>
           <div class="objectives-grid">
@@ -27,7 +27,7 @@
           </div>
         </section>
 
-        <!-- Topologia (não aplicável a problemas sintéticos — sem topologia real) -->
+        <!-- Topology (not applicable to synthetic problems — no real topology) -->
         <section v-if="!isSynthetic && individual.topology_picture_id" class="section">
           <div class="section-title">Topology</div>
           <div class="topology-wrap">
@@ -42,7 +42,7 @@
           </div>
         </section>
 
-        <!-- Cromossomo -->
+        <!-- Chromosome -->
         <section class="section">
           <div class="section-title">Chromosome</div>
           <div class="kv-table">
@@ -57,7 +57,7 @@
           </div>
         </section>
 
-        <!-- Simulações -->
+        <!-- Simulations -->
         <section class="section">
           <div class="section-title">
             Simulations
@@ -107,7 +107,7 @@
                 </div>
               </div>
 
-              <!-- Links de arquivos -->
+              <!-- File links -->
               <div v-if="hasFiles(sim)" class="file-links">
                 <button
                   v-for="field in fileFields"
@@ -192,7 +192,7 @@ function formatGene(val: unknown): string {
 }
 
 onMounted(async () => {
-  // Carrega topologia inline (não aplicável a problemas sintéticos)
+  // Load topology inline (not applicable to synthetic problems)
   if (!props.isSynthetic && props.individual.topology_picture_id) {
     loadingTopology.value = true;
     try {
@@ -206,7 +206,7 @@ onMounted(async () => {
     }
   }
 
-  // Carrega simulações
+  // Load simulations
   loadingSims.value = true;
   simError.value = null;
   try {
@@ -369,7 +369,7 @@ onBeforeUnmount(() => {
   color: var(--status-error);
 }
 
-/* Cromossomo */
+/* Chromosome */
 .kv-table {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -401,7 +401,7 @@ onBeforeUnmount(() => {
   color: var(--color-text);
 }
 
-/* Simulações */
+/* Simulations */
 .loading-sims,
 .empty-sims {
   font-size: 13px;
@@ -463,7 +463,7 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid var(--color-border);
 }
 
-/* Métricas */
+/* Metrics */
 .metrics-wrap {
   padding: 10px 12px;
 }
@@ -515,7 +515,7 @@ onBeforeUnmount(() => {
   border-radius: 999px;
 }
 
-/* Links de arquivo */
+/* File links */
 .file-links {
   display: flex;
   gap: 6px;

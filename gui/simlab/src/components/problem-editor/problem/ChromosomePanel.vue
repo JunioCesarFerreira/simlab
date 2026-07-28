@@ -1,8 +1,8 @@
 <template>
   <div class="dispatcher">
     <div v-if="!chromosome" class="empty-state">
-      <p>Nenhum cromossomo definido para <b>{{ problemName }}</b>.</p>
-      <button class="primary" @click="problemStore.ensureChromosome()">Criar cromossomo</button>
+      <p>No chromosome defined for <b>{{ problemName }}</b>.</p>
+      <button class="primary" @click="problemStore.ensureChromosome()">Create chromosome</button>
     </div>
     <template v-else>
       <ChromosomeP1Panel v-if="chromosome.kind === 'problem1'" />

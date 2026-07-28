@@ -17,6 +17,20 @@ class PrometheusClient:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
+    def is_available(self, timeout: float = 5.0) -> bool:
+        """True when the Prometheus health endpoint answers.
+
+        Cheap pre-flight used to skip collection with a single warning line
+        (instead of a traceback) when the server is unreachable — e.g. a local
+        run without the monitoring stack.
+        """
+        url = f"{self.base_url}/-/healthy"
+        try:
+            with urllib.request.urlopen(url, timeout=min(self.timeout, timeout)) as resp:
+                return 200 <= resp.status < 300
+        except Exception:
+            return False
+
     def query_range(
         self,
         query: str,

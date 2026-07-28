@@ -11,6 +11,7 @@
             <span class="pill">inter {{ radiusOfInter }}m</span>
             <span v-if="candidateCount > 0" class="pill pill--blue">{{ candidateCount }} candidates</span>
             <span v-if="mobileNodeCount > 0" class="pill pill--green">{{ mobileNodeCount }} mobile nodes</span>
+            <span v-if="targetCount > 0" class="pill pill--amber">{{ targetCount }} targets</span>
           </div>
         </div>
         <div class="header-actions">
@@ -68,8 +69,10 @@ const region = computed(() => (props.problem.region as [number, number, number, 
 const sink = computed(() => (props.problem.sink as [number, number]) ?? [0, 0]);
 const candidates = computed(() => (props.problem.candidates as [number, number][] | undefined) ?? []);
 const mobileNodes = computed(() => (props.problem.mobile_nodes as unknown as MobileNode[] | undefined) ?? []);
+const targets = computed(() => (props.problem.targets as [number, number][] | undefined) ?? []);
 const candidateCount = computed(() => candidates.value.length);
 const mobileNodeCount = computed(() => mobileNodes.value.length);
+const targetCount = computed(() => targets.value.length);
 
 // -------------------------------------------------------
 // Path evaluation (parametric expressions with numpy-style math)
@@ -265,6 +268,26 @@ function buildOption() {
     }
   }
 
+  // Sensing targets (P3) — goals, not nodes: distinct pin marker, above
+  // candidates but below the sink
+  if (targets.value.length > 0) {
+    const showLabels = targets.value.length <= 20;
+    series.push({
+      name: "Targets",
+      type: "scatter",
+      data: targets.value.map((t, i) => ({
+        value: t,
+        label: showLabels
+          ? { show: true, formatter: `T${i + 1}`, position: "top", fontSize: 9, fontWeight: "bold", color: "#b45309" }
+          : { show: false },
+      })),
+      symbol: "pin",
+      symbolSize: 18,
+      itemStyle: { color: "#f59e0b", borderColor: "#b45309", borderWidth: 1.5 },
+      z: 4,
+    });
+  }
+
   // Sink (rendered last so it sits on top)
   series.push({
     name: "Sink",
@@ -279,6 +302,7 @@ function buildOption() {
   const legendNames = [
     ...(candidates.value.length > 0 ? ["Candidates"] : []),
     ...mobileNodes.value.map((n) => n.name),
+    ...(targets.value.length > 0 ? ["Targets"] : []),
     "Sink",
   ];
 
@@ -408,6 +432,12 @@ onBeforeUnmount(() => {
   background: #d1fae5;
   border-color: #a7f3d0;
   color: #065f46;
+}
+
+.pill--amber {
+  background: #fef3c7;
+  border-color: #fde68a;
+  color: #92400e;
 }
 
 .header-actions {

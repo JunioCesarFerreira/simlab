@@ -12,6 +12,10 @@ interface ExperimentViewState {
   pareto3dXKey: string
   pareto3dYKey: string
   pareto3dZKey: string
+  /** Pinned individual_ids, shared by the 2D and 3D Pareto charts so a pin
+   *  survives switching between them (and a page reload, like the rest of
+   *  this state). */
+  pinnedIds: string[]
 }
 
 const DEFAULTS: ExperimentViewState = {
@@ -26,6 +30,7 @@ const DEFAULTS: ExperimentViewState = {
   pareto3dXKey: '',
   pareto3dYKey: '',
   pareto3dZKey: '',
+  pinnedIds: [],
 }
 
 function storageKey(id: string) {

@@ -9,7 +9,7 @@
     </div>
 
     <div v-if="candidates.length === 0" class="empty">
-      Adicione candidates no canvas primeiro
+      Add candidates on the canvas first
     </div>
 
     <div v-for="(idx, i) in route" :key="`stop-${i}`" class="row">
@@ -27,7 +27,7 @@
         title="sojourn time"
         @change="setTime(i, +($event.target as HTMLInputElement).value)"
       />
-      <button class="remove" title="Remover" @click="removeStop(i)">✕</button>
+      <button class="remove" title="Remove" @click="removeStop(i)">✕</button>
     </div>
 
     <div v-if="hasError('chromosome.route')" class="err-msg">

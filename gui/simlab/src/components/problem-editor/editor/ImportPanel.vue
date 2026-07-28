@@ -5,17 +5,17 @@
       <button class="close-btn" @click="$emit('close')">✕</button>
     </div>
     <div class="body">
-      <p class="hint">Cole o conteúdo de um arquivo <code>problem.json</code> abaixo.</p>
+      <p class="hint">Paste the contents of a <code>problem.json</code> file below.</p>
       <textarea
         v-model="raw"
         placeholder='{ "problem": { ... } }'
         spellcheck="false"
       />
       <div v-if="error" class="error">⚠ {{ error }}</div>
-      <div v-if="success" class="success">✓ Problema carregado com sucesso</div>
+      <div v-if="success" class="success">✓ Problem loaded successfully</div>
       <div class="actions">
-        <button @click="loadFromFile">Abrir arquivo…</button>
-        <button class="primary" :disabled="!raw.trim()" @click="doImport">Importar</button>
+        <button @click="loadFromFile">Open file…</button>
+        <button class="primary" :disabled="!raw.trim()" @click="doImport">Import</button>
       </div>
       <input ref="fileInput" type="file" accept=".json,application/json" style="display:none" @change="onFile" />
     </div>

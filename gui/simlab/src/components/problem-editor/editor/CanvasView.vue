@@ -21,21 +21,21 @@
 
   <Teleport to="body">
     <div v-if="scaleCalibrateState?.locked" class="scale-input-overlay">
-      <div class="scale-label">Comprimento real do segmento:</div>
-      <div class="scale-dist-hint">Distância atual: {{ scaleCalibrateWorldDist.toFixed(2) }} u</div>
+      <div class="scale-label">Real length of the segment:</div>
+      <div class="scale-dist-hint">Current distance: {{ scaleCalibrateWorldDist.toFixed(2) }} u</div>
       <input
         ref="scaleInputRef"
         v-model="scaleRealLength"
         type="number"
         min="0.001"
         step="any"
-        placeholder="ex: 50.0"
+        placeholder="e.g. 50.0"
         @keydown.enter.stop="applyScaleCalibration"
         @keydown.escape.stop="cancelScaleCalibration"
       />
       <div class="scale-btns">
-        <button class="apply" @mousedown.prevent="applyScaleCalibration">Aplicar</button>
-        <button class="cancel" @mousedown.prevent="cancelScaleCalibration">Cancelar</button>
+        <button class="apply" @mousedown.prevent="applyScaleCalibration">Apply</button>
+        <button class="cancel" @mousedown.prevent="cancelScaleCalibration">Cancel</button>
       </div>
     </div>
   </Teleport>
@@ -142,7 +142,7 @@ function applyScaleCalibration() {
   scaleCalibrateState.value = null
   scaleRealLength.value = ''
   if (toastTimer) clearTimeout(toastTimer)
-  calibrationToast.value = `Escala aplicada — fator ${factor.toFixed(4)}×  |  nova região: [${problemStore.draft.region.map(v => v.toFixed(1)).join(', ')}]`
+  calibrationToast.value = `Scale applied — factor ${factor.toFixed(4)}×  |  new region: [${problemStore.draft.region.map(v => v.toFixed(1)).join(', ')}]`
   toastTimer = setTimeout(() => { calibrationToast.value = null }, 4000)
 }
 
@@ -288,6 +288,46 @@ function hitRelay(cx: number, cy: number): string | null {
   return null
 }
 
+function distToSegmentPx(cx: number, cy: number, x1: number, y1: number, x2: number, y2: number): number {
+  const dx = x2 - x1, dy = y2 - y1
+  const len2 = dx * dx + dy * dy
+  const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((cx - x1) * dx + (cy - y1) * dy) / len2))
+  return Math.hypot(cx - (x1 + t * dx), cy - (y1 + t * dy))
+}
+
+/** Hit-test the dashed trajectory paths of mobile nodes (line/ellipse/custom segments). */
+function hitPathSegment(cx: number, cy: number): { nodeId: string; segIndex: number } | null {
+  for (const node of problemStore.draft.mobileNodes) {
+    for (let i = 0; i < node.segments.length; i++) {
+      const seg = node.segments[i]!
+      if (seg.type === 'line') {
+        const [x1, y1] = worldToCanvas(seg.start[0], seg.start[1])
+        const [x2, y2] = worldToCanvas(seg.end[0], seg.end[1])
+        if (distToSegmentPx(cx, cy, x1, y1, x2, y2) <= HIT_PX) return { nodeId: node.id, segIndex: i }
+      } else if (seg.type === 'ellipse') {
+        const [cpx, cpy] = worldToCanvas(seg.center[0], seg.center[1])
+        const [ex] = worldToCanvas(seg.center[0] + seg.radiusX, seg.center[1])
+        const [, ey] = worldToCanvas(seg.center[0], seg.center[1] + seg.radiusY)
+        const rx = Math.abs(ex - cpx), ry = Math.abs(ey - cpy)
+        if (rx < 1 || ry < 1) continue
+        // distance to the boundary, approximated on the normalized ellipse
+        const nr = Math.hypot((cx - cpx) / rx, (cy - cpy) / ry)
+        if (Math.abs(nr - 1) * Math.min(rx, ry) <= HIT_PX) return { nodeId: node.id, segIndex: i }
+      } else if (seg.type === 'custom') {
+        const pts = sampleCustomSegment(seg.exprX, seg.exprY, 80)
+        if (!pts || pts.length < 2) continue
+        const canvasPts = pts.map(([wx, wy]) => worldToCanvas(wx, wy))
+        for (let j = 1; j < canvasPts.length; j++) {
+          const [x1, y1] = canvasPts[j - 1]!
+          const [x2, y2] = canvasPts[j]!
+          if (distToSegmentPx(cx, cy, x1, y1, x2, y2) <= HIT_PX) return { nodeId: node.id, segIndex: i }
+        }
+      }
+    }
+  }
+  return null
+}
+
 const canvasCursor = computed(() => {
   if (regionDrag.value) return HANDLE_CURSORS[regionDrag.value.handle]
   if (hoveredHandle.value) return HANDLE_CURSORS[hoveredHandle.value]
@@ -312,52 +352,52 @@ const isToolWarn = computed(() => {
 const toolHint = computed(() => {
   const t = editorStore.activeTool
   if (t === 'draw-line') {
-    if (!editorStore.activeNodeId) return '⚠ Selecione um nó móvel na aba Nodes antes de desenhar'
+    if (!editorStore.activeNodeId) return '⚠ Select a mobile node in the Nodes tab before drawing'
     const n = polylinePoints.value.length
     return n === 0
-      ? 'Clique para iniciar polilinha  ·  Esc cancela'
-      : `${n} ponto(s)  ·  clique para continuar  ·  duplo-clique ou clique direito para finalizar`
+      ? 'Click to start polyline  ·  Esc cancels'
+      : `${n} point(s)  ·  click to continue  ·  double-click or right-click to finish`
   }
   if (t === 'draw-ellipse') {
-    if (!editorStore.activeNodeId) return '⚠ Selecione um nó móvel na aba Nodes antes de desenhar'
-    return ellipseDrag.value ? 'Solte para confirmar a elipse' : 'Arraste para definir centro e raios da elipse'
+    if (!editorStore.activeNodeId) return '⚠ Select a mobile node in the Nodes tab before drawing'
+    return ellipseDrag.value ? 'Release to confirm the ellipse' : 'Drag to define the ellipse center and radii'
   }
   if (t === 'measure') {
-    if (!measureState.value) return 'Arraste para medir distância  [M]  ·  Esc cancela'
-    if (!measureState.value.locked) return 'Solte para fixar a medição  ·  Esc cancela'
+    if (!measureState.value) return 'Drag to measure distance  [M]  ·  Esc cancels'
+    if (!measureState.value.locked) return 'Release to lock the measurement  ·  Esc cancels'
     const d = measureDistance()
-    return `Distância: ${d.toFixed(1)} u  ·  clique ou Esc para limpar`
+    return `Distance: ${d.toFixed(1)} u  ·  click or Esc to clear`
   }
   if (t === 'scale-calibrate') {
-    if (!scaleCalibrateState.value) return 'Arraste um segmento de comprimento conhecido  [R]  ·  Esc cancela'
-    if (!scaleCalibrateState.value.locked) return 'Solte para fixar o segmento  ·  Esc cancela'
-    return 'Digite o comprimento real e pressione Enter para recalibrar a escala'
+    if (!scaleCalibrateState.value) return 'Drag a segment of known length  [R]  ·  Esc cancels'
+    if (!scaleCalibrateState.value.locked) return 'Release to lock the segment  ·  Esc cancels'
+    return 'Type the real length and press Enter to recalibrate the scale'
   }
   if (t === 'place-relay') {
     const chrom = problemStore.draft.chromosome
     const n = (chrom && chrom.kind === 'problem1') ? chrom.relays.length : 0
     const lim = problemStore.draft.numSensors
-    if (n >= lim) return `⚠ Limite atingido (${n}/${lim}) — ajuste "Number of Sensors"`
-    return `Clique para adicionar relay  [N]  ·  ${n}/${lim}  ·  clique direito para remover`
+    if (n >= lim) return `⚠ Limit reached (${n}/${lim}) — adjust "Number of Sensors"`
+    return `Click to add relay  [N]  ·  ${n}/${lim}  ·  right-click to remove`
   }
   if (t === 'chromosome-pick') {
     const name = problemStore.draft.name
     const chrom = problemStore.draft.chromosome
     if (name === 'problem2' || name === 'problem3') {
       const n = (chrom && (chrom.kind === 'problem2' || chrom.kind === 'problem3')) ? chrom.mask.filter(b => b === 1).length : 0
-      return `Clique no candidato para ativar/desativar  [X]  ·  ${n} ativo(s)  ·  clique direito desativa`
+      return `Click the candidate to activate/deactivate  [X]  ·  ${n} active  ·  right-click deactivates`
     }
     if (name === 'problem4') {
       const n = (chrom && chrom.kind === 'problem4') ? chrom.route.length : 0
-      return `Clique no candidato para adicionar à rota  [X]  ·  ${n} stop(s)  ·  clique direito remove último`
+      return `Click the candidate to add to the route  [X]  ·  ${n} stop(s)  ·  right-click removes the last one`
     }
-    return 'Selecione um problema p2/p3/p4 para usar esta ferramenta'
+    return 'Select a p2/p3/p4 problem to use this tool'
   }
   const hints: Record<string, string> = {
-    'select': 'Clique para selecionar · arraste para mover · Del para remover · clique direito para remover',
-    'place-sink': 'Clique para posicionar o sink  [K]',
-    'place-candidate': 'Clique para adicionar candidato  [C]  ·  clique direito para remover',
-    'place-target': 'Clique para adicionar alvo  [T]  ·  clique direito para remover',
+    'select': 'Click to select · drag to move · Del to remove · right-click removes element or path',
+    'place-sink': 'Click to place the sink  [K]',
+    'place-candidate': 'Click to add candidate  [C]  ·  right-click to remove',
+    'place-target': 'Click to add target  [T]  ·  right-click to remove',
   }
   return hints[t] ?? ''
 })
@@ -1100,7 +1140,10 @@ function handleRightClick(e: MouseEvent) {
   if (tid) { problemStore.removeTarget(tid); editorStore.setSelected(null); return }
   if (hitSink(cx, cy)) { problemStore.setSink(null); editorStore.setSelected(null); return }
   const rid = hitRelay(cx, cy)
-  if (rid) { problemStore.removeRelay(rid); editorStore.setSelected(null) }
+  if (rid) { problemStore.removeRelay(rid); editorStore.setSelected(null); return }
+  // Dashed trajectory paths: tested last so point elements always win the click
+  const seg = hitPathSegment(cx, cy)
+  if (seg) problemStore.removeSegmentFromNode(seg.nodeId, seg.segIndex)
 }
 
 function handleMouseLeave() { hover.value = null }

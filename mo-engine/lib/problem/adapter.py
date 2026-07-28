@@ -28,6 +28,12 @@ class ProblemAdapter(ABC):
     - encoding/decoding Simulation documents for the SimLab workflow
     """
 
+    # Problem-specific GA parameter keys this adapter reads in
+    # set_ga_operator_configs. Used by resolve.build_adapter to warn about
+    # keys the launcher sent but this problem ignores. Strategy-level keys
+    # (population size, prob_cx, ...) are declared in resolve.STRATEGY_GA_KEYS.
+    CONSUMED_GA_KEYS: frozenset[str] = frozenset()
+
     def __init__(self, problem: Mapping[str, Any]) -> None:
         """
         Parameters

@@ -14,7 +14,8 @@ def _build_plot_network(
     region: tuple[float, float, float, float],
     radius: float,
     interference_radius: float,
-    paths: list[list[str]] = None
+    paths: list[list[str]] = None,
+    targets: list[tuple[float, float]] = None,
 ) -> Figure:
     """
     Plots a node network with two concentric disks for each node:
@@ -47,6 +48,9 @@ def _build_plot_network(
             [ ["x_expr1", "y_expr1"] ],                         # Path with 1 segment
             [ ["x_expr1", "y_expr1"], ["x_expr2", "y_expr2"] ]  # Path with 2 segments
         ]
+    targets : list of sensing target coordinates (x, y) — P3 only.
+        Drawn as star markers labeled T1..Tn; targets are goals, not nodes,
+        so they get no communication/interference disks or edges.
     """
     if interference_radius < radius:
         raise ValueError("interference_radius must be greater than or equal to radius")
@@ -177,6 +181,20 @@ def _build_plot_network(
 
             ax.plot(xs_total, ys_total, linestyle="--", color="blue", alpha=0.6)
 
+    # ~~~ Sensing targets (P3) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    if targets:
+        for i, (x, y) in enumerate(targets):
+            ax.plot(
+                x, y, marker="*", markersize=16,
+                color="#F59E0B", markeredgecolor="#B45309", markeredgewidth=1.0,
+                linestyle="none", zorder=6,
+            )
+            ax.annotate(
+                f"T{i + 1}", (x, y),
+                textcoords="offset points", xytext=(0, 10),
+                color="#B45309", ha="center", fontsize=8, fontweight="bold",
+            )
+
     return fig
 
 
@@ -193,7 +211,8 @@ def plot_network_save_from_sim(
     radius = sim_model["radiusOfReach"]
     interference_radius = sim_model["radiusOfInter"]
     paths = [list[str](mote["functionPath"]) for mote in mobile_motes]
+    targets = [tuple(t) for t in sim_model["simulationElements"].get("targets") or []]
 
-    fig = _build_plot_network(points, region, radius, interference_radius, paths)
+    fig = _build_plot_network(points, region, radius, interference_radius, paths, targets)
     fig.savefig(file_path)
     plt.close(fig)

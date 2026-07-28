@@ -15,7 +15,7 @@ export function isPenalized(objectives: number[]): boolean {
 }
 
 /* -------------------------------------------------------
- * Primitivos
+ * Primitives
  * ----------------------------------------------------- */
 
 export type ID = string;
@@ -33,7 +33,7 @@ export type GenerationStatus = "Waiting" | "Running" | "Done" | "Error";
 export type SimulationStatus = "Waiting" | "Running" | "Done" | "Error";
 
 /* -------------------------------------------------------
- * Parameters (alinhado com pylib/db/models/experiment.py)
+ * Parameters (aligned with pylib/db/models/experiment.py)
  * ----------------------------------------------------- */
 
 export interface ObjectiveItem {
@@ -58,7 +58,8 @@ export interface DataConversionConfigDto {
 /**
  * Algorithm parameters as built by the launch wizards. All optional because
  * strategies differ (random_search has no evolutionary operators, only NSGA-III
- * has divisions); the index signature tolerates strategy-specific extras.
+ * has divisions) and problems consume different keys (see
+ * lib/problemCapabilities.ts); the index signature tolerates extras.
  */
 export interface AlgorithmParamsDto {
   population_size?: number;
@@ -68,8 +69,16 @@ export interface AlgorithmParamsDto {
   prob_cx?: number;
   prob_mt?: number;
   per_gene_prob?: number;
+  crossover_method?: string;       // P1 only
+  eta_cx?: number;                 // P0/P1: SBX distribution index
+  eta_mt?: number;                 // P0/P1: polynomial mutation index
+  pm_tau?: number;                 // P4: tau mutation probability
+  sigma_tau?: number;              // P4: tau mutation std. dev.
+  apply_coverage_repair?: boolean; // P1/P2
+  repair_coverage_budget?: number; // P1/P2
+  /** @deprecated the engine ignores these; kept for reading old experiments */
   selection_method?: string;
-  crossover_method?: string;
+  /** @deprecated the engine ignores these; kept for reading old experiments */
   mutation_method?: string;
   // `unknown` (not JsonValue): the recursive JsonValue union inside an index
   // signature blows up Vue's deep ref-unwrapping type instantiation (TS2589).
@@ -167,14 +176,14 @@ export interface RuntimeMetricsSeriesResponseDto {
 }
 
 /* -------------------------------------------------------
- * Individual (dentro de uma geração)
+ * Individual (within a generation)
  * ----------------------------------------------------- */
 
 export interface IndividualDto {
   id: ID;
-  individual_id: string;       // hash do cromossomo
+  individual_id: string;       // chromosome hash
   chromosome: JsonObject;
-  objectives: number[];        // indexed; usar parameters.objectives[i].metric_name para nome
+  objectives: number[];        // indexed; use parameters.objectives[i].metric_name for the name
   topology_picture_id: ID | null;
   simulations_ids?: ID[];
 }
@@ -194,7 +203,7 @@ export interface GenerationDto {
 }
 
 /* -------------------------------------------------------
- * Experiment (base e info)
+ * Experiment (base and info)
  * ----------------------------------------------------- */
 
 export interface ExperimentInfoDto {
@@ -203,7 +212,7 @@ export interface ExperimentInfoDto {
   system_message?: string | null;
   start_time?: ISODateTime | null;
   end_time?: ISODateTime | null;
-  status: ExperimentStatus; // adicionado client-side (vem do endpoint by-status)
+  status: ExperimentStatus; // added client-side (comes from the by-status endpoint)
   is_synthetic?: boolean;
   synthetic_bench?: string | null;
 }

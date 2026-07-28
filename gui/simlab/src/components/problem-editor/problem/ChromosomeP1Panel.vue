@@ -9,7 +9,7 @@
     </div>
 
     <div v-if="relays.length === 0" class="empty">
-      Nenhum relay — use a ferramenta ⊗ no canvas ou o botão acima
+      No relays yet — use the ⊗ tool on the canvas or the button above
     </div>
 
     <div v-for="(r, i) in relays" :key="r.id" class="row">
@@ -26,7 +26,7 @@
         title="y"
         @change="update(r.id, 'y', +($event.target as HTMLInputElement).value)"
       />
-      <button class="remove" title="Remover" @click="problemStore.removeRelay(r.id)">✕</button>
+      <button class="remove" title="Remove" @click="problemStore.removeRelay(r.id)">✕</button>
     </div>
 
     <div v-if="hasError('chromosome.relays')" class="err-msg">

@@ -96,13 +96,33 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
         penalty = _PENALTY_BASE * (1.0 + deficit)
         return [penalty] * n_objectives
 
+    # Crossover methods implemented by this adapter (see crossover()).
+    # Mutation is fixed by design: polynomial on relay coordinates + bit-flip MAC.
+    CROSSOVER_METHODS = ("sbx_with_radial_translate", "rand", "rand_network")
+
+    CONSUMED_GA_KEYS = frozenset({
+        "eta_cx", "eta_mt", "per_gene_prob", "crossover_method",
+        "apply_coverage_repair",
+        "repair_coverage_budget", "coverage_repair_budget",
+        "repair_coverage_candidates", "coverage_repair_candidates",
+        "repair_coverage_relay_candidates", "coverage_repair_relay_candidates",
+        "connectivity_repair_step_ratio", "connectivity_repair_retries",
+    })
+
     def set_ga_operator_configs(self, rng: Random, parameters: GeneticAlgorithmConfigDto):
-        N = 2 * self.problem.number_of_relays # x and y for each relay  
+        N = 2 * self.problem.number_of_relays # x and y for each relay
         self._eta_cx = float(parameters.get("eta_cx", 20.0))
         self._eta_mt = float(parameters.get("eta_mt", 25.0))
         self._per_gene_prob = float(parameters.get("per_gene_prob", 1.0 / N))
-        self._crossover_method = str(parameters.get("crossover_method"))
-        self._mutation_method = str(parameters.get("mutation_method"))
+        # Validate at configuration time so a bad method fails the experiment
+        # before any simulation is spent, not at the first crossover.
+        method = str(parameters.get("crossover_method") or self.CROSSOVER_METHODS[0]).lower()
+        if method not in self.CROSSOVER_METHODS:
+            raise ValueError(
+                f"[P1] crossover_method '{method}' not supported. "
+                f"Expected one of: {', '.join(self.CROSSOVER_METHODS)}"
+            )
+        self._crossover_method = method
         self._apply_coverage_repair = bool(parameters.get("apply_coverage_repair", True))
         self._coverage_repair_budget = int(parameters.get("repair_coverage_budget", parameters.get("coverage_repair_budget", 2)))
         self._coverage_repair_candidates = int(parameters.get("repair_coverage_candidates", parameters.get("coverage_repair_candidates", 4)))
