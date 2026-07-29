@@ -16,6 +16,8 @@
           </div>
         </div>
         <div class="header-actions">
+          <span class="zoom-hint">scroll to zoom · drag to pan</span>
+          <button class="reset-btn" @click="resetView">Reset view</button>
           <ChartExportButton @click="handleExportImage" />
           <button class="close-btn" @click="$emit('close')">✕</button>
         </div>
@@ -37,10 +39,15 @@ const props = defineProps<{ sim: SimulationDto }>();
 defineEmits<{ (e: "close"): void }>();
 
 const chartEl = ref<HTMLElement | null>(null);
-const { setOption, ready, resize, exportImage } = useEChart(chartEl);
+const { setOption, ready, resize, dispatch, exportImage } = useEChart(chartEl);
 
 function handleExportImage() {
   exportImage(chartExportFilename(`dodag-${props.sim.id}`));
+}
+
+/** Reset the inside dataZoom back to the full framed view. */
+function resetView() {
+  dispatch({ type: "dataZoom", dataZoomIndex: 0, start: 0, end: 100 });
 }
 
 // -------------------------------------------------------
@@ -235,50 +242,46 @@ function buildOption() {
     legendHoverLink: false,
   });
 
-  // DODAG edges (child → parent) as individual 2-point lines sharing one legend
-  // entry, plus a rotated arrowhead near the parent end to show direction.
-  const arrowPoints: { value: [number, number] }[] = [];
-  const arrowRotations: number[] = [];
+  // DODAG edges (child → parent). Each edge is a 2-point line sharing the name
+  // "DODAG links" so the legend shows one entry that toggles the whole tree.
+  // A single arrowhead is drawn at the midpoint of every edge, pointing from the
+  // child toward its parent — collected into one scatter series (per-item
+  // symbolRotate) so direction reads clearly and never overlaps the node markers.
+  const arrowData: { value: [number, number]; symbolRotate: number }[] = [];
   for (const { child, parent } of edges.value) {
     const c = pos[child];
     const p = pos[parent];
     if (!c || !p) continue;
-    // All edge lines share the name "DODAG links" so the legend shows a single
-    // entry that toggles the whole tree at once.
     series.push({
       name: "DODAG links",
       type: "line",
       data: [c, p],
-      lineStyle: { color: "#60a5fa", width: 1.5 },
+      lineStyle: { color: "#93c5fd", width: 1.75, opacity: 0.9 },
       symbol: "none",
       z: 1,
       silent: true,
       tooltip: { show: false },
       legendHoverLink: false,
     });
-    // Arrowhead at 65% from child toward parent.
-    const ax = c[0] + (p[0] - c[0]) * 0.65;
-    const ay = c[1] + (p[1] - c[1]) * 0.65;
-    arrowPoints.push({ value: [ax, ay] });
-    arrowRotations.push((Math.atan2(p[1] - c[1], p[0] - c[0]) * 180) / Math.PI);
+    arrowData.push({
+      value: [(c[0] + p[0]) / 2, (c[1] + p[1]) / 2],
+      symbolRotate: (Math.atan2(p[1] - c[1], p[0] - c[0]) * 180) / Math.PI,
+    });
   }
-  // Arrowheads: one scatter point per edge (symbolRotate is per-series, so emit
-  // each as its own tiny series to rotate independently — cheap for tens of edges).
-  arrowPoints.forEach((pt, i) => {
+  if (arrowData.length > 0) {
     series.push({
       name: "DODAG links",
       type: "scatter",
-      data: [pt],
-      symbol: "arrow",
-      symbolSize: 9,
-      symbolRotate: arrowRotations[i] ?? 0,
-      itemStyle: { color: "#3b82f6" },
+      data: arrowData,
+      symbol: "arrow", // built-in triangle; rotation formula matches path tangents
+      symbolSize: 12,
+      itemStyle: { color: "#2563eb" },
       z: 2,
       silent: true,
       tooltip: { show: false },
       legendHoverLink: false,
     });
-  });
+  }
 
   // Nodes: joined (colored by depth) and disconnected (gray), labelled by mote id.
   const joinedData: { value: [number, number]; moteId: number; itemStyle: { color: string } }[] = [];
@@ -357,6 +360,9 @@ function buildOption() {
     grid: { left: GRID.left, right: GRID.right, top: GRID.top, bottom: GRID.bottom },
     xAxis: { type: "value", min: xMin, max: xMax, splitLine: { lineStyle: { color: "#f0f0f0" } }, axisLabel: { fontSize: 11 } },
     yAxis: { type: "value", min: yMin, max: yMax, splitLine: { lineStyle: { color: "#f0f0f0" } }, axisLabel: { fontSize: 11 } },
+    // Single inside dataZoom bound to both axes → wheel-zoom + drag-pan that
+    // scales both axes together, preserving the equal-aspect (meter) scale.
+    dataZoom: [{ type: "inside", xAxisIndex: 0, yAxisIndex: 0, filterMode: "none" }],
     series,
   });
 }
@@ -450,6 +456,29 @@ onBeforeUnmount(() => window.removeEventListener("resize", onResize));
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.zoom-hint {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.reset-btn {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.reset-btn:hover {
+  background: var(--color-bg);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
 }
 
 .close-btn {
