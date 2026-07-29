@@ -13,9 +13,29 @@
     <div v-else class="hvgd-charts">
       <div class="hvgd-col">
         <div class="controls-bar">
+          <div class="hv-mode-toggle" role="group" aria-label="Hypervolume mode">
+            <button
+              type="button"
+              :class="['mode-btn', { active: hvMode === 'perGen' }]"
+              :aria-pressed="hvMode === 'perGen'"
+              title="Hypervolume of each generation's own Pareto front"
+              @click="hvMode = 'perGen'"
+            >
+              Per generation
+            </button>
+            <button
+              type="button"
+              :class="['mode-btn', { active: hvMode === 'cumulative' }]"
+              :aria-pressed="hvMode === 'cumulative'"
+              title="Best-so-far hypervolume over every generation up to each point"
+              @click="hvMode = 'cumulative'"
+            >
+              Cumulative
+            </button>
+          </div>
           <ChartExportButton @click="handleExportImage('hv')" />
         </div>
-        <div ref="hvEl" class="hvgd-chart" role="img" aria-label="Hypervolume per generation chart" />
+        <div ref="hvEl" class="hvgd-chart" role="img" :aria-label="hvAriaLabel" />
       </div>
       <div class="hvgd-col">
         <div class="controls-bar">
@@ -28,7 +48,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted, onBeforeUnmount } from "vue";
+import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
 import * as echarts from "../../lib/echarts";
 import type { EChartsOption, DefaultLabelFormatterCallbackParams } from "echarts";
 import { useTheme } from "../../composables/useTheme";
@@ -50,13 +70,26 @@ type State = "idle" | "loading" | "ready" | "empty" | "error";
 const state = ref<State>("idle");
 const errorMsg = ref("");
 
+// HV can be viewed per generation (each gen's own front) or cumulatively
+// (best-so-far front over all generations so far). Both curves come from a
+// single fetch, so switching is instant and never re-hits the backend.
+type HvMode = "perGen" | "cumulative";
+const hvMode = ref<HvMode>("perGen");
+
 interface HvGdData {
   generations: number[];
   hv: number[];
+  hv_cumulative: number[];
   gd: number[];
   worst_point: Record<string, number>;
 }
 const data = ref<HvGdData | null>(null);
+
+const hvAriaLabel = computed(() =>
+  hvMode.value === "cumulative"
+    ? "Cumulative hypervolume chart"
+    : "Hypervolume per generation chart",
+);
 
 // ── chart instances ─────────────────────────────────────────────────────────
 const hvEl = ref<HTMLElement | null>(null);
@@ -102,9 +135,13 @@ async function fetchData() {
 
 // ── chart init & rendering ──────────────────────────────────────────────────
 
-function buildHvOption(d: HvGdData, dark: boolean): EChartsOption {
+function buildHvOption(d: HvGdData, dark: boolean, mode: HvMode): EChartsOption {
   const c = chartPalette(dark);
   const xLabels = d.generations.map((g) => `Gen ${g}`);
+  const cumulative = mode === "cumulative";
+  const series = cumulative ? d.hv_cumulative : d.hv;
+  const axisLabel = cumulative ? "HV (cumulative)" : "HV";
+  const seriesName = cumulative ? "Cumulative hypervolume" : "Hypervolume";
 
   return {
     backgroundColor: c.bg,
@@ -117,7 +154,7 @@ function buildHvOption(d: HvGdData, dark: boolean): EChartsOption {
         const list = params as Array<DefaultLabelFormatterCallbackParams & { axisValueLabel?: string }>;
         const p = list[0];
         if (!p) return "";
-        return `${p.axisValueLabel ?? p.name}<br/><b>HV</b>: ${(p.value as number).toExponential(3)}`;
+        return `${p.axisValueLabel ?? p.name}<br/><b>${axisLabel}</b>: ${(p.value as number).toExponential(3)}`;
       },
     },
     grid: { top: 30, right: 20, bottom: 40, left: 60, containLabel: false },
@@ -130,7 +167,7 @@ function buildHvOption(d: HvGdData, dark: boolean): EChartsOption {
     },
     yAxis: {
       type: "value",
-      name: "HV",
+      name: axisLabel,
       nameTextStyle: { color: c.muted, fontSize: 11 },
       axisLabel: {
         color: c.muted,
@@ -145,9 +182,9 @@ function buildHvOption(d: HvGdData, dark: boolean): EChartsOption {
     },
     series: [
       {
-        name: "Hypervolume",
+        name: seriesName,
         type: "line",
-        data: d.hv,
+        data: series,
         smooth: true,
         symbol: "circle",
         symbolSize: 6,
@@ -226,7 +263,7 @@ function initCharts() {
 function renderCharts() {
   if (!data.value || !hvChart || !gdChart) return;
   const dark = isDark.value;
-  hvChart.setOption(buildHvOption(data.value, dark), true);
+  hvChart.setOption(buildHvOption(data.value, dark, hvMode.value), true);
   gdChart.setOption(buildGdOption(data.value, dark), true);
 }
 
@@ -258,6 +295,14 @@ watch(state, async (s) => {
 // Re-render on theme change
 watch(isDark, () => {
   if (state.value === "ready") renderCharts();
+});
+
+// Toggle per-generation ↔ cumulative — reuse the already-fetched data, only the
+// HV chart changes so the GD chart is left untouched.
+watch(hvMode, (mode) => {
+  if (state.value === "ready" && hvChart && data.value) {
+    hvChart.setOption(buildHvOption(data.value, isDark.value, mode), true);
+  }
 });
 
 // Refetch if experiment changes
@@ -302,7 +347,43 @@ watch(
 
 .controls-bar {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Toggle sits at the far left; the export button stays flush right. */
+.hv-mode-toggle {
+  margin-right: auto;
+  display: inline-flex;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.mode-btn {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border: none;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.mode-btn + .mode-btn {
+  border-left: 1px solid var(--color-border);
+}
+
+.mode-btn:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.mode-btn.active {
+  background: var(--color-primary);
+  color: #fff;
 }
 
 .hvgd-placeholder {

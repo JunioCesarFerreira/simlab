@@ -418,7 +418,7 @@ def get_hv_gd(
 
     stored_pf: list[dict] = doc.get("pareto_front") or []
     if not stored_pf:
-        return {"generations": [], "hv": [], "gd": [], "igd": [], "reference": None, "worst_point": {}}
+        return {"generations": [], "hv": [], "hv_cumulative": [], "gd": [], "igd": [], "reference": None, "worst_point": {}}
 
     minimize_bools = [m.lower() == "true" for m in minimize]
 
@@ -441,7 +441,7 @@ def get_hv_gd(
         individuals_per_gen[gen_idx] = valid
 
     if not individuals_per_gen:
-        return {"generations": [], "hv": [], "gd": [], "igd": [], "reference": None, "worst_point": {}}
+        return {"generations": [], "hv": [], "hv_cumulative": [], "gd": [], "igd": [], "reference": None, "worst_point": {}}
 
     # ── Reference front (GD/IGD) + HV reference point ────────────────────────
     # Synthetic experiments have a closed-form true Pareto front: use it as the
@@ -492,16 +492,30 @@ def get_hv_gd(
     hv_ref_arr = np.array(hv_ref, dtype=float)
 
     # ── Per-generation HV / GD / IGD ─────────────────────────────────────────
+    # Two HV curves are returned:
+    #   • hv            — each generation's OWN Pareto front ("current" view).
+    #   • hv_cumulative — the front of every individual seen up to and including
+    #     the generation ("best-so-far"). It is monotonically non-decreasing and
+    #     built incrementally: the running non-dominated set is folded with each
+    #     generation's front (never the whole population), keeping the cost at
+    #     O(G · front²) instead of O(G · population²).
     generations_sorted = sorted(individuals_per_gen.keys())
+    all_min_bools = [True] * n_obj      # min-space domination for the acc. front
     hv_values: list[float] = []
+    hv_cumulative: list[float] = []
     gd_values: list[float | None] = []
     igd_values: list[float | None] = []
+
+    acc_seen: set[tuple] = set()        # dedup keys of the running front
+    acc_rows: list[list[float]] = []    # running non-dominated set (min-space)
+    last_cum_hv = 0.0
 
     for gen_idx in generations_sorted:
         pop_objs = individuals_per_gen[gen_idx]
         front_idx = _pareto_front(pop_objs, minimize_bools) if pop_objs else []
         if not front_idx:
             hv_values.append(0.0)
+            hv_cumulative.append(last_cum_hv)   # empty gen adds nothing new
             gd_values.append(None)
             igd_values.append(None)
             continue
@@ -523,18 +537,37 @@ def get_hv_gd(
         dominating = pts_min[np.all(pts_min < hv_ref_arr, axis=1)]
         hv_val = float(moocore.hypervolume(dominating, ref=hv_ref)) if len(dominating) else 0.0
 
+        # Cumulative HV: fold this generation's front into the running
+        # non-dominated set, then re-filter. A point off its own generation's
+        # front is dominated within that generation too, so it can never join the
+        # accumulated front — merging the front alone keeps the set minimal.
+        for row in pts_min_rows:
+            key = tuple(row)
+            if key not in acc_seen:
+                acc_seen.add(key)
+                acc_rows.append(row)
+        nd_idx = _pareto_front(acc_rows, all_min_bools)
+        acc_rows = [acc_rows[i] for i in nd_idx]
+        acc_seen = {tuple(r) for r in acc_rows}
+        acc_arr = np.array(acc_rows, dtype=float)
+        acc_dom = acc_arr[np.all(acc_arr < hv_ref_arr, axis=1)]
+        cum_hv = float(moocore.hypervolume(acc_dom, ref=hv_ref)) if len(acc_dom) else 0.0
+        last_cum_hv = cum_hv
+
         # Pairwise distances (population front × reference front), reused for GD/IGD.
         dist = np.sqrt(((pts_min[:, None, :] - reference_front[None, :, :]) ** 2).sum(axis=2))
         gd_val = float(dist.min(axis=1).mean())    # each pop point → nearest reference
         igd_val = float(dist.min(axis=0).mean())   # each reference point → nearest pop
 
         hv_values.append(hv_val)
+        hv_cumulative.append(cum_hv)
         gd_values.append(gd_val)
         igd_values.append(igd_val)
 
     return {
         "generations": generations_sorted,
         "hv": hv_values,
+        "hv_cumulative": hv_cumulative,
         "gd": gd_values,
         "igd": igd_values,
         "reference": reference_kind,

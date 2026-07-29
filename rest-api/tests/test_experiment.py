@@ -302,6 +302,34 @@ class TestGetHvGd:
         assert data["hv"][1] == pytest.approx(5.3125, rel=1e-6)
         assert data["hv"][1] > data["hv"][0]  # HV grows as the front improves
 
+    def test_cumulative_hv_is_best_so_far_and_monotonic(self, client, mock_factory):
+        # Per-generation HV can regress when a generation's own front is worse
+        # than an earlier one; the cumulative ("best-so-far") HV must not.
+        doc = sample_experiment()  # non-synthetic → empirical HV reference
+        doc["pareto_front"] = [{"objectives": {"f1": 1.0, "f2": 1.0}}]
+        mock_factory.experiment_repo.get.return_value = doc
+        mock_factory.generation_repo.find_by_experiment.return_value = [
+            {"_id": ObjectId(GEN_ID), "index": 0},
+            {"_id": ObjectId(IND_ID), "index": 1},
+        ]
+        mock_factory.individual_repo.find_by_generation.side_effect = [
+            [{"objectives": [1.0, 1.0]}],   # gen 0 (good)
+            [{"objectives": [2.0, 2.0]}],   # gen 1 (worse — regression)
+        ]
+
+        data = self._call(client).json()   # objectives f1,f2 both minimized
+
+        # worst (min-space) = [2, 2] → ref = [2 + 2*0.05 + 1] = [3.1, 3.1]
+        # HV gen0 = (3.1-1)^2 = 4.41 ; HV gen1 = (3.1-2)^2 = 1.21
+        assert data["hv"][0] == pytest.approx(4.41, rel=1e-6)
+        assert data["hv"][1] == pytest.approx(1.21, rel=1e-6)
+        assert data["hv"][1] < data["hv"][0]                    # own front regresses
+        # Cumulative keeps the best-so-far front ([1,1]) → holds at 4.41
+        assert data["hv_cumulative"][0] == pytest.approx(4.41, rel=1e-6)
+        assert data["hv_cumulative"][1] == pytest.approx(4.41, rel=1e-6)
+        assert data["hv_cumulative"][1] >= data["hv_cumulative"][0]
+        assert data["hv_cumulative"][1] >= data["hv"][1]
+
 
 # ── POST /{experiment_id}/plot-pareto ─────────────────────────────────────────
 class TestPlotPareto:
