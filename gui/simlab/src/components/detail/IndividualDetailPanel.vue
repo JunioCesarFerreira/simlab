@@ -107,6 +107,58 @@
                 </div>
               </div>
 
+              <!-- RPL DODAG formation & tree -->
+              <div v-if="sim.dodag" class="dodag-wrap">
+                <div class="metrics-label">RPL DODAG</div>
+                <div class="dodag-stats">
+                  <span class="dodag-stat">
+                    <span class="dodag-stat-key">Convergence</span>
+                    <span class="dodag-stat-val mono">{{ fmtDodagTime(sim.dodag) }}</span>
+                  </span>
+                  <span
+                    class="dodag-badge"
+                    :class="sim.dodag.convergence.converged ? 'dodag-badge--ok' : 'dodag-badge--warn'"
+                  >
+                    {{ sim.dodag.convergence.converged ? "converged" : "not converged" }}
+                  </span>
+                  <span class="dodag-stat">
+                    <span class="dodag-stat-key">Joined</span>
+                    <span class="dodag-stat-val mono">
+                      {{ sim.dodag.convergence.n_nodes }}/{{ sim.dodag.deployed_nodes }}
+                    </span>
+                  </span>
+                  <span v-if="dodagMaxDepth(sim.dodag) !== null" class="dodag-stat">
+                    <span class="dodag-stat-key">Max depth</span>
+                    <span class="dodag-stat-val mono">{{ dodagMaxDepth(sim.dodag) }}</span>
+                  </span>
+                  <span class="dodag-stat">
+                    <span class="dodag-stat-key">Parent switches</span>
+                    <span class="dodag-stat-val mono">{{ sim.dodag.convergence.total_parent_switches }}</span>
+                  </span>
+                </div>
+
+                <!-- Exact tree edges (child → parent), when available -->
+                <div v-if="dodagEdges(sim.dodag).length > 0" class="dodag-tree">
+                  <div class="dodag-tree-title">Tree ({{ dodagEdges(sim.dodag).length }} edges)</div>
+                  <div class="dodag-edges">
+                    <div
+                      v-for="edge in dodagEdges(sim.dodag)"
+                      :key="edge.node"
+                      class="dodag-edge mono"
+                    >
+                      <span class="dodag-edge-node">{{ edge.node }}</span>
+                      <span class="dodag-edge-arrow">→</span>
+                      <span class="dodag-edge-parent">{{ edge.parent }}</span>
+                      <span v-if="edge.depth !== null" class="dodag-edge-depth">d{{ edge.depth }}</span>
+                    </div>
+                  </div>
+                </div>
+                <div v-else class="dodag-approx-note">
+                  No parent-switch events in log — showing approximate formation only
+                  (legacy firmware).
+                </div>
+              </div>
+
               <!-- File links -->
               <div v-if="hasFiles(sim)" class="file-links">
                 <button
@@ -130,7 +182,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from "vue";
 import StatusBadge from "../common/StatusBadge.vue";
-import type { IndividualDto, SimulationDto } from "../../types/simlab";
+import type { DodagInfo, IndividualDto, SimulationDto } from "../../types/simlab";
 import { getSimulationsByIndividual } from "../../api/simulations";
 import { fetchBlobUrl, downloadFile } from "../../api/files";
 
@@ -165,6 +217,27 @@ function hasFiles(sim: SimulationDto): boolean {
 
 function isUsedForObjective(column: string): boolean {
   return props.metricColumns.includes(column);
+}
+
+/** DODAG convergence time, preferring the exact value, falling back to approx. */
+function fmtDodagTime(dodag: DodagInfo): string {
+  const ms = dodag.convergence.convergence_time_ms ?? dodag.approx.approx_formation_time_ms;
+  if (ms === null || ms === undefined) return "—";
+  return `${(ms / 1000).toFixed(1)} s`;
+}
+
+function dodagMaxDepth(dodag: DodagInfo): number | null {
+  const depths = Object.values(dodag.tree.depth ?? {});
+  if (depths.length > 0) return Math.max(...depths);
+  return dodag.approx.approx_max_depth;
+}
+
+/** Exact tree edges (child → parent) sorted by depth, when firmware events exist. */
+function dodagEdges(dodag: DodagInfo): { node: string; parent: string; depth: number | null }[] {
+  const edges = dodag.tree.edges ?? {};
+  return Object.entries(edges)
+    .map(([node, parent]) => ({ node, parent, depth: dodag.tree.depth?.[node] ?? null }))
+    .sort((a, b) => (a.depth ?? 99) - (b.depth ?? 99) || a.node.localeCompare(b.node));
 }
 
 async function downloadSimFile(simId: string, fieldKey: string, ext: string) {
@@ -513,6 +586,106 @@ onBeforeUnmount(() => {
   color: #fff;
   padding: 1px 5px;
   border-radius: 999px;
+}
+
+/* DODAG */
+.dodag-wrap {
+  padding: 10px 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+.dodag-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+}
+
+.dodag-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 12px;
+}
+
+.dodag-stat-key {
+  color: var(--color-text-muted);
+}
+
+.dodag-stat-val {
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.dodag-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.dodag-badge--ok {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.dodag-badge--warn {
+  background: var(--color-warning, #b45309);
+  color: #fff;
+}
+
+.dodag-tree {
+  margin-top: 8px;
+}
+
+.dodag-tree-title {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin-bottom: 4px;
+}
+
+.dodag-edges {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.dodag-edge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.dodag-edge:nth-child(odd) {
+  background: var(--color-bg);
+}
+
+.dodag-edge-arrow {
+  color: var(--color-text-muted);
+}
+
+.dodag-edge-parent {
+  font-weight: 600;
+}
+
+.dodag-edge-depth {
+  margin-left: auto;
+  color: var(--color-text-muted);
+  font-size: 10px;
+}
+
+.dodag-approx-note {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-style: italic;
 }
 
 /* File links */

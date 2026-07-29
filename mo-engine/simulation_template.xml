@@ -114,7 +114,10 @@
           log.log("Mote " + id + " current position: (" + x + ", " + y + ")\n");
           */
 
-          log.log("[Mote:" + id + "] " + msg + "\n");
+          // Prefix each mote line with the global simulation time (us) so that
+          // per-node events (e.g. "[RPL] ..." parent switches) can be aligned on
+          // a common clock, independent of unsynchronized per-node clocks.
+          log.log("[t_us=" + time + "] [Mote:" + id + "] " + msg + "\n");
         }
 
         // Finaliza a simulação

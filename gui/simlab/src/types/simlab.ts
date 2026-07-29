@@ -241,6 +241,48 @@ export interface ExperimentFullDto extends ExperimentDto {
  * Simulation
  * ----------------------------------------------------- */
 
+/** RPL DODAG tree reconstructed from the simulation log. */
+export interface DodagTree {
+  root: string | null;
+  /** child address -> preferred-parent address (final edge). */
+  edges: Record<string, string>;
+  /** node address -> hop depth from the root. */
+  depth: Record<string, number>;
+  /** nodes that never reached the root. */
+  disconnected: string[];
+}
+
+/** DODAG stable-convergence summary (from firmware parent-switch events). */
+export interface DodagConvergence {
+  converged: boolean;
+  convergence_time_ms: number | null;
+  n_nodes: number;
+  expected_nodes?: number | null;
+  total_parent_switches: number;
+  parent_switches_per_node: Record<string, number>;
+  uses_global_clock: boolean;
+  stability_verified: boolean;
+}
+
+/** Approximate, first-contact based DODAG formation (works on legacy logs). */
+export interface DodagApprox {
+  n_nodes_joined: number;
+  expected_nodes?: number | null;
+  all_joined: boolean;
+  approx_first_join_ms: number | null;
+  approx_last_join_ms: number | null;
+  approx_formation_time_ms: number | null;
+  approx_max_depth: number | null;
+  approx_mean_depth: number | null;
+}
+
+export interface DodagInfo {
+  deployed_nodes: number;
+  approx: DodagApprox;
+  tree: DodagTree;
+  convergence: DodagConvergence;
+}
+
 export interface SimulationDto {
   id: ID;
   experiment_id: ID;
@@ -259,6 +301,7 @@ export interface SimulationDto {
   runtime_log_id?: ID | null;
   csv_log_id?: ID | null;
   network_metrics: FloatMap;
+  dodag?: DodagInfo | null;
 }
 
 /* -------------------------------------------------------

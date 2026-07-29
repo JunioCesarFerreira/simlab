@@ -27,6 +27,7 @@ from pylib.db.models import Simulation, SourceRepository
 from pylib.db.repositories.simulation import SimulationRepository
 from pylib import cooja_files
 from pylib import statistics
+from pylib import rpl_dodag
 
 # --------------------------- Logging --------------------------------
 logging.basicConfig(
@@ -251,7 +252,23 @@ def run_cooja_simulation(
             cfg = mongo.experiment_repo.get_metrics_data_conversion(str(exp_id))
             net_meas = statistics.evaluate_config(df, cfg, log)
             log.info("[port=%s] Metrics calculated: %s", port, net_meas)
-            mongo.simulation_repo.mark_done(sim_oid, log_id, csv_id, net_meas)
+
+            # RPL DODAG analysis (formation time + tree) from the raw testlog.
+            # Best-effort: never let it fail the simulation result.
+            dodag = None
+            try:
+                dodag = rpl_dodag.analyze_dodag_full(log_path)
+                log.info(
+                    "[port=%s] DODAG: %d/%d joined, convergence=%s ms",
+                    port,
+                    dodag["convergence"]["n_nodes"],
+                    dodag["deployed_nodes"],
+                    dodag["convergence"]["convergence_time_ms"],
+                )
+            except Exception:
+                log.exception("[port=%s] DODAG analysis failed", port)
+
+            mongo.simulation_repo.mark_done(sim_oid, log_id, csv_id, net_meas, dodag)
         else:
             log.warning("[port=%s] CSV file is missing or empty for simulation %s", port, sim_oid)
             mongo.simulation_repo.mark_error(sim_oid, "CSV file is missing or empty after conversion")

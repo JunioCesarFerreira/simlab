@@ -15,6 +15,7 @@
 #include "net/netstack.h"
 #include "net/ipv6/simple-udp.h"
 #include "net/ipv6/uip-ds6.h"
+#include "net/ipv6/uip-ds6-route.h"
 #include "net/ipv6/uiplib.h"
 #include "sys/energest.h"
 #include "random.h"
@@ -79,6 +80,41 @@ static void print_own_link_local(void) {
     } else {
         printf("Sensor Loop: No link-local address available\n");
     }
+}
+
+/**
+ * @brief Logs the RPL preferred parent whenever it changes (DODAG instrumentation).
+ *
+ * Emits one compact line per parent switch, keyed by "[RPL]", carrying the
+ * node's own clock (ms), its link-local address and the parent's address
+ * (the next hop of the default route). This lets the offline analysis
+ * reconstruct the exact DODAG tree and the parent-switch history needed to
+ * detect stable convergence. Portable across rpl-lite/rpl-classic.
+ */
+static void log_parent_if_changed(void) {
+    static uip_ipaddr_t last_parent;
+    static uint8_t has_parent = 0;
+
+    const uip_ipaddr_t *parent = uip_ds6_defrt_choose();
+    if (parent == NULL) {
+        return;
+    }
+    if (has_parent && uip_ipaddr_cmp(&last_parent, parent)) {
+        return; /* parent unchanged */
+    }
+    uip_ipaddr_copy(&last_parent, parent);
+    has_parent = 1;
+
+    char self_str[UIPLIB_IPV6_MAX_STR_LEN] = "";
+    char parent_str[UIPLIB_IPV6_MAX_STR_LEN];
+    uip_ds6_addr_t *ll_addr = uip_ds6_get_link_local(ADDR_PREFERRED);
+    if (ll_addr != NULL) {
+        uiplib_ipaddr_snprint(self_str, sizeof(self_str), &ll_addr->ipaddr);
+    }
+    uiplib_ipaddr_snprint(parent_str, sizeof(parent_str), parent);
+
+    printf("[RPL] t=%lu node=%s parent=%s\n",
+           (unsigned long)TICKS_TO_MS(NOW_TICKS()), self_str, parent_str);
 }
 
 /**
@@ -213,6 +249,8 @@ PROCESS_THREAD(udp_client_process, ev, data)
 
     while(1) {
         PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&periodic_timer));
+
+        log_parent_if_changed();
 
         if (NETSTACK_ROUTING.node_is_reachable() &&
             NETSTACK_ROUTING.get_root_ipaddr(&dest_ipaddr)) {

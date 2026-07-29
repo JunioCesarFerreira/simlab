@@ -26,6 +26,7 @@ def simulation_from_mongo(doc: dict) -> SimulationDto:
         "runtime_log_id": oid_to_str(d.get("runtime_log_id")),
         "csv_log_id": oid_to_str(d.get("csv_log_id")),
         "network_metrics": d.get("network_metrics", {}),
+        "dodag": d.get("dodag"),
     }
 
 
@@ -44,6 +45,8 @@ def simulation_to_mongo(dto: SimulationDto) -> Simulation:
     sim["end_time"] = d.get("end_time")
     sim["parameters"] = d.get("parameters", {})
     sim["network_metrics"] = d.get("network_metrics", {})
+    if d.get("dodag") is not None:
+        sim["dodag"] = d.get("dodag")
 
     for k in ("experiment_id", "generation_id", "pos_file_id", "csc_file_id",
               "source_repository_id", "log_cooja_id", "runtime_log_id", "csv_log_id"):

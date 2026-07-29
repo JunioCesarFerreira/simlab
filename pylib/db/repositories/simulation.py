@@ -105,18 +105,22 @@ class SimulationRepository:
         sim_id: ObjectId,
         log_id: Optional[ObjectId],
         csv_id: Optional[ObjectId],
-        network_metrics: dict[str, float]
+        network_metrics: dict[str, float],
+        dodag: Optional[dict] = None,
     ):
+        fields: dict = {
+            "status": EnumStatus.DONE,
+            "end_time": datetime.now(),
+            "log_cooja_id": log_id,
+            "csv_log_id": csv_id,
+            "network_metrics": network_metrics,
+        }
+        if dodag is not None:
+            fields["dodag"] = dodag
         with self.connection.connect() as db:
             db["simulations"].update_one(
                 {"_id": sim_id},
-                {"$set": {
-                    "status": EnumStatus.DONE,
-                    "end_time": datetime.now(),
-                    "log_cooja_id": log_id,
-                    "csv_log_id": csv_id,
-                    "network_metrics": network_metrics,
-                }}
+                {"$set": fields}
             )
 
     def mark_error(self, sim_id: ObjectId, system_message: str):

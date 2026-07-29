@@ -1,4 +1,4 @@
-from typing import TypedDict, Optional
+from typing import TypedDict, Optional, NotRequired
 from datetime import datetime
 
 from pylib.config.simulator import SimulationConfig
@@ -22,3 +22,6 @@ class SimulationDto(TypedDict):
     runtime_log_id: str
     csv_log_id: str
     network_metrics: dict[str, float]
+    # Populated by the master-node after a run (RPL DODAG formation + tree);
+    # optional on create so existing simulation payloads remain valid.
+    dodag: NotRequired[Optional[dict]]

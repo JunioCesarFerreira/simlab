@@ -79,6 +79,28 @@ class TestGetSimulation:
         assert resp.status_code == 200
         assert resp.json()["id"] == SIM_ID
 
+    def test_dodag_is_exposed(self, client, mock_factory):
+        doc = sample_simulation()
+        doc["dodag"] = {
+            "deployed_nodes": 2,
+            "tree": {"root": "fd00::201", "edges": {"fd00::202": "fd00::201"},
+                     "depth": {"fd00::202": 1}, "disconnected": []},
+            "convergence": {"converged": True, "convergence_time_ms": 5000.0,
+                            "n_nodes": 2, "expected_nodes": 2},
+        }
+        mock_factory.simulation_repo.get.return_value = doc
+        resp = client.get(f"{BASE}/{SIM_ID}")
+        assert resp.status_code == 200
+        dodag = resp.json()["dodag"]
+        assert dodag["convergence"]["convergence_time_ms"] == 5000.0
+        assert dodag["tree"]["root"] == "fd00::201"
+
+    def test_dodag_absent_maps_to_null(self, client, mock_factory):
+        mock_factory.simulation_repo.get.return_value = sample_simulation()
+        resp = client.get(f"{BASE}/{SIM_ID}")
+        assert resp.status_code == 200
+        assert resp.json()["dodag"] is None
+
     def test_not_found_returns_404(self, client, mock_factory):
         mock_factory.simulation_repo.get.return_value = None
         resp = client.get(f"{BASE}/{SIM_ID}")

@@ -1,4 +1,4 @@
-from typing import TypedDict
+from typing import Optional, TypedDict
 from datetime import datetime
 from bson import ObjectId
 
@@ -23,3 +23,4 @@ class Simulation(TypedDict):
     runtime_log_id: ObjectId
     csv_log_id: ObjectId
     network_metrics: dict[str, float]
+    dodag: Optional[dict]
