@@ -109,7 +109,12 @@
 
               <!-- RPL DODAG formation & tree -->
               <div v-if="sim.dodag" class="dodag-wrap">
-                <div class="metrics-label">RPL DODAG</div>
+                <div class="dodag-head">
+                  <div class="metrics-label">RPL DODAG</div>
+                  <button class="dodag-graph-btn" @click="dodagSim = sim">
+                    View tree on topology
+                  </button>
+                </div>
                 <div class="dodag-stats">
                   <span class="dodag-stat">
                     <span class="dodag-stat-key">Convergence</span>
@@ -176,12 +181,19 @@
         </section>
       </div>
     </div>
+
+    <SimulationDodagModal
+      v-if="dodagSim"
+      :sim="dodagSim"
+      @close="dodagSim = null"
+    />
   </Teleport>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from "vue";
 import StatusBadge from "../common/StatusBadge.vue";
+import SimulationDodagModal from "./SimulationDodagModal.vue";
 import type { DodagInfo, IndividualDto, SimulationDto } from "../../types/simlab";
 import { getSimulationsByIndividual } from "../../api/simulations";
 import { fetchBlobUrl, downloadFile } from "../../api/files";
@@ -203,6 +215,9 @@ const loadingTopology = ref(false);
 const simulations = ref<SimulationDto[]>([]);
 const loadingSims = ref(false);
 const simError = ref<string | null>(null);
+
+// DODAG tree-on-topology modal (holds the simulation being visualized)
+const dodagSim = ref<SimulationDto | null>(null);
 
 const fileFields = [
   { key: "log_cooja_id", label: "Cooja Log", ext: "log" },
@@ -592,6 +607,29 @@ onBeforeUnmount(() => {
 .dodag-wrap {
   padding: 10px 12px;
   border-top: 1px solid var(--color-border);
+}
+
+.dodag-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dodag-graph-btn {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  transition: background 0.15s, color 0.15s;
+}
+
+.dodag-graph-btn:hover {
+  background: var(--color-primary);
+  color: #fff;
 }
 
 .dodag-stats {

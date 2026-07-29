@@ -274,6 +274,7 @@ export interface DodagApprox {
   approx_formation_time_ms: number | null;
   approx_max_depth: number | null;
   approx_mean_depth: number | null;
+  per_node: Record<string, { approx_join_ms: number; approx_depth: number | null }>;
 }
 
 export interface DodagInfo {
