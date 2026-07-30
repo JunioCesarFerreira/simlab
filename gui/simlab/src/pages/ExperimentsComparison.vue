@@ -224,7 +224,29 @@
         <div class="evo-row">
           <div class="evo-block">
             <div class="evo-label-row">
-              <span class="evo-label">Hypervolume (HV)</span>
+              <div class="evo-label-group">
+                <span class="evo-label">Hypervolume (HV)</span>
+                <div class="view-toggle" role="group" aria-label="Hypervolume mode">
+                  <button
+                    type="button"
+                    :class="['vt-btn', { active: hvMode === 'perGen' }]"
+                    :aria-pressed="hvMode === 'perGen'"
+                    title="Hypervolume of each generation's own Pareto front"
+                    @click="hvMode = 'perGen'"
+                  >
+                    Per gen
+                  </button>
+                  <button
+                    type="button"
+                    :class="['vt-btn', { active: hvMode === 'cumulative' }]"
+                    :aria-pressed="hvMode === 'cumulative'"
+                    title="Best-so-far hypervolume over every generation up to each point"
+                    @click="hvMode = 'cumulative'"
+                  >
+                    Cumulative
+                  </button>
+                </div>
+              </div>
               <ChartExportButton @click="handleExportEvoImage('hv')" />
             </div>
             <div ref="hvEl" class="chart-fill" />
@@ -267,6 +289,7 @@ const ParetoFront3DComparisonChart = defineAsyncComponent(
 interface HvGdData {
   generations: number[];
   hv: number[];
+  hv_cumulative: number[];
   gd: number[];
   worst_point: Record<string, number>;
 }
@@ -529,6 +552,11 @@ const paretoChart = useEChart(paretoEl);
 const hvChart = useEChart(hvEl);
 const gdChart = useEChart(gdEl);
 
+// HV curve: per generation (each gen's own front) or cumulative (best-so-far).
+// Both arrays arrive in one fetch, so switching only re-renders — no refetch.
+type HvMode = 'perGen' | 'cumulative';
+const hvMode = ref<HvMode>('perGen');
+
 function handleExportParetoImage() {
   paretoChart.exportImage(chartExportFilename('pareto-front-comparison'), {
     backgroundColor: chartExportBackground(isDark.value),
@@ -693,13 +721,15 @@ function renderEvolutionCharts() {
   const nameA = expA.name;
   const nameB = expB.name;
 
+  const hvKey = hvMode.value === 'cumulative' ? 'hv_cumulative' : 'hv';
+  const hvLabel = hvMode.value === 'cumulative' ? 'HV (cumulative)' : 'HV';
   const hvA: [number, number][] = hvgdA
-    ? hvgdA.generations.map((g, i) => [g, hvgdA.hv[i]!])
+    ? hvgdA.generations.map((g, i) => [g, hvgdA[hvKey][i]!])
     : [];
   const hvB: [number, number][] = hvgdB
-    ? hvgdB.generations.map((g, i) => [g, hvgdB.hv[i]!])
+    ? hvgdB.generations.map((g, i) => [g, hvgdB[hvKey][i]!])
     : [];
-  hvChart.setOption(buildEvoOption(nameA, nameB, hvA, hvB, 'HV', dark), true);
+  hvChart.setOption(buildEvoOption(nameA, nameB, hvA, hvB, hvLabel, dark), true);
 
   const gdA: [number, number][] = hvgdA
     ? hvgdA.generations.map((g, i) => [g, hvgdA.gd[i]!])
@@ -745,6 +775,11 @@ watch(isDark, () => {
   if (!result.value) return;
   if (chartView.value === '2d') renderParetoChart();
   renderEvolutionCharts();
+});
+
+// Per-generation ↔ cumulative HV — reuse the already-fetched data, no refetch.
+watch(hvMode, () => {
+  if (result.value) renderEvolutionCharts();
 });
 
 watch(chartView, async (view) => {
@@ -1104,6 +1139,13 @@ watch(chartView, async (view) => {
   justify-content: space-between;
   gap: 8px;
   flex-shrink: 0;
+}
+
+.evo-label-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 
 .evo-label {
