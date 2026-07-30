@@ -198,6 +198,17 @@ class TestUpdateExperimentStatus:
         assert resp.status_code == 200
         assert resp.json() is True
 
+    def test_cancelled_is_accepted(self, client, mock_factory):
+        mock_factory.experiment_repo.update_status.return_value = None
+        resp = client.patch(f"{BASE}/{EXP_ID}/status", params={"new_status": "Cancelled"})
+        assert resp.status_code == 200
+        assert resp.json() is True
+
+    def test_invalid_status_returns_422(self, client, mock_factory):
+        resp = client.patch(f"{BASE}/{EXP_ID}/status", params={"new_status": "Bogus"})
+        assert resp.status_code == 422
+        mock_factory.experiment_repo.update_status.assert_not_called()
+
     def test_repo_error_returns_500(self, client, mock_factory):
         mock_factory.experiment_repo.update_status.side_effect = RuntimeError("db error")
         resp = client.patch(f"{BASE}/{EXP_ID}/status", params={"new_status": "Running"})

@@ -84,6 +84,14 @@
               {{ downloading.topologies ? "Downloading…" : "Download topologies" }}
             </button>
             <button
+              v-if="canCancel"
+              class="action-btn cancel-btn"
+              :disabled="cancelling"
+              @click="doCancel"
+            >
+              {{ cancelling ? "Cancelling…" : "Cancel experiment" }}
+            </button>
+            <button
               class="action-btn danger-btn"
               :disabled="deleting"
               @click="doDelete"
@@ -388,7 +396,7 @@ import IndividualDetailPanel from "../components/detail/IndividualDetailPanel.vu
 import RuntimeMetricsSection from "../components/detail/RuntimeMetricsSection.vue";
 import ProblemVizModal from "../components/detail/ProblemVizModal.vue";
 import { downloadAnalysisZip, downloadTopologiesZip } from "../api/files";
-import { updateExperiment, plotParetoResults, deleteExperiment } from "../api/experiments";
+import { updateExperiment, updateExperimentStatus, plotParetoResults, deleteExperiment } from "../api/experiments";
 import { useRouter } from "vue-router";
 import ResizableChartCard from "../components/common/ResizableChartCard.vue";
 import { confirmDialog } from "../composables/useConfirm";
@@ -422,6 +430,40 @@ async function doDelete() {
   } catch (e) {
     reportRuntimeError(e, "Failed to delete experiment");
     deleting.value = false;
+  }
+}
+
+// Cancel experiment — only meaningful while it is queued or running. The engine
+// stops a running experiment cooperatively at the next generation boundary and
+// leaves it in the Cancelled state (already-computed results are kept).
+const cancelling = ref(false);
+const canCancel = computed(
+  () =>
+    store.experiment?.status === "Waiting" ||
+    store.experiment?.status === "Running",
+);
+async function doCancel() {
+  const name = store.experiment?.name ?? "this experiment";
+  const ok = await confirmDialog({
+    title: `Cancel experiment "${name}"?`,
+    message:
+      "This marks the experiment as Cancelled and stops it from running. " +
+      "A running experiment is halted at the next generation boundary; results " +
+      "already computed are kept. Nothing is deleted.",
+    confirmLabel: "Cancel experiment",
+    cancelLabel: "Keep running",
+    danger: true,
+  });
+  if (!ok) return;
+  cancelling.value = true;
+  try {
+    await updateExperimentStatus(props.id, "Cancelled");
+    await store.refresh(props.id);
+    store.stopPolling();
+  } catch (e) {
+    reportRuntimeError(e, "Failed to cancel experiment");
+  } finally {
+    cancelling.value = false;
   }
 }
 
@@ -971,6 +1013,10 @@ onBeforeUnmount(() => {
 .danger-btn { color: var(--status-error); border-color: #fecaca; background: #fee2e2; }
 .danger-btn:hover:not(:disabled) { background: #fecaca; border-color: var(--status-error); color: var(--status-error); }
 .danger-btn:disabled { opacity: 0.5; cursor: default; }
+
+.cancel-btn { color: var(--status-waiting); border-color: #fde68a; background: #fef3c7; }
+.cancel-btn:hover:not(:disabled) { background: #fde68a; border-color: var(--status-waiting); color: #b45309; }
+.cancel-btn:disabled { opacity: 0.5; cursor: default; }
 
 .pareto-btn { display: flex; align-items: center; gap: 6px; }
 .pareto-btn.pareto-running { border-color: var(--color-primary); color: var(--color-primary); opacity: 0.8; cursor: wait; }

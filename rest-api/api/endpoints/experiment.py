@@ -14,6 +14,7 @@ from bson import ObjectId
 
 from pylib import benchmarks
 from pylib.db import MongoRepository
+from pylib.db.models.enums import EnumStatus
 from api.dependencies import get_factory
 from api.domain.experiment import ExperimentDto, ExperimentFullDto, ExperimentInfoDto
 from api.mappers.experiment import (
@@ -148,9 +149,17 @@ def update_experiment_status(
     factory: MongoRepository = Depends(get_factory)
 ) -> bool:
     """Update only the status field of an experiment."""
+    valid = {s.value for s in EnumStatus}
+    if new_status not in valid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid status {new_status!r}; expected one of {sorted(valid)}",
+        )
     try:
         factory.experiment_repo.update_status(experiment_id, new_status)
         return True
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

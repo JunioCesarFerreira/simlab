@@ -54,6 +54,10 @@
           <div class="stat-value">{{ countByStatus['Error'] ?? 0 }}</div>
           <div class="stat-label">Errored</div>
         </div>
+        <div v-if="countByStatus['Cancelled']" class="stat-card stat-card--cancelled">
+          <div class="stat-value">{{ countByStatus['Cancelled'] }}</div>
+          <div class="stat-label">Cancelled</div>
+        </div>
       </div>
 
       <!-- Experiments list -->
@@ -551,6 +555,7 @@ onMounted(reload);
 .stat-card--waiting .stat-value { color: var(--status-waiting); }
 .stat-card--done .stat-value { color: var(--status-done); }
 .stat-card--error .stat-value { color: var(--status-error); }
+.stat-card--cancelled .stat-value { color: var(--status-cancelled); }
 
 .section-header {
   display: flex;

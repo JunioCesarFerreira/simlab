@@ -28,7 +28,7 @@ export type JsonObject = Record<string, JsonValue>;
  * Status
  * ----------------------------------------------------- */
 
-export type ExperimentStatus = "Waiting" | "Running" | "Done" | "Error";
+export type ExperimentStatus = "Waiting" | "Running" | "Done" | "Error" | "Cancelled";
 export type GenerationStatus = "Waiting" | "Running" | "Done" | "Error";
 export type SimulationStatus = "Waiting" | "Running" | "Done" | "Error";
 

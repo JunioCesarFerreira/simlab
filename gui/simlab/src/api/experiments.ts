@@ -53,6 +53,18 @@ export async function deleteExperiment(id: string): Promise<boolean> {
   return data;
 }
 
+export async function updateExperimentStatus(
+  id: string,
+  status: ExperimentStatus,
+): Promise<boolean> {
+  const { data } = await client.patch<boolean>(
+    `/experiments/${id}/status`,
+    null,
+    { params: { new_status: status } },
+  );
+  return data;
+}
+
 export async function createExperiment(
   payload: ExperimentCreateDto,
 ): Promise<string> {

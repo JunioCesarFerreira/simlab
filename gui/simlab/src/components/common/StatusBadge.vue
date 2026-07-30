@@ -37,4 +37,8 @@ const normalizedStatus = computed(() => props.status.toLowerCase());
   background: #fee2e2;
   color: var(--status-error);
 }
+.badge--cancelled {
+  background: #e5e7eb;
+  color: var(--status-cancelled);
+}
 </style>

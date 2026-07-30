@@ -61,6 +61,21 @@ class ExperimentRepository:
     def update_status(self, experiment_id: str, status: str) -> bool:
         return self.update(experiment_id, {"status": status})
 
+    def is_cancelled(self, experiment_id: str) -> bool:
+        """True when the experiment has been marked CANCELLED (e.g. from the GUI).
+
+        Used by the engine strategies to cooperatively stop a running experiment
+        at the next generation boundary instead of driving it to completion.
+        """
+        try:
+            oid = ObjectId(experiment_id)
+        except errors.InvalidId:
+            log.error("Invalid ID: %s", experiment_id)
+            return False
+        with self.connection.connect() as db:
+            doc = db["experiments"].find_one({"_id": oid}, {"status": 1})
+            return bool(doc) and doc.get("status") == EnumStatus.CANCELLED
+
     def update_starting(self, experiment_id: str) -> bool:
         with self.connection.connect() as db:
             result = db["experiments"].update_one(

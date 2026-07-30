@@ -15,6 +15,7 @@
   --status-running: #3b82f6;
   --status-done:    #10b981;
   --status-error:   #ef4444;
+  --status-cancelled: #6b7280;
 
   --radius-sm: 4px;
   --radius-md: 8px;

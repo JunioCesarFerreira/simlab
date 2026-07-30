@@ -215,6 +215,11 @@ class NSGA3LoopStrategy(EngineStrategy):
         if gen_oid != self._generation_id:
             return
 
+        if self.mongo.experiment_repo.is_cancelled(str(self._exp_id)):
+            logger.info("[NSGA-III] Experiment %s cancelled; stopping without finalizing.", self._exp_id)
+            self.stop()
+            return
+
         logger.info("EVENT GENERATION TERMINAL gen_id=%s", self._generation_id)
 
         map_ind_metrics = self.mongo.generation_repo.get_simulations_metrics_by_individual(

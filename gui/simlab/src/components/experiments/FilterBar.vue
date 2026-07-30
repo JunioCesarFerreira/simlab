@@ -25,7 +25,7 @@
 import { computed } from "vue";
 import type { ExperimentStatus } from "../../types/simlab";
 
-const STATUSES: ExperimentStatus[] = ["Running", "Waiting", "Done", "Error"];
+const STATUSES: ExperimentStatus[] = ["Running", "Waiting", "Done", "Error", "Cancelled"];
 
 const props = defineProps<{
   modelValue: ExperimentStatus | null;

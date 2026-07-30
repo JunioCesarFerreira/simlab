@@ -33,6 +33,10 @@
         <div class="stat-value">{{ counts["Error"] ?? 0 }}</div>
         <div class="stat-label">Errored</div>
       </div>
+      <div class="stat-card stat-card--cancelled">
+        <div class="stat-value">{{ counts["Cancelled"] ?? 0 }}</div>
+        <div class="stat-label">Cancelled</div>
+      </div>
     </div>
 
     <!-- Running experiments -->
@@ -210,6 +214,7 @@ onBeforeUnmount(() => {
 .stat-card--waiting .stat-value { color: var(--status-waiting); }
 .stat-card--done .stat-value { color: var(--status-done); }
 .stat-card--error .stat-value { color: var(--status-error); }
+.stat-card--cancelled .stat-value { color: var(--status-cancelled); }
 
 section {
   display: flex;
