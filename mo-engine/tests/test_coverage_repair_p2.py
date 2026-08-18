@@ -239,6 +239,36 @@ def test_p2_random_individuals_are_feasible_with_repair_on():
         assert is_connected([_SINK, *_active_positions(chrm.mask, candidates)], _R)
 
 
+def test_p2_random_individuals_are_unique_when_search_space_allows():
+    # Coverage/connectivity repair is a many-to-one map: independently drawn
+    # stochastic masks can converge onto the same repaired mask, which used to
+    # silently shrink generation 0 below `population_size` once NSGA de-dupes
+    # genomes per generation (see `_generation_enqueue`'s `seen_generation_hashes`).
+    # A spread-out grid (radius-matched) gives the growth process enough room
+    # to avoid collisions, unlike the tight `_line_candidates()` fixture.
+    R = 40.0
+    candidates = [
+        (float(x), float(y))
+        for x in range(-100, 101, 40)
+        for y in range(-100, 101, 40)
+        if (x, y) != (0, 0)
+    ]
+    problem = _p2_problem(0.0, candidates)
+    problem["radius_of_reach"] = R
+    problem["radius_of_inter"] = R * 1.2
+    adapter = build_test_adapter(problem)
+    adapter.set_ga_operator_configs(
+        random.Random(3),
+        {"per_gene_prob": 0.1, "apply_coverage_repair": True, "repair_coverage_budget": len(candidates)},
+    )
+
+    pop = adapter.random_individual_generator(20)
+    hashes = [chrm.get_hash() for chrm in pop]
+
+    assert len(pop) == 20
+    assert len(set(hashes)) == 20
+
+
 def test_p2_crossover_children_are_feasible_with_repair_on():
     candidates = _line_candidates()
     adapter = _adapter(min_pct=100.0, candidates=candidates, budget=len(candidates))

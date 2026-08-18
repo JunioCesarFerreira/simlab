@@ -67,6 +67,8 @@ P4_PROBLEM = {
     "data_rate": 1.0,
     "speed": 10.0,
     "time_step": 1.0,
+    "max_route_length": 6,
+    "tau_bounds": (0.0, 60.0),
     "sojourns": [
         {"id": 0, "position": (0.0, 0.0), "adjacency": [1], "visibleNodes": [0]},
         {"id": 1, "position": (30.0, 0.0), "adjacency": [0], "visibleNodes": [1]},

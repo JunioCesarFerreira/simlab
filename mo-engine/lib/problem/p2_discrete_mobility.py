@@ -150,18 +150,50 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
 
 
     def random_individual_generator(self, size: int) -> list[ChromosomeP2]:
+        """
+        Generate ``size`` individuals, retrying on collision.
+
+        Coverage/connectivity repair is a many-to-one map: many stochastic
+        masks converge to the same repaired mask (most acutely when
+        ``min_coverage_percentage`` is high or the candidate set is small),
+        so drawing masks independently produces duplicate chromosomes far
+        more often than in an unconstrained discrete space. Callers (e.g.
+        NSGA-II's generation enqueue) de-duplicate genomes within a
+        generation, so undetected duplicates here silently shrink the
+        initial population below ``size``. Retry a bounded number of times
+        per slot to keep the population at full size whenever the search
+        space allows it.
+        """
         Q = self.problem.candidates
         S = self.problem.sink
         R = self.problem.radius_of_reach
 
         pop: list[ChromosomeP2] = []
+        seen: set[str] = set()
+        max_attempts = 20
+
         for _ in range(size):
-            mask = self._repair_mask(stochastic_reachability_mask(Q, S, R, self._rng))
-            chrm = ChromosomeP2(
-                mac_protocol = self._rng.randint(0, 1),
-                mask=mask
-            )
-            pop.append(chrm)            
+            chrm = None
+            for attempt in range(max_attempts):
+                mask = self._repair_mask(stochastic_reachability_mask(Q, S, R, self._rng))
+                candidate = ChromosomeP2(
+                    mac_protocol=self._rng.randint(0, 1),
+                    mask=mask
+                )
+                if candidate.get_hash() not in seen:
+                    chrm = candidate
+                    break
+            if chrm is None:
+                # Search space exhausted for this instance (or too constrained
+                # to yield `size` unique repaired masks): accept the last
+                # candidate rather than shrinking the population.
+                log.warning(
+                    "[P2] random_individual_generator: could not produce a unique "
+                    "genome after %d attempts; accepting a duplicate.", max_attempts,
+                )
+                chrm = candidate
+            seen.add(chrm.get_hash())
+            pop.append(chrm)
         return pop
                 
         

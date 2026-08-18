@@ -269,18 +269,24 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
         for _ in range(size):
             route = self._repair_route(self._random_route())
             tau = self._random_tau(len(route))
-            pop.append(ChromosomeP4(chromosome=(route, tau)))
+            pop.append(ChromosomeP4(
+                mac_protocol=self._rng.randint(0, 1),
+                route=route,
+                sojourn_times=tau,
+            ))
         return pop
 
 
     def crossover(self, parents: Sequence[ChromosomeP4]) -> list[ChromosomeP4]:
         """
-        Crossover for (route, tau):
+        Crossover for (route, sojourn_times):
         - Route: single cut splice (very simple), then repair
         - Tau: blend crossover on aligned prefix (pad/trim to match repaired route)
+        - MAC gene inheritance (simple uniform choice)
         """
-        (r1, t1) = parents[0]
-        (r2, t2) = parents[1]
+        p1, p2 = parents[0], parents[1]
+        r1, t1 = p1.route, p1.sojourn_times
+        r2, t2 = p2.route, p2.sojourn_times
 
         # Route crossover: splice
         cut1 = self._rng.randrange(1, max(2, len(r1))) if len(r1) > 2 else 1
@@ -305,18 +311,25 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
         child_t1 = make_child_tau(child_r1, t1, t2)
         child_t2 = make_child_tau(child_r2, t2, t1)
 
-        return [(child_r1, child_t1), (child_r2, child_t2)]
+        # MAC gene inheritance (simple uniform choice)
+        mac1 = p1.mac_protocol if self._rng.random() < 0.5 else p2.mac_protocol
+        mac2 = p2.mac_protocol if self._rng.random() < 0.5 else p1.mac_protocol
+
+        return [
+            ChromosomeP4(mac_protocol=mac1, route=child_r1, sojourn_times=child_t1),
+            ChromosomeP4(mac_protocol=mac2, route=child_r2, sojourn_times=child_t2),
+        ]
 
 
     def mutate(self, chromosome: ChromosomeP4) -> ChromosomeP4:
         """
-        Mutation for (route, tau):
+        Mutation for (route, sojourn_times):
         - With some probability, perform a local route edit (random node replacement) then repair.
         - Apply Gaussian mutation to tau.
+        - Bit-flip mutation on MAC gene.
         """
-        (route, tau) = chromosome
-        route = route[:]
-        tau = tau[:]
+        route = chromosome.route[:]
+        tau = chromosome.sojourn_times[:]
 
         # Route mutation
         p_route = self._p_bit_mut
@@ -337,7 +350,12 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
             lo, hi = self.problem.tau_bounds
             tau = [ _clamp(x + self._rng.gauss(0.0, sigma), lo, hi) for x in tau ]
 
-        return (route, tau)
+        # MAC mutation (bit-flip)
+        mac = chromosome.mac_protocol
+        if self._rng.random() < self._p_bit_mut:
+            mac = 1 - mac  # 0 ↔ 1
+
+        return ChromosomeP4(mac_protocol=mac, route=route, sojourn_times=tau)
 
 
     def _linseg_expr(self, p0: Position, p1: Position) -> PathSeg:

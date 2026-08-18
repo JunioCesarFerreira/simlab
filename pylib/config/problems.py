@@ -162,6 +162,8 @@ class ProblemP4(HomogeneousProblem):
         obj.data_rate = map["data_rate"]
         obj.speed = map["speed"]
         obj.time_step = map["time_step"]
+        obj.max_route_length = map["max_route_length"]
+        obj.tau_bounds = tuple(map["tau_bounds"])
         obj.sojourns = []
         for sl in map["sojourns"]:
             sojourn = SojournLocation()

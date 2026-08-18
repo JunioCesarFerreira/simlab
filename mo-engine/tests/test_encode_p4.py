@@ -44,6 +44,9 @@ def test_p4_encode_path_with_multiple_sojourns():
         "speed": 10.0,
         "time_step": 1.0,
 
+        "max_route_length": 6,
+        "tau_bounds": (0.0, 60.0),
+
         "sojourns": [
             {
                 "id": 0,

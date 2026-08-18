@@ -72,30 +72,49 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
 
 
     def random_individual_generator(self, size: int) -> list[ChromosomeP3]:
+        """
+        Generate ``size`` individuals, retrying for feasibility and uniqueness.
+
+        When the feasible subspace (k-coverage + connectivity) is small, the
+        rejection loop below can keep landing on the same mask, producing
+        duplicate chromosomes far more often than in an unconstrained
+        discrete space. Callers (e.g. NSGA-II's generation enqueue)
+        de-duplicate genomes within a generation, so undetected duplicates
+        here would silently shrink the initial population below ``size``.
+        Retry a bounded number of times per slot to keep the population at
+        full size whenever the search space allows it.
+        """
         Q = self.problem.candidates
         S = self.problem.sink
         R = self.problem.radius_of_reach
 
         pop: list[ChromosomeP3] = []
-
+        seen: set[str] = set()
         max_attempts = 20
 
         for _ in range(size):
-            for _ in range(max_attempts):
+            chrm = None
+            for attempt in range(max_attempts):
                 mask = stochastic_reachability_mask(Q, S, R, self._rng)
-
-                if self._is_feasible_static(mask):
-                    break
-            else:
-                # fallback: Accept even if unfeasible (GA corrects later)
-                log.warning("[P3] Random gen fallback: infeasible individual")
-
-            pop.append(
-                ChromosomeP3(
+                candidate = ChromosomeP3(
                     mac_protocol=self._rng.randint(0, 1),
                     mask=mask
                 )
-            )
+                if self._is_feasible_static(mask) and candidate.get_hash() not in seen:
+                    chrm = candidate
+                    break
+            if chrm is None:
+                # Fallback: no feasible-and-unique mask found in `max_attempts`
+                # tries (feasible subspace too small, or infeasible search
+                # space). Accept the last draw rather than shrinking the
+                # population — the GA repairs/penalizes infeasibility later.
+                log.warning(
+                    "[P3] Random gen fallback: could not produce a feasible, "
+                    "unique individual after %d attempts.", max_attempts,
+                )
+                chrm = candidate
+            seen.add(chrm.get_hash())
+            pop.append(chrm)
 
         return pop
 
