@@ -1,0 +1,440 @@
+{
+  "id": null,
+  "name": "NSGA-III adaptive simulation on P2 (tree-encoded, repair-free)",
+  "status": "Waiting",
+  "system_message": null,
+  "created_time": "2026-03-16T23:47:00Z",
+  "start_time": null,
+  "end_time": null,
+  "generations": [],
+  "source_repository_options": {
+    "csma": "69b97e20911986d1242e5a7c"
+  },
+  "parameters": {
+    "strategy": "nsga3_adaptive_simulation",
+    "objectives": [
+      {
+        "metric_name": "latency",
+        "goal": "min"
+      },
+      {
+        "metric_name": "energy",
+        "goal": "min"
+      },
+      {
+        "metric_name": "throughput",
+        "goal": "max"
+      }
+    ],
+    "algorithm": {
+      "population_size": 50,
+      "number_of_generations": 20,
+      "random_seed": 42,
+      "prob_cx": 0.8,
+      "prob_mt": 0.2,
+      "divisions": 6,
+      "selection_method": "tournament",
+      "per_gene_prob": 0.1,
+      "apply_coverage_repair": true,
+      "repair_coverage_budget": 8,
+      "adaptive_evaluation": {
+        "enabled": true,
+        "min_training_samples": 50,
+        "estimator": {
+          "type": "weighted_knn",
+          "k": 7,
+          "epsilon": 1e-09
+        },
+        "confidence": {
+          "kappa": 1.96
+        },
+        "novelty": {
+          "descriptor_weight": 0.7,
+          "hamming_weight": 0.3,
+          "threshold": 0.4
+        },
+        "uncertainty_threshold": 0.25,
+        "dominance_margin": 0.02,
+        "audit_probability": 0.05,
+        "simulation_budget": {
+          "enabled": false,
+          "min_per_generation": 5,
+          "max_per_generation": 20,
+          "promotion_reserve": 5
+        },
+        "require_simulated_survivors": true
+      },
+      "tree_mutation_moves": 2
+    },
+    "simulation": {
+      "duration": 180,
+      "random_seeds": [
+        336157,
+        667370,
+        35239,
+        873465,
+        987654,
+        123456,
+        493499,
+        5343
+      ]
+    },
+    "problem": {
+      "name": "problem2_tree_encoded",
+      "radius_of_reach": 100,
+      "radius_of_inter": 200,
+      "region": [
+        -150,
+        -150,
+        150,
+        150
+      ],
+      "sink": [
+        0,
+        0
+      ],
+      "candidates": [
+        [
+          -29,
+          32
+        ],
+        [
+          -102,
+          -21
+        ],
+        [
+          -91,
+          -59
+        ],
+        [
+          -11,
+          -45.5
+        ],
+        [
+          27,
+          39
+        ],
+        [
+          74,
+          29
+        ],
+        [
+          102,
+          -12
+        ],
+        [
+          114,
+          -33
+        ],
+        [
+          87,
+          44
+        ],
+        [
+          -74.47885710671174,
+          32.41437154400245
+        ],
+        [
+          24.144027024094726,
+          -56.0352263042327
+        ],
+        [
+          -49.03573903173938,
+          -69.70902258243518
+        ],
+        [
+          -124.73684210526316,
+          -55.78947368421053
+        ],
+        [
+          -108.42105263157896,
+          9.736842105263158
+        ],
+        [
+          -54.21052631578948,
+          -12.631578947368421
+        ],
+        [
+          38.684210526315795,
+          -23.68421052631579
+        ],
+        [
+          88.15789473684211,
+          -54.73684210526316
+        ],
+        [
+          0.2631578947368421,
+          63.42105263157895
+        ],
+        [
+          -88.6842105263158,
+          71.31578947368422
+        ],
+        [
+          -126.31578947368422,
+          68.42105263157895
+        ],
+        [
+          -108.15789473684211,
+          38.684210526315795
+        ],
+        [
+          -33.94736842105263,
+          66.31578947368422
+        ],
+        [
+          81.31578947368422,
+          71.05263157894737
+        ],
+        [
+          131.8421052631579,
+          54.21052631578948
+        ],
+        [
+          67.10526315789474,
+          -42.89473684210527
+        ],
+        [
+          70.52631578947368,
+          -82.89473684210526
+        ],
+        [
+          -11.31578947368421,
+          -88.94736842105263
+        ],
+        [
+          -141.05263157894737,
+          -86.31578947368422
+        ],
+        [
+          -143.1578947368421,
+          5.526315789473684
+        ],
+        [
+          138.94736842105263,
+          7.36842105263158
+        ]
+      ],
+      "mobile_nodes": [
+        {
+          "path_segments": [
+            [
+              "70",
+              "44 + 31 * t"
+            ],
+            [
+              "70 - 140 * t",
+              "75"
+            ],
+            [
+              "-70",
+              "75 - 31 * t"
+            ],
+            [
+              "-70 + 140 * t",
+              "44"
+            ]
+          ],
+          "is_closed": true,
+          "is_round_trip": false,
+          "speed": 5,
+          "time_step": 1,
+          "name": "node13",
+          "source_code": "node.c"
+        },
+        {
+          "path_segments": [
+            [
+              "117 + 24 * np.cos(2 * np.pi * t)",
+              "-28 + 52 * np.sin(2 * np.pi * t)"
+            ]
+          ],
+          "is_closed": true,
+          "is_round_trip": false,
+          "speed": 5,
+          "time_step": 1,
+          "name": "node14",
+          "source_code": "node.c"
+        },
+        {
+          "path_segments": [
+            [
+              "-114*(1-t)-64*t",
+              "61*(1-t)+20*t"
+            ],
+            [
+              "-64",
+              "20-82*t"
+            ],
+            [
+              "-64+136*t",
+              "-62"
+            ]
+          ],
+          "is_closed": false,
+          "is_round_trip": true,
+          "speed": 5,
+          "time_step": 1,
+          "name": "node15",
+          "source_code": "node.c"
+        },
+        {
+          "path_segments": [
+            [
+              "-134+50*t",
+              "16"
+            ],
+            [
+              "-84",
+              "16-98*t"
+            ],
+            [
+              "-84-50*t",
+              "-82"
+            ],
+            [
+              "-134",
+              "-82+98*t"
+            ]
+          ],
+          "is_closed": true,
+          "is_round_trip": false,
+          "speed": 5,
+          "time_step": 1,
+          "name": "node16",
+          "source_code": "node.c"
+        },
+        {
+          "path_segments": [
+            [
+              "114*(1-t)+56*t",
+              "80*(1-t)-33*t"
+            ],
+            [
+              "56 - 77*t",
+              "-33"
+            ]
+          ],
+          "is_closed": false,
+          "is_round_trip": true,
+          "speed": 5,
+          "time_step": 1,
+          "name": "node17",
+          "source_code": "node.c"
+        },
+        {
+          "path_segments": [
+            [
+              "-54+108*t",
+              "-81"
+            ]
+          ],
+          "is_closed": false,
+          "is_round_trip": true,
+          "speed": 5,
+          "time_step": 1,
+          "name": "node18",
+          "source_code": "node.c"
+        }
+      ],
+      "min_coverage_percentage": 90,
+      "tree_encoding": {
+        "backend": "two_level",
+        "mutation_moves": 2,
+        "max_relays": null
+      }
+    }
+  },
+  "data_conversion_config": {
+    "node_col": "node",
+    "time_col": "root_time_now",
+    "metrics": [
+      {
+        "name": "cpu_energy_mj",
+        "kind": "sum_all",
+        "column": "cpu_energy_mj"
+      },
+      {
+        "name": "lpm_energy_mj",
+        "kind": "sum_all",
+        "column": "lpm_energy_mj"
+      },
+      {
+        "name": "radio_tx_energy_mj",
+        "kind": "sum_all",
+        "column": "radio_tx_energy_mj"
+      },
+      {
+        "name": "radio_rx_energy_mj",
+        "kind": "sum_all",
+        "column": "radio_rx_energy_mj"
+      },
+      {
+        "name": "total_sent",
+        "kind": "sum_last_minus_first",
+        "column": "total_sent"
+      },
+      {
+        "name": "total_received",
+        "kind": "sum_last_minus_first",
+        "column": "total_received"
+      },
+      {
+        "name": "server_sent",
+        "kind": "sum_last_minus_first",
+        "column": "server_received"
+      },
+      {
+        "name": "bytes_tx",
+        "kind": "sum_last_minus_first",
+        "column": "bytes_tx"
+      },
+      {
+        "name": "bytes_rx",
+        "kind": "sum_last_minus_first",
+        "column": "bytes_rx"
+      },
+      {
+        "name": "server_bytes_rx",
+        "kind": "sum_last_minus_first",
+        "column": "server_bytes_rx"
+      },
+      {
+        "name": "r2n_latency",
+        "kind": "mean",
+        "column": "r2n_latency"
+      },
+      {
+        "name": "n2r_latency",
+        "kind": "mean",
+        "column": "n2r_latency"
+      },
+      {
+        "name": "hops",
+        "kind": "mean",
+        "column": "hops"
+      },
+      {
+        "name": "rtt_latency",
+        "kind": "mean",
+        "column": "rtt_latency"
+      },
+      {
+        "name": "latency",
+        "kind": "mean",
+        "column": "rtt_latency"
+      },
+      {
+        "name": "energy",
+        "kind": "sum_all",
+        "column": "total_energy_mj"
+      },
+      {
+        "name": "throughput",
+        "kind": "sum_last_minus_first",
+        "column": "server_received"
+      }
+    ]
+  },
+  "pareto_front": null
+}

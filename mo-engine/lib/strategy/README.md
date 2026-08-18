@@ -113,3 +113,45 @@ Supported by `nsga2`, `nsga3`, `random_search` and, by inheritance, all
 DEAP/pymoo variants. See
 [docs/markdown/SYNTHETIC_MODE.md](../../../docs/markdown/SYNTHETIC_MODE.md)
 for the complete guide to synthetic mode.
+
+
+## NSGA-III with adaptive simulation budget (`nsga3_adaptive_simulation`)
+
+`NSGA3AdaptiveSimulationStrategy` subclasses `NSGA3LoopStrategy` and reuses its
+population handling, genetic operators, non-dominated sorting, reference
+points, niching, persistence and restart/resume unchanged. It only inserts a
+decision layer in front of the simulator, so that the evaluation map
+$f : X 
+ightarrow Y$ is applied selectively rather than to every offspring.
+
+Per generation, in two phases:
+
+1. **Screening.** Each new offspring is classified — exact genome-cache hit →
+   `REUSE`; hard-constraint violation → penalty; otherwise the
+   `AdaptiveEvaluationPolicy` decides `SIMULATE` or `ESTIMATE_ONLY` from the
+   structural descriptors $\phi(x)$, a k-NN estimate $\hat f(x)$, its
+   uncertainty $\hat\sigma(x)$, and a novelty term. An individual is only
+   skipped when even its optimistic bound
+   $L(x) = \hat f(x) - \kappa\hat\sigma(x)$ is *clearly* dominated by a
+   really-evaluated solution.
+2. **Promotion.** After the screening simulations close the generation, a
+   provisional NSGA-III selection runs over $R_t = P_t \cup P_{t-1}$ using the
+   conservative bound $U(x) = \hat f(x) + \kappa\hat\sigma(x)$ for the
+   estimated individuals. Any of them landing in the first front or in the
+   survivor set is promoted to a real simulation, queued into the *same*
+   generation; the definitive selection runs only once those results arrive.
+
+The resulting invariant — on by default via `require_simulated_survivors` — is
+that every individual entering $P_{t+1}$ carries simulated or exact-cache
+objectives. Estimated objectives are tagged `evaluation_source="estimated"`,
+never written to `genome_cache`, never used as estimator training data and
+never published in `Experiment.pareto_front`.
+
+Requires a problem adapter exposing `descriptors`, `scenario_fingerprint` and
+`observe_simulated` (today: `problem2_topology_aware`); the strategy raises at
+construction time otherwise.
+
+See [docs/markdown/ADAPTIVE_SIMULATION.md](../../../docs/markdown/ADAPTIVE_SIMULATION.md)
+for the full design, and
+[experiments/adaptive-simulation/](../../../experiments/adaptive-simulation/)
+for the cost/quality comparison harness.

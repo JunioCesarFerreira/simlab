@@ -438,6 +438,81 @@ Mutation:
 
 ---
 
+## Problem 2 (topology-aware variant) — `problem2_topology_aware`
+
+A **second adapter over the same formulation**, added for the adaptive
+simulation-budget research line. `Problem2TopologyAwareAdapter` subclasses
+`Problem2DiscreteMobilityAdapter`, so the semantics, the binary chromosome, the
+coverage constraint and the Cooja encoding are identical — results are
+comparable one-to-one with a classic P2 run, and stored experiments of either
+variant restore through the same `ChromosomeP2`.
+
+What differs is the machinery *around* the chromosome:
+
+* a **`ScenarioTopology`** cache (adjacency, distances, per-candidate coverage,
+  aligned trajectory time slices) computed once per scenario;
+* a **sink-rooted structural tree** $T_x$ derived from each individual
+  (`RootedTreeBackend` / `ParentArrayTree`) — explicitly *not* the RPL DODAG;
+* a **structure-driven repair** replacing the global BFS
+  `repair_connectivity_to_sink`: it bridges only the subtrees that lost their
+  path to the sink, scoring candidate bridges by historical link importance,
+  normalised distance, structural quality and a uniform per-relay cost;
+* 20 cheap, deterministic **descriptors** $\phi(x)$ plus a scenario
+  fingerprint, both consumed by `nsga3_adaptive_simulation`;
+* an optional **`RoutingKnowledge`** matrix $R = (r_{ij})$ of observed link
+  importance, fed by the structural trees of really-simulated individuals and,
+  when the address mapping is available, by the RPL DODAG on
+  `Simulation.dodag`.
+
+A chromosome whose active relays cannot all reach the sink is flagged
+infeasible and receives a structural penalty ranked below the coverage penalty.
+
+Configured under `problem.topology_heuristic`; see
+[docs/markdown/ADAPTIVE_SIMULATION.md](../../../docs/markdown/ADAPTIVE_SIMULATION.md).
+
+---
+
+## Problem 2 (tree-encoded variant) — `problem2_tree_encoded`
+
+A **third adapter over the same formulation**, and the one that makes the
+connectivity repair unnecessary rather than merely cheaper.
+`Problem2TreeEncodedAdapter` subclasses `Problem2TopologyAwareAdapter`, so it
+inherits the scenario caches, the descriptors, the scenario fingerprint and the
+routing knowledge; what it replaces is the **variation pipeline**.
+
+The sink-rooted tree is stored in the chromosome itself
+(`ChromosomeP2Tree.tree_parents`) and manipulated through a two-level rooted
+forest (`TwoLevelTree`: preorder sequence cut into `~sqrt(n)` segments, so a
+subtree splice costs `O(m + sqrt(n))`). The operators are the node-depth pair
+from the forest-EA literature — **PAO** (re-hang a subtree) and **CAO**
+(re-root a fragment, then re-hang it) — plus `grow` and `prune`, which P2 needs
+because its relay set is not fixed. Crossover is a subtree transplant.
+
+Every one of those moves maps feasible trees to feasible trees:
+
+* a node is only linked under a parent within `R_com` of it;
+* a node is only linked under a parent that already reaches the sink;
+* relays are removed by cutting a subtree, and cutting a subtree from a tree
+  leaves a tree.
+
+So no repair function is called anywhere in this adapter —
+`_structural_repair_mask` is overridden to raise, which turns any future
+regression into an immediate failure. Coverage growth is handled the same way,
+restricted to the admissible frontier.
+
+The tree is **genotype only**: equality, `__hash__` and `get_hash` ignore
+`tree_parents` and match `ChromosomeP2` exactly, so a tree-encoded experiment
+shares `genome_cache` entries and `individual_id`s with a mask-encoded one, and
+either variant can seed the other. Descriptors keep using the canonical
+shortest-path tree of the mask, so they remain deterministic for a fixed
+`scenario + chromosome`.
+
+Configured under `problem.tree_encoding` (`backend`, `mutation_moves`,
+`max_relays`); see
+[docs/markdown/ADAPTIVE_SIMULATION.md](../../../docs/markdown/ADAPTIVE_SIMULATION.md).
+
+---
+
 # GA Parameter Consumption per Problem
 
 Each adapter declares the problem-specific GA keys it reads in its
@@ -455,6 +530,7 @@ all strategies currently use tournament selection.
 | `eta_cx`, `eta_mt` | ✓ | ✓ | — | — | — |
 | `apply_coverage_repair`, `repair_coverage_budget` | — | ✓ | ✓ | — | — |
 | `pm_tau`, `sigma_tau` | — | — | — | — | ✓ |
+| `tree_mutation_moves` | — | — | P2 tree-encoded only | — | — |
 
 Crossover/mutation operators are **fixed by design** everywhere except P1's
 crossover: feasibility-preserving pipelines (connectivity/coverage repair)

@@ -222,6 +222,23 @@ class NSGA3LoopStrategy(EngineStrategy):
 
         logger.info("EVENT GENERATION TERMINAL gen_id=%s", self._generation_id)
 
+        self._collect_generation_objectives()
+
+        # Persist objectives to individual documents before evolving
+        self._update_individual_objectives()
+
+        self._evolution()
+
+
+    def _collect_generation_objectives(self) -> None:
+        """Read the simulation metrics of the current generation into
+        ``_map_genome_objectives`` (minimization space).
+
+        Genomes that already carry objectives are left untouched — that covers
+        cache hits, penalised individuals, the analytical fast path, and any
+        provisional value a subclass may have assigned.
+        """
+        assert self._generation_id is not None
         map_ind_metrics = self.mongo.generation_repo.get_simulations_metrics_by_individual(
             generation_id=self._generation_id,
             metrics=self._objective_keys,
@@ -248,11 +265,6 @@ class NSGA3LoopStrategy(EngineStrategy):
                 self._map_genome_objectives[ind] = worst_objectives
             else:
                 self._map_genome_objectives[ind] = obj_vector
-
-        # Persist objectives to individual documents before evolving
-        self._update_individual_objectives()
-
-        self._evolution()
 
 
     def stop(self):
@@ -517,40 +529,13 @@ class NSGA3LoopStrategy(EngineStrategy):
 # Generation / Queuing
 # ------------------------------
     def _generation_enqueue(self) -> None:
+        """Create generation ``t`` and queue whatever work its genomes need."""
         assert self._exp_id is not None
         exp_oid = self._exp_id
-        gen_index = self._gen_index
         population = self._current_population
         self._sim_done_count = 0
 
-        # Pre-generate generation ObjectId so simulations are inserted with generation_id set,
-        # avoiding the race where master-node picks up a simulation before the generation exists.
-        gen_oid = ObjectId()
-
-        # Insert the generation document (WAITING) BEFORE any simulation. Fast
-        # workers (e.g. synthetic mode) can complete every simulation in
-        # milliseconds; if the generation did not exist yet, master-node's
-        # generation mark_done() would update a missing document (no-op) and the
-        # generation would hang forever. Creating it first guarantees the close
-        # signal lands on an existing document.
-        gen_doc: Generation = {
-            "_id": gen_oid,
-            "experiment_id": exp_oid,
-            "index": gen_index,
-            "status": EnumStatus.WAITING,
-            "start_time": datetime.now(),
-            "end_time": None,
-        }
-        # Increment before inserting so the change-stream callback (which fires
-        # asynchronously) always sees the already-updated index.
-        self._gen_index += 1
-        self._generation_id = self.mongo.generation_repo.insert(gen_doc)
-
-        if gen_index == 0:
-            self.mongo.experiment_repo.update(str(exp_oid), {
-                "status": EnumStatus.RUNNING,
-                "start_time": datetime.now()
-            })
+        gen_oid, gen_index = self._create_generation_document()
 
         first_seed = self._sim_rand_seeds[0] if self._sim_rand_seeds else 123456
         sims_inserted = 0
@@ -569,136 +554,244 @@ class NSGA3LoopStrategy(EngineStrategy):
                 continue
             seen_generation_hashes.add(genome_hash)
 
-            # --- Case A: objectives already in persistent cache ---
-            # Pre-populate the objectives map so _handle_generation_done skips this genome.
-            # Insert the Individual with objectives already filled; no simulations needed.
-            if genome_hash in self._genome_objectives_cache:
-                cached_obj = self._genome_objectives_cache[genome_hash]
-                self._map_genome_objectives[genome] = cached_obj
-                ind_doc: Individual = {
-                    "experiment_id": exp_oid,
-                    "generation_id": gen_oid,
-                    "individual_id": genome_hash,
-                    "chromosome": genome.to_dict(),
-                    "objectives": self._objectives_list_to_original(cached_obj),
-                    "topology_picture_id": None,
-                }
-                self.mongo.individual_repo.insert(ind_doc)
-                config_topo = self._convert_genome_to_sim_config(
-                    genome=genome, gen_index=gen_index, ind_idx=i, seed=first_seed
-                )
-                self._upload_topology_async(exp_oid, gen_oid, gen_index, i, genome_hash, dict(config_topo))
-                logger.info("Genome %s has cached objectives; skipping simulation.", genome_hash)
-                continue
-
-            # --- Case B: genome registered in this session but results still pending ---
-            # (Rare: same genome produced twice by the GA in one generation.)
-            if genome_hash in self._inserted_genomes:
-                logger.info("Genome %s already inserted this SESSION; skipping.", genome_hash)
-                continue
-
-            # --- Analytical fast-path: evaluate in-process, no simulation needed ---
-            # P0 (closed-form benchmarks) is evaluated directly here; no Simulation
-            # document is enqueued, so the generation completes via the
-            # "no simulations pending → mark DONE" path at the end of this method.
-            if self._problem_adapter.is_analytical:
-                _, obj_min = analytical_objectives(
-                    self._problem_adapter, genome, genome_hash,
-                    bench=self._bench, noise_std=self._noise_std, sch1_domain=self._sch1_domain,
-                    seeds=self._sim_rand_seeds, n_obj=len(self._objective_keys),
-                    objective_goals=self._objective_goals,
-                )
-                self._map_genome_objectives[genome] = obj_min
-                self.mongo.individual_repo.insert({
-                    "experiment_id": exp_oid,
-                    "generation_id": gen_oid,
-                    "individual_id": genome_hash,
-                    "chromosome": genome.to_dict(),
-                    "objectives": self._objectives_list_to_original(obj_min),
-                    "topology_picture_id": None,
-                })
-                self._inserted_genomes.add(genome_hash)
-                self._genome_objectives_cache[genome_hash] = obj_min
-                try:
-                    self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
-                    self.mongo.genome_cache_repo.set_objectives(self._exp_id, genome_hash, obj_min)
-                except Exception:
-                    logger.warning("genome_cache write failed for %s; continuing without cache.", genome_hash)
-                config_topo = self._convert_genome_to_sim_config(
-                    genome=genome, gen_index=gen_index, ind_idx=i, seed=first_seed
-                )
-                self._upload_topology_async(exp_oid, gen_oid, gen_index, i, genome_hash, dict(config_topo))
-                continue
-
-            # --- Case C: infeasible genome — assign gradient penalty, skip simulation ---
-            # Adapters that define hard constraints (e.g. trajectory coverage in P2)
-            # return a penalty vector instead of None.  The penalty is larger the more
-            # infeasible the chromosome is, so the evolutionary pressure still favours
-            # less-infeasible solutions.  Penalised individuals never reach front 0.
-            penalty = self._problem_adapter.penalty_objectives(genome, len(self._objective_keys))
-            if penalty is not None:
-                self._map_genome_objectives[genome] = penalty
-                ind_doc: Individual = {
-                    "experiment_id": exp_oid,
-                    "generation_id": gen_oid,
-                    "individual_id": genome_hash,
-                    "chromosome": genome.to_dict(),
-                    "objectives": self._objectives_list_to_original(penalty),
-                    "topology_picture_id": None,
-                }
-                self.mongo.individual_repo.insert(ind_doc)
-                self._inserted_genomes.add(genome_hash)
-                self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
-                self.mongo.genome_cache_repo.set_objectives(self._exp_id, genome_hash, penalty)
-                self._genome_objectives_cache[genome_hash] = penalty
-                config_topo = self._convert_genome_to_sim_config(
-                    genome=genome, gen_index=gen_index, ind_idx=i, seed=first_seed
-                )
-                self._upload_topology_async(exp_oid, gen_oid, gen_index, i, genome_hash, dict(config_topo))
-                logger.info(
-                    "Genome %s is infeasible (penalty=%.2e); skipping simulation.", genome_hash, penalty[0]
-                )
-                continue
-
-            # --- Case D: new genome — register in cache, insert Individual, queue simulations ---
-            config = self._convert_genome_to_sim_config(
+            sims_inserted += self._enqueue_genome(
                 genome=genome,
+                genome_hash=genome_hash,
+                exp_oid=exp_oid,
+                gen_oid=gen_oid,
                 gen_index=gen_index,
                 ind_idx=i,
-                seed=first_seed
+                first_seed=first_seed,
             )
-            self._count_sims_inserted += len(self._sim_rand_seeds)
 
-            ind_doc: Individual = {
-                "experiment_id": exp_oid,
-                "generation_id": gen_oid,
-                "individual_id": genome_hash,
-                "chromosome": genome.to_dict(),
-                "objectives": [],
-                "topology_picture_id": None,
-            }
-            self.mongo.individual_repo.insert(ind_doc)
+        self._close_generation_enqueue(gen_oid, gen_index, sims_inserted, len(population))
+
+
+    def _enqueue_genome(
+        self,
+        genome: Chromosome,
+        genome_hash: str,
+        exp_oid: ObjectId,
+        gen_oid: ObjectId,
+        gen_index: int,
+        ind_idx: int,
+        first_seed: int,
+    ) -> int:
+        """Handle one genome of the generation; returns simulations inserted."""
+
+        # --- Case A: objectives already in persistent cache ---
+        # Pre-populate the objectives map so _handle_generation_done skips this genome.
+        # Insert the Individual with objectives already filled; no simulations needed.
+        if genome_hash in self._genome_objectives_cache:
+            cached_obj = self._genome_objectives_cache[genome_hash]
+            self._map_genome_objectives[genome] = cached_obj
+            self._insert_individual_document(
+                exp_oid, gen_oid, genome, genome_hash, objectives_min=cached_obj
+            )
+            self._upload_topology_for(
+                exp_oid, gen_oid, gen_index, ind_idx, genome, genome_hash, first_seed
+            )
+            logger.info("Genome %s has cached objectives; skipping simulation.", genome_hash)
+            return 0
+
+        # --- Case B: genome registered in this session but results still pending ---
+        # (Rare: same genome produced twice by the GA in one generation.)
+        if genome_hash in self._inserted_genomes:
+            logger.info("Genome %s already inserted this SESSION; skipping.", genome_hash)
+            return 0
+
+        # --- Analytical fast-path: evaluate in-process, no simulation needed ---
+        # P0 (closed-form benchmarks) is evaluated directly here; no Simulation
+        # document is enqueued, so the generation completes via the
+        # "no simulations pending -> mark DONE" path at the end of the enqueue.
+        if self._problem_adapter.is_analytical:
+            _, obj_min = analytical_objectives(
+                self._problem_adapter, genome, genome_hash,
+                bench=self._bench, noise_std=self._noise_std, sch1_domain=self._sch1_domain,
+                seeds=self._sim_rand_seeds, n_obj=len(self._objective_keys),
+                objective_goals=self._objective_goals,
+            )
+            self._map_genome_objectives[genome] = obj_min
+            self._insert_individual_document(
+                exp_oid, gen_oid, genome, genome_hash, objectives_min=obj_min
+            )
+            self._inserted_genomes.add(genome_hash)
+            self._genome_objectives_cache[genome_hash] = obj_min
+            try:
+                self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
+                self.mongo.genome_cache_repo.set_objectives(self._exp_id, genome_hash, obj_min)
+            except Exception:
+                logger.warning("genome_cache write failed for %s; continuing without cache.", genome_hash)
+            self._upload_topology_for(
+                exp_oid, gen_oid, gen_index, ind_idx, genome, genome_hash, first_seed
+            )
+            return 0
+
+        # --- Case C: infeasible genome - assign gradient penalty, skip simulation ---
+        # Adapters that define hard constraints (e.g. trajectory coverage in P2)
+        # return a penalty vector instead of None.  The penalty is larger the more
+        # infeasible the chromosome is, so the evolutionary pressure still favours
+        # less-infeasible solutions.  Penalised individuals never reach front 0.
+        penalty = self._problem_adapter.penalty_objectives(genome, len(self._objective_keys))
+        if penalty is not None:
+            self._map_genome_objectives[genome] = penalty
+            self._insert_individual_document(
+                exp_oid, gen_oid, genome, genome_hash, objectives_min=penalty
+            )
             self._inserted_genomes.add(genome_hash)
             self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
+            self.mongo.genome_cache_repo.set_objectives(self._exp_id, genome_hash, penalty)
+            self._genome_objectives_cache[genome_hash] = penalty
+            self._upload_topology_for(
+                exp_oid, gen_oid, gen_index, ind_idx, genome, genome_hash, first_seed
+            )
+            logger.info(
+                "Genome %s is infeasible (penalty=%.2e); skipping simulation.", genome_hash, penalty[0]
+            )
+            return 0
 
-            for seed in self._sim_rand_seeds:
-                config["randomSeed"] = seed
-                self._insert_simulation_db(genome_hash, exp_oid, gen_oid, config)
-                sims_inserted += 1
-                logger.info("SIM inserted SEED=%s genome=%s", seed, genome_hash)
+        # --- Case D: new genome - register in cache, insert Individual, queue simulations ---
+        self._insert_individual_document(exp_oid, gen_oid, genome, genome_hash)
+        self._inserted_genomes.add(genome_hash)
+        self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
+        return self._enqueue_genome_simulations(
+            genome, genome_hash, exp_oid, gen_oid, gen_index, ind_idx, first_seed
+        )
 
-            self._upload_topology_async(exp_oid, gen_oid, gen_index, i, genome_hash, dict(config))
 
-        # When every genome already had cached objectives (or was penalised)
-        # there are no simulations to wait for. Mark the generation DONE and fire
-        # the handler directly in a worker thread — the change-stream event may be
-        # lost (watcher not yet subscribed on the first generation, or mid-
-        # reconnect), so this guarantees the evolution loop always advances.
+    def _create_generation_document(self) -> tuple[ObjectId, int]:
+        """Insert the Generation document and advance the generation counter.
+
+        The ObjectId is pre-generated so simulations can carry ``generation_id``
+        from the start, and the document is inserted BEFORE any simulation:
+        fast workers (synthetic mode) can finish a simulation in milliseconds,
+        and master-node's mark_done() would then target a missing document.
+        """
+        assert self._exp_id is not None
+        exp_oid = self._exp_id
+        gen_index = self._gen_index
+        gen_oid = ObjectId()
+
+        gen_doc: Generation = {
+            "_id": gen_oid,
+            "experiment_id": exp_oid,
+            "index": gen_index,
+            "status": EnumStatus.WAITING,
+            "start_time": datetime.now(),
+            "end_time": None,
+        }
+        # Increment before inserting so the change-stream callback (which fires
+        # asynchronously) always sees the already-updated index.
+        self._gen_index += 1
+        self._generation_id = self.mongo.generation_repo.insert(gen_doc)
+
+        if gen_index == 0:
+            self.mongo.experiment_repo.update(str(exp_oid), {
+                "status": EnumStatus.RUNNING,
+                "start_time": datetime.now()
+            })
+        return gen_oid, gen_index
+
+
+    def _insert_individual_document(
+        self,
+        exp_oid: ObjectId,
+        gen_oid: ObjectId,
+        genome: Chromosome,
+        genome_hash: str,
+        objectives_min: Optional[list[float]] = None,
+        evaluation_source: Optional[str] = None,
+    ) -> None:
+        """Insert one Individual document for the current generation.
+
+        ``objectives_min`` is in minimization space and is converted back to the
+        experiment's original goal space for persistence; ``None`` means "not
+        evaluated yet".  ``evaluation_source`` is optional metadata used by
+        strategies that mix evaluation provenances.
+        """
+        ind_doc: Individual = {
+            "experiment_id": exp_oid,
+            "generation_id": gen_oid,
+            "individual_id": genome_hash,
+            "chromosome": genome.to_dict(),
+            "objectives": (
+                self._objectives_list_to_original(objectives_min)
+                if objectives_min is not None else []
+            ),
+            "topology_picture_id": None,
+        }
+        if evaluation_source is not None:
+            ind_doc["evaluation_source"] = evaluation_source
+        self.mongo.individual_repo.insert(ind_doc)
+
+
+    def _upload_topology_for(
+        self,
+        exp_oid: ObjectId,
+        gen_oid: ObjectId,
+        gen_index: int,
+        ind_idx: int,
+        genome: Chromosome,
+        genome_hash: str,
+        seed: int,
+    ) -> None:
+        """Render and upload the topology picture of one individual."""
+        config = self._convert_genome_to_sim_config(
+            genome=genome, gen_index=gen_index, ind_idx=ind_idx, seed=seed
+        )
+        self._upload_topology_async(exp_oid, gen_oid, gen_index, ind_idx, genome_hash, dict(config))
+
+
+    def _enqueue_genome_simulations(
+        self,
+        genome: Chromosome,
+        genome_hash: str,
+        exp_oid: ObjectId,
+        gen_oid: ObjectId,
+        gen_index: int,
+        ind_idx: int,
+        first_seed: int,
+    ) -> int:
+        """Queue one Simulation document per random seed; returns how many."""
+        config = self._convert_genome_to_sim_config(
+            genome=genome,
+            gen_index=gen_index,
+            ind_idx=ind_idx,
+            seed=first_seed
+        )
+        self._count_sims_inserted += len(self._sim_rand_seeds)
+
+        inserted = 0
+        for seed in self._sim_rand_seeds:
+            config["randomSeed"] = seed
+            self._insert_simulation_db(genome_hash, exp_oid, gen_oid, config)
+            inserted += 1
+            logger.info("SIM inserted SEED=%s genome=%s", seed, genome_hash)
+
+        self._upload_topology_async(exp_oid, gen_oid, gen_index, ind_idx, genome_hash, dict(config))
+        return inserted
+
+
+    def _close_generation_enqueue(
+        self,
+        gen_oid: ObjectId,
+        gen_index: int,
+        sims_inserted: int,
+        population_size: int,
+    ) -> None:
+        """Mark an empty generation DONE, or just log the queued work.
+
+        When every genome already had cached objectives (or was penalised)
+        there are no simulations to wait for. Marking the generation DONE and
+        firing the handler directly in a worker thread guarantees the evolution
+        loop advances even if the change-stream event is lost (watcher not yet
+        subscribed on the first generation, or mid-reconnect).
+        """
         if sims_inserted == 0:
             self.mongo.generation_repo.mark_done(gen_oid)
             logger.info(
                 "[NSGA-III] Generation %d: all %d genomes have cached objectives; marked DONE.",
-                gen_index, len(population),
+                gen_index, population_size,
             )
             Thread(
                 target=self._fire_generation_done,
@@ -709,8 +802,9 @@ class NSGA3LoopStrategy(EngineStrategy):
         else:
             logger.info(
                 "[NSGA-III] Generation %d enqueued with %d individuals (%d new simulations).",
-                gen_index, len(population), sims_inserted,
+                gen_index, population_size, sims_inserted,
             )
+
 
     def _fire_generation_done(self, gen_oid: ObjectId) -> None:
         """
@@ -749,13 +843,24 @@ class NSGA3LoopStrategy(EngineStrategy):
             # Persist to genome cache only on first evaluation (avoids redundant writes).
             # Cache values remain in minimization space because pylib does not store
             # metadata describing the objective representation.
-            if genome_hash not in self._genome_objectives_cache:
+            if genome_hash not in self._genome_objectives_cache and self._is_ground_truth(genome):
                 self.mongo.genome_cache_repo.set_objectives(
                     self._exp_id,
                     genome_hash,
                     objectives,
                 )
                 self._genome_objectives_cache[genome_hash] = objectives
+
+
+    def _is_ground_truth(self, genome: Chromosome) -> bool:
+        """Whether ``genome``'s objectives may enter the persistent genome cache.
+
+        Always True here: every objective this strategy produces comes from a
+        simulation, an exact cache replay, the analytical fast path or a hard
+        constraint penalty.  Subclasses that also produce *estimated* objectives
+        override this so approximations never become ground truth.
+        """
+        return True
 
 
     def _objectives_list_to_original(self, vec: list[float]) -> list[float]:

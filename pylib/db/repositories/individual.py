@@ -49,6 +49,27 @@ class IndividualRepository:
             )
             return result.modified_count > 0
 
+    def update_fields(
+        self,
+        individual_id: str,
+        generation_id: ObjectId,
+        fields: dict,
+    ) -> bool:
+        """Set arbitrary fields on one Individual document.
+
+        Used by strategies that record extra, optional metadata on an
+        individual (e.g. the provenance of its objectives) without needing a
+        dedicated setter per field.
+        """
+        if not fields:
+            return False
+        with self.connection.connect() as db:
+            result = db["individuals"].update_one(
+                {"generation_id": generation_id, "individual_id": individual_id},
+                {"$set": fields}
+            )
+            return result.modified_count > 0
+
     def update_topology_picture(
         self,
         individual_id: str,

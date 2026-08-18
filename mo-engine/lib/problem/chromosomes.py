@@ -108,10 +108,19 @@ def chromosome_from_dict(problem_name: str, data: dict) -> "Chromosome":
             relays=relays,
         )
 
-    if problem_name == "problem2":
+    # Every P2 variant shares the same binary-mask chromosome, so a
+    # topology-aware experiment restores exactly like a classic P2 one.
+    if problem_name in ("problem2", "problem2_topology_aware"):
         return ChromosomeP2(
             mac_protocol=int(data["mac_protocol"]),
             mask=[int(bit) for bit in data.get("mask", [])],
+        )
+
+    if problem_name == "problem2_tree_encoded":
+        return ChromosomeP2Tree(
+            mac_protocol=int(data["mac_protocol"]),
+            mask=[int(bit) for bit in data.get("mask", [])],
+            tree_parents=tuple(int(p) for p in data.get("tree_parents", ())),
         )
 
     if problem_name == "problem3":
@@ -250,6 +259,57 @@ class ChromosomeP2(ChromosomeBase, Chromosome):
 
     def __hash__(self) -> int:
         return hash((self.mac_protocol, tuple(self.mask)))
+
+
+@dataclass(frozen=True, slots=True)
+class ChromosomeP2Tree(ChromosomeP2):
+    """P2 chromosome that also carries its sink-rooted tree.
+
+    ``tree_parents[i]`` is the parent of candidate ``i`` — ``-1`` for a child
+    of the sink and ``-2`` for a candidate outside the tree — so the genotype
+    records *how* the relays are connected, not merely *which* are active.
+    That is what lets the tree-encoded variant use feasibility-preserving
+    operators and drop the connectivity repair entirely.
+
+    **The tree is genotype, not phenotype.**  Equality, ``__hash__`` and
+    ``get_hash`` deliberately ignore ``tree_parents`` and stay identical to
+    :class:`ChromosomeP2`: two trees over the same relay set deploy the same
+    motes and would produce the same simulation, so they must share one
+    genome-cache entry and one ``Individual.individual_id``.  A tree-encoded
+    experiment therefore reuses results from a mask-encoded one, and vice
+    versa.
+
+    ``to_dict`` still emits the array, so the exact tree survives a restart;
+    ``chromosome_from_dict`` falls back to the canonical shortest-path tree
+    when the field is absent (documents written before this variant existed).
+    """
+    tree_parents: tuple[int, ...] = ()
+
+    def to_dict(self) -> dict:
+        return {
+            "mac_protocol": self.mac_protocol,
+            "mask": self.mask,
+            "tree_parents": list(self.tree_parents),
+        }
+
+    def __eq__(self, other: object) -> bool:
+        # Compare as a plain P2 chromosome: same deployment, same individual.
+        if not isinstance(other, ChromosomeP2):
+            return NotImplemented
+        return (
+            self.mac_protocol == other.mac_protocol and
+            self.mask == other.mask
+        )
+
+    def __hash__(self) -> int:
+        return hash((self.mac_protocol, tuple(self.mask)))
+
+    def get_hash(self) -> str:
+        # Must match ChromosomeP2.get_hash exactly, so the persistent genome
+        # cache is shared between the mask-encoded and tree-encoded variants.
+        d = {"mac_protocol": self.mac_protocol, "mask": self.mask}
+        canonical = json.dumps(d, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha1(canonical.encode()).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)

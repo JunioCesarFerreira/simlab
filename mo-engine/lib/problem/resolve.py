@@ -8,6 +8,8 @@ from .adapter import ProblemAdapter
 from .p0_synthetic import Problem0SyntheticAdapter
 from .p1_continuous_mobility import Problem1ContinuousMobilityAdapter
 from .p2_discrete_mobility import Problem2DiscreteMobilityAdapter
+from .p2_topology_aware import Problem2TopologyAwareAdapter
+from .p2_tree_encoded import Problem2TreeEncodedAdapter
 from .p3_target_coverage import Problem3TargetCoverageAdapter
 from .p4_mobile_sink_collection import Problem4MobileSinkCollectionAdapter
 
@@ -18,6 +20,8 @@ PROBLEM_REGISTRY: dict[str, Type[ProblemAdapter]] = {
     "problem0": Problem0SyntheticAdapter,
     "problem1": Problem1ContinuousMobilityAdapter,
     "problem2": Problem2DiscreteMobilityAdapter,
+    "problem2_topology_aware": Problem2TopologyAwareAdapter,
+    "problem2_tree_encoded": Problem2TreeEncodedAdapter,
     "problem3": Problem3TargetCoverageAdapter,
     "problem4": Problem4MobileSinkCollectionAdapter,
 }
@@ -29,6 +33,8 @@ PROBLEM_REGISTRY: dict[str, Type[ProblemAdapter]] = {
 STRATEGY_GA_KEYS = frozenset({
     "population_size", "number_of_generations", "random_seed",
     "divisions", "prob_cx", "prob_mt", "selection_method",
+    # Nested block read by NSGA3AdaptiveSimulationStrategy; problem-agnostic.
+    "adaptive_evaluation",
 })
 
 
@@ -46,7 +52,9 @@ def resolve_problem_key(problem: Mapping[str, Any]) -> str:
     Resolve the problem key from a problem document.
 
     Primary convention:
-      - problem["name"] where name ∈ {"problem1", "problem2", "problem3", "problem4"}
+      - problem["name"] where name is a key of PROBLEM_REGISTRY, e.g.
+        "problem1", "problem2", "problem2_topology_aware",
+        "problem2_tree_encoded", "problem3", "problem4"
 
     Backward-compatible aliases (if you still have older stored documents):
       - problem["problem_type"]

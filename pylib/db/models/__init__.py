@@ -4,6 +4,7 @@ from pylib.db.models.individual import Individual
 from pylib.db.models.generation import Generation
 from pylib.db.models.simulation import Simulation
 from pylib.db.models.genome_cache import GenomeCache
+from pylib.db.models.adaptive_evaluation import AdaptiveEvaluation, AdaptiveMetrics
 from pylib.db.models.experiment import (
     MetricItem,
     ObjetiveItem,
@@ -25,6 +26,8 @@ __all__ = [
     "Generation",
     "Simulation",
     "GenomeCache",
+    "AdaptiveEvaluation",
+    "AdaptiveMetrics",
     "MetricItem",
     "ObjetiveItem",
     "DataConversionConfig",

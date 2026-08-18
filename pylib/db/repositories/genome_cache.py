@@ -50,12 +50,22 @@ class GenomeCacheRepository:
         experiment_id: ObjectId,
         genome_hash: str,
         objectives: list[float],
+        evaluation_source: str | None = None,
     ) -> bool:
-        """Persist computed objectives for a previously registered genome."""
+        """Persist computed objectives for a previously registered genome.
+
+        ``evaluation_source`` is optional and records how the objectives were
+        obtained ("simulated", "cache", "analytical", "penalty").  Only ground
+        truth may be written here: strategies that also produce *estimated*
+        objectives must keep them out of this collection.
+        """
+        updates: dict[str, Any] = {"objectives": objectives}
+        if evaluation_source is not None:
+            updates["evaluation_source"] = evaluation_source
         with self.connection.connect() as db:
             result = db["genome_cache"].update_one(
                 {"experiment_id": experiment_id, "genome_hash": genome_hash},
-                {"$set": {"objectives": objectives}},
+                {"$set": updates},
             )
             return result.modified_count > 0
 
@@ -68,6 +78,21 @@ class GenomeCacheRepository:
             return list(db["genome_cache"].find(
                 {"experiment_id": experiment_id},
                 {"_id": 0, "genome_hash": 1, "objectives": 1},
+            ))
+
+    def get_all_full_by_experiment(self, experiment_id: ObjectId) -> list[dict]:
+        """Return all cache entries **with their chromosomes**.
+
+        Heavier than :meth:`get_all_by_experiment` (which projects only the
+        hash and the objectives): use it when the caller must rebuild
+        chromosome-derived state, such as the knowledge base of an adaptive
+        strategy after a restart.
+        """
+        with self.connection.connect() as db:
+            return list(db["genome_cache"].find(
+                {"experiment_id": experiment_id},
+                {"_id": 0, "genome_hash": 1, "chromosome": 1,
+                 "objectives": 1, "evaluation_source": 1},
             ))
 
     def delete_by_experiment(self, experiment_id: ObjectId) -> int:

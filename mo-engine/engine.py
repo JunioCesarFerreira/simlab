@@ -9,6 +9,7 @@ from pylib.db import create_mongo_repository_factory, EnumStatus
 from pylib.telemetry import start_runtime_metrics_watcher
 from lib.strategy.base import EngineStrategy
 from lib.strategy.nsga3 import NSGA3LoopStrategy
+from lib.strategy.nsga3_adaptive import NSGA3AdaptiveSimulationStrategy
 from lib.strategy.nsga2 import NSGA2LoopStrategy
 from lib.strategy.batch import BatchStrategy
 from lib.strategy.random_search import RandomSearchStrategy
@@ -40,6 +41,8 @@ def select_strategy(exp_doc: dict) -> EngineStrategy:
     # When adding new strategies, remember to update the front-end: Step2Experiment.vue
     if exp_type == "nsga3":
         return NSGA3LoopStrategy(exp_doc, mongo)
+    if exp_type == "nsga3_adaptive_simulation":
+        return NSGA3AdaptiveSimulationStrategy(exp_doc, mongo)
     if exp_type == "nsga2":
         return NSGA2LoopStrategy(exp_doc, mongo)
     if exp_type == "batch":
