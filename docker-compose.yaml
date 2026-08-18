@@ -143,7 +143,10 @@ services:
       restapi:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost/"]
+      # 127.0.0.1 (not localhost): nginx.conf only has "listen 80" (IPv4), and
+      # the image entrypoint skips its IPv6 patch on a custom default.conf.
+      # BusyBox wget tries ::1 first and does not fall back.
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -179,7 +182,9 @@ services:
       - "simlab.role=processor"
       - "simlab.group=backend"
     healthcheck:
-      test: ["CMD", "pgrep", "python"]
+      # pgrep is unavailable: python:3.12-slim ships without procps.
+      # PID 1 is the app process, so inspect its cmdline directly.
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0 if b'python' in open('/proc/1/cmdline','rb').read() else 1)"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -220,7 +225,9 @@ services:
       - "simlab.role=controller"
       - "simlab.group=backend"
     healthcheck:
-      test: ["CMD", "pgrep", "python"]
+      # pgrep is unavailable: python:3.12-slim ships without procps.
+      # PID 1 is the app process, so inspect its cmdline directly.
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0 if b'python' in open('/proc/1/cmdline','rb').read() else 1)"]
       interval: 30s
       timeout: 10s
       retries: 3
