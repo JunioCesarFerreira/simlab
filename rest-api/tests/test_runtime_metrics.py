@@ -166,3 +166,97 @@ class TestRuntimeMetricsSeries:
 
         assert resp.status_code == 500
         assert "telemetry artifact" in resp.json()["detail"]
+
+
+# ── POST /experiments/{id}/runtime-metrics/collect (manual retry) ──────────────
+class TestManualCollect:
+    def _patch_collect(self, monkeypatch, status="completed"):
+        """Stub the real Prometheus collection; capture the call arguments."""
+        calls: dict = {}
+
+        def fake(factory, experiment_id, started_at, finished_at, force=False):
+            calls["args"] = (experiment_id, started_at, finished_at, force)
+            return status
+
+        import pylib.telemetry.collector as coll
+        monkeypatch.setattr(coll, "collect_and_store", fake)
+        return calls
+
+    def _finished_doc(self) -> dict:
+        doc = sample_experiment()
+        doc["status"] = "Done"
+        doc["start_time"] = _STARTED
+        doc["end_time"] = _FINISHED
+        return doc
+
+    def test_defaults_to_experiment_window_and_forces(self, client, mock_factory, monkeypatch):
+        mock_factory.experiment_repo.get.return_value = self._finished_doc()
+        mock_factory.experiment_repo.get_runtime_metrics.return_value = {
+            "status": "completed", "summary": {"duration_seconds": 1800.0},
+        }
+        calls = self._patch_collect(monkeypatch, status="completed")
+
+        resp = client.post(f"{BASE}/{EXP_ID}/runtime-metrics/collect")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "completed"
+        assert body["runtime_metrics"]["status"] == "completed"
+        exp_id_arg, start_arg, end_arg, force = calls["args"]
+        assert exp_id_arg == EXP_ID
+        assert start_arg == _STARTED and end_arg == _FINISHED
+        assert force is True
+
+    def test_override_interval_is_passed_through(self, client, mock_factory, monkeypatch):
+        mock_factory.experiment_repo.get.return_value = self._finished_doc()
+        mock_factory.experiment_repo.get_runtime_metrics.return_value = {
+            "status": "no_data", "summary": {},
+        }
+        calls = self._patch_collect(monkeypatch, status="no_data")
+
+        resp = client.post(
+            f"{BASE}/{EXP_ID}/runtime-metrics/collect",
+            json={"start": "2026-07-01T10:00:00", "end": "2026-07-01T11:00:00"},
+        )
+
+        assert resp.status_code == 200
+        _, start_arg, end_arg, _ = calls["args"]
+        assert start_arg == datetime(2026, 7, 1, 10, 0, 0)
+        assert end_arg == datetime(2026, 7, 1, 11, 0, 0)
+
+    def test_conflict_while_collecting(self, client, mock_factory, monkeypatch):
+        doc = self._finished_doc()
+        doc["runtime_metrics"] = {"status": "collecting"}
+        mock_factory.experiment_repo.get.return_value = doc
+        self._patch_collect(monkeypatch)
+
+        resp = client.post(f"{BASE}/{EXP_ID}/runtime-metrics/collect")
+
+        assert resp.status_code == 409
+
+    def test_missing_experiment_returns_404(self, client, mock_factory, monkeypatch):
+        mock_factory.experiment_repo.get.return_value = None
+        self._patch_collect(monkeypatch)
+
+        resp = client.post(f"{BASE}/{EXP_ID}/runtime-metrics/collect")
+
+        assert resp.status_code == 404
+
+    def test_without_start_time_returns_400(self, client, mock_factory, monkeypatch):
+        mock_factory.experiment_repo.get.return_value = sample_experiment()  # start_time None
+        self._patch_collect(monkeypatch)
+
+        resp = client.post(f"{BASE}/{EXP_ID}/runtime-metrics/collect")
+
+        assert resp.status_code == 400
+
+    def test_end_before_start_returns_400(self, client, mock_factory, monkeypatch):
+        mock_factory.experiment_repo.get.return_value = self._finished_doc()
+        self._patch_collect(monkeypatch)
+
+        resp = client.post(
+            f"{BASE}/{EXP_ID}/runtime-metrics/collect",
+            json={"start": "2026-07-01T12:00:00", "end": "2026-07-01T11:00:00"},
+        )
+
+        assert resp.status_code == 400

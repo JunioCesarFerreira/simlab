@@ -5,7 +5,9 @@ import type {
   ExperimentFullDto,
   ExperimentInfoDto,
   ExperimentStatus,
+  RuntimeMetricsDto,
   RuntimeMetricsSeriesResponseDto,
+  RuntimeMetricsStatus,
 } from "../types/simlab";
 
 type BackendExperimentInfo = Omit<ExperimentInfoDto, "status">;
@@ -79,6 +81,27 @@ export async function getRuntimeMetricsSeries(
   const { data } = await client.get<RuntimeMetricsSeriesResponseDto>(
     `/experiments/${id}/runtime-metrics`,
     { params: { max_points: maxPoints } },
+  );
+  return data;
+}
+
+export interface CollectRuntimeMetricsResponse {
+  status: RuntimeMetricsStatus;
+  runtime_metrics: RuntimeMetricsDto | null;
+}
+
+/**
+ * Manually (re)collect runtime metrics from Prometheus for an experiment.
+ * Optionally overrides the [start, end] window (naive ISO strings, no timezone
+ * suffix — interpreted in the server's local time, matching stored timestamps).
+ */
+export async function collectRuntimeMetrics(
+  id: string,
+  interval?: { start?: string; end?: string },
+): Promise<CollectRuntimeMetricsResponse> {
+  const { data } = await client.post<CollectRuntimeMetricsResponse>(
+    `/experiments/${id}/runtime-metrics/collect`,
+    { start: interval?.start ?? null, end: interval?.end ?? null },
   );
   return data;
 }

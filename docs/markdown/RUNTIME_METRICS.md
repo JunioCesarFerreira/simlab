@@ -25,18 +25,27 @@ Store in GridFS              → file_id, sha256, size
 Update experiment document   → runtime_metrics block (summary + artifact ref)
 ```
 
-A startup sweep backfills experiments that finished while the watcher was
-down, bounded by `TELEMETRY_BACKFILL_HOURS` (default 6 h) so runs whose data
-Prometheus no longer retains are not churned. Collection is idempotent: an
-atomic claim on the `runtime_metrics` field guarantees a single collector per
-experiment.
+A **periodic** sweep (also runs once at startup) backfills experiments that
+finished while the watcher was down, and reprocesses runs left in a transient
+`unavailable`/`failed` state — e.g. Prometheus was down at finish time and has
+since come back. It is bounded by `TELEMETRY_BACKFILL_HOURS` (default 6 h) so
+runs whose data Prometheus no longer retains are not churned, and its cadence
+is `TELEMETRY_SWEEP_INTERVAL_SECONDS` (default 600 s; `0` = startup only).
+Collection is idempotent: an atomic claim on the `runtime_metrics` field
+guarantees a single collector per experiment; the sweep uses `force` to
+overwrite the retryable blocks it owns.
+
+When Prometheus is unreachable the state is **persisted** as `unavailable`
+(rather than silently dropped) so the experiment page can surface it and offer
+a manual retry. An operator can also trigger a collection on demand via
+`POST /experiments/{id}/runtime-metrics/collect` (see API below).
 
 ## Experiment document (`runtime_metrics`)
 
 ```json
 {
   "runtime_metrics": {
-    "status": "completed",            // collecting | completed | no_data | failed
+    "status": "completed",            // collecting | completed | no_data | failed | unavailable
     "started_at": "...",
     "finished_at": "...",
     "collection_finished_at": "...",
@@ -89,15 +98,25 @@ The default queries cover the SimLab containers selected by
   from GridFS, reconstructs each series and downsamples it (bucket average)
   to at most `N` points (default 1000). Returns
   `{status, summary, series[], downsampled, total_samples}`.
+- `POST /experiments/{id}/runtime-metrics/collect` — manually (re)collect from
+  Prometheus, overwriting any existing block. Body `{start?, end?}` (naive ISO,
+  server-local time) overrides the window; omitted, the experiment's own
+  `[start_time, end_time]` is used. Returns `{status, runtime_metrics}`. `409`
+  while a collection is already in progress. This runs inside the REST API, so
+  it must reach Prometheus (`PROMETHEUS_URL`, monitoring network).
 - `GET /files/{file_id}/as/{extension}` — raw artifact download (generic
   files endpoint).
 
 ## Front-end
 
-The experiment detail page shows a **Runtime Metrics** section with summary
-tiles (duration, CPU avg/peak, memory avg/peak) loaded with the page, and a
-*Show charts* button that fetches the series endpoint on demand and renders
-CPU / memory line charts (aggregate emphasized, one thin line per container).
+The experiment detail page shows a **Runtime Metrics** section for every
+finished run. When a completed collection exists it renders summary tiles
+(duration, CPU avg/peak, memory avg/peak) and a *Show charts* button that
+fetches the series endpoint on demand (aggregate emphasized, one thin line per
+container). When no data was recorded (`unavailable`/`no_data`/`failed`, or no
+block at all) it shows an alert explaining the situation and a *Collect from
+Prometheus* shortcut: the operator confirms/edits the `[start, end]` window and
+the front calls the collect endpoint, then refreshes.
 
 ## Configuration (mo-engine environment)
 
@@ -107,8 +126,13 @@ CPU / memory line charts (aggregate emphasized, one thin line per container).
 | `TELEMETRY_ENABLED`                  | `True`                   | disable collection entirely      |
 | `TELEMETRY_QUERY_STEP`               | `15s`                    | `query_range` resolution         |
 | `TELEMETRY_COLLECTION_DELAY_SECONDS` | `30`                     | wait for the final scrape        |
-| `TELEMETRY_BACKFILL_HOURS`           | `6`                      | startup sweep window             |
+| `TELEMETRY_BACKFILL_HOURS`           | `6`                      | sweep window (recent runs only)  |
+| `TELEMETRY_SWEEP_INTERVAL_SECONDS`   | `600`                    | periodic sweep cadence (0=once)  |
+| `TELEMETRY_STALE_CLAIM_SECONDS`      | `900`                    | release stale `collecting` claims|
 | `TELEMETRY_CONTAINER_FILTER`         | simlab group filter      | PromQL label selector            |
+
+`PROMETHEUS_URL` is also set on the **rest-api** service, which serves the
+manual collect endpoint and therefore queries Prometheus directly.
 
 When `PROMETHEUS_URL` is unset, the default depends on where the process runs:
 `http://prometheus:9090` inside Docker (`IS_DOCKER=True`) and

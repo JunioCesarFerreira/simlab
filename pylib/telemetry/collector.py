@@ -134,30 +134,41 @@ def collect_and_store(
     prometheus_url: str | None = None,
     step: str | None = None,
     specs: list[MetricSpec] | None = None,
+    container_filter: str | None = None,
+    force: bool = False,
 ) -> str:
     """Collect telemetry for one finished experiment and persist it.
 
     Returns the final ``runtime_metrics.status`` ("completed", "no_data",
-    "failed"), "skipped" when another collector already owns the block, or
-    "unavailable" when Prometheus is unreachable (nothing is persisted, so a
-    later backfill sweep can retry once the monitoring stack is up).
+    "failed", "unavailable"), or "skipped" when another collector already owns
+    the block.
+
+    Unlike earlier versions, an ``unavailable`` result (Prometheus unreachable)
+    is now *persisted* on the experiment so the front-end can surface the
+    situation and offer a manual retry; the block stays eligible for the
+    backfill sweep, which reprocesses ``unavailable``/``failed`` states.
+
+    ``force=True`` performs a manual (re)collection: it overwrites any existing
+    block instead of claiming it, so an operator can retry a failed/empty run —
+    optionally over a corrected ``[started_at, finished_at]`` window.
     """
     prometheus_url = prometheus_url or default_prometheus_url()
     step = step or os.getenv("TELEMETRY_QUERY_STEP", "15s")
-    specs = specs or default_metric_specs(
-        os.getenv("TELEMETRY_CONTAINER_FILTER", DEFAULT_CONTAINER_FILTER)
+    container_filter = container_filter or os.getenv(
+        "TELEMETRY_CONTAINER_FILTER", DEFAULT_CONTAINER_FILTER
     )
+    specs = specs or default_metric_specs(container_filter)
 
     client = PrometheusClient(prometheus_url)
-    if not client.is_available():
-        logger.warning(
-            "[telemetry] Prometheus unreachable at %s — skipping runtime metrics for "
-            "experiment %s (start the monitoring stack or set PROMETHEUS_URL)",
-            prometheus_url, experiment_id,
-        )
-        return STATUS_UNAVAILABLE
 
-    if not mongo.experiment_repo.claim_runtime_metrics_collection(
+    if force:
+        # Manual retry: take ownership by overwriting whatever block exists.
+        mongo.experiment_repo.set_runtime_metrics(experiment_id, {
+            "status": STATUS_COLLECTING,
+            "started_at": started_at,
+            "finished_at": finished_at,
+        })
+    elif not mongo.experiment_repo.claim_runtime_metrics_collection(
         experiment_id, started_at, finished_at
     ):
         logger.info("[telemetry] runtime metrics already handled for %s", experiment_id)
@@ -171,9 +182,27 @@ def collect_and_store(
             "source": "prometheus",
             "prometheus_url": prometheus_url,
             "query_step": step,
+            "container_filter": container_filter,
             "metrics": [asdict(s) for s in specs],
         },
     }
+
+    if not client.is_available():
+        # Persist the unreachable state (instead of silently dropping it) so the
+        # experiment page shows an explicit warning and a manual-retry shortcut.
+        # The block remains eligible for the periodic backfill sweep.
+        block = {**base, "status": STATUS_UNAVAILABLE,
+                 "collection_finished_at": datetime.now(),
+                 "error": f"Prometheus unreachable at {prometheus_url}"}
+        mongo.experiment_repo.set_runtime_metrics(experiment_id, block)
+        logger.warning(
+            "[telemetry] Prometheus unreachable at %s — marked runtime metrics "
+            "'unavailable' for experiment %s (start the monitoring stack, set "
+            "PROMETHEUS_URL, or retry manually from the experiment page)",
+            prometheus_url, experiment_id,
+        )
+        return STATUS_UNAVAILABLE
+
     try:
         samples = collect_samples(client, specs, started_at, finished_at, step)
         summary = summarize_samples(samples, started_at, finished_at)
@@ -183,7 +212,12 @@ def collect_and_store(
             block = {**base, "status": STATUS_NO_DATA,
                      "collection_finished_at": datetime.now(), "summary": summary}
             mongo.experiment_repo.set_runtime_metrics(experiment_id, block)
-            logger.warning("[telemetry] no Prometheus samples for experiment %s", experiment_id)
+            logger.warning(
+                "[telemetry] no Prometheus samples for experiment %s over [%s, %s] "
+                "with filter {%s} — check that cAdvisor is up and the SimLab "
+                "containers carry the simlab.group label",
+                experiment_id, started_at, finished_at, container_filter,
+            )
             return STATUS_NO_DATA
 
         payload = serialize_samples(samples)

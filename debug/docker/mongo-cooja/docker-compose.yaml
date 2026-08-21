@@ -23,7 +23,7 @@ services:
   # The simlab.group labels on the cooja services are required — the telemetry
   # container filter selects group "simulation|backend".
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:latest
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
     container_name: cadvisor
     restart: unless-stopped
     privileged: true
@@ -33,15 +33,17 @@ services:
       - /var/run:/var/run:ro
       - /sys:/sys:ro
       - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
     command:
       - --docker=unix:///var/run/docker.sock
+      - --store_container_labels=true
     ports:
       - "8080:8080"
     networks:
       - monitoring-net
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v2.54.1
     container_name: prometheus
     restart: unless-stopped
     volumes:

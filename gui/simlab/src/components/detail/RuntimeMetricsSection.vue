@@ -3,7 +3,7 @@
     <div class="section-title rm-title">
       <span>
         Runtime Metrics
-        <span v-if="statusLabel" :class="['rm-status', `rm-status--${metrics.status}`]">
+        <span v-if="statusLabel" :class="['rm-status', `rm-status--${status}`]">
           {{ statusLabel }}
         </span>
       </span>
@@ -18,8 +18,8 @@
       </button>
     </div>
 
-    <!-- Summary tiles — always visible, fed by the embedded summary block -->
-    <div class="rm-summary">
+    <!-- Summary tiles — shown once a completed collection exists -->
+    <div v-if="status === 'completed'" class="rm-summary">
       <div class="rm-tile">
         <div class="rm-tile-label">Duration</div>
         <div class="rm-tile-value">{{ formatDuration(summary.duration_seconds) }}</div>
@@ -42,14 +42,61 @@
       </div>
     </div>
 
-    <div v-if="metrics.status === 'collecting'" class="rm-note">
+    <div v-if="status === 'collecting' || awaitingAuto" class="rm-note">
       Collecting telemetry from Prometheus — the summary will appear shortly.
     </div>
-    <div v-else-if="metrics.status === 'no_data'" class="rm-note">
-      No telemetry samples were captured for this execution window.
+
+    <!-- Attention states: no consumption data recorded. Offer a manual retry. -->
+    <div v-else-if="needsAttention" :class="['rm-alert', `rm-alert--${alertKind}`]">
+      <div class="rm-alert-body">
+        <div class="rm-alert-title">{{ alertTitle }}</div>
+        <p class="rm-alert-text">{{ alertMessage }}</p>
+      </div>
+      <button
+        v-if="!manualOpen"
+        class="rm-toggle-btn"
+        @click="openManual"
+      >
+        Collect from Prometheus
+      </button>
     </div>
-    <div v-else-if="metrics.status === 'failed'" class="rm-note rm-note--error">
-      Telemetry collection failed{{ metrics.error ? `: ${metrics.error}` : "." }}
+
+    <!-- Manual collection: query Prometheus over an explicit time window -->
+    <div v-if="manualOpen" class="rm-manual">
+      <div class="rm-manual-title">Manual collection window</div>
+      <p class="rm-note">
+        SimLab will query Prometheus over this interval and store the resulting
+        consumption series for this experiment. Defaults to the experiment's
+        execution window — adjust it if needed.
+      </p>
+      <div class="rm-manual-fields">
+        <label class="rm-field">
+          <span>Start</span>
+          <input v-model="startInput" type="datetime-local" step="1" />
+        </label>
+        <label class="rm-field">
+          <span>End</span>
+          <input v-model="endInput" type="datetime-local" step="1" />
+        </label>
+      </div>
+      <div v-if="manualError" class="rm-note rm-note--error">{{ manualError }}</div>
+      <div class="rm-manual-actions">
+        <button
+          class="rm-toggle-btn rm-btn-primary"
+          :disabled="manualState === 'loading' || !startInput"
+          @click="submitManual"
+        >
+          <span v-if="manualState === 'loading'" class="spinner" />
+          {{ manualState === "loading" ? "Collecting…" : "Collect" }}
+        </button>
+        <button
+          class="rm-toggle-btn"
+          :disabled="manualState === 'loading'"
+          @click="closeManual"
+        >
+          Cancel
+        </button>
+      </div>
     </div>
 
     <!-- Full time series — loaded on demand only -->
@@ -81,7 +128,7 @@ import type { EChartsOption } from "echarts";
 import { useEChart } from "../../composables/useEChart";
 import { useTheme } from "../../composables/useTheme";
 import { chartPalette } from "../../services/chartTheme";
-import { getRuntimeMetricsSeries } from "../../api/experiments";
+import { collectRuntimeMetrics, getRuntimeMetricsSeries } from "../../api/experiments";
 import type {
   RuntimeMetricsDto,
   RuntimeMetricsSeriesDto,
@@ -90,26 +137,144 @@ import type {
 
 const props = defineProps<{
   experimentId: string;
-  metrics: RuntimeMetricsDto;
+  // Null/undefined when the finished experiment has no telemetry block yet.
+  metrics?: RuntimeMetricsDto | null;
+  // Execution window, used to prefill the manual collection form.
+  startTime?: string | null;
+  endTime?: string | null;
+  // True while the automatic collector is still expected to write a block
+  // (just-finished run) — suppresses the "no data" alert during that window.
+  pending?: boolean;
 }>();
+
+const emit = defineEmits<{ (e: "collected"): void }>();
 
 const MAX_POINTS = 1000;
 
 const { isDark } = useTheme();
 
-const summary = computed(() => props.metrics.summary ?? {});
+// "absent" is a UI-only pseudo-status meaning no runtime_metrics block exists.
+const status = computed(() => props.metrics?.status ?? "absent");
+const summary = computed(() => props.metrics?.summary ?? {});
 const hasArtifact = computed(
-  () => props.metrics.status === "completed" && !!props.metrics.artifact,
+  () => status.value === "completed" && !!props.metrics?.artifact,
 );
 
+const ATTENTION_STATES = ["unavailable", "no_data", "failed", "absent"];
+const needsAttention = computed(() => ATTENTION_STATES.includes(status.value));
+
+// Automatic collection is imminent for a just-finished run: show a "collecting"
+// note rather than the "no data" alert until the block lands.
+const awaitingAuto = computed(() => status.value === "absent" && !!props.pending);
+
 const statusLabel = computed(() => {
-  switch (props.metrics.status) {
+  switch (status.value) {
     case "collecting": return "collecting…";
     case "no_data": return "no data";
     case "failed": return "failed";
+    case "unavailable": return "unavailable";
+    case "absent": return "not recorded";
     default: return "";
   }
 });
+
+// Warning tone for recoverable states; error tone for a hard failure.
+const alertKind = computed(() => (status.value === "failed" ? "error" : "warning"));
+const alertTitle = computed(() =>
+  status.value === "failed"
+    ? "Telemetry collection failed"
+    : "No consumption data recorded",
+);
+const alertMessage = computed(() => {
+  switch (status.value) {
+    case "unavailable":
+      return "Prometheus was unreachable when this experiment finished. Make sure the monitoring stack (cAdvisor + Prometheus) is running, then retry the collection below.";
+    case "no_data":
+      return "Prometheus returned no samples for this execution window. Check that cAdvisor is up and the SimLab containers carry the simlab.group label, then retry — you can also adjust the time window.";
+    case "failed":
+      return props.metrics?.error
+        ? `The collection errored: ${props.metrics.error}. You can retry it below.`
+        : "The collection errored. You can retry it below.";
+    default: // absent
+      return "This experiment has no computational telemetry. You can collect it now from Prometheus over its execution window.";
+  }
+});
+
+// ── manual (re)collection ────────────────────────────────────────────────────
+type ManualState = "idle" | "loading";
+const manualOpen = ref(false);
+const manualState = ref<ManualState>("idle");
+const manualError = ref("");
+const startInput = ref("");
+const endInput = ref("");
+
+// datetime-local wants "YYYY-MM-DDTHH:mm[:ss]"; the API sends naive ISO strings,
+// so slice rather than go through Date() (which would apply a timezone shift).
+function toLocalInput(iso: string | null | undefined): string {
+  return iso ? iso.slice(0, 19) : "";
+}
+
+function openManual() {
+  startInput.value = toLocalInput(props.startTime);
+  endInput.value = toLocalInput(props.endTime);
+  manualError.value = "";
+  manualOpen.value = true;
+}
+
+function closeManual() {
+  manualOpen.value = false;
+  manualError.value = "";
+}
+
+async function submitManual() {
+  if (!startInput.value) {
+    manualError.value = "A start time is required.";
+    return;
+  }
+  if (endInput.value && endInput.value <= startInput.value) {
+    manualError.value = "End must be after start.";
+    return;
+  }
+  manualState.value = "loading";
+  manualError.value = "";
+  try {
+    // Only send fields the user actually changed; otherwise the server reuses
+    // the experiment's stored (second-precise) timestamps.
+    const interval: { start?: string; end?: string } = {};
+    if (startInput.value && startInput.value !== toLocalInput(props.startTime)) {
+      interval.start = startInput.value;
+    }
+    if (endInput.value && endInput.value !== toLocalInput(props.endTime)) {
+      interval.end = endInput.value;
+    }
+    const hasOverride = Object.keys(interval).length > 0;
+    const res = await collectRuntimeMetrics(
+      props.experimentId,
+      hasOverride ? interval : undefined,
+    );
+    manualState.value = "idle";
+    manualOpen.value = false;
+    // Reset any previously loaded series so the charts reflect the new artifact.
+    data.value = null;
+    chartsOpen.value = false;
+    state.value = "idle";
+    emit("collected");
+    if (res.status !== "completed") {
+      // The parent refresh will re-render the alert with the new status; surface
+      // a hint immediately for unavailable/no_data outcomes.
+      manualError.value =
+        res.status === "unavailable"
+          ? "Prometheus is still unreachable."
+          : res.status === "no_data"
+            ? "Prometheus returned no samples for the chosen window."
+            : "";
+      manualOpen.value = manualError.value !== "";
+    }
+  } catch (e) {
+    manualState.value = "idle";
+    manualError.value = e instanceof Error ? e.message : String(e);
+  }
+}
 
 // ── on-demand series loading ────────────────────────────────────────────────
 type State = "idle" | "loading" | "ready" | "error";
@@ -271,9 +436,15 @@ function formatDuration(seconds: number | undefined): string {
   animation: rm-pulse 2s infinite;
 }
 
-.rm-status--no_data {
+.rm-status--no_data,
+.rm-status--absent {
   color: var(--color-text-muted);
   background: var(--color-bg);
+}
+
+.rm-status--unavailable {
+  color: var(--status-warning, #b45309);
+  background: rgba(217, 119, 6, 0.12);
 }
 
 .rm-status--failed {
@@ -284,6 +455,103 @@ function formatDuration(seconds: number | undefined): string {
 @keyframes rm-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
+}
+
+/* ── attention alert + manual collection ─────────────────────────────────── */
+.rm-alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-left-width: 3px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+}
+
+.rm-alert--warning {
+  border-left-color: var(--status-warning, #d97706);
+}
+
+.rm-alert--error {
+  border-left-color: var(--status-error);
+}
+
+.rm-alert-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.rm-alert-text {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  max-width: 68ch;
+}
+
+.rm-manual {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.rm-manual-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.rm-manual-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.rm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+}
+
+.rm-field input {
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  color-scheme: light dark;
+}
+
+.rm-manual-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.rm-btn-primary {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.rm-btn-primary:hover:not(:disabled) {
+  background: var(--color-primary);
+  filter: brightness(1.05);
+  color: #fff;
 }
 
 .rm-toggle-btn {

@@ -1,7 +1,9 @@
 services:
 
+  # Pinned tags (not :latest) so the monitoring stack behaves identically on a
+  # developer machine and on the production VM.
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:latest
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
     container_name: cadvisor
     restart: unless-stopped
     privileged: true
@@ -11,8 +13,10 @@ services:
       - /var/run:/var/run:ro
       - /sys:/sys:ro
       - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
     command:
       - --docker=unix:///var/run/docker.sock
+      - --store_container_labels=true
     ports:
       - "8080:8080"
     labels:
@@ -23,7 +27,7 @@ services:
       - monitoring-net
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v2.54.1
     container_name: prometheus
     restart: unless-stopped
     volumes:
@@ -35,6 +39,12 @@ services:
       - "simlab.type=timeseries"
       - "simlab.role=storage"
       - "simlab.group=monitoring"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
     depends_on:
       - cadvisor
     networks:
@@ -105,6 +115,10 @@ services:
       - SIMLAB_API_KEY=simlab-api-key42
       - MONGO_URI=mongodb://mongodb:27017/?replicaSet=rs0
       - IS_DOCKER=True
+      # Manual runtime-metrics retry (POST /experiments/{id}/runtime-metrics/collect)
+      # queries Prometheus directly from the API, so it must reach the monitoring
+      # network. Keep in sync with the moengine PROMETHEUS_URL.
+      - PROMETHEUS_URL=http://prometheus:9090
     ports:
       - "8000:8000"
     labels:
@@ -123,6 +137,7 @@ services:
     networks:
       - mongo-net
       - proxy-net
+      - monitoring-net
 
   gui:
     build:
@@ -174,7 +189,9 @@ services:
       # TELEMETRY_ENABLED=True                 → set False to disable
       # TELEMETRY_QUERY_STEP=15s               → query_range resolution
       # TELEMETRY_COLLECTION_DELAY_SECONDS=30  → wait for the final scrape
-      # TELEMETRY_BACKFILL_HOURS=6             → startup sweep window
+      # TELEMETRY_BACKFILL_HOURS=6             → sweep window (recent runs only)
+      # TELEMETRY_SWEEP_INTERVAL_SECONDS=600   → periodic backfill cadence (0 = startup only)
+      # TELEMETRY_STALE_CLAIM_SECONDS=900      → release 'collecting' claims older than this
     ports:
       - "2219:22"
     labels:
@@ -191,6 +208,11 @@ services:
       start_period: 30s
     depends_on:
       mongodb:
+        condition: service_healthy
+      # Wait for Prometheus so the startup backfill sweep doesn't run before the
+      # monitoring stack is reachable (it would otherwise mark runs 'unavailable'
+      # until the next sweep tick).
+      prometheus:
         condition: service_healthy
     networks:
       - mongo-net

@@ -155,12 +155,15 @@ class TestArtifactRoundTrip:
 class FakeExperimentRepo:
     def __init__(self):
         self.blocks: dict[str, dict] = {}
-        self.claimed: set[str] = set()
 
     def claim_runtime_metrics_collection(self, experiment_id, started_at, finished_at):
-        if experiment_id in self.claimed:
+        # Mirrors the real atomic claim: succeeds only when no block exists yet.
+        if experiment_id in self.blocks:
             return False
-        self.claimed.add(experiment_id)
+        self.blocks[experiment_id] = {
+            "status": "collecting", "started_at": started_at,
+            "finished_at": finished_at, "claimed_at": datetime.now(),
+        }
         return True
 
     def set_runtime_metrics(self, experiment_id, block):
@@ -186,11 +189,11 @@ EXP_ID = "507f1f77bcf86cd799439011"
 
 
 class TestCollectAndStore:
-    def _run(self, fake_mongo, monkeypatch, client):
+    def _run(self, fake_mongo, monkeypatch, client, force=False):
         monkeypatch.setattr(collector_mod, "PrometheusClient", lambda url: client)
         return collect_and_store(
             fake_mongo, EXP_ID, START, END,
-            prometheus_url="http://prom:9090", step="15s", specs=SPECS,
+            prometheus_url="http://prom:9090", step="15s", specs=SPECS, force=force,
         )
 
     def test_completed_stores_artifact_and_summary(self, fake_mongo, monkeypatch):
@@ -238,16 +241,32 @@ class TestCollectAndStore:
         assert block["status"] == "failed"
         assert "prometheus unreachable" in block["error"]
 
-    def test_unreachable_prometheus_skips_without_claiming(self, fake_mongo, monkeypatch):
-        """Local run without the monitoring stack: one warning, nothing persisted,
-        and no claim — so a later backfill sweep can still collect."""
+    def test_unreachable_prometheus_marks_unavailable(self, fake_mongo, monkeypatch):
+        """Monitoring stack down: the state is now *persisted* as 'unavailable'
+        (so the front-end can surface it and offer a manual retry) — nothing is
+        uploaded, and the block stays eligible for the backfill sweep."""
         client = FakePrometheusClient(_fake_results(), available=False)
         assert self._run(fake_mongo, monkeypatch, client) == "unavailable"
-        assert EXP_ID not in fake_mongo.experiment_repo.blocks
+
+        block = fake_mongo.experiment_repo.blocks[EXP_ID]
+        assert block["status"] == "unavailable"
+        assert "unreachable" in block["error"].lower()
+        assert "artifact" not in block
         assert fake_mongo.fs_handler.uploads == []
-        # Prometheus comes back → collection succeeds on retry
-        client.available = True
-        assert self._run(fake_mongo, monkeypatch, client) == "completed"
+
+    def test_force_retry_overwrites_and_completes(self, fake_mongo, monkeypatch):
+        """A persisted 'unavailable' block is not re-collected by the automatic
+        (claim) path, but force=True (the sweep/manual retry) overwrites it once
+        Prometheus is back."""
+        down = FakePrometheusClient(_fake_results(), available=False)
+        assert self._run(fake_mongo, monkeypatch, down) == "unavailable"
+        # Automatic path refuses to touch an existing block.
+        assert self._run(fake_mongo, monkeypatch, down) == "skipped"
+
+        up = FakePrometheusClient(_fake_results(), available=True)
+        assert self._run(fake_mongo, monkeypatch, up, force=True) == "completed"
+        assert fake_mongo.experiment_repo.blocks[EXP_ID]["status"] == "completed"
+        assert len(fake_mongo.fs_handler.uploads) == 1
 
 
 class TestDefaultPrometheusUrl:

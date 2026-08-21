@@ -325,11 +325,17 @@
         </div>
       </div>
 
-      <!-- Runtime (computational) metrics of the execution -->
+      <!-- Runtime (computational) metrics of the execution. Rendered for any
+           finished run — even without a block — so a missing/failed collection
+           surfaces an alert and a manual Prometheus retry. -->
       <RuntimeMetricsSection
-        v-if="store.experiment.runtime_metrics"
+        v-if="showRuntimeMetrics"
         :experiment-id="props.id"
         :metrics="store.experiment.runtime_metrics"
+        :start-time="store.experiment.start_time"
+        :end-time="store.experiment.end_time"
+        :pending="telemetryPending"
+        @collected="store.refresh(props.id)"
       />
 
       <!-- Progress bar for running experiments -->
@@ -759,6 +765,15 @@ async function doPlotPareto() {
 // predate the feature (and will never get metrics) don't poll forever.
 const TELEMETRY_WAIT_WINDOW_MS = 10 * 60 * 1000;
 let telemetryTimer: ReturnType<typeof setInterval> | null = null;
+
+// Finished runs always show the Runtime Metrics section: with a block it renders
+// the summary/charts, without one it offers a manual Prometheus collection.
+const FINISHED_STATUSES = ["Done", "Error", "Cancelled"];
+const showRuntimeMetrics = computed(() => {
+  const exp = store.experiment;
+  if (!exp) return false;
+  return !!exp.runtime_metrics || FINISHED_STATUSES.includes(exp.status ?? "");
+});
 
 const telemetryPending = computed(() => {
   const exp = store.experiment;

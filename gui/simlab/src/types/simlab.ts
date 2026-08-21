@@ -127,7 +127,8 @@ export type RuntimeMetricsStatus =
   | "collecting"
   | "completed"
   | "no_data"
-  | "failed";
+  | "failed"
+  | "unavailable";
 
 export interface RuntimeMetricsSummaryDto {
   duration_seconds?: number;

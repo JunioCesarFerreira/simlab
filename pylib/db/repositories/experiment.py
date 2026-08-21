@@ -106,6 +106,7 @@ class ExperimentRepository:
                     "status": "collecting",
                     "started_at": started_at,
                     "finished_at": finished_at,
+                    "claimed_at": datetime.now(),
                 }}}
             )
             return result.modified_count > 0
@@ -130,31 +131,51 @@ class ExperimentRepository:
                 return None
             return doc.get("runtime_metrics") or {}
 
-    def release_stale_runtime_metrics_claims(self) -> int:
+    def release_stale_runtime_metrics_claims(self, claimed_before: datetime) -> int:
         """Drop 'collecting' blocks left behind by a crashed collector.
 
-        Startup-only: a single mo-engine instance owns telemetry collection,
-        so at process start no collection can legitimately be in flight and
-        any remaining claim is stale. Releasing it lets the backfill sweep
-        retry the experiment.
+        Only claims older than ``claimed_before`` are released, so this is safe
+        to call from the periodic sweep without racing a collection that is
+        legitimately in flight. Releasing a stale claim lets the sweep retry the
+        experiment. Legacy claims without a ``claimed_at`` are treated as stale.
         """
         with self.connection.connect() as db:
             result = db["experiments"].update_many(
-                {"runtime_metrics.status": "collecting"},
+                {
+                    "runtime_metrics.status": "collecting",
+                    "$or": [
+                        {"runtime_metrics.claimed_at": {"$lt": claimed_before}},
+                        {"runtime_metrics.claimed_at": {"$exists": False}},
+                    ],
+                },
                 {"$unset": {"runtime_metrics": ""}}
             )
             return result.modified_count
 
-    def find_finished_missing_runtime_metrics(self, finished_after: datetime) -> list[dict[str, Any]]:
-        """Finished experiments (Done/Error) still lacking telemetry — used by
-        the startup backfill sweep, bounded to recent runs."""
+    # Terminal states that must never be reprocessed automatically: a completed
+    # collection is done, and 'no_data' means Prometheus answered but the window
+    # held no matching series (a configuration issue a blind retry won't fix —
+    # use the manual endpoint after correcting the filter/interval).
+    _RETRYABLE_RUNTIME_METRICS_STATUS = ("unavailable", "failed")
+
+    def find_finished_runtime_metrics_to_collect(self, finished_after: datetime) -> list[dict[str, Any]]:
+        """Finished experiments (Done/Error) whose telemetry still needs a pass.
+
+        Used by the backfill sweep, bounded to recent runs. Picks experiments
+        with no ``runtime_metrics`` block yet, plus those left in a transient
+        ``unavailable``/``failed`` state (e.g. Prometheus was down at finish
+        time and has since come back)."""
         with self.connection.connect() as db:
             return list(db["experiments"].find(
                 {
                     "status": {"$in": [EnumStatus.DONE, EnumStatus.ERROR]},
                     "start_time": {"$ne": None},
                     "end_time": {"$gte": finished_after},
-                    "runtime_metrics": {"$exists": False},
+                    "$or": [
+                        {"runtime_metrics": {"$exists": False}},
+                        {"runtime_metrics.status":
+                            {"$in": list(self._RETRYABLE_RUNTIME_METRICS_STATUS)}},
+                    ],
                 },
                 {"_id": 1, "start_time": 1, "end_time": 1}
             ))

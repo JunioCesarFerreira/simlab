@@ -1,6 +1,8 @@
 import json
 import os
 import subprocess
+from datetime import datetime
+from typing import Optional
 
 import numpy as np
 import moocore
@@ -22,6 +24,7 @@ from api.mappers.experiment import (
     experiment_full_from_mongo,
     experiment_info_from_mongo,
     experiment_to_mongo,
+    _runtime_metrics_from_mongo,
 )
 from api.mappers.generation import generation_from_mongo
 
@@ -292,6 +295,84 @@ def get_experiment_runtime_metrics(
         "downsampled": downsampled,
         "total_samples": len(samples),
     }
+
+
+def _as_naive(dt: Optional[datetime]) -> Optional[datetime]:
+    """Drop tz info so an override matches the naive timestamps SimLab stores.
+
+    Experiment start/end times are persisted as naive local datetimes; a
+    tz-aware override (e.g. an ISO string ending in 'Z') is converted to the
+    same local wall-clock so the Prometheus query window stays consistent.
+    """
+    if isinstance(dt, datetime) and dt.tzinfo is not None:
+        return dt.astimezone().replace(tzinfo=None)
+    return dt
+
+
+class RuntimeMetricsCollectRequest(BaseModel):
+    """Optional [start, end] override for a manual collection.
+
+    When omitted, the experiment's own start_time/end_time are used. Times are
+    interpreted in the server's local time, matching stored experiment
+    timestamps.
+    """
+    start: Optional[datetime] = None
+    end: Optional[datetime] = None
+
+
+@router.post("/{experiment_id}/runtime-metrics/collect")
+def collect_experiment_runtime_metrics(
+    experiment_id: str,
+    body: Optional[RuntimeMetricsCollectRequest] = None,
+    factory: MongoRepository = Depends(get_factory),
+) -> dict:
+    """Manually (re)collect runtime metrics from Prometheus for an experiment.
+
+    Overwrites any existing block. Intended as the operator-facing retry when
+    the automatic collection found Prometheus unreachable, failed, or captured
+    no data: monitoring is back, so query the ``[start, end]`` window again —
+    optionally corrected via the request body. Returns the resulting collection
+    ``status`` and the refreshed ``runtime_metrics`` summary block.
+    """
+    from pylib.telemetry.collector import collect_and_store
+
+    try:
+        doc = factory.experiment_repo.get(experiment_id)
+    except bson_errors.InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid experiment_id")
+    if not doc:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    body = body or RuntimeMetricsCollectRequest()
+    started_at = _as_naive(body.start or doc.get("start_time"))
+    finished_at = _as_naive(body.end or doc.get("end_time") or datetime.now())
+
+    if not started_at:
+        raise HTTPException(
+            status_code=400,
+            detail="Experiment has no start_time; provide an explicit 'start' to collect.",
+        )
+    if finished_at <= started_at:
+        raise HTTPException(status_code=400, detail="'end' must be after 'start'.")
+
+    current_status = (doc.get("runtime_metrics") or {}).get("status")
+    if current_status == "collecting":
+        raise HTTPException(
+            status_code=409,
+            detail="A telemetry collection is already in progress for this experiment.",
+        )
+
+    try:
+        status = collect_and_store(
+            factory, experiment_id, started_at, finished_at, force=True
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Runtime metrics collection failed: {e}"
+        )
+
+    rm = factory.experiment_repo.get_runtime_metrics(experiment_id)
+    return {"status": status, "runtime_metrics": _runtime_metrics_from_mongo(rm)}
 
 
 class ParetoPlotRequest(BaseModel):
