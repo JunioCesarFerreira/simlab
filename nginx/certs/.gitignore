@@ -1,0 +1,7 @@
+# Certificates are environment-specific and the private key is a secret.
+# The directory itself is tracked so the compose bind mount always resolves.
+*.crt
+*.key
+*.pem
+*.p12
+*.pfx

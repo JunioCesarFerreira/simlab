@@ -1,5 +1,77 @@
 services:
 
+  # ---------------------------------------------------------------------------
+  # Ingress. Nothing else in the stack publishes an HTTP port any more: the SPA,
+  # the REST API (Swagger included) and Grafana are reachable only through this
+  # proxy, over TLS. Route map: nginx/README.md.
+  # ---------------------------------------------------------------------------
+
+  # One-shot init: writes a self-signed certificate into nginx/certs/ and exits.
+  # It skips itself once simlab.crt/simlab.key exist, so installing a real
+  # certificate is just a matter of dropping the PEM files in that directory.
+  proxy-certs:
+    image: alpine/openssl:3.5.4
+    container_name: simlab_proxy_certs
+    entrypoint: ["/bin/sh", "/scripts/generate-self-signed.sh"]
+    environment:
+      - SIMLAB_TLS_CN=${SIMLAB_TLS_CN:-localhost}
+      - SIMLAB_TLS_SAN=${SIMLAB_TLS_SAN:-DNS:localhost,IP:127.0.0.1}
+      - SIMLAB_TLS_DAYS=${SIMLAB_TLS_DAYS:-825}
+    volumes:
+      - ./nginx/scripts:/scripts:ro
+      - ./nginx/certs:/certs
+    labels:
+      - "simlab.type=init"
+      - "simlab.role=tls"
+      - "simlab.group=proxy"
+
+  proxy:
+    image: nginx:1.27-alpine
+    container_name: simlab_proxy
+    restart: unless-stopped
+    ports:
+      - "${SIMLAB_HTTP_PORT:-80}:80"
+      - "${SIMLAB_HTTPS_PORT:-443}:443"
+    environment:
+      # Target of the HTTP -> HTTPS redirect. Must carry the port when HTTPS is
+      # published somewhere other than 443 (e.g. https://simlab.example.org:8443).
+      - SIMLAB_PUBLIC_URL=${SIMLAB_PUBLIC_URL:-https://localhost}
+      # Render nginx/templates/*.template into /etc/nginx/generated, expanding
+      # only ${SIMLAB_*} so nginx's own $$variables survive envsubst.
+      - NGINX_ENVSUBST_OUTPUT_DIR=/etc/nginx/generated
+      - NGINX_ENVSUBST_FILTER=^SIMLAB_
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/snippets:/etc/nginx/snippets:ro
+      - ./nginx/templates:/etc/nginx/templates:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    # The image entrypoint refuses to render templates unless the output
+    # directory exists and is writable; every other path here is read-only.
+    tmpfs:
+      - /etc/nginx/generated
+    labels:
+      - "simlab.type=proxy"
+      - "simlab.role=ingress"
+      - "simlab.group=proxy"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      proxy-certs:
+        condition: service_completed_successfully
+      gui:
+        condition: service_healthy
+      restapi:
+        condition: service_healthy
+      grafana:
+        condition: service_healthy
+    networks:
+      - proxy-net
+
   # Pinned tags (not :latest) so the monitoring stack behaves identically on a
   # developer machine and on the production VM.
   cadvisor:
@@ -18,7 +90,9 @@ services:
       - --docker=unix:///var/run/docker.sock
       - --store_container_labels=true
     ports:
-      - "8080:8080"
+      # Loopback only: the UI is a local debugging aid, Prometheus scrapes it
+      # over monitoring-net.
+      - "127.0.0.1:8080:8080"
     labels:
       - "simlab.type=collector"
       - "simlab.role=metrics"
@@ -34,7 +108,9 @@ services:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
     ports:
-      - "9090:9090"
+      # Loopback only. docs/markdown/RUNTIME_METRICS.md relies on reaching the
+      # expression browser at http://localhost:9090 from the host.
+      - "127.0.0.1:9090:9090"
     labels:
       - "simlab.type=timeseries"
       - "simlab.role=storage"
@@ -53,21 +129,31 @@ services:
   grafana:
     image: grafana/grafana-oss
     container_name: grafana
-    ports:
-      - "3000:3000"
+    # No published port: dashboards are reachable only through the reverse
+    # proxy at https://<host>/grafana/.
     volumes:
       - grafana-storage:/var/lib/grafana
       - ./grafana-provisioning:/etc/grafana/provisioning
     environment:
-      - GF_SECURITY_ADMIN_USER=simlab
-      - GF_SECURITY_ADMIN_PASSWORD=simlab123
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-simlab}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-simlab123}
+      # Served under the proxy's /grafana/ sub-path. root_url has to match the
+      # URL the browser uses, port included, or Grafana's own asset and login
+      # redirects point outside the proxy.
+      - GF_SERVER_ROOT_URL=${SIMLAB_PUBLIC_URL:-https://localhost}/grafana/
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+      # TLS terminates at the proxy, so the session cookie can be secure-only.
+      - GF_SECURITY_COOKIE_SECURE=true
+      - GF_SECURITY_COOKIE_SAMESITE=lax
     restart: unless-stopped
     labels:
       - "simlab.type=visualization"
       - "simlab.role=dashboard"
       - "simlab.group=monitoring"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      # serve_from_sub_path moves every route, /api/health included, under
+      # /grafana.
+      test: ["CMD", "curl", "-f", "http://localhost:3000/grafana/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -76,6 +162,7 @@ services:
       - prometheus
     networks:
       - monitoring-net
+      - proxy-net
 
   mongodb:
     image: mongo:latest
@@ -83,7 +170,9 @@ services:
     restart: always
     command: ["--replSet", "rs0", "--bind_ip_all", "--port", "27017"]
     ports:
-      - 27017:27017
+      # Loopback only - this mongod runs without authentication. Containers
+      # reach it over mongo-net; host tools go through an SSH tunnel.
+      - "127.0.0.1:27017:27017"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     labels:
@@ -112,15 +201,15 @@ services:
     environment:
       - PYTHONPATH=/app:/app/pylib
       - DB_NAME=simlab
-      - SIMLAB_API_KEY=simlab-api-key42
+      - SIMLAB_API_KEY=${SIMLAB_API_KEY:-simlab-api-key42}
       - MONGO_URI=mongodb://mongodb:27017/?replicaSet=rs0
       - IS_DOCKER=True
       # Manual runtime-metrics retry (POST /experiments/{id}/runtime-metrics/collect)
       # queries Prometheus directly from the API, so it must reach the monitoring
       # network. Keep in sync with the moengine PROMETHEUS_URL.
       - PROMETHEUS_URL=http://prometheus:9090
-    ports:
-      - "8000:8000"
+    # No published port: the API, Swagger included, is reachable only through
+    # the reverse proxy at https://<host>/api/v1/ and https://<host>/docs.
     labels:
       - "simlab.type=api"
       - "simlab.role=orchestrator"
@@ -145,11 +234,11 @@ services:
       dockerfile: Dockerfile.gui
       args:
         VITE_API_BASE_URL: /api/v1
-        VITE_API_KEY: simlab-api-key42
+        VITE_API_KEY: ${SIMLAB_API_KEY:-simlab-api-key42}
     container_name: simlab_gui
     restart: unless-stopped
-    ports:
-      - "5173:80"
+    # No published port: the SPA is served through the reverse proxy at
+    # https://<host>/.
     labels:
       - "simlab.type=frontend"
       - "simlab.role=ui"
@@ -193,7 +282,8 @@ services:
       # TELEMETRY_SWEEP_INTERVAL_SECONDS=600   → periodic backfill cadence (0 = startup only)
       # TELEMETRY_STALE_CLAIM_SECONDS=900      → release 'collecting' claims older than this
     ports:
-      - "2219:22"
+      # Loopback only: SSH into the container is a debugging entry point.
+      - "127.0.0.1:2219:22"
     labels:
       - "simlab.type=engine"
       - "simlab.role=processor"
@@ -241,7 +331,8 @@ services:
       #- BENCH=DTLZ2
       #- NOISE_STD=0.0
     ports:
-      - "2220:22"
+      # Loopback only: SSH into the container is a debugging entry point.
+      - "127.0.0.1:2220:22"
     labels:
       - "simlab.type=master"
       - "simlab.role=controller"
@@ -270,7 +361,7 @@ services:
     container_name: cooja1
     restart: unless-stopped
     ports:
-      - "2231:22"
+      - "127.0.0.1:2231:22"
     networks:
       - cooja-net
     labels:
@@ -284,7 +375,7 @@ services:
     container_name: cooja2
     restart: unless-stopped
     ports:
-      - "2232:22"
+      - "127.0.0.1:2232:22"
     networks:
       - cooja-net
     labels:
@@ -298,7 +389,7 @@ services:
     container_name: cooja3
     restart: unless-stopped
     ports:
-      - "2233:22"
+      - "127.0.0.1:2233:22"
     networks:
       - cooja-net
     labels:
@@ -312,7 +403,7 @@ services:
     container_name: cooja4
     restart: unless-stopped
     ports:
-      - "2234:22"
+      - "127.0.0.1:2234:22"
     networks:
       - cooja-net
     labels:
@@ -326,7 +417,7 @@ services:
     container_name: cooja5
     restart: unless-stopped
     ports:
-      - "2235:22"
+      - "127.0.0.1:2235:22"
     networks:
       - cooja-net
     labels:
@@ -340,7 +431,7 @@ services:
     container_name: cooja6
     restart: unless-stopped
     ports:
-      - "2236:22"
+      - "127.0.0.1:2236:22"
     networks:
       - cooja-net
     labels:
@@ -354,7 +445,7 @@ services:
     container_name: cooja7
     restart: unless-stopped
     ports:
-      - "2237:22"
+      - "127.0.0.1:2237:22"
     networks:
       - cooja-net
     labels:
@@ -368,7 +459,7 @@ services:
     container_name: cooja8
     restart: unless-stopped
     ports:
-      - "2238:22"
+      - "127.0.0.1:2238:22"
     networks:
       - cooja-net
     labels:
@@ -382,7 +473,7 @@ services:
     container_name: cooja9
     restart: unless-stopped
     ports:
-      - "2239:22"
+      - "127.0.0.1:2239:22"
     networks:
       - cooja-net
     labels:
@@ -396,7 +487,7 @@ services:
     container_name: cooja10
     restart: unless-stopped
     ports:
-      - "2240:22"
+      - "127.0.0.1:2240:22"
     networks:
       - cooja-net
     labels:
@@ -410,7 +501,7 @@ services:
     container_name: cooja11
     restart: unless-stopped
     ports:
-      - "2241:22"
+      - "127.0.0.1:2241:22"
     networks:
       - cooja-net
     labels:
@@ -424,7 +515,7 @@ services:
     container_name: cooja12
     restart: unless-stopped
     ports:
-      - "2242:22"
+      - "127.0.0.1:2242:22"
     networks:
       - cooja-net
     labels:
@@ -438,7 +529,7 @@ services:
     container_name: cooja13
     restart: unless-stopped
     ports:
-      - "2243:22"
+      - "127.0.0.1:2243:22"
     networks:
       - cooja-net
     labels:
@@ -452,7 +543,7 @@ services:
     container_name: cooja14
     restart: unless-stopped
     ports:
-      - "2244:22"
+      - "127.0.0.1:2244:22"
     networks:
       - cooja-net
     labels:
@@ -466,7 +557,7 @@ services:
     container_name: cooja15
     restart: unless-stopped
     ports:
-      - "2245:22"
+      - "127.0.0.1:2245:22"
     networks:
       - cooja-net
     labels:
@@ -480,7 +571,7 @@ services:
     container_name: cooja16
     restart: unless-stopped
     ports:
-      - "2246:22"
+      - "127.0.0.1:2246:22"
     networks:
       - cooja-net
     labels:

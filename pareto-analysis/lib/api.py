@@ -1,3 +1,4 @@
+import os
 import requests
 from pathlib import Path
 from typing import Any
@@ -6,6 +7,41 @@ from typing import Any
 # are considered penalized and excluded from all analyses.
 PENALTY_THRESHOLD = 1e8
 
+# The REST API no longer publishes a host port: everything goes through the
+# nginx reverse proxy over TLS. Override per environment with SIMLAB_API_BASE.
+DEFAULT_API_BASE = os.getenv("SIMLAB_API_BASE", "https://localhost/api/v1")
+
+# Trust anchor for the proxy's self-signed certificate. These scripts run from
+# a checkout, so the certificate the proxy-certs container wrote is sitting
+# right there - pointing requests at it keeps verification ON instead of
+# turning it off. Irrelevant once a CA-issued certificate is installed.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_CA_BUNDLE = _REPO_ROOT / "nginx" / "certs" / "simlab.crt"
+
+_FALSEY = {"0", "false", "no", "off"}
+
+
+def resolve_tls_verify() -> bool | str:
+    """Value for the ``verify=`` argument of requests.
+
+    Resolution order:
+      1. ``SIMLAB_TLS_VERIFY`` falsey -> no verification at all (last resort).
+      2. ``SIMLAB_CA_BUNDLE`` -> that file.
+      3. ``nginx/certs/simlab.crt`` when present -> the self-signed proxy cert.
+      4. the system trust store, for a CA-issued certificate or plain HTTP.
+    """
+    if os.getenv("SIMLAB_TLS_VERIFY", "true").strip().lower() in _FALSEY:
+        return False
+
+    bundle = os.getenv("SIMLAB_CA_BUNDLE", "").strip()
+    if bundle:
+        return bundle
+
+    if _DEFAULT_CA_BUNDLE.is_file():
+        return str(_DEFAULT_CA_BUNDLE)
+
+    return True
+
 
 def build_session(api_key: str) -> requests.Session:
     s = requests.Session()
@@ -13,6 +49,7 @@ def build_session(api_key: str) -> requests.Session:
         "accept": "application/json",
         "X-API-Key": api_key,
     })
+    s.verify = resolve_tls_verify()
     return s
 
 

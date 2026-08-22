@@ -89,7 +89,7 @@ def main():
     )
     parser.add_argument(
         "--api-base",
-        default=os.getenv("SIMLAB_API_BASE", "http://localhost:8000/api/v1"),
+        default=os.getenv("SIMLAB_API_BASE", "https://localhost/api/v1"),
         help="SimLab REST API base URL  [env: SIMLAB_API_BASE]",
     )
     parser.add_argument(

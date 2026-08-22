@@ -1,0 +1,25 @@
+# Keep secrets and bulk out of the build context. No Dockerfile copies the
+# repository root today (each COPY is scoped to one subdirectory), but the
+# whole tree is still shipped to the daemon on every build - including the
+# reverse proxy's private key.
+.env
+nginx/certs/*.key
+nginx/certs/*.crt
+nginx/certs/*.pem
+nginx/certs/*.p12
+nginx/certs/*.pfx
+
+.git
+.github
+.venv
+**/.venv
+venv
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+
+# Local compose variants and generated analysis output.
+dc*.yaml
+master-node/tmp
+util/docker_stats.csv

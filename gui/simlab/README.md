@@ -33,16 +33,26 @@ algorithm (MOEA) experiments, and analysing the resulting Pareto fronts.
 ### Prerequisites
 
 - Node.js ≥ 18
-- SimLab REST API running (default `http://localhost:8000`)
+- SimLab stack running behind the reverse proxy (default `https://localhost`)
 
 ### Environment
 
-Copy `.env` and adjust if needed:
+The REST API no longer publishes a host port — it is reachable only through
+the nginx reverse proxy. Point the dev server at the proxy:
 
 ```
-VITE_API_BASE_URL=http://localhost:8000/api/v1
-VITE_API_KEY=api-password
+VITE_API_BASE_URL=https://localhost/api/v1
+VITE_API_KEY=simlab-api-key42
 ```
+
+The proxy's certificate is self-signed, so open `https://localhost/` once and
+accept the warning; the browser then trusts the same origin for the XHR calls
+`npm run dev` makes from `http://localhost:5173`. Those are cross-origin
+requests, which work because the API still sends
+`Access-Control-Allow-Origin: *`.
+
+In production the SPA is served *by* the proxy, so it uses the relative base
+`/api/v1` (set as a build arg in `docker-compose.yaml`) and no CORS is involved.
 
 ### Development server
 
@@ -283,5 +293,5 @@ The composable reads from and deep-watches to `sessionStorage` automatically.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `VITE_API_BASE_URL` | `http://localhost:8000/api/v1` | REST API base URL |
+| `VITE_API_BASE_URL` | `/api/v1` in the container build; `https://localhost/api/v1` for `npm run dev` | REST API base URL |
 | `VITE_API_KEY` | `api-password` | `X-API-Key` header sent with every request |

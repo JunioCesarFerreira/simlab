@@ -415,6 +415,9 @@ def plot_pareto_results(
         "--expid", experiment_id,
         "--objectives", *body.objectives[:3],
         "--minimize", *minimize_strs,
+        # Deliberately plain HTTP on localhost: this runs *inside* the
+        # rest_api container calling its own uvicorn, so it never crosses the
+        # reverse proxy and needs no TLS.
         "--api-base", "http://localhost:8000/api/v1",
         "--api-key", api_key,
     ]

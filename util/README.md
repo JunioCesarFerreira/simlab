@@ -76,13 +76,23 @@ python run_pareto_analysis.py [--uri URI] [--db DB] [--api-base URL] [--api-key 
 |---|---|---|---|
 | `--uri` | `MONGO_URI` | `mongodb://localhost:27017/?replicaSet=rs0` | MongoDB connection URI |
 | `--db` | `DB_NAME` | `simlab` | Database name |
-| `--api-base` | `SIMLAB_API_BASE` | `http://localhost:8000/api/v1` | SimLab REST API base URL |
+| `--api-base` | `SIMLAB_API_BASE` | `https://localhost/api/v1` | SimLab REST API base URL (through the nginx proxy) |
 | `--api-key` | `SIMLAB_API_KEY` | `api-password` | SimLab API key |
 
 **Example (remote server):**
+
+MongoDB is bound to `127.0.0.1` on the SimLab host, so reach it through an SSH
+tunnel (`ssh -L 27017:localhost:27017 server`). The REST API goes through the
+reverse proxy over HTTPS.
+
 ```bash
-MONGO_URI=mongodb://server:27017/?replicaSet=rs0 \
-SIMLAB_API_BASE=http://server:8000/api/v1 \
+MONGO_URI=mongodb://localhost:27017/?replicaSet=rs0 \
+SIMLAB_API_BASE=https://server/api/v1 \
+SIMLAB_CA_BUNDLE=../nginx/certs/simlab.crt \
 SIMLAB_API_KEY=my-key \
 python run_pareto_analysis.py
 ```
+
+`SIMLAB_CA_BUNDLE` is only needed when the server uses the self-signed
+certificate; drop it once a CA-issued one is installed. As a last resort,
+`SIMLAB_TLS_VERIFY=false` skips verification.
