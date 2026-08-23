@@ -66,7 +66,7 @@ class Settings:
         local_log_dir = "logs"
         Path(local_log_dir).mkdir(exist_ok=True)
 
-        default_n = int(os.getenv("NUMBER_OF_CONTAINERS", "3"))
+        default_n = int(os.getenv("NUMBER_OF_CONTAINERS", "8"))
         if is_docker:
             hostnames = [f"cooja{i+1}" for i in range(default_n)]
             ports = [22 for _ in range(default_n)]

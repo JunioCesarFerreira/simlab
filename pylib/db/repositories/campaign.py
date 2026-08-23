@@ -18,8 +18,27 @@ class CampaignRepository:
             return db["campaigns"].insert_one(campaign).inserted_id
 
     def find_all(self) -> list[dict[str, Any]]:
+        """
+        List every campaign with `experiment_ids` narrowed to the experiments
+        that still exist. Deleting an experiment used to leave its id behind in
+        the campaigns that referenced it, which inflated the listing count while
+        the detail view (which resolves each id) showed the real number.
+        """
+        pipeline: list[dict[str, Any]] = [
+            {
+                "$lookup": {
+                    "from": "experiments",
+                    "localField": "experiment_ids",
+                    "foreignField": "_id",
+                    "as": "_existing",
+                    "pipeline": [{"$project": {"_id": 1}}],
+                }
+            },
+            {"$set": {"experiment_ids": "$_existing._id"}},
+            {"$unset": "_existing"},
+        ]
         with self.connection.connect() as db:
-            return list(db["campaigns"].find({}))
+            return list(db["campaigns"].aggregate(pipeline))
 
     def get(self, campaign_id: str) -> Campaign:
         try:

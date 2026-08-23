@@ -20,22 +20,32 @@ services:
 
   # Monitoring pair for runtime telemetry when mo-engine runs on the host:
   # Prometheus is published on localhost:9090 (the collector's local default).
-  # The simlab.group labels on the cooja services are required — the telemetry
-  # container filter selects group "simulation|backend".
+  #
+  # This host's Docker uses the containerd-snapshotter image store (the modern
+  # default; `docker info` → "Storage Driver: overlayfs" /
+  # "io.containerd.snapshotter.v1"). In that mode cAdvisor's Docker integration
+  # cannot resolve a container's read-write layer, so it drops EVERY docker
+  # container and exports only unlabeled cgroup rows. We therefore read metrics
+  # straight from containerd, in the "moby" namespace (where docker-compose
+  # containers live). IMPORTANT: do NOT mount the docker socket or /var/run —
+  # cAdvisor would then prefer the Docker factory again and fail.
+  #
+  # Trade-off: containerd series are NOT enriched with the docker simlab.* labels,
+  # so the collector's default group filter won't match. The cooja workers are
+  # selected by image instead — launch the host mo-engine with:
+  #   TELEMETRY_CONTAINER_FILTER='image=~"docker.io/juniocesarferreira/simulation-cooja.*"'
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.49.1
     container_name: cadvisor
     restart: unless-stopped
     privileged: true
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - /:/rootfs:ro
-      - /var/run:/var/run:ro
       - /sys:/sys:ro
-      - /var/lib/docker:/var/lib/docker:ro
-      - /dev/disk:/dev/disk:ro
+      - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro
     command:
-      - --docker=unix:///var/run/docker.sock
+      - --containerd=/run/containerd/containerd.sock
+      - --containerd-namespace=moby
       - --store_container_labels=true
     ports:
       - "8080:8080"
@@ -137,6 +147,34 @@ services:
     labels:
       - "simlab.type=cooja"
       - "simlab.id=6"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
+
+  cooja7:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja7
+    restart: unless-stopped
+    ports:
+      - "2237:22"
+    networks:
+      - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=7"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
+
+  cooja8:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja8
+    restart: unless-stopped
+    ports:
+      - "2238:22"
+    networks:
+      - cooja-net
+    labels:
+      - "simlab.type=cooja"
+      - "simlab.id=8"
       - "simlab.role=worker"
       - "simlab.group=simulation"
 

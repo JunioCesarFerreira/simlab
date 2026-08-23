@@ -18,3 +18,5 @@ rest-api/api/mappers/__pycache__
 rest-api/api/domain/__pycache__
 rest-api/tests/__pycache__
 .claude
+dc7.yaml
+dc8.yaml

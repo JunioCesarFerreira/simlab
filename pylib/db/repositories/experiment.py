@@ -289,6 +289,13 @@ class ExperimentRepository:
             cache_deleted = db["genome_cache"].delete_many({"experiment_id": exp_oid}).deleted_count
             exp_deleted = db["experiments"].delete_one({"_id": exp_oid}).deleted_count
 
+            # Drop the now dangling reference from every campaign that held it,
+            # otherwise the campaign listing keeps counting a deleted experiment.
+            db["campaigns"].update_many(
+                {"experiment_ids": exp_oid},
+                {"$pull": {"experiment_ids": exp_oid}},
+            )
+
             return {
                 "deleted_experiments": int(exp_deleted),
                 "deleted_generations": int(gens_deleted),
