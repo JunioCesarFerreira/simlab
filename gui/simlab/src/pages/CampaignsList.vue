@@ -14,6 +14,14 @@
       Failed to load: {{ store.error }}
     </div>
 
+    <div v-if="store.campaigns.length > 0" class="toolbar">
+      <SearchInput
+        v-model="store.searchQuery"
+        class="search"
+        placeholder="Search campaigns by name…"
+      />
+    </div>
+
     <div v-if="store.loading && store.campaigns.length === 0" class="loading">
       Loading campaigns…
     </div>
@@ -22,9 +30,13 @@
       No campaigns yet. Create one to group your experiments.
     </div>
 
+    <div v-else-if="store.filtered.length === 0" class="empty-state">
+      No campaigns matching "{{ store.searchQuery.trim() }}".
+    </div>
+
     <div v-else class="campaign-list">
       <CampaignCard
-        v-for="c in store.campaigns"
+        v-for="c in store.filtered"
         :key="c.id"
         :campaign="c"
       />
@@ -91,6 +103,7 @@ import { useRouter } from "vue-router";
 import { useCampaignsStore } from "../app/stores/campaignsStore";
 import { createCampaign } from "../api/campaigns";
 import CampaignCard from "../components/campaigns/CampaignCard.vue";
+import SearchInput from "../components/common/SearchInput.vue";
 
 const store = useCampaignsStore();
 const router = useRouter();
@@ -190,6 +203,16 @@ onMounted(load);
 }
 
 .primary-btn:hover { opacity: 0.88; }
+
+.toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.search {
+  width: 260px;
+  max-width: 100%;
+}
 
 .error-banner {
   padding: 12px 16px;
