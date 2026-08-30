@@ -50,3 +50,10 @@ python3 plot_pareto_results.py --expid 69b97e5c911986d1242e5a7e --api-key secret
 ```bash
 py plot_pareto_results.py --expid 69b97e5c911986d1242e5a7e --keep-the-files --api-key secret --api-base http://andromeda.lasdpc.icmc.usp.br/:8198/api/v1
 ```
+
+**host linux**
+```bash
+cd /home/github/simlab/pareto-analysis
+./.venv/bin/python plot_pareto_results.py --expid 6a92d3018d392109abdffaba \
+    --objectives latency energy throughput --minimize True True False
+```

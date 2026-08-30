@@ -1,12 +1,39 @@
+"""
+Pareto analysis for SimLab experiments.
+
+Produces two figures, both consistent with what the SimLab web GUI shows:
+
+  1. Pareto fronts (dominance layers) — every front of the global
+     non-dominated sort, each with its own colour and marker size.
+  2. Hypervolume (per generation and cumulative) and Generational Distance.
+
+Consistency with the GUI
+------------------------
+The GUI does not compute these metrics in the browser: it reads them from
+``GET /experiments/{id}/hv-gd`` (rest-api/api/endpoints/experiment.py) and it
+colours points by ``individualRankMap`` (gui/.../pages/ExperimentDetail.vue).
+This module mirrors both definitions exactly:
+
+* penalized individuals (any |objective| >= 1e8) are dropped everywhere;
+* the HV reference point is the per-axis worst value **in minimization space**
+  (maximized objectives negated first), plus a ``5% + 1.0`` margin;
+* HV of a generation is the hypervolume of that generation's own Pareto front,
+  counting only points that strictly dominate the reference point;
+* cumulative HV folds each generation's front into a running non-dominated set
+  ("best so far"), and is therefore monotonically non-decreasing;
+* GD is the *mean* nearest-neighbour distance from the generation's front to
+  the experiment's stored Pareto front, in minimization space;
+* front ranks come from a global non-dominated sort over the unique objective
+  vectors of every non-penalized individual of every generation.
+"""
 import os
 import argparse
 from pathlib import Path
 from typing import Any
-from collections import defaultdict
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib import colormaps
+from matplotlib.lines import Line2D
 
 import moocore
 
@@ -21,7 +48,7 @@ from lib.api import (
 # Pareto dominance
 # ------------------------------------------------------------
 def dominates(
-    a: dict[str, float], 
+    a: dict[str, float],
     b: dict[str, float],
     objectives: list[str] = ["latency", "energy", "throughput"],
     minimize: list[bool] = [True, True, False]
@@ -43,14 +70,16 @@ def dominates(
     Dominance definition
     --------------------
     a dominates b iff:
-        ∀i: a_i <= b_i   (min)   or   a_i >= b_i (max)
-        ∃j: a_j <  b_j   (min)   or   a_j >  b_j (max)
+        for all i: a_i <= b_i   (min)   or   a_i >= b_i (max)
+        exists  j: a_j <  b_j   (min)   or   a_j >  b_j (max)
+
+    Matches ``_dominates`` in the rest-api hv-gd endpoint and ``dominates``
+    in the GUI's nonDominatedSort.ts.
     """
 
     if len(objectives) != len(minimize):
         raise ValueError("`objectives` and `minimize` must have same length")
 
-    better_or_equal = True
     strictly_better = False
 
     for obj, is_min in zip(objectives, minimize):
@@ -59,18 +88,17 @@ def dominates(
 
         if is_min:
             if va > vb:
-                better_or_equal = False
-                break
+                return False
             if va < vb:
                 strictly_better = True
-        else:  # maximization
+        else:
             if va < vb:
-                better_or_equal = False
-                break
+                return False
             if va > vb:
                 strictly_better = True
 
-    return better_or_equal and strictly_better
+    return strictly_better
+
 
 # ------------------------------------------------------------
 # Fast non-dominated sorting
@@ -80,8 +108,16 @@ def fast_nondominated_sort(
     objectives: list[str] = ["latency", "energy", "throughput"],
     minimize: list[bool] = [True, True, False]
 ) -> list[list[dict[str, Any]]]:
-    S = {}
-    n = {}
+    """
+    NSGA-II fast non-dominated sort.
+
+    Returns the fronts as lists of the input dicts, and stamps a ``rank`` key
+    (0 = non-dominated) on every individual.  Points with identical objective
+    vectors never dominate each other, so duplicates share a front — the same
+    convention used by the GUI.
+    """
+    S: dict[Any, list[dict[str, Any]]] = {}
+    n: dict[Any, int] = {}
     fronts: list[list[dict[str, Any]]] = [[]]
 
     for p in population:
@@ -113,52 +149,13 @@ def fast_nondominated_sort(
                     next_front.append(q)
         i += 1
         fronts.append(next_front)
-        
+
     for p in population:
         if "rank" not in p:
             p["rank"] = i
 
     return fronts[:-1]
 
-# ------------------------------------------------------------
-# Population builder (API → flat list)
-# ------------------------------------------------------------
-def build_population_from_api(
-    individuals_by_generation: dict[int, list[dict]]
-    ) -> list[dict]:
-    population = []
-
-    for gen, inds in individuals_by_generation.items():
-        for ind in inds:
-            population.append({
-                "id": ind["id"],
-                "generation": gen,
-                "objectives": ind["objectives"]
-            })
-
-    return population
-
-# ------------------------------------------------------------
-# Normalization to parallel coordinates / radar
-# ------------------------------------------------------------
-def normalize_objectives(
-    values: np.ndarray,
-    minimize: list[bool]
-    ) -> np.ndarray:
-    """
-    Min-max normalization.
-    If objective is to minimize, invert scale so that
-    'better' is always higher after normalization.
-    """
-    vmin = values.min(axis=0)
-    vmax = values.max(axis=0)
-    norm = (values - vmin) / (vmax - vmin + 1e-12)
-
-    for i, is_min in enumerate(minimize):
-        if is_min:
-            norm[:, i] = 1.0 - norm[:, i]
-
-    return norm
 
 # ------------------------------------------------------------
 # Minimization transform for hypervolume / GD
@@ -169,37 +166,27 @@ def to_minimization_array(
     minimize: list[bool],
 ) -> np.ndarray:
     """
-    Convert objective matrix to an equivalent minimization space.
+    Convert an objective matrix to an equivalent minimization space.
 
     Parameters
     ----------
     points : np.ndarray
-        Objective matrix of shape (N, M), where:
-            N = number of solutions
-            M = number of objectives
+        Objective matrix of shape (N, M): N solutions, M objectives.
     objectives : list[str]
         Objective names (metadata / ordering reference).
     minimize : list[bool]
-        Orientation vector:
-            True  -> objective already minimized
-            False -> objective is maximized (will be inverted)
+        True  -> objective already minimized
+        False -> objective is maximized (will be negated)
 
     Returns
     -------
     np.ndarray
-        Transformed matrix where all objectives follow
-        'smaller is better' semantics.
+        Matrix where every objective follows 'smaller is better' semantics.
 
-    Transformation
-    --------------
-    For each maximization objective j:
-
-        f'_j(x) = - f_j(x)
-
-    This preserves Pareto dominance relations.
+    For each maximization objective j:  f'_j(x) = -f_j(x), which preserves
+    Pareto dominance relations.
     """
 
-    # --- Shape normalization ---
     points = np.asarray(points, dtype=float)
 
     if points.ndim == 1:
@@ -215,1076 +202,463 @@ def to_minimization_array(
         )
 
     if len(minimize) != n_obj_meta:
-        raise ValueError(
-            "`objectives` and `minimize` must have same length"
-        )
+        raise ValueError("`objectives` and `minimize` must have same length")
 
-    # --- Copy to avoid mutating original array ---
     out = points.copy()
 
-    # --- Orientation transform ---
     for j, is_min in enumerate(minimize):
         if not is_min:
             out[:, j] *= -1.0
 
     return out
 
+
 # ------------------------------------------------------------
-# worst point computation for hypervolume reference
+# Worst point computation for the hypervolume reference
 # ------------------------------------------------------------
 def compute_worst_point(
     pareto_per_gen: dict[int, list[dict]],
-    objective_names: tuple[str, str, str],
+    objective_names: tuple[str, ...],
     minimize: list[bool]
 ) -> list[float]:
+    """
+    Per-axis worst (maximum) value over every individual, in minimization space.
+
+    Maximized objectives are negated *before* taking the maximum: computing the
+    worst value in raw space would place the reference on the wrong side of a
+    maximized axis, inflating HV by a large constant and masking its growth.
+    This mirrors the ``all_min`` / ``worst`` block of the hv-gd endpoint.
+
+    Raises
+    ------
+    ValueError
+        If there is no individual to derive the reference from.
+    """
     all_points = []
 
     for fronts in pareto_per_gen.values():
         for p in fronts:
-            all_points.append(
-                [p["objectives"][o] for o in objective_names]
-            )
-            
-    all_points = to_minimization_array(np.array(all_points), objectives=objective_names, minimize=minimize)
+            all_points.append([p["objectives"][o] for o in objective_names])
+
+    if not all_points:
+        raise ValueError("cannot compute a worst point: no individuals available")
+
+    all_points = to_minimization_array(
+        np.array(all_points, dtype=float), objectives=list(objective_names), minimize=minimize
+    )
 
     return all_points.max(axis=0).tolist()
 
+
 # ------------------------------------------------------------
-# Generational Distance computation
+# Generational Distance
 # ------------------------------------------------------------
 def compute_gd(front: np.ndarray, ref_front: np.ndarray) -> float:
-    """Generational Distance (RMS variant) between ``front`` and ``ref_front``.
+    """Generational Distance between ``front`` and ``ref_front``.
 
     For each point p in ``front``, let d(p) be its Euclidean distance to the
-    nearest point of ``ref_front``. This returns the root-mean-square:
+    nearest point of ``ref_front``.  This returns the arithmetic mean:
 
-        GD = sqrt( (1/N) * sum_p d(p)^2 )
+        GD = (1/N) * sum_p d(p)
 
-    This is the p=2 / RMS formulation (Schütze et al., 2012), which is more
-    stable than Van Veldhuizen's classic ``(1/N) * (sum d^p)^(1/p)`` under
-    fronts of different cardinality. Both inputs must be in the same
-    minimization objective space. Returns +inf if either set is empty.
+    This is the p=1 formulation, and it is the one the SimLab API serves to the
+    GUI (``dist.min(axis=1).mean()`` in the hv-gd endpoint), so the numbers the
+    tool prints match the numbers the GUI shows.  Both inputs must be in the
+    same minimization objective space.  Returns +inf if either set is empty.
     """
     if len(front) == 0 or len(ref_front) == 0:
         return float("inf")
 
-    dists = []
-    for p in front:
-        dist = np.min(np.linalg.norm(ref_front - p, axis=1))
-        dists.append(dist)
+    dist = np.sqrt(((np.asarray(front, dtype=float)[:, None, :]
+                     - np.asarray(ref_front, dtype=float)[None, :, :]) ** 2).sum(axis=2))
 
-    return float(np.sqrt(np.mean(np.square(dists))))
+    return float(dist.min(axis=1).mean())
 
 
 # ------------------------------------------------------------
-# Plot: Pareto fronts (same visual pattern)
+# Non-dominated filter in minimization space
 # ------------------------------------------------------------
+def nondominated_rows_min(rows: list[list[float]]) -> list[list[float]]:
+    """
+    Keep only the non-dominated rows of a minimization-space point set.
+
+    Mirrors ``_pareto_front(..., [True]*n_obj)`` in the hv-gd endpoint.
+    """
+    n = len(rows)
+    if n <= 1:
+        return [list(r) for r in rows]
+
+    arr = np.asarray(rows, dtype=float)
+    keep: list[list[float]] = []
+
+    for i in range(n):
+        # j dominates i  <=>  all(arr[j] <= arr[i]) and any(arr[j] < arr[i])
+        le = np.all(arr <= arr[i], axis=1)
+        lt = np.any(arr < arr[i], axis=1)
+        dominated = le & lt
+        dominated[i] = False
+        if not dominated.any():
+            keep.append(list(arr[i]))
+
+    return keep
+
+
+def generation_front_min(
+    individuals: list[dict],
+    objectives: list[str],
+    minimize: list[bool],
+) -> list[list[float]]:
+    """
+    Pareto front of one generation, deduplicated, in minimization space.
+
+    Equivalent to the endpoint's ``_pareto_front`` + dedup block: the front is
+    computed in the original space with the real orientations, then mapped to
+    minimization space and deduplicated by exact objective tuple.
+    """
+    if not individuals:
+        return []
+
+    raw = np.array(
+        [[ind["objectives"][o] for o in objectives] for ind in individuals],
+        dtype=float,
+    )
+    pts_min = to_minimization_array(raw, objectives=objectives, minimize=minimize)
+
+    # Dominance in minimization space is identical to dominance in the original
+    # space with the real orientations, so a single filter suffices here.
+    front_rows = nondominated_rows_min(pts_min.tolist())
+
+    seen: set[tuple] = set()
+    out: list[list[float]] = []
+    for row in front_rows:
+        key = tuple(row)
+        if key not in seen:
+            seen.add(key)
+            out.append(row)
+
+    return out
+
+
+# ------------------------------------------------------------
+# Convergence metrics: HV, cumulative HV and GD
+# ------------------------------------------------------------
+def compute_convergence_metrics(
+    individuals_per_gen: dict[int, list[dict]],
+    objectives: list[str],
+    minimize: list[bool],
+    hv_ref: list[float],
+    reference_front_min: np.ndarray,
+) -> tuple[list[int], list[float], list[float], list[float]]:
+    """
+    Compute per-generation HV, cumulative HV and GD.
+
+    Returns
+    -------
+    (generations, hv, hv_cumulative, gd)
+        ``generations`` is sorted ascending; the three metric lists are aligned
+        with it index by index.  ``gd`` uses NaN for generations with no
+        feasible individual so the curve shows a gap instead of a fake zero.
+
+    The cumulative curve folds each generation's front into a running
+    non-dominated set rather than re-sorting the whole population: a point that
+    is off its own generation's front is dominated within that generation too,
+    so it can never join the accumulated front.  Cost is O(G * front^2).
+    """
+    generations = sorted(individuals_per_gen.keys())
+
+    hv_values: list[float] = []
+    hv_cumulative: list[float] = []
+    gd_values: list[float] = []
+
+    hv_ref_arr = np.asarray(hv_ref, dtype=float)
+    acc_seen: set[tuple] = set()        # dedup keys of the running front
+    acc_rows: list[list[float]] = []    # running non-dominated set (min-space)
+    last_cum_hv = 0.0
+
+    for gen in generations:
+        front_rows = generation_front_min(
+            individuals_per_gen[gen], objectives=objectives, minimize=minimize
+        )
+
+        if not front_rows:
+            hv_values.append(0.0)
+            hv_cumulative.append(last_cum_hv)   # an empty generation adds nothing
+            gd_values.append(float("nan"))
+            continue
+
+        pts_min = np.asarray(front_rows, dtype=float)
+
+        # Only points that strictly dominate the reference contribute to HV;
+        # moocore requires every point passed to it to dominate ``ref``.
+        dominating = pts_min[np.all(pts_min < hv_ref_arr, axis=1)]
+        hv_val = float(moocore.hypervolume(dominating, ref=hv_ref)) if len(dominating) else 0.0
+
+        # Cumulative ("best so far") front.  Duplicates never dominate each
+        # other, so without the dedup key the accumulator would keep one copy
+        # per generation a point reappears in — same hypervolume, unbounded
+        # growth.  Deduplicating keeps the running set minimal.
+        for row in front_rows:
+            key = tuple(row)
+            if key not in acc_seen:
+                acc_seen.add(key)
+                acc_rows.append(row)
+        acc_rows = nondominated_rows_min(acc_rows)
+        acc_seen = {tuple(r) for r in acc_rows}
+        acc_arr = np.asarray(acc_rows, dtype=float)
+        acc_dom = acc_arr[np.all(acc_arr < hv_ref_arr, axis=1)]
+        cum_hv = float(moocore.hypervolume(acc_dom, ref=hv_ref)) if len(acc_dom) else 0.0
+        last_cum_hv = cum_hv
+
+        hv_values.append(hv_val)
+        hv_cumulative.append(cum_hv)
+        gd_values.append(compute_gd(pts_min, reference_front_min))
+
+    return generations, hv_values, hv_cumulative, gd_values
+
+
+# ------------------------------------------------------------
+# Plot: Pareto fronts (dominance layers)
+# ------------------------------------------------------------
+# Colours and marker sizes are taken verbatim from the web GUI's 3D Pareto
+# chart (gui/.../components/charts/ParetoFront3DChart.vue), so a front is the
+# same colour here and there.  The GUI labels ranks 1-indexed and merges
+# everything from rank 5 down into a single grey "Other" group; both
+# conventions are reproduced.
+_GUI_RANK_PALETTE = (
+    "#3b82f6",   # Front 1 — blue
+    "#10b981",   # Front 2 — emerald
+    "#f59e0b",   # Front 3 — amber
+    "#8b5cf6",   # Front 4 — violet
+    "#f43f5e",   # Front 5 — rose
+    "#94a3b8",   # Other   — gray
+)
+# GUI RANK_SIZES_3D: ECharts symbolSize, i.e. marker DIAMETERS in px on a chart
+# a few hundred px wide.  matplotlib's scatter ``s`` is an AREA in points² on a
+# 300-dpi figure, so the diameters are rescaled to this canvas and squared —
+# the 6:5:5:4:4:3 proportions between fronts are preserved exactly.
+_GUI_RANK_SIZES = (6, 5, 5, 4, 4, 3)
+_MARKER_DIAMETER_SCALE = 1.47
+# GUI opacity: 0.9 for a labelled front, 0.4 for the "Other" bucket.
+_GUI_RANK_ALPHA = (0.9, 0.9, 0.9, 0.9, 0.9, 0.4)
+# Ranks at or beyond this index collapse into "Other", as in the GUI.
+_MAX_LABELED_RANKS = 5
+
+
+def _gui_rank_groups(
+    pareto_by_front: dict[int, list[dict]],
+) -> list[tuple[int, str, list[dict]]]:
+    """
+    Bucket dominance layers the way the GUI does.
+
+    Ranks 0..4 stay separate and keep the GUI's 1-indexed labels ("Front 1" is
+    the non-dominated set); every deeper rank is merged into one "Other" group.
+    No individual is dropped — deep layers are grouped, not discarded.
+
+    Returns a list of ``(bucket_index, label, points)``, ordered best-first.
+    """
+    groups: list[tuple[int, str, list[dict]]] = []
+
+    for rank in range(_MAX_LABELED_RANKS):
+        points = pareto_by_front.get(rank, [])
+        if points:
+            groups.append((rank, f"Front {rank + 1}", points))
+
+    other = [
+        point
+        for rank, points in sorted(pareto_by_front.items())
+        if rank >= _MAX_LABELED_RANKS
+        for point in points
+    ]
+    if other:
+        groups.append((_MAX_LABELED_RANKS, "Other", other))
+
+    return groups
+
+
 def plot_pareto_fronts(
     pareto_by_front: dict[int, list[dict]],
-    objective_names: tuple[str, str, str],
-    output_path: Path
+    objective_names: tuple[str, ...],
+    output_path: Path,
 ):
-    fronts = sorted(pareto_by_front.keys())
-    num_fronts = len(fronts)
+    """
+    Scatter every dominance layer of the global non-dominated sort.
 
-    colors = plt.cm.coolwarm(np.linspace(0.1, 0.9, num_fronts))
+    Colour and marker size per front come from the web GUI's palette, so the
+    figure and the GUI agree on what each front looks like.  Fronts are drawn
+    worst-first so that front 1 (the non-dominated set) is never hidden
+    underneath a deeper layer.
+
+    ``pareto_by_front`` maps rank -> individuals; ``objective_names`` must hold
+    exactly three objectives (three 2D projections plus one 3D view).
+    """
+    if len(objective_names) != 3:
+        raise ValueError(f"expected exactly 3 objectives, got {len(objective_names)}")
+
+    groups = _gui_rank_groups(pareto_by_front)
+    if not groups:
+        raise ValueError("no non-empty front to plot")
+
+    def _style(bucket: int) -> tuple[str, float, float]:
+        color = _GUI_RANK_PALETTE[bucket]
+        size = (_GUI_RANK_SIZES[bucket] * _MARKER_DIAMETER_SCALE) ** 2
+        return color, size, _GUI_RANK_ALPHA[bucket]
+
+    def _values(points: list[dict], axis: int) -> list[float]:
+        return [p["objectives"][objective_names[axis]] for p in points]
 
     fig = plt.figure(figsize=(18, 12))
     gs = fig.add_gridspec(2, 3, height_ratios=[1, 1.3])
 
-    pairs = [(1, 0), (1, 2), (0, 2)]
+    # Draw worst-first so the non-dominated set ends up on top everywhere.
+    draw_order = list(range(len(groups)))[::-1]
 
-    # ---------- 2D projections ----------
+    # ---------- 2D projections: all three axis pairs ----------
+    pairs = [(0, 1), (0, 2), (1, 2)]
+
     for idx_pair, (i, j) in enumerate(pairs):
         ax = fig.add_subplot(gs[0, idx_pair])
 
-        for idx_f, f in enumerate(fronts):
-            front = pareto_by_front[f]
-            if not front:
-                continue
-
-            x = [p["objectives"][objective_names[i]] for p in front]
-            y = [p["objectives"][objective_names[j]] for p in front]
-
-            ax.scatter(x, y, color=colors[idx_f], alpha=0.85)
+        for g in draw_order:
+            bucket, _, points = groups[g]
+            color, size, alpha = _style(bucket)
+            ax.scatter(
+                _values(points, i),
+                _values(points, j),
+                color=color,
+                s=size,
+                alpha=alpha,
+                edgecolors="none",
+                zorder=len(groups) - g,
+            )
 
         ax.set_xlabel(objective_names[i])
         ax.set_ylabel(objective_names[j])
         ax.set_title(f"{objective_names[i]} vs {objective_names[j]}")
-        ax.grid(True)
+        ax.grid(True, alpha=0.3)
 
-    # ---------- 3D Pareto ----------
-    ax3d_a = fig.add_subplot(gs[1, 0], projection="3d")
+    # ---------- 3D view ----------
+    ax3d = fig.add_subplot(gs[1, 0:2], projection="3d")
 
-    for idx_f, f in enumerate(fronts):
-        front = pareto_by_front[f]
-        if not front:
-            continue
+    for g in draw_order:
+        bucket, _, points = groups[g]
+        color, size, alpha = _style(bucket)
+        ax3d.scatter(
+            _values(points, 0),
+            _values(points, 1),
+            _values(points, 2),
+            color=color,
+            s=size,
+            alpha=alpha,
+            edgecolors="none",
+            depthshade=False,
+        )
 
-        xs = [p["objectives"][objective_names[0]] for p in front]
-        ys = [p["objectives"][objective_names[1]] for p in front]
-        zs = [p["objectives"][objective_names[2]] for p in front]
+    ax3d.set_xlabel(objective_names[0])
+    ax3d.set_ylabel(objective_names[1])
+    ax3d.set_zlabel(objective_names[2])
+    ax3d.set_title("Pareto fronts (3D)")
 
-        ax3d_a.scatter(xs, ys, zs, color=colors[idx_f], alpha=0.85)
+    # ---------- Legend ----------
+    ax_legend = fig.add_subplot(gs[1, 2])
+    ax_legend.axis("off")
 
-    ax3d_a.set_xlabel(objective_names[0])
-    ax3d_a.set_ylabel(objective_names[1])
-    ax3d_a.set_zlabel(objective_names[2])
-    ax3d_a.set_title("Pareto Fronts (view XYZ)")
-    
-    # ---------- 3D Pareto ----------
-    ax3d_b = fig.add_subplot(gs[1, 1], projection="3d")
+    total_points = sum(len(points) for _, _, points in groups)
+    n_fronts = len(pareto_by_front)
 
-    legend_handles = []
-    legend_labels = []
+    handles = []
+    for bucket, label, points in groups:
+        color, size, alpha = _style(bucket)
+        handles.append(
+            Line2D(
+                [], [], linestyle="none", marker="o",
+                markerfacecolor=color, markeredgecolor="none", alpha=alpha,
+                # Line2D sizes are diameters in points, matching the diameter
+                # the scatter above was built from.
+                markersize=_GUI_RANK_SIZES[bucket] * _MARKER_DIAMETER_SCALE,
+                label=f"{label}  (n = {len(points)})",
+            )
+        )
 
-    for idx_f, f in enumerate(fronts):
-        front = pareto_by_front[f]
-        if not front:
-            continue
-
-        xs = [p["objectives"][objective_names[1]] for p in front]
-        ys = [p["objectives"][objective_names[0]] for p in front]
-        zs = [p["objectives"][objective_names[2]] for p in front]
-
-        sc = ax3d_b.scatter(xs, ys, zs, color=colors[idx_f], alpha=0.85)
-        legend_handles.append(sc)
-        legend_labels.append(f"F{f}")
-
-    ax3d_b.set_xlabel(objective_names[1])
-    ax3d_b.set_ylabel(objective_names[0])
-    ax3d_b.set_zlabel(objective_names[2])
-    ax3d_b.set_title("Pareto Fronts (swapped axes)")
-
-    ax3d_b.legend(
-        legend_handles,
-        legend_labels,
-        loc="center left",
-        bbox_to_anchor=(1.15, 0.5),
-        title="Fronts"
+    ax_legend.legend(
+        handles=handles,
+        loc="center",
+        title=f"Dominance layers\n{n_fronts} fronts · {total_points} unique solutions",
+        frameon=True,
+        labelspacing=1.1,
     )
 
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    fig.suptitle("Pareto fronts (dominance layers)", fontsize=15)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 # ------------------------------------------------------------
-# Plot: distribution by generation × front
-# ------------------------------------------------------------
-def plot_global_front_per_generation_distribution(
-    population: list[dict],
-    output_path: Path
-):
-    counts = defaultdict(lambda: defaultdict(int))
-
-    for ind in population:
-        gen = ind.get("generation")
-        rank = ind.get("rank")
-        if rank is None:
-            rank = 999
-            ind["rank"] = rank
-        counts[gen][rank] += 1
-
-    generations = sorted(counts.keys())
-    fronts = sorted({ind["rank"] for ind in population})
-
-    x = np.arange(len(generations))
-    bar_width = 0.9 / len(fronts)
-
-    colors = plt.cm.coolwarm(np.linspace(0.1, 0.9, len(fronts)))
-
-    fig, ax = plt.subplots(figsize=(18, 6))
-
-    for idx_f, f in enumerate(fronts):
-        values = [counts[g].get(f, 0) for g in generations]
-        ax.bar(
-            x + idx_f * bar_width,
-            values,
-            width=bar_width,
-            color=colors[idx_f],
-            label=f"F{f}"
-        )
-
-    ax.set_xlabel("Generation")
-    ax.set_ylabel("Number of Individuals")
-    ax.set_title("Individuals per Pareto Front by Generation (Global)")
-
-    ax.set_xticks(x + bar_width * (len(fronts) - 1) / 2)
-    ax.set_xticklabels(generations)
-
-    ax.legend(title="Pareto Fronts")
-    ax.grid(axis="y", linestyle="--", alpha=0.6)
-
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-    
-# ------------------------------------------------------------
-# Plot: distribution by generation × front (intra-generation ranking)
-# ------------------------------------------------------------
-def plot_local_front_per_generation_distribution(
-    population: dict[int, list[dict[str, Any]]],
-    output_path: Path
-):
-    """
-    Plot distribution of Pareto fronts per generation.
-
-    The non-dominated sorting is computed independently
-    inside each generation.
-    """
-
-    # ------------------------------------------------------------
-    # Build counts[generation][front] = number of individuals
-    # ------------------------------------------------------------
-    counts = defaultdict(lambda: defaultdict(int))
-
-    for gen, individuals in population.items():
-
-        # --------------------------------------------
-        # Build local population (generation only)
-        # --------------------------------------------
-        local_population = []
-
-        for ind in individuals:
-            local_population.append({
-                "id": ind["id"],
-                "generation": gen,
-                "objectives": ind["objectives"]
-            })
-
-        if not local_population:
-            continue
-
-        # --------------------------------------------
-        # Fast non-dominated sorting (intra-generation)
-        # --------------------------------------------
-        fronts = fast_nondominated_sort(local_population)
-
-        for f_idx, front in enumerate(fronts):
-            counts[gen][f_idx] = len(front)
-
-    # ------------------------------------------------------------
-    # Axes construction
-    # ------------------------------------------------------------
-    generations = sorted(counts.keys())
-
-    all_fronts = sorted({
-        f for gen_counts in counts.values()
-        for f in gen_counts.keys()
-    })
-
-    if not generations or not all_fronts:
-        print("[WARN] No data for front-per-generation distribution")
-        return
-
-    x = np.arange(len(generations))
-    bar_width = 0.8 / len(all_fronts)
-
-    colors = plt.cm.coolwarm(
-        np.linspace(0.1, 0.9, len(all_fronts))
-    )
-
-    # ------------------------------------------------------------
-    # Plot
-    # ------------------------------------------------------------
-    fig, ax = plt.subplots(figsize=(18, 6))
-
-    for idx_f, f in enumerate(all_fronts):
-
-        values = [
-            counts[g].get(f, 0)
-            for g in generations
-        ]
-
-        ax.bar(
-            x + idx_f * bar_width,
-            values,
-            width=bar_width,
-            color=colors[idx_f],
-            label=f"F{f}"
-        )
-
-    # ------------------------------------------------------------
-    # Labels & layout
-    # ------------------------------------------------------------
-    ax.set_xlabel("Generation")
-    ax.set_ylabel("Number of Individuals")
-    ax.set_title(
-        "Pareto Front Distribution per Generation (Local)"
-    )
-
-    ax.set_xticks(
-        x + bar_width * (len(all_fronts) - 1) / 2
-    )
-    ax.set_xticklabels(generations)
-
-    ax.legend(title="Pareto Fronts")
-    ax.grid(axis="y", linestyle="--", alpha=0.6)
-
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-
-# ------------------------------------------------------------
-# Plot: parallel coordinates for Pareto front 0
-# ------------------------------------------------------------
-def plot_parallel_coordinates_pareto0(
-    pareto_by_front: dict[int, list[dict]],
-    objective_names: tuple[str, str, str],
-    minimize: list[bool],
-    output_path: Path
-):
-    front0 = pareto_by_front.get(0, [])
-    if not front0:
-        print("[WARN] Empty Pareto front 0 (parallel coordinates)")
-        return
-
-    # Deduplicate by objectives so legend is not overloaded by clones
-    seen: set[tuple] = set()
-    unique_front0 = []
-    for p in front0:
-        key = tuple(p["objectives"][o] for o in objective_names)
-        if key not in seen:
-            seen.add(key)
-            unique_front0.append(p)
-    front0 = unique_front0
-
-    ids = [p.get("id", str(i)) for i, p in enumerate(front0)]
-
-    data = np.array([
-        [p["objectives"][obj] for obj in objective_names]
-        for p in front0
-    ])
-
-    norm = normalize_objectives(data, minimize)
-
-    fig, ax = plt.subplots(figsize=(16, 6))
-
-    x = np.arange(len(objective_names))
-
-    cmap = colormaps["tab20"].resampled(len(front0))
-
-    for i, row in enumerate(norm):
-        ax.plot(
-            x,
-            row,
-            color=cmap(i),
-            alpha=0.8,
-            linewidth=2,
-            label=str(ids[i])
-        )
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(objective_names)
-    ax.set_ylabel("Normalized objective value")
-    ax.set_title("Pareto Front 0 — Parallel Coordinates")
-
-    ax.grid(True, axis="y", linestyle="--", alpha=0.5)
-
-    ax.legend(
-        title="Simulation ID",
-        loc="center left",
-        bbox_to_anchor=(1.02, 0.5),
-        fontsize=9
-    )
-
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-
-# ------------------------------------------------------------
-# Plot: radar for Pareto front 0
-# ------------------------------------------------------------
-def plot_radar_pareto0(
-    pareto_by_front: dict[int, list[dict]],
-    objective_names: tuple[str, str, str],
-    minimize: list[bool],
-    output_path: Path
-):
-    front0 = pareto_by_front.get(0, [])
-    if not front0:
-        print("[WARN] Empty Pareto front 0 (radar)")
-        return
-
-    # Deduplicate by objectives
-    seen: set[tuple] = set()
-    unique_front0 = []
-    for p in front0:
-        key = tuple(p["objectives"][o] for o in objective_names)
-        if key not in seen:
-            seen.add(key)
-            unique_front0.append(p)
-    front0 = unique_front0
-
-    ids = [p.get("id", str(i)) for i, p in enumerate(front0)]
-
-    data = np.array([
-        [p["objectives"][obj] for obj in objective_names]
-        for p in front0
-    ])
-
-    norm = normalize_objectives(data, minimize)
-
-    num_vars = len(objective_names)
-    angles = np.linspace(0, 2 * np.pi, num_vars, endpoint=False)
-    angles = np.concatenate([angles, [angles[0]]])
-
-    fig = plt.figure(figsize=(9, 9))
-    ax = fig.add_subplot(111, polar=True)
-
-    cmap = colormaps["tab20"].resampled(len(front0))
-
-    for i, row in enumerate(norm):
-        values = np.concatenate([row, [row[0]]])
-        ax.plot(
-            angles,
-            values,
-            color=cmap(i),
-            linewidth=2,
-            alpha=0.9,
-            label=str(ids[i])
-        )
-        ax.fill(
-            angles,
-            values,
-            color=cmap(i),
-            alpha=0.12
-        )
-
-    ax.set_thetagrids(
-        angles[:-1] * 180 / np.pi,
-        objective_names
-    )
-
-    ax.set_ylim(0, 1)
-    ax.set_title("Pareto Front 0 — Radar Plot", pad=25)
-
-    ax.legend(
-        title="Simulation ID",
-        loc="center left",
-        bbox_to_anchor=(1.25, 0.5),
-        fontsize=9
-    )
-
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-
-# ------------------------------------------------------------
-# Plot: hypervolume and generational distance evolution
+# Plot: hypervolume (per generation + cumulative) and GD
 # ------------------------------------------------------------
 def plot_hv_gd(
     generations: list[int],
     hv_values: list[float],
+    hv_cumulative: list[float],
     gd_values: list[float],
     worst_point: list[float],
-    output_path: Path
+    objective_names: tuple[str, ...],
+    output_path: Path,
 ):
-    fig, (ax_hv, ax_gd) = plt.subplots(
-        1, 2,
-        figsize=(15, 5),
-        sharex=True
+    """
+    Left panel: hypervolume per generation and its cumulative (best-so-far)
+    envelope, the same two series the GUI toggles between.  Both share the
+    reference point printed in the title, so they are directly comparable and
+    the cumulative curve always sits on or above the per-generation one.
+
+    Right panel: generational distance to the experiment's stored Pareto front.
+    """
+    fig, (ax_hv, ax_gd) = plt.subplots(1, 2, figsize=(15, 5), sharex=True)
+
+    ref_txt = ", ".join(
+        f"{name}={value:.3g}" for name, value in zip(objective_names, worst_point)
     )
 
-    # -------------------------------
-    # Hypervolume
-    # -------------------------------
-    ax_hv.plot(generations, hv_values, marker="o")
+    # ---------- Hypervolume ----------
+    ax_hv.plot(
+        generations, hv_values,
+        marker="o", markersize=4, linewidth=1.5,
+        color="tab:blue", label="Per generation",
+    )
+    ax_hv.plot(
+        generations, hv_cumulative,
+        marker="^", markersize=4, linewidth=1.8, linestyle="--",
+        color="tab:green", label="Cumulative (best so far)",
+    )
+    ax_hv.fill_between(generations, hv_values, hv_cumulative, color="tab:green", alpha=0.08)
     ax_hv.set_ylabel("Hypervolume")
-    ax_hv.set_title(
-        "Hypervolume Evolution\n"
-        f"Reference point = {np.round(worst_point, 3).tolist()}"
-    )
-    ax_hv.grid(True)
+    ax_hv.set_title(f"Hypervolume evolution\nreference point (min-space): {ref_txt}")
+    ax_hv.legend(loc="lower right", fontsize=9)
+    ax_hv.grid(True, alpha=0.3)
 
-    # -------------------------------
-    # Generational Distance
-    # -------------------------------
-    ax_gd.plot(generations, gd_values, marker="s", color="tab:red")
-    ax_gd.set_ylabel("Generational Distance")
-    ax_gd.set_title("Generational Distance to Final Pareto Front")
-    ax_gd.grid(True)
+    # ---------- Generational distance ----------
+    ax_gd.plot(
+        generations, gd_values,
+        marker="s", markersize=4, linewidth=1.5, color="tab:red",
+    )
+    ax_gd.set_ylabel("Generational distance")
+    ax_gd.set_title("Generational distance to the stored Pareto front")
+    ax_gd.grid(True, alpha=0.3)
+
+    # A long run would otherwise stamp one tick per generation and smear them
+    # into an unreadable band.
+    step = max(1, len(generations) // 15)
+    ticks = generations[::step]
 
     for ax in (ax_hv, ax_gd):
         ax.set_xlabel("Generation")
-        ax.set_xticks(generations)
-        ax.set_xticklabels([str(g) for g in generations])
+        ax.set_xticks(ticks)
+        ax.set_xticklabels([str(g) for g in ticks])
 
     fig.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-
-# ------------------------------------------------------------
-# Plot: individual lifetime across generations
-# ------------------------------------------------------------
-def plot_individual_lifetime(
-    individuals_per_generation: dict[int, list[dict[str, Any]]],
-    pareto_by_front: dict[int, list[dict]],
-    output_path: Path
-):
-    """
-    Plot individual survival across generations.
-
-    Each horizontal bar represents the lifespan of an individual:
-        birth_generation -> death_generation
-
-    Color encodes the GLOBAL Pareto rank.
-    """
-
-    # ------------------------------------------------------------
-    # Build presence map
-    # ------------------------------------------------------------
-    presence = defaultdict(list)
-
-    for gen, individuals in individuals_per_generation.items():
-        for ind in individuals:
-            iid = ind["id"]
-            presence[iid].append(gen)
-
-    # ------------------------------------------------------------
-    # Birth / death extraction
-    # ------------------------------------------------------------
-    lifetimes = []
-
-    for iid, gens in presence.items():
-        birth = min(gens)
-        death = max(gens)
-        lifetimes.append((iid, birth, death))
-
-    # ------------------------------------------------------------
-    # Global rank map
-    # ------------------------------------------------------------
-    rank_map = {}
-
-    for rank, front in pareto_by_front.items():
-        for ind in front:
-            rank_map[ind["id"]] = rank
-
-    # Default rank for missing (should not happen)
-    max_rank = max(rank_map.values(), default=0)
-
-    # ------------------------------------------------------------
-    # Sorting individuals
-    # Strategy: by birth → rank → death
-    # ------------------------------------------------------------
-    lifetimes.sort(
-        key=lambda x: (
-            x[1],                     # birth
-            rank_map.get(x[0], max_rank),
-            x[2]                      # death
-        )
-    )
-
-    ids = [x[0] for x in lifetimes]
-    births = [x[1] for x in lifetimes]
-    deaths = [x[2] for x in lifetimes]
-    durations = [d - b + 1 for b, d in zip(births, deaths)]
-
-    # ------------------------------------------------------------
-    # Color mapping by global Pareto front
-    # ------------------------------------------------------------
-    unique_ranks = sorted(set(rank_map.values()))
-    cmap = plt.cm.coolwarm(
-        np.linspace(0.1, 0.9, len(unique_ranks))
-    )
-
-    rank_to_color = {
-        r: cmap[i]
-        for i, r in enumerate(unique_ranks)
-    }
-
-    colors = [
-        rank_to_color.get(
-            rank_map.get(iid, max_rank),
-            (0.5, 0.5, 0.5, 1.0)
-        )
-        for iid in ids
-    ]
-
-    # ------------------------------------------------------------
-    # Plot
-    # ------------------------------------------------------------
-    N = len(ids)
-
-    HEIGHT_PER_INDIVIDUAL = 0.25
-    MAX_HEIGHT_IN = 30
-
-    height = min(MAX_HEIGHT_IN, max(6, N * HEIGHT_PER_INDIVIDUAL))
-
-    fig, ax = plt.subplots(
-        figsize=(18, height)
-    )
-
-    y_pos = np.arange(N)
-
-    ax.barh(
-        y_pos,
-        durations,
-        left=births,
-        color=colors,
-        edgecolor="black",
-        alpha=0.9
-    )
-
-    # ------------------------------------------------------------
-    # Labels
-    # ------------------------------------------------------------
-    ax.set_xlabel("Generation")
-    ax.set_ylabel("Individual (Simulation ID)")
-    ax.set_title(
-        "Individual Lifetime Across Generations\n"
-        "Color = Global Pareto Rank"
-    )
-
-    ax.set_yticks(y_pos)
-    ax.set_yticklabels(ids, fontsize=8)
-
-    ax.grid(axis="x", linestyle="--", alpha=0.6)
-
-    # ------------------------------------------------------------
-    # Legend (Pareto fronts)
-    # ------------------------------------------------------------
-    handles = [
-        plt.Rectangle((0, 0), 1, 1, color=rank_to_color[r])
-        for r in unique_ranks
-    ]
-
-    labels = [f"F{r}" for r in unique_ranks]
-
-    ax.legend(
-        handles,
-        labels,
-        title="Global Pareto Front",
-        bbox_to_anchor=(1.02, 0.5),
-        loc="center left"
-    )
-
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-
-# ------------------------------------------------------------
-# Plot: individual lifetime per generation (presence + survival)
-# ------------------------------------------------------------
-def plot_individual_lifetime_per_generation(
-    individuals_per_generation: dict[int, list[dict[str, Any]]],
-    pareto_by_front: dict[int, list[dict]],
-    output_dir: Path
-):
-    """
-    Generate one lifetime plot per generation.
-
-    For each generation g:
-        - individuals present in g are selected
-        - survival is tracked forward
-        - color = global Pareto rank
-    """
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # ------------------------------------------------------------
-    # Presence map
-    # ------------------------------------------------------------
-    presence = defaultdict(list)
-
-    for gen, individuals in individuals_per_generation.items():
-        for ind in individuals:
-            presence[ind["id"]].append(gen)
-
-    # ------------------------------------------------------------
-    # Global rank map
-    # ------------------------------------------------------------
-    rank_map = {}
-
-    for rank, front in pareto_by_front.items():
-        for ind in front:
-            rank_map[ind["id"]] = rank
-
-    unique_ranks = sorted(set(rank_map.values()))
-    cmap = plt.cm.coolwarm(
-        np.linspace(0.1, 0.9, len(unique_ranks))
-    )
-
-    rank_to_color = {
-        r: cmap[i]
-        for i, r in enumerate(unique_ranks)
-    }
-
-    generations = sorted(individuals_per_generation.keys())
-
-    # ------------------------------------------------------------
-    # Plot per generation
-    # ------------------------------------------------------------
-    for g in generations:
-
-        individuals = individuals_per_generation[g]
-
-        lifetimes = []
-
-        for ind in individuals:
-            iid = ind["id"]
-            gens = presence[iid]
-
-            birth = g
-            death = max(t for t in gens if t >= g)
-
-            lifetimes.append((iid, birth, death))
-
-        if not lifetimes:
-            continue
-
-        # Sort by rank then survival
-        lifetimes.sort(
-            key=lambda x: (
-                rank_map.get(x[0], 999),
-                -(x[2] - x[1])
-            )
-        )
-
-        ids = [x[0] for x in lifetimes]
-        births = [x[1] for x in lifetimes]
-        durations = [x[2] - x[1] + 1 for x in lifetimes]
-
-        colors = [
-            rank_to_color.get(
-                rank_map.get(iid, 999),
-                (0.5, 0.5, 0.5, 1.0)
-            )
-            for iid in ids
-        ]
-
-        # --------------------------------------------------------
-        # Adaptive sizing
-        # --------------------------------------------------------
-        N = len(ids)
-
-        HEIGHT_PER_INDIVIDUAL = 0.25
-        MAX_HEIGHT_IN = 25
-
-        height = min(
-            MAX_HEIGHT_IN,
-            max(5, N * HEIGHT_PER_INDIVIDUAL)
-        )
-
-        fig, ax = plt.subplots(figsize=(18, height))
-
-        y_pos = np.arange(N)
-
-        ax.barh(
-            y_pos,
-            durations,
-            left=births,
-            color=colors,
-            edgecolor="black",
-            alpha=0.9
-        )
-
-        ax.set_xlabel("Generation")
-        ax.set_title(
-            f"Individual Survival Starting at Generation {g}\n"
-            "Color = Global Pareto Rank"
-        )
-
-        if N > 60:
-            ax.set_yticks([])
-        else:
-            ax.set_yticks(y_pos)
-            ax.set_yticklabels(ids, fontsize=8)
-
-        ax.grid(axis="x", linestyle="--", alpha=0.6)
-
-        # Legend
-        handles = [
-            plt.Rectangle((0, 0), 1, 1, color=rank_to_color[r])
-            for r in unique_ranks
-        ]
-
-        labels = [f"F{r}" for r in unique_ranks]
-
-        ax.legend(
-            handles,
-            labels,
-            title="Global Pareto Front",
-            bbox_to_anchor=(1.02, 0.5),
-            loc="center left"
-        )
-
-        plt.tight_layout()
-
-        out_path = output_dir / f"lifetime_gen_{g}.png"
-
-        plt.savefig(out_path, dpi=300)
-        plt.close(fig)
-
-        print(f"[OK] Lifetime plot generated for generation {g}")
-
-# ------------------------------------------------------------
-# Plot: Pareto front of last generation only
-# ------------------------------------------------------------ 
-def plot_last_generation_pareto_front(
-    pareto_per_generation: dict[int, list[dict]],
-    objective_names: tuple[str, str, str],
-    output_path: Path
-):
-    """
-    Plot ONLY the Pareto front of the last generation,
-    following the EXACT visual pattern of plot_pareto_fronts().
-    """
-
-    if not pareto_per_generation:
-        print("[WARN] No Pareto data available")
-        return
-
-    # ------------------------------------------------------------
-    # Identify last generation
-    # ------------------------------------------------------------
-    last_gen = max(pareto_per_generation.keys())
-    front = pareto_per_generation[last_gen]
-
-    if not front:
-        print(f"[WARN] Empty Pareto front at generation {last_gen}")
-        return
-
-    # ------------------------------------------------------------
-    # Mimic structure of 'pareto_by_front'
-    # Single front → index 0
-    # ------------------------------------------------------------
-    pareto_by_front = {0: front}
-
-    fronts = [0]
-    num_fronts = 1
-
-    colors = plt.cm.coolwarm(
-        np.linspace(0.1, 0.9, num_fronts)
-    )
-
-    # ------------------------------------------------------------
-    # Figure layout (IDENTICAL)
-    # ------------------------------------------------------------
-    fig = plt.figure(figsize=(18, 12))
-    gs = fig.add_gridspec(2, 3, height_ratios=[1, 1.3])
-
-    pairs = [(1, 0), (1, 2), (0, 2)]
-
-    # ------------------------------------------------------------
-    # 2D projections
-    # ------------------------------------------------------------
-    for idx_pair, (i, j) in enumerate(pairs):
-
-        ax = fig.add_subplot(gs[0, idx_pair])
-
-        front_data = pareto_by_front[0]
-
-        x = [
-            p["objectives"][objective_names[i]]
-            for p in front_data
-        ]
-
-        y = [
-            p["objectives"][objective_names[j]]
-            for p in front_data
-        ]
-
-        ax.scatter(
-            x,
-            y,
-            color=colors[0],
-            alpha=0.85
-        )
-
-        ax.set_xlabel(objective_names[i])
-        ax.set_ylabel(objective_names[j])
-        ax.set_title(
-            f"{objective_names[i]} vs {objective_names[j]}"
-        )
-        ax.grid(True)
-
-    # ------------------------------------------------------------
-    # 3D view A (XYZ)
-    # ------------------------------------------------------------
-    ax3d_a = fig.add_subplot(
-        gs[1, 0],
-        projection="3d"
-    )
-
-    xs = [
-        p["objectives"][objective_names[0]]
-        for p in front
-    ]
-    ys = [
-        p["objectives"][objective_names[1]]
-        for p in front
-    ]
-    zs = [
-        p["objectives"][objective_names[2]]
-        for p in front
-    ]
-
-    ax3d_a.scatter(
-        xs,
-        ys,
-        zs,
-        color=colors[0],
-        alpha=0.85
-    )
-
-    ax3d_a.set_xlabel(objective_names[0])
-    ax3d_a.set_ylabel(objective_names[1])
-    ax3d_a.set_zlabel(objective_names[2])
-    ax3d_a.set_title(
-        f"Pareto Front — Last Generation (XYZ)\nG{last_gen}"
-    )
-
-    # ------------------------------------------------------------
-    # 3D view B (swapped axes)
-    # ------------------------------------------------------------
-    ax3d_b = fig.add_subplot(
-        gs[1, 1],
-        projection="3d"
-    )
-
-    xs = [
-        p["objectives"][objective_names[1]]
-        for p in front
-    ]
-    ys = [
-        p["objectives"][objective_names[0]]
-        for p in front
-    ]
-    zs = [
-        p["objectives"][objective_names[2]]
-        for p in front
-    ]
-
-    sc = ax3d_b.scatter(
-        xs,
-        ys,
-        zs,
-        color=colors[0],
-        alpha=0.85
-    )
-
-    ax3d_b.set_xlabel(objective_names[1])
-    ax3d_b.set_ylabel(objective_names[0])
-    ax3d_b.set_zlabel(objective_names[2])
-
-    ax3d_b.set_title(
-        f"Pareto Front — Last Generation (swapped)\nG{last_gen}"
-    )
-
-    # Legend (same pattern)
-    ax3d_b.legend(
-        [sc],
-        [f"F0 (Gen {last_gen})"],
-        loc="center left",
-        bbox_to_anchor=(1.15, 0.5),
-        title="Fronts"
-    )
-
-    # ------------------------------------------------------------
-    # Layout & save
-    # ------------------------------------------------------------
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-
-# ------------------------------------------------------------
-# Plot: global distribution of individuals across fronts
-# ------------------------------------------------------------
-def plot_global_front_distribution(
-    population: list[dict],
-    output_path: Path
-):
-    """
-    Plot the distribution of individuals across
-    GLOBAL Pareto fronts.
-
-    Requires population already ranked via
-    fast_nondominated_sort().
-    """
-
-    if not population:
-        print("[WARN] Empty population")
-        return
-
-    # ------------------------------------------------------------
-    # Count individuals per front
-    # ------------------------------------------------------------
-    front_counts = defaultdict(int)
-
-    for ind in population:
-
-        rank = ind.get("rank")
-
-        if rank is None:
-            print(
-                f"[WARN] Individual {ind.get('id')} "
-                "without rank — skipped"
-            )
-            continue
-
-        front_counts[rank] += 1
-
-    if not front_counts:
-        print("[WARN] No rank data available")
-        return
-
-    # ------------------------------------------------------------
-    # Sorting fronts
-    # ------------------------------------------------------------
-    fronts = sorted(front_counts.keys())
-    counts = [front_counts[f] for f in fronts]
-
-    # ------------------------------------------------------------
-    # Color mapping (same pattern)
-    # ------------------------------------------------------------
-    colors = plt.cm.coolwarm(
-        np.linspace(0.1, 0.9, len(fronts))
-    )
-
-    # ------------------------------------------------------------
-    # Plot
-    # ------------------------------------------------------------
-    fig, ax = plt.subplots(figsize=(14, 6))
-
-    bars = ax.bar(
-        [f"F{f}" for f in fronts],
-        counts,
-        color=colors,
-        edgecolor="black",
-        alpha=0.9
-    )
-
-    # Labels
-    ax.set_xlabel("Pareto Front")
-    ax.set_ylabel("Number of Individuals")
-
-    ax.set_title(
-        "Global Distribution of Individuals Across Pareto Fronts"
-    )
-
-    ax.grid(axis="y", linestyle="--", alpha=0.6)
-
-    # Annotate counts on bars
-    for bar, val in zip(bars, counts):
-
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height(),
-            str(val),
-            ha="center",
-            va="bottom",
-            fontsize=10
-        )
-
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
-# ------------------------------------------------------------
-# CLI
-# ------------------------------------------------------------
 def main():
     # ------------------------------------------------------------
     # ARGS
@@ -1330,7 +704,8 @@ def main():
     )
 
     args = parser.parse_args()
-    
+
+    args.objectives = list(args.objectives)
     args.minimize = [s.lower() == "true" for s in args.minimize]
 
     # ------------------------------------------------------------
@@ -1346,6 +721,12 @@ def main():
         label_objectives=args.objectives,
     )
 
+    if not any(individuals_per_gen.values()):
+        raise SystemExit(
+            "[ERROR] No feasible individual found for this experiment — "
+            "every individual is penalized or the experiment has no generations."
+        )
+
     # Authoritative Pareto front stored by the engine — exactly what the GUI shows.
     # Items: {"objectives": {metric: value, ...}, "chromosome": {...}}
     stored_pareto = get_experiment_pareto_front(
@@ -1354,22 +735,18 @@ def main():
         experiment_id=args.expid,
     )
 
-    # pareto_by_front used for Pareto-front visualizations (2D/3D, parallel, radar).
-    # Wraps the stored front directly so plots match the GUI.
-    pareto_by_front_viz = {0: stored_pareto}
-
     # ------------------------------------------------------------
-    # GLOBAL POPULATION — deduplicated by exact objectives
+    # GLOBAL DOMINANCE LAYERS — deduplicated by exact objectives
     # ------------------------------------------------------------
-    # The same chromosome can appear in multiple generations with
-    # different MongoDB _ids.  Keeping all copies inflates the
-    # non-dominated front because duplicates never dominate each other.
-    # We deduplicate here so that rank-based analyses (distributions,
-    # lifetime coloring) reflect unique solutions.
+    # The same chromosome can appear in several generations under different
+    # MongoDB _ids.  Keeping every copy would inflate the non-dominated front,
+    # because duplicates never dominate each other.  Deduplicating here makes
+    # the ranks match the GUI's individualRankMap, which sorts unique objective
+    # vectors of all non-penalized individuals.
     seen_obj_keys: set[tuple] = set()
     dedup_population: list[dict] = []
-    for gen, inds in individuals_per_gen.items():
-        for ind in inds:
+    for gen in sorted(individuals_per_gen.keys()):
+        for ind in individuals_per_gen[gen]:
             key = tuple(ind["objectives"][o] for o in args.objectives)
             if key not in seen_obj_keys:
                 seen_obj_keys.add(key)
@@ -1379,43 +756,17 @@ def main():
                     "objectives": ind["objectives"],
                 })
 
-    # Global non-dominated sort on the deduplicated population.
     dedup_fronts = fast_nondominated_sort(dedup_population, args.objectives, args.minimize)
-
-    # Build rank mapping: objective-tuple → global rank
-    obj_rank_map: dict[tuple, int] = {}
-    for rank, front in enumerate(dedup_fronts):
-        for ind in front:
-            key = tuple(ind["objectives"][o] for o in args.objectives)
-            obj_rank_map[key] = rank
-
-    # pareto_by_front used for distribution/lifetime analysis (has "id" fields).
-    pareto_by_front_analysis: dict[int, list[dict]] = defaultdict(list)
-    for ind in dedup_population:
-        key = tuple(ind["objectives"][o] for o in args.objectives)
-        rank = obj_rank_map.get(key, 999)
-        ind["rank"] = rank
-        pareto_by_front_analysis[rank].append(ind)
-
-    # Propagate rank to every individual in individuals_per_gen
-    # (including duplicates across generations) so lifetime plots work.
-    for gen, inds in individuals_per_gen.items():
-        for ind in inds:
-            key = tuple(ind["objectives"][o] for o in args.objectives)
-            ind["rank"] = obj_rank_map.get(key, 999)
-
-    # flat list with rank for distribution plots
-    population_ranked = build_population_from_api(individuals_per_gen)
-    for ind in population_ranked:
-        key = tuple(ind["objectives"][o] for o in args.objectives)
-        ind["rank"] = obj_rank_map.get(key, 999)
+    pareto_by_front: dict[int, list[dict]] = {
+        rank: front for rank, front in enumerate(dedup_fronts) if front
+    }
 
     # ------------------------------------------------------------
-    # Pareto front plots (use stored_pareto — matches the GUI)
+    # Pareto fronts (dominance layers)
     # ------------------------------------------------------------
     pareto_plot = Path(f"pareto_fronts_{args.expid}.png")
     plot_pareto_fronts(
-        pareto_by_front_viz,
+        pareto_by_front,
         tuple(args.objectives),
         pareto_plot,
     )
@@ -1423,100 +774,14 @@ def main():
         session, args.api_base, args.expid, pareto_plot,
         "pareto_fronts", "Pareto fronts (dominance layers)",
     )
-    print("[OK] Pareto dominance analysis completed")
+    print(
+        f"[OK] Pareto dominance analysis completed "
+        f"({len(pareto_by_front)} fronts, {len(dedup_population)} unique solutions)"
+    )
 
     # ------------------------------------------------------------
-    # Distribution of individuals per global front and generation
+    # HV (per generation + cumulative) and GD
     # ------------------------------------------------------------
-    dist_plot = Path(f"pareto_distribution_{args.expid}.png")
-    plot_global_front_per_generation_distribution(population_ranked, dist_plot)
-    upload_analysis_file_api(
-        session, args.api_base, args.expid, dist_plot,
-        "pareto_distribution", "Distribution of individuals per front and generation",
-    )
-    print("[OK] Distribution of individuals per front and generation completed")
-
-    # ------------------------------------------------------------
-    # Global distribution of individuals across fronts
-    # ------------------------------------------------------------
-    global_dist_plot = Path(f"pareto_global_distribution_{args.expid}.png")
-    plot_global_front_distribution(population=population_ranked, output_path=global_dist_plot)
-    upload_analysis_file_api(
-        session, args.api_base, args.expid, global_dist_plot,
-        "pareto_global_distribution", "Global distribution of individuals across Pareto fronts",
-    )
-    print("[OK] Global Pareto distribution completed")
-
-    # ------------------------------------------------------------
-    # Front distribution per local front and generation
-    # ------------------------------------------------------------
-    front_gen_plot = Path(f"pareto_fronts_per_generation_{args.expid}.png")
-    plot_local_front_per_generation_distribution(
-        population=individuals_per_gen,
-        output_path=front_gen_plot,
-    )
-    upload_analysis_file_api(
-        session, args.api_base, args.expid, front_gen_plot,
-        "pareto_fronts_per_generation", "Pareto fronts distribution computed intra-generation",
-    )
-    print("[OK] Pareto fronts per generation completed")
-
-    # ------------------------------------------------------------
-    # Lifetime analysis
-    # ------------------------------------------------------------
-    lifetime_dir = Path(f"lifetimes_{args.expid}")
-    plot_individual_lifetime_per_generation(
-        individuals_per_generation=individuals_per_gen,
-        pareto_by_front=pareto_by_front_analysis,
-        output_dir=lifetime_dir,
-    )
-    for file in lifetime_dir.glob("*.png"):
-        upload_analysis_file_api(
-            session, args.api_base, args.expid,
-            file, file.name.replace(".png", ""), file.name.replace(".png", ""),
-        )
-    print("[OK] Lifetime per generation completed")
-
-    lifetime_plot = Path(f"individual_lifetime_{args.expid}.png")
-    plot_individual_lifetime(
-        individuals_per_generation=individuals_per_gen,
-        pareto_by_front=pareto_by_front_analysis,
-        output_path=lifetime_plot,
-    )
-    upload_analysis_file_api(
-        session, args.api_base, args.expid, lifetime_plot,
-        "individual_lifetime", "Individual survival across generations (colored by global Pareto rank)",
-    )
-    print("[OK] Individual lifetime completed")
-
-    # ------------------------------------------------------------
-    # Local Pareto front per generation → last-generation plot
-    # ------------------------------------------------------------
-    pareto_per_gen: dict[int, list[dict]] = {}
-    for gen, inds in individuals_per_gen.items():
-        local_pop = [
-            {"id": ind["id"], "generation": gen, "objectives": ind["objectives"]}
-            for ind in inds
-        ]
-        local_fronts = fast_nondominated_sort(local_pop, args.objectives, args.minimize)
-        pareto_per_gen[gen] = local_fronts[0] if local_fronts else []
-
-    last_front_plot = Path(f"pareto_last_generation_{args.expid}.png")
-    plot_last_generation_pareto_front(
-        pareto_per_generation=pareto_per_gen,
-        objective_names=tuple(args.objectives),
-        output_path=last_front_plot,
-    )
-    upload_analysis_file_api(
-        session, args.api_base, args.expid, last_front_plot,
-        "pareto_last_generation", "Pareto front of the last generation",
-    )
-    print("[OK] Pareto front of last generation completed")
-
-    # ------------------------------------------------------------
-    # HV and GD computation
-    # ------------------------------------------------------------
-    # HV reference point + GD reference front.
     # Synthetic experiments have a closed-form true Pareto front: use the
     # benchmark's analytical front as the GD reference (convergence to the real
     # optimum, not to the run's own final front) and its fixed nadir as the HV
@@ -1526,7 +791,7 @@ def main():
         from lib.true_fronts import sample_true_front, true_nadir
         m = args.true_front_m or len(args.objectives)
         true_front = sample_true_front(args.true_front_bench, m)
-        final_front = to_minimization_array(
+        reference_front_min = to_minimization_array(
             true_front, objectives=args.objectives, minimize=args.minimize
         )
         worst_point = [v * 1.1 for v in true_nadir(args.true_front_bench, m)]
@@ -1539,93 +804,46 @@ def main():
         )
         worst_point = [coord + abs(coord) * 0.05 + 1.0 for coord in worst_point]
 
-        # GD reference: unique objectives from the stored (authoritative) Pareto front.
+        if not stored_pareto:
+            raise SystemExit(
+                "[ERROR] The experiment has no stored pareto_front, which is the "
+                "GD reference. Re-run the engine for this experiment, or pass "
+                "--true-front-bench for a synthetic benchmark."
+            )
+
+        # GD reference: unique objectives from the stored (authoritative) front.
         stored_obj_matrix = np.array([
             [p["objectives"][o] for o in args.objectives]
             for p in stored_pareto
-        ])
+        ], dtype=float)
         stored_obj_unique = np.unique(stored_obj_matrix, axis=0)
-        final_front = to_minimization_array(
+        reference_front_min = to_minimization_array(
             stored_obj_unique, objectives=args.objectives, minimize=args.minimize
         )
 
-    worst_point_arr = np.asarray(worst_point, dtype=float)
-    hv_values: list[float] = []
-    gd_values: list[float] = []
-
-    for gen, inds in individuals_per_gen.items():
-        if not inds:
-            hv_values.append(0.0)
-            gd_values.append(np.nan)
-            continue
-
-        local_population = [
-            {"id": ind["id"], "generation": gen, "objectives": ind["objectives"]}
-            for ind in inds
-        ]
-        local_fronts = fast_nondominated_sort(local_population, args.objectives, args.minimize)
-        if not local_fronts:
-            hv_values.append(0.0)
-            gd_values.append(np.nan)
-            continue
-
-        front_points = np.array([
-            [p["objectives"][o] for o in args.objectives]
-            for p in local_fronts[0]
-        ])
-        # Deduplicate per-generation front before HV/GD
-        front_points = np.unique(front_points, axis=0)
-        front_min = to_minimization_array(
-            front_points, objectives=args.objectives, minimize=args.minimize
-        )
-
-        # Only points that strictly dominate the reference contribute to HV.
-        # With the fixed analytical nadir a lagging front can sit outside the
-        # reference box, and moocore requires every point to dominate ``ref``.
-        dominating = front_min[np.all(front_min < worst_point_arr, axis=1)]
-        hv_val = float(moocore.hypervolume(dominating, ref=worst_point)) if len(dominating) else 0.0
-        gd_val = compute_gd(front_min, final_front)
-
-        hv_values.append(hv_val)
-        gd_values.append(gd_val)
+    generations, hv_values, hv_cumulative, gd_values = compute_convergence_metrics(
+        individuals_per_gen=individuals_per_gen,
+        objectives=args.objectives,
+        minimize=args.minimize,
+        hv_ref=worst_point,
+        reference_front_min=reference_front_min,
+    )
 
     hv_gd_plot = Path(f"hv_gd_{args.expid}.png")
-    generations = sorted(individuals_per_gen.keys())
     plot_hv_gd(
         generations=generations,
         hv_values=hv_values,
+        hv_cumulative=hv_cumulative,
         gd_values=gd_values,
         worst_point=worst_point,
+        objective_names=tuple(args.objectives),
         output_path=hv_gd_plot,
     )
     upload_analysis_file_api(
         session, args.api_base, args.expid, hv_gd_plot,
-        "hv_gd", "Hypervolume and generational distance evolution 2",
+        "hv_gd", "Hypervolume (per generation and cumulative) and generational distance",
     )
     print("[OK] Pareto HV and GD analysis completed")
-
-    # ------------------------------------------------------------
-    # Parallel coordinates and radar (stored Pareto front 0)
-    # ------------------------------------------------------------
-    parallel_plot = Path(f"pareto_parallel_{args.expid}.png")
-    plot_parallel_coordinates_pareto0(
-        pareto_by_front_viz, tuple(args.objectives), args.minimize, parallel_plot,
-    )
-    upload_analysis_file_api(
-        session, args.api_base, args.expid, parallel_plot,
-        "pareto_parallel", "Pareto front 0 — parallel coordinates",
-    )
-    print("[OK] Pareto parallel coordinates analysis completed")
-
-    radar_plot = Path(f"pareto_radar_{args.expid}.png")
-    plot_radar_pareto0(
-        pareto_by_front_viz, tuple(args.objectives), args.minimize, radar_plot,
-    )
-    upload_analysis_file_api(
-        session, args.api_base, args.expid, radar_plot,
-        "pareto_radar", "Pareto front 0 — radar plot",
-    )
-    print("[OK] Pareto radar coordinates analysis completed")
 
     # ------------------------------------------------------------
     # Cleanup
@@ -1633,19 +851,11 @@ def main():
     if not args.keep_the_files:
         try:
             pareto_plot.unlink(missing_ok=True)
-            dist_plot.unlink(missing_ok=True)
             hv_gd_plot.unlink(missing_ok=True)
-            lifetime_plot.unlink(missing_ok=True)
-            front_gen_plot.unlink(missing_ok=True)
-            parallel_plot.unlink(missing_ok=True)
-            radar_plot.unlink(missing_ok=True)
-            global_dist_plot.unlink(missing_ok=True)
-            last_front_plot.unlink(missing_ok=True)
-            for file in lifetime_dir.glob("*.png"):
-                file.unlink(missing_ok=True)
             print("[OK] Temporary files removed")
-        except Exception as ex:
+        except OSError as ex:
             print(f"[WARN] Failed to remove temporary file: {ex}")
+
 
 if __name__ == "__main__":
     main()

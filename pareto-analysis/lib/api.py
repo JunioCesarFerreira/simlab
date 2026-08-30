@@ -36,6 +36,12 @@ def get_generations_from_experiment(
         valid: list[dict] = []
         for ind in gen["population"]:
             raw_objs: list[float] = ind.get("objectives", [])
+            # Individuals that never got a full objective vector (still running,
+            # or a partial write) are dropped, matching the hv-gd endpoint's
+            # `len(raw) < n_obj` guard — without it the zip below would silently
+            # build a short objectives dict and KeyError later.
+            if len(raw_objs) < len(label_objectives):
+                continue
             if _is_penalized(raw_objs):
                 continue
             valid.append({
