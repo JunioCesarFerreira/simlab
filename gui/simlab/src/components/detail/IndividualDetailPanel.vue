@@ -273,7 +273,12 @@ function formatDate(iso: string): string {
 }
 
 function formatGene(val: unknown): string {
-  if (Array.isArray(val)) return `[${(val as unknown[]).join(", ")}]`;
+  if (Array.isArray(val)) {
+    const parts = (val as unknown[]).map((el) =>
+      typeof el === "object" && el !== null ? JSON.stringify(el) : String(el),
+    );
+    return `[${parts.join(", ")}]`;
+  }
   if (typeof val === "number") return Number.isInteger(val) ? String(val) : val.toFixed(6);
   if (typeof val === "object" && val !== null) return JSON.stringify(val);
   return String(val);
