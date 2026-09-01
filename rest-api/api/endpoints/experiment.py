@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import sys
 from datetime import datetime
 from typing import Optional
 
@@ -380,14 +381,20 @@ class ParetoPlotRequest(BaseModel):
     minimize: list[bool]
 
 
+# Sibling of rest-api/, resolved from this file rather than from the working
+# directory or a build-time absolute path: the same expression yields
+# /app/pareto-analysis in the container image and <repo>/pareto-analysis in a
+# checkout, the two layouts the API runs in.
+_REPO_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
 _PARETO_SCRIPT = os.getenv(
     "SIMLAB_PARETO_SCRIPT",
-    "/home/junio/github/simlab/pareto-analysis/plot_pareto_results.py",
+    os.path.join(_REPO_ROOT, "pareto-analysis", "plot_pareto_results.py"),
 )
-_PARETO_PYTHON = os.getenv(
-    "SIMLAB_PARETO_PYTHON",
-    "/home/junio/github/simlab/mo-engine/.venv/bin/python",
-)
+# sys.executable is the interpreter already serving the API, so it exists by
+# construction and carries the dependencies installed alongside the API.
+_PARETO_PYTHON = os.getenv("SIMLAB_PARETO_PYTHON", sys.executable)
 
 
 @router.post("/{experiment_id}/plot-pareto")
@@ -407,6 +414,16 @@ def plot_pareto_results(
     if len(body.objectives) < 3 or len(body.minimize) < 3:
         raise HTTPException(status_code=422, detail="objectives and minimize must each have at least 3 items")
 
+    if not os.path.isfile(_PARETO_SCRIPT):
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Pareto analysis script not found at {_PARETO_SCRIPT}. "
+                "Set SIMLAB_PARETO_SCRIPT to its location, or rebuild the API "
+                "image so pareto-analysis/ ships with it."
+            ),
+        )
+
     api_key = os.getenv("SIMLAB_API_KEY", "api-password")
     minimize_strs = [str(m) for m in body.minimize[:3]]
 
@@ -415,7 +432,9 @@ def plot_pareto_results(
         "--expid", experiment_id,
         "--objectives", *body.objectives[:3],
         "--minimize", *minimize_strs,
-        "--api-base", "http://localhost:8000/api/v1",
+        # The script reads generations and uploads the plots back over HTTP, so
+        # it needs a URL for this same API; the default is the port it serves on.
+        "--api-base", os.getenv("SIMLAB_API_BASE", "http://localhost:8000/api/v1"),
         "--api-key", api_key,
     ]
 
@@ -427,6 +446,11 @@ def plot_pareto_results(
     if syn.get("enabled") and bench in ("DTLZ2", "ZDT1", "SCH1") and all(body.minimize[:3]):
         cmd += ["--true-front-bench", bench, "--true-front-m", str(len(body.objectives[:3]))]
 
+    # The script renders to PNG with no display attached, and matplotlib needs a
+    # writable config dir; neither is guaranteed by the API's own environment.
+    env = {**os.environ, "MPLBACKEND": "Agg"}
+    env.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
+
     try:
         result = subprocess.run(
             cmd,
@@ -434,6 +458,7 @@ def plot_pareto_results(
             text=True,
             timeout=600,
             cwd=os.path.dirname(_PARETO_SCRIPT),
+            env=env,
         )
         if result.returncode != 0:
             raise HTTPException(status_code=500, detail=f"Script failed:\n{result.stderr}")

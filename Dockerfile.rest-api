@@ -4,9 +4,17 @@ WORKDIR /app
 
 COPY ./rest-api /app/rest-api
 COPY ./pylib /app/pylib
+# POST /experiments/{id}/plot-pareto shells out to this script, so it has to be
+# in the image alongside the API rather than on the host that built it.
+COPY ./pareto-analysis /app/pareto-analysis
 
+# The script's other two requirements, numpy and moocore, already come from
+# rest-api/requirements.txt. Installing pareto-analysis/requirements.txt wholesale
+# would pull its older numpy pin and downgrade the API's, so only the two
+# packages the API does not already have are added here.
 RUN apt-get update && apt-get install -y --no-install-recommends gcc python3-dev && \
     pip install --no-cache-dir -r /app/rest-api/requirements.txt && \
+    pip install --no-cache-dir matplotlib==3.10.9 requests==2.34.2 && \
     apt-get purge -y gcc python3-dev && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
