@@ -108,10 +108,12 @@ const hvAriaLabel = computed(() =>
     : "Hypervolume per generation chart",
 );
 
-// Against the run's own final front, GD and IGD reach zero on the last
-// generation by construction: they measure how much of that front had been
-// found by generation k, not convergence to the real optimum. Saying so is the
-// difference between a progress curve and a misread quality claim.
+// Against the run's own final front, GD and IGD measure progress towards this
+// run's own result, not convergence to the real optimum, and so cannot be
+// compared across runs. They do NOT reach zero on the last generation: the
+// engine builds the stored front from the merged pool (surviving parents ∪ last
+// offspring), while a generation document records only that generation's
+// offspring — so each set holds points the other lacks.
 const selfReferential = computed(() => data.value?.reference === "final_front");
 
 const referenceCaption = computed(() => {
@@ -122,7 +124,7 @@ const referenceCaption = computed(() => {
     : "in raw objective units";
   const size = `${d.reference_size} point${d.reference_size === 1 ? "" : "s"}`;
   return selfReferential.value
-    ? `GD / IGD reference: this run's own final Pareto front (${size}) — self-referential, so both reach 0 on the last generation by construction. Distances ${scale}.`
+    ? `GD / IGD reference: this run's own final Pareto front (${size}) — self-referential, so these measure progress towards this run's own result, not convergence to the true optimum, and are not comparable across runs. Distances ${scale}.`
     : `GD / IGD reference: the benchmark's analytical true front (${size}). Distances ${scale}.`;
 });
 

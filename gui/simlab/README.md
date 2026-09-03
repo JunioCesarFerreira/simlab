@@ -242,9 +242,18 @@ kbps) weigh comparably. Hypervolume keeps its own reference point in raw units
 and is unaffected.
 
 A caption under the charts names the reference front. When it is the run's own
-final front — every non-synthetic experiment — GD and IGD are self-referential
-and reach zero on the last generation by construction; the caption says so,
+final front — every non-synthetic experiment — GD and IGD are self-referential:
+they track progress towards *this run's own* result rather than convergence to
+the true optimum, so they are not comparable across runs. The caption says so,
 because otherwise the curves read as a quality claim they do not support.
+
+They do **not** collapse to zero on the last generation, which is the intuitive
+guess. The engine builds the stored front from the merged pool (surviving
+parents ∪ last offspring, `_final_pareto_front` in `mo-engine`), while a
+generation document records only that generation's offspring. So the last
+generation's front holds points dominated by a surviving parent (absent from
+the reference → GD > 0), and the reference holds surviving parents that never
+appear as individuals of the last generation (→ IGD > 0).
 
 ### Objectives evolution
 

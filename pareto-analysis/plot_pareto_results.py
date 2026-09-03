@@ -870,10 +870,12 @@ def main():
         reference_front_min = to_minimization_array(
             stored_obj_unique, objectives=args.objectives, minimize=args.minimize
         )
-        # A run's own final front makes GD/IGD self-referential: both go to zero
-        # on the last generation by construction, so the curves read as
-        # "how much of my own final front had I found by generation k" rather
-        # than as convergence to the real optimum.
+        # A run's own final front makes GD/IGD self-referential: they read as
+        # "how close to my own final result was I at generation k" rather than
+        # as convergence to the real optimum, and cannot be compared across
+        # runs. Note they do NOT reach zero at the end — the engine builds this
+        # front from the merged pool (surviving parents u last offspring) while
+        # a generation holds only its own offspring.
         reference_label = "the run's own final front (self-reference)"
 
     # Penalized, duplicate and dominated rows would corrupt IGD, which averages

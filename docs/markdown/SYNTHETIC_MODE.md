@@ -277,8 +277,7 @@ can render the synthetic badge without fetching the full document.
 
 Because the synthetic benchmarks have a Pareto front known in closed form,
 `pareto-analysis/compute_hv_gd.py` can measure **GD**, **IGD** and **IGD+**
-against the analytical (true) front instead of the experiment's own final front
-(which would drive all three trivially to zero on the last generation):
+against the analytical (true) front instead of the experiment's own final front:
 
 ```bash
 python compute_hv_gd.py --expid <id> \
@@ -287,6 +286,17 @@ python compute_hv_gd.py --expid <id> \
 ```
 
 Without `--true-front-bench` the behavior is unchanged (self-reference front).
+
+> **Self-reference does not mean zero.** The intuitive guess is that GD against
+> the run's own final front collapses to 0 on the last generation. It does not:
+> the engine builds that front from the merged pool (surviving parents ∪ last
+> offspring, `_final_pareto_front`), while a generation document records only
+> that generation's offspring. So the last generation's front contains points
+> dominated by a surviving parent — absent from the reference, hence GD > 0 —
+> and the reference contains surviving parents that never appear as individuals
+> of the last generation, hence IGD > 0. What self-reference *does* cost is
+> meaning: the indicators measure progress towards that one run's own result,
+> so they cannot be compared across runs or read as distance to the optimum.
 The analytical fronts live in `pareto-analysis/lib/true_fronts.py` (DTLZ2 =
 unit hypersphere segment; ZDT1 = `1 − √f₁`; SCH1 = `x²`/`(x−2)²`, `x∈[0,2]`).
 

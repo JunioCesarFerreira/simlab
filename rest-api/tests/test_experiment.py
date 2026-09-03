@@ -1,4 +1,5 @@
 import io
+import math
 import pytest
 from bson import ObjectId, errors as bson_errors
 
@@ -285,6 +286,107 @@ class TestGetHvGd:
         mock_factory.experiment_repo.get.return_value = doc
         data = self._call(client).json()
         assert data["generations"] == [] and data["igd"] == []
+        # Every series key must be present even when there is nothing to plot,
+        # so the frontend never has to special-case a missing field.
+        for key in ("hv", "hv_cumulative", "gd", "igd", "igd_plus"):
+            assert data[key] == []
+        assert data["reference"] is None and data["reference_size"] == 0
+
+    def test_penalized_reference_row_does_not_corrupt_igd(self, client, mock_factory):
+        # Regression: the stored front may carry penalized individuals (the
+        # engine writes 1e9+ for infeasible solutions). IGD averages over the
+        # REFERENCE, so one such row used to drag the mean to ~1e9. GD never
+        # exposed this — it minimizes over the reference instead.
+        doc = sample_experiment()
+        doc["pareto_front"] = [
+            {"objectives": {"f1": 0.0, "f2": 1.0}},
+            {"objectives": {"f1": 1.0, "f2": 0.0}},
+            {"objectives": {"f1": 1e9, "f2": 1e9}},     # penalized
+        ]
+        self._setup(mock_factory, doc, [[0.0, 1.0], [1.0, 0.0]])
+
+        data = self._call(client).json()
+        assert data["reference_size"] == 2                    # penalized row dropped
+        assert data["igd"][0] == pytest.approx(0.0, abs=1e-9)
+
+    def test_dominated_reference_row_is_filtered(self, client, mock_factory):
+        # A reference front must be non-dominated: charging the population for
+        # failing to cover a point that is not on the front biases IGD upward.
+        doc = sample_experiment()
+        doc["pareto_front"] = [
+            {"objectives": {"f1": 0.0, "f2": 1.0}},
+            {"objectives": {"f1": 1.0, "f2": 0.0}},
+            {"objectives": {"f1": 5.0, "f2": 5.0}},     # dominated by both
+        ]
+        self._setup(mock_factory, doc, [[0.0, 1.0], [1.0, 0.0]])
+
+        data = self._call(client).json()
+        assert data["reference_size"] == 2
+        assert data["igd"][0] == pytest.approx(0.0, abs=1e-9)
+
+    def test_reference_row_missing_an_objective_is_dropped(self, client, mock_factory):
+        # Defaulting a missing objective to 0.0 would read as optimal on a
+        # minimized axis and pull the whole reference towards the origin.
+        doc = sample_experiment()
+        doc["pareto_front"] = [
+            {"objectives": {"f1": 3.0, "f2": 3.0}},
+            {"objectives": {"f1": 3.0}},                # no f2
+        ]
+        self._setup(mock_factory, doc, [[3.0, 3.0]])
+        assert self._call(client).json()["reference_size"] == 1
+
+    def test_normalization_is_on_by_default_and_rescales_axes(self, client, mock_factory):
+        # f2 spans 1000x the range of f1: unnormalized, it alone decides the
+        # distance. Normalizing by the reference front's ideal-nadir range puts
+        # both axes on comparable footing, so the two numbers must differ.
+        doc = sample_experiment()
+        doc["pareto_front"] = [
+            {"objectives": {"f1": 0.0, "f2": 1000.0}},
+            {"objectives": {"f1": 1.0, "f2": 0.0}},
+        ]
+        self._setup(mock_factory, doc, [[0.5, 900.0]])
+
+        default = self._call(client).json()
+        assert default["normalized"] is True
+
+        q = "&".join(["objectives=f1", "objectives=f2", "minimize=true", "minimize=true",
+                      "normalize=false"])
+        raw = client.get(f"{BASE}/{EXP_ID}/hv-gd?{q}").json()
+        assert raw["normalized"] is False
+        assert raw["gd"][0] > default["gd"][0]      # raw distance carries f2's magnitude
+        # HV is measured in raw units either way and must not move.
+        assert raw["hv"] == default["hv"]
+
+    def test_gd_matches_the_documented_p1_mean(self, client, mock_factory):
+        # Regression lock on the definition itself: GD is the arithmetic mean of
+        # each front point's distance to its nearest reference point (p=1), not
+        # the RMS variant. The three population points are mutually
+        # non-dominated, so all three survive into the generation's front, and
+        # their distances to the reference {(0,0)} are 1, 1 and √0.5 — unequal,
+        # which is what makes mean and RMS distinguishable here.
+        doc = sample_experiment()
+        doc["pareto_front"] = [{"objectives": {"f1": 0.0, "f2": 0.0}}]
+        self._setup(mock_factory, doc, [[0.0, 1.0], [1.0, 0.0], [0.5, 0.5]])
+
+        q = "&".join(["objectives=f1", "objectives=f2", "minimize=true", "minimize=true",
+                      "normalize=false"])
+        data = client.get(f"{BASE}/{EXP_ID}/hv-gd?{q}").json()
+        p1_mean = (1.0 + 1.0 + math.sqrt(0.5)) / 3.0
+        rms = math.sqrt((1.0 + 1.0 + 0.5) / 3.0)
+        assert data["gd"][0] == pytest.approx(p1_mean)
+        assert data["gd"][0] != pytest.approx(rms)
+
+    def test_igd_plus_never_exceeds_igd(self, client, mock_factory):
+        # d+ only counts the components where the solution is worse than the
+        # reference point, so IGD+ is bounded above by IGD by construction.
+        doc = sample_experiment()
+        doc["parameters"]["simulation"] = {"synthetic": {"enabled": True, "bench": "ZDT1"}}
+        doc["pareto_front"] = [{"objectives": {"f1": 0.5, "f2": 0.5}}]
+        self._setup(mock_factory, doc, [[0.2, 0.9], [0.8, 0.4]])
+
+        data = self._call(client).json()
+        assert data["igd_plus"][0] <= data["igd"][0] + 1e-12
+        assert data["igd_plus"][0] > 0
 
     def test_max_objective_hv_reference_in_min_space(self, client, mock_factory):
         # Regression: with a MAXimized objective the HV reference must be built in

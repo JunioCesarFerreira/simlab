@@ -19,8 +19,8 @@ This project follows [Semantic Versioning](https://semver.org/).
 - **Web GUI**: the experiment detail page shows **IGD and IGD+ side by side with
   GD** in a third chart panel, each with its own PNG export. A caption names the
   reference front and warns when it is the run's own final front, in which case
-  GD and IGD are self-referential and reach zero on the last generation by
-  construction.
+  GD and IGD are self-referential — progress towards this run's own result
+  rather than convergence to the true optimum, and not comparable across runs.
 - **`pareto-analysis`**: both CLIs report IGD/IGD+; the uploaded figure gained a
   third panel; `compute_hv_gd.py` now reuses `compute_convergence_metrics`
   instead of its own duplicate loop (and so gains the cumulative-HV curve).

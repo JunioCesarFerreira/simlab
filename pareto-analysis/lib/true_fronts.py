@@ -2,7 +2,11 @@
 
 For synthetic experiments the true Pareto front is known in closed form, so
 GD / IGD can be measured against the *real* optimum instead of the experiment's
-own final front (which would trivially drive GD to zero on the last generation).
+own final front. Self-reference does not drive the indicators to zero — the
+stored front comes from the merged pool (surviving parents u last offspring)
+while a generation holds only its own offspring — but it does make them measure
+progress towards that one run's result, which is not comparable across runs and
+says nothing about distance to the actual optimum.
 
 All fronts are returned in the same objective space and orientation
 (minimization) that ``synthetic_data.py`` writes to the database.
