@@ -5,6 +5,54 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Inverted Generational Distance (IGD / IGD+)
+
+### Added
+
+- **`pylib/moo_metrics`**: new canonical module for the convergence quality
+  indicators — GD, IGD and IGD+ (Ishibuchi et al., 2015) — plus reference-front
+  sanitation and ideal-nadir normalisation. Single source of truth shared by the
+  REST API; `pareto-analysis/lib/metrics.py` mirrors it for the standalone CLIs
+  (which must run with no `pylib` on the path) under a new parity test.
+- **REST API**: `GET /experiments/{id}/hv-gd` now returns `igd_plus` alongside
+  `igd`, plus `reference_size` and `normalized`, and accepts `?normalize=`.
+- **Web GUI**: the experiment detail page shows **IGD and IGD+ side by side with
+  GD** in a third chart panel, each with its own PNG export. A caption names the
+  reference front and warns when it is the run's own final front, in which case
+  GD and IGD are self-referential and reach zero on the last generation by
+  construction.
+- **`pareto-analysis`**: both CLIs report IGD/IGD+; the uploaded figure gained a
+  third panel; `compute_hv_gd.py` now reuses `compute_convergence_metrics`
+  instead of its own duplicate loop (and so gains the cumulative-HV curve).
+  New `--raw-distances` flag on both.
+
+### Fixed
+
+- **IGD was unusable on non-synthetic experiments**: the stored Pareto front was
+  used as the GD/IGD reference with no filtering, so a penalised individual
+  (the engine writes 1e9+ for infeasible solutions) contaminated it. IGD
+  averages *over* the reference, so one such row dragged the indicator to ~1e9.
+  GD hid the same contamination because it minimises over the reference
+  instead. Penalised, duplicate and dominated rows are now dropped, and a
+  reference row missing an objective is skipped rather than defaulted to `0.0`
+  (which read as optimal on a minimised axis and pulled the whole front towards
+  the origin).
+- **`docs/markdown/SYNTHETIC_MODE.md`** claimed GD was the RMS variant
+  `sqrt((1/N)·Σ dᵢ²)`; the code has always used the `p = 1` arithmetic mean.
+  The doc now matches the code, and a test locks the definition down.
+
+### Changed
+
+- **GD values move**: distances are now normalised by the reference front's
+  ideal-nadir range by default, so objectives of different magnitudes weigh
+  comparably. Pass `?normalize=false` (API) or `--raw-distances` (CLIs) for the
+  previous raw-unit values. Hypervolume is unaffected — it keeps its own
+  reference point in raw units.
+- `compute_convergence_metrics` returns a named `ConvergenceMetrics` tuple
+  (still positionally unpackable) rather than a bare 4-tuple.
+
+---
+
 ## [Unreleased] — Runtime (computational) telemetry per experiment
 
 ### Added — runtime metrics collection, persistence and visualization

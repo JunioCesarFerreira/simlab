@@ -158,8 +158,8 @@ runs. It shows:
 - **Parameters card** with the full algorithm and simulation configuration.
 - **Pareto Front** chart — switchable between 2-D scatter (coloured by
   non-domination rank) and 3-D WebGL scatter (when ≥ 3 objectives).
-- **HV & GD per generation** — hypervolume and generational distance tracked
-  generation by generation.
+- **HV, GD & IGD per generation** — hypervolume, generational distance and
+  inverted generational distance tracked generation by generation.
 - **Objectives evolution** — normalised best-per-generation line chart for each
   objective.
 - **Parallel coordinates** — each Pareto solution as a poly-line across all
@@ -221,11 +221,30 @@ WebGL scatter (echarts-gl). Controls:
 The camera position is preserved across data refreshes (polling) so the user's
 viewpoint is not reset while the experiment runs.
 
-### HV & GD per generation
+### HV, GD & IGD per generation
 
-Dual-axis line chart: hypervolume (higher = better) on the left axis, generational
-distance (lower = better) on the right. One line per objective pair /
-normalisation used.
+Three side-by-side line charts, all read from `GET /experiments/{id}/hv-gd` —
+none of these numbers are computed in the browser.
+
+| Panel | Reads | Lower/higher is better |
+|---|---|---|
+| **HV** | Hypervolume of each generation's own front, toggleable to the cumulative (best-so-far) curve | higher |
+| **GD** | Mean distance from the front to the nearest reference point — *convergence* | lower |
+| **IGD / IGD+** | Mean distance from each reference point to the nearest solution — *convergence **and** spread*. IGD+ is the Pareto-compliant variant (Ishibuchi et al., 2015) and bounds IGD from below | lower |
+
+GD and IGD sit on separate axes on purpose: a population that converged onto a
+single corner of the front scores a near-zero GD and a large IGD, which is
+exactly the failure mode the pair is there to expose.
+
+GD/IGD/IGD+ distances are normalised by the reference front's ideal-nadir range,
+so objectives of different magnitudes (a latency in ms next to a throughput in
+kbps) weigh comparably. Hypervolume keeps its own reference point in raw units
+and is unaffected.
+
+A caption under the charts names the reference front. When it is the run's own
+final front — every non-synthetic experiment — GD and IGD are self-referential
+and reach zero on the last generation by construction; the caption says so,
+because otherwise the curves read as a quality claim they do not support.
 
 ### Objectives evolution
 

@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from bson import ObjectId
 
-from pylib import benchmarks
+from pylib import benchmarks, moo_metrics
 from pylib.db import MongoRepository
 from pylib.db.models.enums import EnumStatus
 from api.dependencies import get_factory
@@ -473,7 +473,7 @@ def plot_pareto_results(
 
 # ── HV/GD inline helpers ──────────────────────────────────────────────────────
 
-_PENALTY_THRESHOLD = 1.0e8
+_PENALTY_THRESHOLD = moo_metrics.PENALTY_THRESHOLD
 
 
 def _is_penalized(objs: list[float]) -> bool:
@@ -507,14 +507,38 @@ def _pareto_front(objs_list: list[list[float]], minimize: list[bool]) -> list[in
     return [i for i in range(n) if not dominated[i]]
 
 
+def _empty_hv_gd() -> dict:
+    """Response shape when there is nothing to measure — same keys, empty series."""
+    return {
+        "generations": [],
+        "hv": [],
+        "hv_cumulative": [],
+        "gd": [],
+        "igd": [],
+        "igd_plus": [],
+        "reference": None,
+        "reference_size": 0,
+        "normalized": False,
+        "worst_point": {},
+    }
+
+
 @router.get("/{experiment_id}/hv-gd")
 def get_hv_gd(
     experiment_id: str,
     objectives: list[str] = Query(...),
     minimize: list[str] = Query(...),
+    normalize: bool = Query(
+        True,
+        description=(
+            "Normalise GD/IGD/IGD+ by the reference front's ideal-nadir range, so "
+            "objectives on different scales contribute comparably. Hypervolume is "
+            "unaffected — it keeps its own reference point in raw units."
+        ),
+    ),
     factory: MongoRepository = Depends(get_factory),
 ) -> dict:
-    """Compute hypervolume and generational distance per generation."""
+    """Compute hypervolume, GD, IGD and IGD+ per generation."""
     try:
         exp_oid = ObjectId(experiment_id)
     except bson_errors.InvalidId:
@@ -533,7 +557,7 @@ def get_hv_gd(
 
     stored_pf: list[dict] = doc.get("pareto_front") or []
     if not stored_pf:
-        return {"generations": [], "hv": [], "hv_cumulative": [], "gd": [], "igd": [], "reference": None, "worst_point": {}}
+        return _empty_hv_gd()
 
     minimize_bools = [m.lower() == "true" for m in minimize]
 
@@ -556,9 +580,9 @@ def get_hv_gd(
         individuals_per_gen[gen_idx] = valid
 
     if not individuals_per_gen:
-        return {"generations": [], "hv": [], "hv_cumulative": [], "gd": [], "igd": [], "reference": None, "worst_point": {}}
+        return _empty_hv_gd()
 
-    # ── Reference front (GD/IGD) + HV reference point ────────────────────────
+    # ── Reference front (GD/IGD/IGD+) + HV reference point ───────────────────
     # Synthetic experiments have a closed-form true Pareto front: use it as the
     # GD/IGD reference (measuring convergence to the real optimum, not to the
     # run's own final front) and a FIXED nadir as the HV reference so HV is
@@ -590,23 +614,36 @@ def get_hv_gd(
         ]
         worst = [max(row[i] for row in all_min) for i in range(n_obj)]
         hv_ref = [v + abs(v) * 0.05 + 1.0 for v in worst]
-        seen_ref: set[tuple] = set()
         ref_min_rows: list[list[float]] = []
         for p in stored_pf:
             objs_dict: dict = p.get("objectives") or {}
-            row_min = tuple(
-                float(objs_dict.get(o, 0.0)) if minimize_bools[i]
-                else -float(objs_dict.get(o, 0.0))
+            # A row missing an objective is dropped rather than defaulted: a
+            # missing value read as 0.0 would look optimal on a minimised axis
+            # and pull the whole reference front towards the origin.
+            if any(o not in objs_dict for o in objectives):
+                continue
+            ref_min_rows.append([
+                float(objs_dict[o]) if minimize_bools[i] else -float(objs_dict[o])
                 for i, o in enumerate(objectives)
-            )
-            if row_min not in seen_ref:
-                seen_ref.add(row_min)
-                ref_min_rows.append(list(row_min))
-        reference_front = np.array(ref_min_rows, dtype=float)
+            ])
+        reference_front = ref_min_rows
+
+    # Penalised, duplicate and dominated rows are stripped before the front is
+    # used as a reference. IGD averages over the reference, so a single
+    # penalised row (≥ 1e8) would dominate the mean outright — GD never exposed
+    # this because it minimises over the reference instead.
+    reference_front = moo_metrics.sanitize_reference_front(reference_front)
+    if reference_front.size == 0:
+        return _empty_hv_gd()
 
     hv_ref_arr = np.array(hv_ref, dtype=float)
 
-    # ── Per-generation HV / GD / IGD ─────────────────────────────────────────
+    # ── Per-generation HV / GD / IGD / IGD+ ──────────────────────────────────
+    # GD, IGD and IGD+ are three readings of the same comparison and are cheap
+    # once the reference front is in hand, so all three are returned: GD alone
+    # rewards a population that converged onto a corner of the front, IGD adds
+    # the spread requirement, and IGD+ is the Pareto-compliant variant.
+    #
     # Two HV curves are returned:
     #   • hv            — each generation's OWN Pareto front ("current" view).
     #   • hv_cumulative — the front of every individual seen up to and including
@@ -620,6 +657,7 @@ def get_hv_gd(
     hv_cumulative: list[float] = []
     gd_values: list[float | None] = []
     igd_values: list[float | None] = []
+    igd_plus_values: list[float | None] = []
 
     acc_seen: set[tuple] = set()        # dedup keys of the running front
     acc_rows: list[list[float]] = []    # running non-dominated set (min-space)
@@ -633,6 +671,7 @@ def get_hv_gd(
             hv_cumulative.append(last_cum_hv)   # empty gen adds nothing new
             gd_values.append(None)
             igd_values.append(None)
+            igd_plus_values.append(None)
             continue
 
         # Minimization space + dedup by objective tuple
@@ -669,15 +708,13 @@ def get_hv_gd(
         cum_hv = float(moocore.hypervolume(acc_dom, ref=hv_ref)) if len(acc_dom) else 0.0
         last_cum_hv = cum_hv
 
-        # Pairwise distances (population front × reference front), reused for GD/IGD.
-        dist = np.sqrt(((pts_min[:, None, :] - reference_front[None, :, :]) ** 2).sum(axis=2))
-        gd_val = float(dist.min(axis=1).mean())    # each pop point → nearest reference
-        igd_val = float(dist.min(axis=0).mean())   # each reference point → nearest pop
-
         hv_values.append(hv_val)
         hv_cumulative.append(cum_hv)
-        gd_values.append(gd_val)
-        igd_values.append(igd_val)
+        gd_values.append(moo_metrics.gd(pts_min, reference_front, normalized=normalize))
+        igd_values.append(moo_metrics.igd(pts_min, reference_front, normalized=normalize))
+        igd_plus_values.append(
+            moo_metrics.igd_plus(pts_min, reference_front, normalized=normalize)
+        )
 
     return {
         "generations": generations_sorted,
@@ -685,6 +722,9 @@ def get_hv_gd(
         "hv_cumulative": hv_cumulative,
         "gd": gd_values,
         "igd": igd_values,
+        "igd_plus": igd_plus_values,
         "reference": reference_kind,
+        "reference_size": int(len(reference_front)),
+        "normalized": bool(normalize),
         "worst_point": dict(zip(objectives, hv_ref)),
     }

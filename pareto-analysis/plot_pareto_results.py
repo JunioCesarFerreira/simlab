@@ -21,15 +21,20 @@ This module mirrors both definitions exactly:
   counting only points that strictly dominate the reference point;
 * cumulative HV folds each generation's front into a running non-dominated set
   ("best so far"), and is therefore monotonically non-decreasing;
-* GD is the *mean* nearest-neighbour distance from the generation's front to
-  the experiment's stored Pareto front, in minimization space;
+* GD, IGD and IGD+ compare the generation's front against a reference front —
+  the benchmark's analytical front when one exists, otherwise the experiment's
+  stored final front — in minimization space, normalized by the reference's
+  ideal-nadir range so objectives of different magnitudes weigh comparably;
 * front ranks come from a global non-dominated sort over the unique objective
   vectors of every non-penalized individual of every generation.
+
+The indicator definitions live in ``lib/metrics.py``, a standalone mirror of the
+API's ``pylib.moo_metrics`` guarded by ``tests/test_metrics_parity.py``.
 """
 import os
 import argparse
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -37,6 +42,7 @@ from matplotlib.lines import Line2D
 
 import moocore
 
+from lib import metrics
 from lib.api import (
     build_session,
     get_generations_from_experiment,
@@ -251,31 +257,6 @@ def compute_worst_point(
 
 
 # ------------------------------------------------------------
-# Generational Distance
-# ------------------------------------------------------------
-def compute_gd(front: np.ndarray, ref_front: np.ndarray) -> float:
-    """Generational Distance between ``front`` and ``ref_front``.
-
-    For each point p in ``front``, let d(p) be its Euclidean distance to the
-    nearest point of ``ref_front``.  This returns the arithmetic mean:
-
-        GD = (1/N) * sum_p d(p)
-
-    This is the p=1 formulation, and it is the one the SimLab API serves to the
-    GUI (``dist.min(axis=1).mean()`` in the hv-gd endpoint), so the numbers the
-    tool prints match the numbers the GUI shows.  Both inputs must be in the
-    same minimization objective space.  Returns +inf if either set is empty.
-    """
-    if len(front) == 0 or len(ref_front) == 0:
-        return float("inf")
-
-    dist = np.sqrt(((np.asarray(front, dtype=float)[:, None, :]
-                     - np.asarray(ref_front, dtype=float)[None, :, :]) ** 2).sum(axis=2))
-
-    return float(dist.min(axis=1).mean())
-
-
-# ------------------------------------------------------------
 # Non-dominated filter in minimization space
 # ------------------------------------------------------------
 def nondominated_rows_min(rows: list[list[float]]) -> list[list[float]]:
@@ -342,22 +323,39 @@ def generation_front_min(
 # ------------------------------------------------------------
 # Convergence metrics: HV, cumulative HV and GD
 # ------------------------------------------------------------
+class ConvergenceMetrics(NamedTuple):
+    """Per-generation convergence curves, all aligned with ``generations``."""
+    generations: list[int]
+    hv: list[float]
+    hv_cumulative: list[float]
+    gd: list[float]
+    igd: list[float]
+    igd_plus: list[float]
+
+
 def compute_convergence_metrics(
     individuals_per_gen: dict[int, list[dict]],
     objectives: list[str],
     minimize: list[bool],
     hv_ref: list[float],
     reference_front_min: np.ndarray,
-) -> tuple[list[int], list[float], list[float], list[float]]:
+    normalized: bool = True,
+) -> ConvergenceMetrics:
     """
-    Compute per-generation HV, cumulative HV and GD.
+    Compute per-generation HV, cumulative HV, GD, IGD and IGD+.
+
+    ``reference_front_min`` is expected to have been through
+    ``metrics.sanitize_reference_front`` already.  The three distance
+    indicators are normalized by its ideal-nadir range unless ``normalized`` is
+    False; HV is always in raw units, since it carries its own reference point.
 
     Returns
     -------
-    (generations, hv, hv_cumulative, gd)
-        ``generations`` is sorted ascending; the three metric lists are aligned
-        with it index by index.  ``gd`` uses NaN for generations with no
-        feasible individual so the curve shows a gap instead of a fake zero.
+    ConvergenceMetrics
+        ``generations`` is sorted ascending; every metric list is aligned with
+        it index by index.  The distance indicators use NaN for generations
+        with no feasible individual, so the curve shows a gap instead of a fake
+        zero.
 
     The cumulative curve folds each generation's front into a running
     non-dominated set rather than re-sorting the whole population: a point that
@@ -369,6 +367,8 @@ def compute_convergence_metrics(
     hv_values: list[float] = []
     hv_cumulative: list[float] = []
     gd_values: list[float] = []
+    igd_values: list[float] = []
+    igd_plus_values: list[float] = []
 
     hv_ref_arr = np.asarray(hv_ref, dtype=float)
     acc_seen: set[tuple] = set()        # dedup keys of the running front
@@ -384,6 +384,8 @@ def compute_convergence_metrics(
             hv_values.append(0.0)
             hv_cumulative.append(last_cum_hv)   # an empty generation adds nothing
             gd_values.append(float("nan"))
+            igd_values.append(float("nan"))
+            igd_plus_values.append(float("nan"))
             continue
 
         pts_min = np.asarray(front_rows, dtype=float)
@@ -411,9 +413,15 @@ def compute_convergence_metrics(
 
         hv_values.append(hv_val)
         hv_cumulative.append(cum_hv)
-        gd_values.append(compute_gd(pts_min, reference_front_min))
+        gd_values.append(metrics.gd(pts_min, reference_front_min, normalized=normalized))
+        igd_values.append(metrics.igd(pts_min, reference_front_min, normalized=normalized))
+        igd_plus_values.append(
+            metrics.igd_plus(pts_min, reference_front_min, normalized=normalized)
+        )
 
-    return generations, hv_values, hv_cumulative, gd_values
+    return ConvergenceMetrics(
+        generations, hv_values, hv_cumulative, gd_values, igd_values, igd_plus_values
+    )
 
 
 # ------------------------------------------------------------
@@ -600,9 +608,13 @@ def plot_hv_gd(
     hv_values: list[float],
     hv_cumulative: list[float],
     gd_values: list[float],
+    igd_values: list[float],
+    igd_plus_values: list[float],
     worst_point: list[float],
     objective_names: tuple[str, ...],
     output_path: Path,
+    reference_label: str = "the stored Pareto front",
+    normalized: bool = True,
 ):
     """
     Left panel: hypervolume per generation and its cumulative (best-so-far)
@@ -610,13 +622,20 @@ def plot_hv_gd(
     reference point printed in the title, so they are directly comparable and
     the cumulative curve always sits on or above the per-generation one.
 
-    Right panel: generational distance to the experiment's stored Pareto front.
+    Middle panel: generational distance — how close the front got to the
+    reference.  Right panel: IGD and IGD+ — how well the front *covers* the
+    reference.  GD and IGD are kept on separate axes because they routinely
+    differ by an order of magnitude: a population converged onto one corner of
+    the front scores an excellent GD and a terrible IGD, and sharing an axis
+    would flatten whichever of the two is smaller into the baseline.  IGD+ sits
+    with IGD, which it bounds from below and is directly comparable to.
     """
-    fig, (ax_hv, ax_gd) = plt.subplots(1, 2, figsize=(15, 5), sharex=True)
+    fig, (ax_hv, ax_gd, ax_igd) = plt.subplots(1, 3, figsize=(21, 5), sharex=True)
 
     ref_txt = ", ".join(
         f"{name}={value:.3g}" for name, value in zip(objective_names, worst_point)
     )
+    dist_units = "normalized" if normalized else "raw objective units"
 
     # ---------- Hypervolume ----------
     ax_hv.plot(
@@ -641,15 +660,35 @@ def plot_hv_gd(
         marker="s", markersize=4, linewidth=1.5, color="tab:red",
     )
     ax_gd.set_ylabel("Generational distance")
-    ax_gd.set_title("Generational distance to the stored Pareto front")
+    ax_gd.set_title(
+        f"Generational distance to {reference_label}\nconvergence, {dist_units}"
+    )
     ax_gd.grid(True, alpha=0.3)
+
+    # ---------- Inverted generational distance ----------
+    ax_igd.plot(
+        generations, igd_values,
+        marker="D", markersize=4, linewidth=1.5, color="tab:purple", label="IGD",
+    )
+    ax_igd.plot(
+        generations, igd_plus_values,
+        marker="v", markersize=4, linewidth=1.5, linestyle="--",
+        color="tab:orange", label="IGD+ (Pareto compliant)",
+    )
+    ax_igd.set_ylabel("Inverted generational distance")
+    ax_igd.set_title(
+        f"Inverted generational distance to {reference_label}\n"
+        f"convergence + spread, {dist_units}"
+    )
+    ax_igd.legend(loc="upper right", fontsize=9)
+    ax_igd.grid(True, alpha=0.3)
 
     # A long run would otherwise stamp one tick per generation and smear them
     # into an unreadable band.
     step = max(1, len(generations) // 15)
     ticks = generations[::step]
 
-    for ax in (ax_hv, ax_gd):
+    for ax in (ax_hv, ax_gd, ax_igd):
         ax.set_xlabel("Generation")
         ax.set_xticks(ticks)
         ax.set_xticklabels([str(g) for g in ticks])
@@ -701,6 +740,16 @@ def main():
         type=int,
         default=None,
         help="Number of objectives for the analytical front (default: len(objectives)).",
+    )
+    parser.add_argument(
+        "--raw-distances",
+        action="store_true",
+        default=False,
+        help=(
+            "Report GD/IGD/IGD+ in raw objective units instead of normalizing "
+            "by the reference front's ideal-nadir range. Only meaningful when "
+            "every objective is already on a comparable scale."
+        ),
     )
 
     args = parser.parse_args()
@@ -795,6 +844,7 @@ def main():
             true_front, objectives=args.objectives, minimize=args.minimize
         )
         worst_point = [v * 1.1 for v in true_nadir(args.true_front_bench, m)]
+        reference_label = f"the true {args.true_front_bench} front"
     else:
         # Reference point: worst feasible values + margin (no penalty contamination).
         worst_point = compute_worst_point(
@@ -820,30 +870,54 @@ def main():
         reference_front_min = to_minimization_array(
             stored_obj_unique, objectives=args.objectives, minimize=args.minimize
         )
+        # A run's own final front makes GD/IGD self-referential: both go to zero
+        # on the last generation by construction, so the curves read as
+        # "how much of my own final front had I found by generation k" rather
+        # than as convergence to the real optimum.
+        reference_label = "the run's own final front (self-reference)"
 
-    generations, hv_values, hv_cumulative, gd_values = compute_convergence_metrics(
+    # Penalized, duplicate and dominated rows would corrupt IGD, which averages
+    # over the reference front rather than minimizing over it.
+    reference_front_min = metrics.sanitize_reference_front(reference_front_min)
+    if reference_front_min.size == 0:
+        raise SystemExit(
+            "[ERROR] The reference front is empty after dropping penalized, "
+            "duplicate and dominated rows — GD/IGD cannot be measured."
+        )
+
+    conv = compute_convergence_metrics(
         individuals_per_gen=individuals_per_gen,
         objectives=args.objectives,
         minimize=args.minimize,
         hv_ref=worst_point,
         reference_front_min=reference_front_min,
+        normalized=not args.raw_distances,
     )
 
     hv_gd_plot = Path(f"hv_gd_{args.expid}.png")
     plot_hv_gd(
-        generations=generations,
-        hv_values=hv_values,
-        hv_cumulative=hv_cumulative,
-        gd_values=gd_values,
+        generations=conv.generations,
+        hv_values=conv.hv,
+        hv_cumulative=conv.hv_cumulative,
+        gd_values=conv.gd,
+        igd_values=conv.igd,
+        igd_plus_values=conv.igd_plus,
         worst_point=worst_point,
         objective_names=tuple(args.objectives),
         output_path=hv_gd_plot,
+        reference_label=reference_label,
+        normalized=not args.raw_distances,
     )
     upload_analysis_file_api(
         session, args.api_base, args.expid, hv_gd_plot,
-        "hv_gd", "Hypervolume (per generation and cumulative) and generational distance",
+        "hv_gd",
+        "Hypervolume (per generation and cumulative), generational distance "
+        "and inverted generational distance (IGD / IGD+)",
     )
-    print("[OK] Pareto HV and GD analysis completed")
+    print(
+        f"[OK] Pareto HV, GD and IGD analysis completed "
+        f"(reference: {reference_label}, {len(reference_front_min)} points)"
+    )
 
     # ------------------------------------------------------------
     # Cleanup

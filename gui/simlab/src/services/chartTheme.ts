@@ -13,11 +13,17 @@ export function chartPalette(dark: boolean) {
     grid: dark ? "#313244" : "#e2e8f0",
     tooltip: dark ? "#1e1e2e" : "#ffffff",
     tooltipBorder: dark ? "#313244" : "#e2e8f0",
-    // Convergence metrics (HV / GD)
+    // Convergence metrics (HV / GD / IGD). GD and IGD get distinct hues rather
+    // than shades of one, because they answer different questions (convergence
+    // vs. convergence + spread) and are read side by side. IGD+ shares the IGD
+    // panel, so it takes a neighbouring warm tone instead of a third accent.
     hv: dark ? "#89b4fa" : "#2563eb",
     gd: dark ? "#f38ba8" : "#dc2626",
+    igd: dark ? "#cba6f7" : "#7c3aed",
+    igdPlus: dark ? "#f9e2af" : "#b45309",
     hvArea: dark ? "rgba(137,180,250,0.12)" : "rgba(37,99,235,0.08)",
     gdArea: dark ? "rgba(243,139,168,0.12)" : "rgba(220,38,38,0.08)",
+    igdArea: dark ? "rgba(203,166,247,0.12)" : "rgba(124,58,237,0.08)",
     // Two-experiment comparison accents (A = blue, B = orange)
     colorA: dark ? "#89b4fa" : "#3b82f6",
     colorB: dark ? "#fab387" : "#f97316",

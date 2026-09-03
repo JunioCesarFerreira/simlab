@@ -12,10 +12,36 @@ A command-line tool that fetches experiment results from the SimLab API, perform
    - Global population distribution
    - Parallel coordinates chart
    - Radar chart
-   - Hypervolume and Generational Distance (GD) evolution over generations
+   - Hypervolume (per generation and cumulative), Generational Distance (GD) and
+     Inverted Generational Distance (IGD / IGD+) evolution over generations
 4. **Upload** — each generated PNG is attached to the experiment record via `PATCH /experiments/{id}/analysis-file`.
 
 Objectives can be individually configured as minimisation or maximisation targets via CLI flags.
+
+## Convergence indicators
+
+`lib/metrics.py` defines GD, IGD and IGD+ against a reference front. It is a
+standalone mirror of the API's canonical `pylib/moo_metrics.py` — the CLIs must
+run with no `pylib` on the path — and `tests/test_metrics_parity.py` is what
+keeps the two from drifting apart. **Any change to one must be made in the other.**
+
+* **GD** — mean distance from each front point to its nearest reference point
+  (the p=1 form, matching `moocore`, `pymoo` and jMetal). Measures convergence.
+* **IGD** — mean distance from each *reference* point to its nearest front
+  point. Measures convergence *and* spread: a front collapsed onto one corner
+  of the optimum scores a perfect GD and a poor IGD.
+* **IGD+** — the weakly Pareto-compliant variant (Ishibuchi et al., 2015).
+
+The reference front is sanitised before use: penalised rows (any |objective| ≥
+1e8), duplicates and dominated rows are dropped. This matters most for IGD,
+which averages *over* the reference — a single penalised row at 1e9 would drag
+the indicator to 1e9. GD hides the same contamination, because it minimises
+over the reference instead.
+
+Distances are normalised by the reference front's ideal-nadir range by default,
+so objectives of different magnitudes contribute comparably; pass
+`--raw-distances` for the unnormalised values. Hypervolume is always in raw
+units — it carries its own reference point.
 
 ## CLI Arguments
 

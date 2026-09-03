@@ -296,8 +296,8 @@
               @axis-change="on3dAxisChange"
             />
           </ResizableChartCard>
-          <ResizableChartCard v-model="hvgdH" label="HV and GD chart">
-            <div class="section-title">HV &amp; GD per generation</div>
+          <ResizableChartCard v-model="hvgdH" label="HV, GD and IGD chart">
+            <div class="section-title">HV, GD &amp; IGD per generation</div>
             <HvGdChart
               :experiment-id="props.id"
               :objective-names="store.objectiveNames"

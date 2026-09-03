@@ -276,9 +276,9 @@ can render the synthetic badge without fetching the full document.
 ## 7. Convergence metrics against the true front
 
 Because the synthetic benchmarks have a Pareto front known in closed form,
-`pareto-analysis/compute_hv_gd.py` can measure **Generational Distance (GD)**
+`pareto-analysis/compute_hv_gd.py` can measure **GD**, **IGD** and **IGD+**
 against the analytical (true) front instead of the experiment's own final front
-(which would drive GD trivially to zero on the last generation):
+(which would drive all three trivially to zero on the last generation):
 
 ```bash
 python compute_hv_gd.py --expid <id> \
@@ -290,9 +290,18 @@ Without `--true-front-bench` the behavior is unchanged (self-reference front).
 The analytical fronts live in `pareto-analysis/lib/true_fronts.py` (DTLZ2 =
 unit hypersphere segment; ZDT1 = `1 − √f₁`; SCH1 = `x²`/`(x−2)²`, `x∈[0,2]`).
 
-> GD here is the **RMS variant** `sqrt((1/N)·Σ dᵢ²)` (Schütze et al., 2012),
-> not Van Veldhuizen's classic `(1/N)·(Σ dᵢᵖ)^(1/p)`. HV uses the `moocore`
-> library with a reference point set to the worst feasible objective + margin.
+> **Definitions.** GD is the arithmetic mean of each front point's distance to
+> its nearest reference point — the `p = 1` form used by `moocore`, `pymoo` and
+> jMetal — *not* the RMS variant `sqrt((1/N)·Σ dᵢ²)`. IGD is the same average
+> taken over the reference points instead, and IGD+ is the weakly
+> Pareto-compliant variant of Ishibuchi et al. (2015). All three are normalised
+> by the reference front's ideal-nadir range unless `--raw-distances` is passed.
+> HV uses `moocore` with a reference point set to the worst feasible objective +
+> margin, always in raw units.
+>
+> The same definitions back `GET /experiments/{id}/hv-gd`, which is what the web
+> GUI plots: they live in `pylib/moo_metrics.py`, mirrored for the offline CLIs
+> in `pareto-analysis/lib/metrics.py` under a parity test.
 
 ---
 

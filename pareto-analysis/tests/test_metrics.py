@@ -1,6 +1,6 @@
 """Unit tests for the Pareto-quality metric primitives used to evaluate
 experiments (dominance, non-dominated sorting, minimization mapping,
-reference point, and Generational Distance).
+reference point, and the GD / IGD / IGD+ convergence indicators).
 """
 import math
 
@@ -12,11 +12,11 @@ from plot_pareto_results import (
     fast_nondominated_sort,
     to_minimization_array,
     compute_worst_point,
-    compute_gd,
     nondominated_rows_min,
     generation_front_min,
     compute_convergence_metrics,
 )
+from lib import metrics
 from lib.true_fronts import sample_true_front, dtlz2_front, zdt1_front, sch1_front
 
 OBJ = ["latency", "energy"]
@@ -110,27 +110,131 @@ class TestComputeWorstPoint:
         assert worst == [3.0, 2.0]
 
 
+# ── reference-front sanitation ───────────────────────────────────────────────
+
+class TestSanitizeReferenceFront:
+    def test_drops_penalized_duplicate_and_dominated_rows(self):
+        rows = [
+            [1.0, 1.0],
+            [1.0, 1.0],                                     # duplicate
+            [2.0, 2.0],                                     # dominated
+            [0.0, 5.0],
+            [metrics.PENALTY_THRESHOLD, 0.1],               # penalized
+        ]
+        out = metrics.sanitize_reference_front(rows).tolist()
+        assert sorted(out) == sorted([[1.0, 1.0], [0.0, 5.0]])
+
+    def test_penalized_row_would_otherwise_wreck_igd(self):
+        # IGD averages over the REFERENCE, so an unfiltered 1e9 row alone puts
+        # the indicator in the 1e8 range. GD hides it (it minimizes over the
+        # reference instead), which is why the bug can go unnoticed.
+        front = np.array([[1.0, 1.0]])
+        dirty = np.array([[1.0, 1.0], [1e9, 1e9]])
+        assert metrics.igd(front, dirty, normalized=False) > 1e8
+
+        clean = metrics.sanitize_reference_front(dirty)
+        assert metrics.igd(front, clean, normalized=False) == pytest.approx(0.0)
+
+    def test_all_rows_penalized_yields_empty(self):
+        assert metrics.sanitize_reference_front([[1e9, 1e9]]).size == 0
+
+
 # ── generational distance ────────────────────────────────────────────────────
 
-class TestComputeGD:
+class TestGD:
     def test_single_point_euclidean(self):
-        # distance from (0,0) to (3,4) = 5
-        gd = compute_gd(np.array([[0.0, 0.0]]), np.array([[3.0, 4.0]]))
+        # distance from (0,0) to (3,4) = 5; a one-point reference is degenerate
+        # on every axis, so normalization is a pure translation and cannot
+        # change the distance.
+        gd = metrics.gd(np.array([[0.0, 0.0]]), np.array([[3.0, 4.0]]))
         assert gd == pytest.approx(5.0)
 
     def test_mean_of_min_distances(self):
         # front (0,0),(1,1); ref {(0,0)} → dists 0 and sqrt(2)
         # GD = mean(0, √2) = √2 / 2.  The p=1 (mean) form is what the SimLab
-        # API serves to the GUI, so the tool must report the same number.
-        gd = compute_gd(np.array([[0.0, 0.0], [1.0, 1.0]]), np.array([[0.0, 0.0]]))
+        # API serves to the GUI, so the tool must report the same number — and
+        # notably NOT the RMS variant sqrt(mean(d²)) = 1.
+        gd = metrics.gd(np.array([[0.0, 0.0], [1.0, 1.0]]), np.array([[0.0, 0.0]]))
         assert gd == pytest.approx(math.sqrt(2) / 2)
+        assert gd != pytest.approx(1.0)
 
     def test_zero_when_front_on_reference(self):
         pts = np.array([[1.0, 1.0], [2.0, 2.0]])
-        assert compute_gd(pts, pts) == pytest.approx(0.0)
+        assert metrics.gd(pts, pts) == pytest.approx(0.0)
 
-    def test_empty_is_inf(self):
-        assert math.isinf(compute_gd(np.empty((0, 2)), np.array([[1.0, 1.0]])))
+    def test_empty_is_none(self):
+        assert metrics.gd(np.empty((0, 2)), np.array([[1.0, 1.0]])) is None
+        assert metrics.igd(np.array([[1.0, 1.0]]), np.empty((0, 2))) is None
+
+
+# ── inverted generational distance ───────────────────────────────────────────
+
+class TestIGD:
+    REF = np.column_stack([np.linspace(0.0, 1.0, 200),
+                           1.0 - np.sqrt(np.linspace(0.0, 1.0, 200))])
+
+    def test_asymmetry_with_gd_on_a_collapsed_front(self):
+        # One point sitting exactly ON the reference has a perfect GD but a
+        # terrible IGD: it converged, it did not spread. Reporting only GD
+        # would call this run a success, which is the whole reason IGD is
+        # shown next to it.
+        one = self.REF[:1]
+        assert metrics.gd(one, self.REF) == pytest.approx(0.0)
+        assert metrics.igd(one, self.REF) > 0.5
+
+    def test_zero_when_front_covers_the_reference(self):
+        assert metrics.igd(self.REF, self.REF) == pytest.approx(0.0)
+
+    def test_igd_plus_never_exceeds_igd(self):
+        # d+ only charges the components where the solution is worse than the
+        # reference point, so IGD+ ≤ IGD by construction.
+        front = np.array([[0.2, 0.9], [0.8, 0.4]])
+        assert metrics.igd_plus(front, self.REF) <= metrics.igd(front, self.REF)
+
+    def test_igd_improves_as_the_front_fills_in(self):
+        sparse = self.REF[::100]
+        dense = self.REF[::5]
+        assert metrics.igd(dense, self.REF) < metrics.igd(sparse, self.REF)
+
+    def test_width_mismatch_raises(self):
+        with pytest.raises(ValueError):
+            metrics.igd(np.array([[1.0, 2.0, 3.0]]), np.array([[1.0, 2.0]]))
+
+
+# ── normalization ────────────────────────────────────────────────────────────
+
+class TestNormalization:
+    def test_rescales_axes_of_very_different_magnitude(self):
+        # f2 spans 1000x the range of f1. Unnormalized, f2 alone decides the
+        # distance; normalized, both axes weigh the same.
+        ref = np.array([[0.0, 1000.0], [1.0, 0.0]])
+        front = np.array([[0.5, 900.0]])
+        assert metrics.gd(front, ref, normalized=False) > 100.0
+        assert metrics.gd(front, ref) < 1.0
+
+    def test_is_the_default(self):
+        ref = np.array([[0.0, 1000.0], [1.0, 0.0]])
+        front = np.array([[0.5, 900.0]])
+        assert metrics.gd(front, ref) == metrics.gd(front, ref, normalized=True)
+
+    def test_degenerate_axis_is_a_pure_translation(self):
+        # A single-point reference has zero range on every axis: the transform
+        # must fall back to a unit scale rather than dividing by zero.
+        ideal, scale = metrics.normalization_bounds(np.array([[3.0, 4.0]]))
+        assert ideal.tolist() == [3.0, 4.0]
+        assert scale.tolist() == [1.0, 1.0]
+        assert np.isfinite(metrics.gd(np.array([[0.0, 0.0]]), np.array([[3.0, 4.0]])))
+
+    def test_invariant_to_a_uniform_rescale_of_an_objective(self):
+        # Scaling one objective by a constant rescales the reference range by
+        # the same constant, so the normalized indicator is unchanged.
+        ref = np.array([[0.0, 1.0], [1.0, 0.0]])
+        front = np.array([[0.3, 0.8]])
+        stretched_ref = ref * np.array([1.0, 1000.0])
+        stretched_front = front * np.array([1.0, 1000.0])
+        assert metrics.gd(front, ref) == pytest.approx(
+            metrics.gd(stretched_front, stretched_ref)
+        )
 
 
 # ── analytical true fronts ───────────────────────────────────────────────────
@@ -166,10 +270,12 @@ class TestTrueFronts:
             sample_true_front("nope", 2)
 
     def test_gd_zero_when_front_sampled_from_true_front(self):
-        # a subset of the true front has GD ~ 0 against the full true front
+        # a subset of the true front has GD ~ 0 against the full true front —
+        # but a non-zero IGD, because it covers only part of it.
         true = zdt1_front(500)
         sample = true[::25]
-        assert compute_gd(sample, true) == pytest.approx(0.0, abs=1e-9)
+        assert metrics.gd(sample, true) == pytest.approx(0.0, abs=1e-9)
+        assert metrics.igd(sample, true) > 0.0
 
 
 # ── minimization-space non-dominated filter ──────────────────────────────────
@@ -206,7 +312,7 @@ class TestGenerationFrontMin:
         assert generation_front_min([], OBJ, MIN) == []
 
 
-# ── convergence metrics (HV, cumulative HV, GD) ──────────────────────────────
+# ── convergence metrics (HV, cumulative HV, GD, IGD, IGD+) ───────────────────
 
 class TestComputeConvergenceMetrics:
     REF = np.array([[0.0, 0.0]])
@@ -223,14 +329,16 @@ class TestComputeConvergenceMetrics:
             0: self._gen((5.0, 5.0)),
             1: self._gen((3.0, 3.0)),
         }
-        gens, hv, hv_cum, gd = compute_convergence_metrics(
+        conv = compute_convergence_metrics(
             per_gen, OBJ, MIN, self.HV_REF, self.REF
         )
-        assert gens == [0, 1, 2]
+        assert conv.generations == [0, 1, 2]
         # HV grows as the front approaches the origin: gen 0 worst, gen 2 best.
-        assert hv[0] < hv[1] < hv[2]
-        # GD to the origin shrinks accordingly.
-        assert gd[0] > gd[1] > gd[2]
+        assert conv.hv[0] < conv.hv[1] < conv.hv[2]
+        # Every distance indicator to the origin shrinks accordingly.
+        assert conv.gd[0] > conv.gd[1] > conv.gd[2]
+        assert conv.igd[0] > conv.igd[1] > conv.igd[2]
+        assert conv.igd_plus[0] > conv.igd_plus[1] > conv.igd_plus[2]
 
     def test_cumulative_is_monotonic_and_dominates_per_generation(self):
         per_gen = {
@@ -238,7 +346,7 @@ class TestComputeConvergenceMetrics:
             1: self._gen((9.0, 1.0)),   # incomparable with gen 0
             2: self._gen((8.0, 8.0)),   # a regression
         }
-        _, hv, hv_cum, _ = compute_convergence_metrics(
+        _, hv, hv_cum, _, _, _ = compute_convergence_metrics(
             per_gen, OBJ, MIN, self.HV_REF, self.REF
         )
         assert all(hv_cum[i] <= hv_cum[i + 1] + 1e-9 for i in range(len(hv_cum) - 1))
@@ -254,11 +362,24 @@ class TestComputeConvergenceMetrics:
             1: [],
             2: self._gen((1.0, 1.0)),
         }
-        gens, hv, hv_cum, gd = compute_convergence_metrics(
+        conv = compute_convergence_metrics(
             per_gen, OBJ, MIN, self.HV_REF, self.REF
         )
-        assert gens == [0, 1, 2]
-        assert hv[1] == 0.0                 # nothing of its own to measure
-        assert hv_cum[1] == hv_cum[0]       # best-so-far carried forward
-        assert math.isnan(gd[1])            # a gap, not a fake zero
-        assert not math.isnan(gd[0])
+        assert conv.generations == [0, 1, 2]
+        assert conv.hv[1] == 0.0                    # nothing of its own to measure
+        assert conv.hv_cumulative[1] == conv.hv_cumulative[0]   # best-so-far carried
+        # A gap, not a fake zero — on every distance indicator.
+        assert math.isnan(conv.gd[1])
+        assert math.isnan(conv.igd[1])
+        assert math.isnan(conv.igd_plus[1])
+        assert not math.isnan(conv.gd[0])
+
+    def test_result_is_tuple_compatible(self):
+        # The named result must still unpack positionally, so the field order
+        # is part of the contract.
+        per_gen = {0: self._gen((1.0, 1.0))}
+        gens, hv, hv_cum, gd, igd, igd_plus = compute_convergence_metrics(
+            per_gen, OBJ, MIN, self.HV_REF, self.REF
+        )
+        conv = compute_convergence_metrics(per_gen, OBJ, MIN, self.HV_REF, self.REF)
+        assert (gens, hv, hv_cum, gd, igd, igd_plus) == tuple(conv)
