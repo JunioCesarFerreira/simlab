@@ -20,3 +20,4 @@ rest-api/tests/__pycache__
 .claude
 dc7.yaml
 dc8.yaml
+dc-local.yml

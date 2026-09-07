@@ -3,12 +3,22 @@ services:
   # Pinned tags (not :latest) so the monitoring stack behaves identically on a
   # developer machine and on the production VM.
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    # v0.55.1, not v0.49.1: when Docker uses the containerd snapshotter
+    # (`docker info` reports driver-type io.containerd.snapshotter.v1), the
+    # legacy image/<driver>/layerdb metadata the older releases require no
+    # longer exists, so they fail to build a handler for every container and
+    # emit no per-container series at all — runtime metrics then land as
+    # "no_data". v0.55.1 reads that metadata from containerd instead.
+    image: gcr.io/cadvisor/cadvisor:v0.55.1
     container_name: cadvisor
     restart: unless-stopped
     privileged: true
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # v0.55.1 registers its Docker factory only once it can also reach
+      # containerd; without this socket the factory fails and container names
+      # and simlab.* labels never make it into the metrics.
+      - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro
       - /:/rootfs:ro
       - /var/run:/var/run:ro
       - /sys:/sys:ro

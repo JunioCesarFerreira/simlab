@@ -41,8 +41,10 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # statistics.py only needs numpy/pandas; reuse mo-engine's pinned set
-          pip install -r mo-engine/requirements.txt pytest
+          # statistics.py only needs numpy/pandas; reuse mo-engine's pinned set.
+          # moo_metrics.py additionally needs moocore, which mo-engine does not
+          # use — keep the pin in step with rest-api/pareto-analysis.
+          pip install -r mo-engine/requirements.txt moocore==0.3.1 pytest
       - name: Run tests
         working-directory: pylib
         run: pytest -q
