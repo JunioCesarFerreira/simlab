@@ -128,34 +128,41 @@ def indicators(
     reference_front: np.ndarray,
     hv_ref: list[float],
     *,
-    radial: bool,
+    bench: str,
+    gd_scale: float,
 ) -> dict:
     """HV / GD / IGD / IGD+ of a point set, exactly as ``/hv-gd`` computes them.
 
-    HV counts only points strictly dominating the reference point, and GD / IGD
-    / IGD+ are normalised by the reference front's ideal-nadir range — both
-    matching ``rest-api/api/endpoints/experiment.py`` so a baseline number can
-    be compared against a real experiment's series.
+    HV counts only points strictly dominating the reference point; GD is the
+    EXACT distance to the analytical front; IGD and IGD+ average over the
+    sampled reference and are normalised by the benchmark's theoretical
+    ideal-nadir range. All three match
+    ``rest-api/api/endpoints/experiment.py``, so a baseline number can be
+    compared against a real experiment's series.
+
+    Phase 0 recorded a separate ``radial_error`` here as a reference-free
+    convergence signal. Phase 4 promoted exactly that quantity to GD itself, so
+    the extra column would now be a duplicate and is gone.
     """
     front = nondominated(points)
     hv_ref_arr = np.asarray(hv_ref, dtype=float)
     dominating = front[np.all(front < hv_ref_arr, axis=1)] if len(front) else front
-    record = {
+    return {
         "hv": float(moocore.hypervolume(dominating, ref=hv_ref)) if len(dominating) else 0.0,
-        "gd": moo_metrics.gd(front, reference_front),
-        "igd": moo_metrics.igd(front, reference_front),
-        "igd_plus": moo_metrics.igd_plus(front, reference_front),
+        "gd": moo_metrics.gd_analytical(
+            benchmarks.front_distance(bench, front, front.shape[1]), scale=gd_scale
+        ) if len(front) else None,
+        "igd": moo_metrics.igd(front, reference_front, bounds=_bounds(bench, len(hv_ref))),
+        "igd_plus": moo_metrics.igd_plus(front, reference_front, bounds=_bounds(bench, len(hv_ref))),
         "front_size": int(len(front)),
     }
-    if radial:
-        # Reference-free convergence signal: on DTLZ2 the true front is the unit
-        # hypersphere, so |‖f‖₂ − 1| is exact. It is immune to the reference
-        # front's discretisation error (finding 5), which makes it the one
-        # number that stays comparable across a change to ``true_front``.
-        record["radial_error"] = (
-            float(np.mean(np.abs(np.linalg.norm(front, axis=1) - 1.0))) if len(front) else None
-        )
-    return record
+
+
+def _bounds(bench: str, m: int) -> "tuple[np.ndarray, np.ndarray]":
+    return (
+        np.asarray(benchmarks.ideal(bench, m), dtype=float),
+        np.asarray(benchmarks.nadir(bench, m), dtype=float),
+    )
 
 
 def run_kernel(config: KernelConfig, seed: int) -> list[dict]:
@@ -163,7 +170,9 @@ def run_kernel(config: KernelConfig, seed: int) -> list[dict]:
     strategy = build_strategy(config, seed)
     reference_front = benchmarks.true_front(config.bench, config.m)
     hv_ref = [v * 1.1 for v in benchmarks.nadir(config.bench, config.m)]
-    radial = config.bench.upper() == "DTLZ2"
+    scale = moo_metrics.analytical_scale(*_bounds(config.bench, config.m))
+    assert np.allclose(scale, scale[0]), "the analytical GD needs an isotropic range"
+    measure = {"bench": config.bench, "gd_scale": float(scale[0])}
 
     def evaluate(population) -> np.ndarray:
         for chromosome in population:
@@ -180,7 +189,7 @@ def run_kernel(config: KernelConfig, seed: int) -> list[dict]:
     objectives = evaluate(strategy._parents)
     archive = nondominated(objectives)
 
-    initial = indicators(objectives, reference_front, hv_ref, radial=radial)
+    initial = indicators(objectives, reference_front, hv_ref, **measure)
     history = [
         {
             "generation": 0,
@@ -188,7 +197,7 @@ def run_kernel(config: KernelConfig, seed: int) -> list[dict]:
             # the newly evaluated set and the surviving one.
             "offspring": initial,
             "survivors": initial,
-            "archive": indicators(archive, reference_front, hv_ref, radial=radial),
+            "archive": indicators(archive, reference_front, hv_ref, **measure),
         }
     ]
 
@@ -209,13 +218,9 @@ def run_kernel(config: KernelConfig, seed: int) -> list[dict]:
         history.append(
             {
                 "generation": generation,
-                "offspring": indicators(
-                    child_objectives, reference_front, hv_ref, radial=radial
-                ),
-                "survivors": indicators(
-                    survivor_objectives, reference_front, hv_ref, radial=radial
-                ),
-                "archive": indicators(archive, reference_front, hv_ref, radial=radial),
+                "offspring": indicators(child_objectives, reference_front, hv_ref, **measure),
+                "survivors": indicators(survivor_objectives, reference_front, hv_ref, **measure),
+                "archive": indicators(archive, reference_front, hv_ref, **measure),
             }
         )
     return history

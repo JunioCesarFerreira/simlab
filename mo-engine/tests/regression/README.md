@@ -31,9 +31,12 @@ HV, GD, IGD e IGD+ são calculados **exatamente como o endpoint** os calcula
 normalizados pela faixa ideal-nadir da frente de referência), para que um número
 do baseline seja comparável com a série de um experimento real.
 
-Para DTLZ2 há também `radial_error` = `mean(|‖f‖₂ − 1|)`. É analítico e imune ao
-erro de discretização da frente de referência (achado 5) — é o único número que
-continua comparável depois que a Fase 4.2 mudar `benchmarks.true_front`.
+**GD é a distância exata** à frente analítica (`benchmarks.front_distance`), não
+a distância média ao vizinho mais próximo numa referência amostrada. A Fase 0
+registrava isso numa coluna separada, `radial_error`; a Fase 4 promoveu
+exatamente essa quantidade a GD, então a coluna extra virou duplicata e saiu.
+IGD e IGD+ continuam sobre a referência amostrada — é o que os faz medir
+cobertura — e por isso carregam o piso de discretização dela.
 
 Diferença deliberada em relação à produção: o kernel aplica seleção ambiental
 também ao último lote de filhos. A produção pula essa etapa (achado 8); a Fase
@@ -55,20 +58,37 @@ que é a mudança pretendida**, então `--write` e subir `BASELINE_STAGE` em
 [`baseline.py`](baseline.py). Recongelar sem ler o diff anula o propósito do
 diretório.
 
-## Baseline `phase-2` (30 execuções)
+## Baseline `phase-4` (30 execuções)
 
 `drop` é a maior queda de HV em um único passo, sobre todas as sementes.
 
 ```
 config                     HV off    HV surv   drop off  drop surv    GD surv
 -----------------------------------------------------------------------------
-nsga2-dtlz2-m3-n10       0.442195   0.495511   0.111201   0.031077   0.149428
-nsga3-dtlz2-m3-n10       0.530671   0.569152   0.050310   0.010402   0.085026
-nsga2-zdt1-m2-n10        0.497700   0.509439   0.032654   0.000000   0.265797
-nsga3-zdt1-m2-n10        0.439273   0.447513   0.088306   0.000000   0.315556
-nsga2-sch1-m2-n1        16.390396  16.518083   0.340590   0.031402   0.000835
-nsga3-sch1-m2-n1        16.057579  16.110428   0.404301   0.229464   0.001048
+nsga2-dtlz2-m3-n10       0.442195   0.495511   0.111201   0.031077   0.141762
+nsga3-dtlz2-m3-n10       0.530671   0.569152   0.050310   0.010402   0.075072
+nsga2-zdt1-m2-n10        0.497700   0.509439   0.032654   0.000000   0.265773
+nsga3-zdt1-m2-n10        0.439273   0.447513   0.088306   0.000000   0.315554
+nsga2-sch1-m2-n1        16.390396  16.518083   0.340590   0.031402   0.000034
+nsga3-sch1-m2-n1        16.057579  16.110428   0.404301   0.229464   0.000270
 ```
+
+A Fase 4 não mexeu no HV; só o GD mudou, ao trocar a referência amostrada pela
+distância exata. Quanto a coluna `GD surv` caiu é exatamente o erro de
+discretização que estava sendo lido como falta de convergência:
+
+| config | GD antes (Fase 2) | GD depois (Fase 4) | erro removido |
+| --- | ---: | ---: | ---: |
+| nsga2-dtlz2-m3-n10 | 0,149428 | 0,141762 | 0,0077 |
+| nsga3-dtlz2-m3-n10 | 0,085026 | 0,075072 | 0,0100 |
+| nsga2-zdt1-m2-n10 | 0,265797 | 0,265773 | 0,00002 |
+| nsga3-zdt1-m2-n10 | 0,315556 | 0,315554 | 0,00000 |
+| **nsga2-sch1-m2-n1** | 0,000835 | **0,000034** | 25× |
+| **nsga3-sch1-m2-n1** | 0,001048 | **0,000270** | 4× |
+
+O ZDT1 mal se move porque aquelas execuções param longe da frente: o erro de
+discretização é irrelevante ao lado da distância real. O SCH1 é o oposto — a
+população chega tão perto que quase todo o GD relatado era da referência.
 
 ### `pre-fix` (Fase 0), para comparação
 

@@ -5,6 +5,70 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — NSGA metrics: exact generational distance
+
+Phase 4 of [`docs/markdown/NSGA_METRICS_FIX_PLAN.md`](docs/markdown/NSGA_METRICS_FIX_PLAN.md).
+
+### Fixed
+
+- **GD reported discretisation error as lack of convergence.** Measured against
+  a *sampled* reference front, GD cannot go below that sample's fill distance.
+  Points lying exactly on the DTLZ2 front — true GD zero — scored 0.0016 at
+  M=2, 0.030 at M=3 and 0.194 at M=6. Raising the sample to 200 000 points
+  still left 0.051 at M=6, because the front is an (M−1)-dimensional manifold
+  and fill distance shrinks only as `N^(-1/(M-1))`.
+  GD now uses the **closed-form distance to the true front**
+  (`pylib.benchmarks.front_distance`): the same points score 5·10⁻¹⁷ at every M.
+  For DTLZ2 the front is the unit sphere, so the nearest point to any
+  positive-orthant `f` is `f/‖f‖`; ZDT1 and SCH1 are plane curves solved to
+  machine precision.
+- **`compute_hv_gd.py` used a different hypervolume reference from everything
+  else.** With `--true-front-bench` it still derived the reference point from
+  the observed worst value, while `/hv-gd` and `plot_pareto_results.py` used the
+  benchmark's fixed `1.1 × nadir` — so the same experiment reported one HV on
+  the CLI and another in the GUI, and no two runs were comparable. It now uses
+  the fixed nadir like the others.
+- **Indicators were normalised by the sampled reference's extremes**, which fall
+  short of the real corners and depend on how the sample was drawn. When the
+  benchmark has a known range, normalisation now uses the theoretical
+  ideal-nadir pair.
+
+### Added
+
+- `pylib.benchmarks.front_distance` and `pylib.benchmarks.ideal`;
+  `moo_metrics.gd_analytical` and an explicit `bounds` argument on `gd`, `igd`
+  and `igd_plus`. Mirrored into `pareto-analysis/lib/`, with the parity tests
+  extended to the new surface — the CLIs must keep running with no `pylib` on
+  the path, so the mirror stays a mirror.
+- `/hv-gd` returns `gd_method` (`analytical` / `reference_front`), `gd_formula`
+  and `normalization`; the chart caption says when GD escaped the reference
+  front's discretisation error.
+- `docs/markdown/SYNTHETIC_MODE.md` §7 documents the definitions, the measured
+  discretisation table, and why IGD cannot take the same route.
+
+### Notes
+
+- **IGD and IGD+ keep the sampled reference and keep the floor.** They average
+  over the reference set itself — that is what makes them measure coverage — so
+  there is nothing to substitute. Read them as comparative numbers between runs
+  sharing a reference, not as absolute distances.
+- The regression baseline is re-frozen at `phase-4`. Hypervolume is unchanged;
+  only GD moved, and the size of the move is the discretisation error that was
+  being misread. It is 25× on `nsga2-sch1`, whose population gets close enough
+  to the front that nearly all the reported GD came from the reference, and
+  negligible on ZDT1, whose runs stop far enough away that it never mattered.
+  The separate `radial_error` column added in phase 0 is gone: phase 4 promoted
+  exactly that quantity to GD, so it became a duplicate.
+- The plan's original exit criterion for this phase — "GD below 1e-3 for M=2, 3
+  and 6, via a denser sample" — was unreachable and has been corrected in place.
+  A Das–Dennis grid projected onto the sphere was also tried and rejected: at
+  M=6 with 252 points it is *worse* than the random sample (0.272 vs 0.194),
+  because the radial projection is not uniform on the sphere.
+- `pareto-analysis` tests needed `requests`, missing from the local venv (CI
+  already installed it). 76 tests now run where 24 did.
+
+---
+
 ## [Unreleased] — NSGA metrics: determinism and resume
 
 Phase 3 of [`docs/markdown/NSGA_METRICS_FIX_PLAN.md`](docs/markdown/NSGA_METRICS_FIX_PLAN.md).

@@ -121,6 +121,9 @@ interface HvGdData {
   worst_point: Record<string, number>;
   population: Population | null;
   population_source: Population | null;
+  gd_method: "analytical" | "reference_front" | null;
+  gd_formula: string | null;
+  normalization: string | null;
 }
 const data = ref<HvGdData | null>(null);
 
@@ -162,8 +165,14 @@ const referenceCaption = computed(() => {
     : `Measured on the ${measuredSetLabel.value.toLowerCase()}.`;
   const reference = selfReferential.value
     ? `GD / IGD reference: this run's own final Pareto front (${size}) — self-referential, so these measure progress towards this run's own result, not convergence to the true optimum, and are not comparable across runs. Distances ${scale}.`
-    : `GD / IGD reference: the benchmark's analytical true front (${size}). Distances ${scale}.`;
-  return `${measured} ${reference}`;
+    : `IGD / IGD+ reference: the benchmark's analytical true front (${size}). Distances ${scale}.`;
+  // A sampled reference cannot measure GD below its own fill distance — points
+  // exactly on the DTLZ2 front score 0.19 at M=6 against 500 reference points.
+  // Say when GD escaped that, since it makes the two curves read differently.
+  const gd = d.gd_method === "analytical"
+    ? " GD is the exact distance to the true front, free of the reference front's discretisation error; IGD and IGD+ still carry it."
+    : "";
+  return `${measured} ${reference}${gd}`;
 });
 
 // ── chart instances ─────────────────────────────────────────────────────────

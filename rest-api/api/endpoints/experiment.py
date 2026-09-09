@@ -522,6 +522,9 @@ def _empty_hv_gd() -> dict:
         "worst_point": {},
         "population": None,
         "population_source": None,
+        "gd_method": None,
+        "gd_formula": None,
+        "normalization": None,
     }
 
 
@@ -629,13 +632,23 @@ def get_hv_gd(
     reference_kind = "final_front"
     reference_front = None
     hv_ref: list[float] = []
+    # Theoretical ideal-nadir range, when the benchmark provides one. Used both
+    # to normalise the indicators (instead of the sampled reference's extremes,
+    # which depend on how that sample was drawn) and to decide whether GD can
+    # take the exact route below.
+    analytical_bounds: tuple[np.ndarray, np.ndarray] | None = None
     if is_synthetic:
         try:
             reference_front = benchmarks.true_front(bench, n_obj)
             hv_ref = [v * 1.1 for v in benchmarks.nadir(bench, n_obj)]
+            analytical_bounds = (
+                np.array(benchmarks.ideal(bench, n_obj), dtype=float),
+                np.array(benchmarks.nadir(bench, n_obj), dtype=float),
+            )
             reference_kind = "true_front"
         except ValueError:
             is_synthetic = False  # unknown benchmark → fall back to empirical
+            analytical_bounds = None
 
     if not is_synthetic:
         # Reference point in MINIMIZATION space, consistent with pts_min below.
@@ -671,6 +684,23 @@ def get_hv_gd(
         return _empty_hv_gd()
 
     hv_ref_arr = np.array(hv_ref, dtype=float)
+
+    # GD is the mean distance from each front point to the true front. With a
+    # sampled reference that mean cannot go below the sample's fill distance —
+    # points sitting EXACTLY on the DTLZ2 front score 0.19 at M=6 against the
+    # 500-point reference, and still 0.05 against 200 000 points, because the
+    # fill distance of a (M-1)-dimensional manifold shrinks only as
+    # N**(-1/(M-1)). Where the distance has a closed form, use it: the same
+    # points then score ~5e-17. IGD and IGD+ average over the reference set
+    # itself, so they keep the sampled front and its floor.
+    gd_scale: float | None = None
+    if analytical_bounds is not None:
+        scale = moo_metrics.analytical_scale(*analytical_bounds)
+        # The closed forms are Euclidean in raw space, so only an isotropic
+        # range carries through exactly. All current benchmarks have one.
+        if np.allclose(scale, scale[0]):
+            gd_scale = float(scale[0]) if normalize else 1.0
+    gd_method = "analytical" if gd_scale is not None else "reference_front"
 
     # ── Per-generation HV / GD / IGD / IGD+ ──────────────────────────────────
     # GD, IGD and IGD+ are three readings of the same comparison and are cheap
@@ -766,10 +796,25 @@ def get_hv_gd(
 
         hv_values.append(hv_val)
         hv_cumulative.append(cum_hv)
-        gd_values.append(moo_metrics.gd(pts_min, reference_front, normalized=normalize))
-        igd_values.append(moo_metrics.igd(pts_min, reference_front, normalized=normalize))
+        if gd_scale is not None:
+            gd_values.append(
+                moo_metrics.gd_analytical(
+                    benchmarks.front_distance(bench, pts_min, n_obj), scale=gd_scale
+                )
+            )
+        else:
+            gd_values.append(
+                moo_metrics.gd(pts_min, reference_front, normalized=normalize)
+            )
+        igd_values.append(
+            moo_metrics.igd(
+                pts_min, reference_front, normalized=normalize, bounds=analytical_bounds
+            )
+        )
         igd_plus_values.append(
-            moo_metrics.igd_plus(pts_min, reference_front, normalized=normalize)
+            moo_metrics.igd_plus(
+                pts_min, reference_front, normalized=normalize, bounds=analytical_bounds
+            )
         )
 
     return {
@@ -785,4 +830,12 @@ def get_hv_gd(
         "worst_point": dict(zip(objectives, hv_ref)),
         "population": population,
         "population_source": population_source,
+        # What the numbers mean, so a plot can label itself and two runs can be
+        # compared knowingly. "analytical" GD is the exact distance to the true
+        # front; "reference_front" is the mean nearest-neighbour distance to the
+        # reference, which carries that sample's discretisation floor.
+        "gd_method": gd_method,
+        "gd_formula": "mean of each front point's distance to the true front (p=1)",
+        "normalization": "analytical ideal-nadir range" if analytical_bounds is not None
+                         else "reference front ideal-nadir range",
     }

@@ -286,6 +286,10 @@ python compute_hv_gd.py --expid <id> \
 ```
 
 Without `--true-front-bench` the behavior is unchanged (self-reference front).
+With it, the HV reference point is the benchmark's fixed `1.1 × nadir` — the
+same one `/hv-gd` and `plot_pareto_results.py` use. `compute_hv_gd.py` used to
+derive it from the observed worst point regardless, so the same experiment
+reported one hypervolume on the CLI and another in the GUI.
 
 > **Self-reference does not mean zero.** The intuitive guess is that GD against
 > the run's own final front collapses to 0 on the last generation. It does not:
@@ -301,17 +305,50 @@ The analytical fronts live in `pareto-analysis/lib/true_fronts.py` (DTLZ2 =
 unit hypersphere segment; ZDT1 = `1 − √f₁`; SCH1 = `x²`/`(x−2)²`, `x∈[0,2]`).
 
 > **Definitions.** GD is the arithmetic mean of each front point's distance to
-> its nearest reference point — the `p = 1` form used by `moocore`, `pymoo` and
-> jMetal — *not* the RMS variant `sqrt((1/N)·Σ dᵢ²)`. IGD is the same average
-> taken over the reference points instead, and IGD+ is the weakly
-> Pareto-compliant variant of Ishibuchi et al. (2015). All three are normalised
-> by the reference front's ideal-nadir range unless `--raw-distances` is passed.
-> HV uses `moocore` with a reference point set to the worst feasible objective +
-> margin, always in raw units.
+> the true front — the `p = 1` form used by `moocore`, `pymoo` and jMetal —
+> *not* the RMS variant `sqrt((1/N)·Σ dᵢ²)`. IGD is the average, over the
+> reference points, of the distance to the measured front, and IGD+ is the
+> weakly Pareto-compliant variant of Ishibuchi et al. (2015). HV uses `moocore`,
+> always in raw units, with a reference point that is `1.1 × nadir` for a known
+> benchmark and the worst feasible objective + margin otherwise.
 >
 > The same definitions back `GET /experiments/{id}/hv-gd`, which is what the web
 > GUI plots: they live in `pylib/moo_metrics.py`, mirrored for the offline CLIs
 > in `pareto-analysis/lib/metrics.py` under a parity test.
+
+### How GD is measured — and why IGD is not measured the same way
+
+For a **known benchmark**, GD uses the *closed-form* distance to the true front
+(`pylib.benchmarks.front_distance`), not a nearest-neighbour search over a
+sampled reference. The response reports which route was taken in `gd_method`.
+
+The reason is that a sampled reference puts a floor under GD equal to its own
+fill distance. Measured on points lying **exactly on** the DTLZ2 front — whose
+true GD is zero:
+
+| Objectives | 500-point reference | 200 000-point reference | closed form |
+| ---: | ---: | ---: | ---: |
+| 2 | 0.0016 | 0.000004 | 4·10⁻¹⁷ |
+| 3 | 0.0296 | 0.0014 | 4·10⁻¹⁷ |
+| 6 | 0.1938 | 0.0510 | 5·10⁻¹⁷ |
+
+That is discretisation error being read as lack of convergence, and no practical
+sample removes it: the front is an (M−1)-dimensional manifold, so fill distance
+shrinks only as `N^(-1/(M-1))` and M=6 would need on the order of 10¹⁵ points.
+
+`front_distance` is exact for DTLZ2 (the front is the unit sphere, so the
+nearest point to any positive-orthant `f` is `f/‖f‖` and the distance is
+`|‖f‖₂ − 1|`) and solved to machine precision for the two plane curves.
+
+**IGD and IGD+ keep the sampled reference and keep the floor.** They average
+over the reference set itself — that is what makes them measure *coverage* —
+so there is nothing to replace it with. Read them as comparative numbers between
+runs sharing the same reference, not as absolute distances.
+
+**Normalisation** uses the benchmark's theoretical ideal-nadir range when one
+exists, rather than the extremes of the sampled reference, so the value does not
+depend on how that sample was drawn. Pass `--raw-distances` to the CLI to skip
+normalisation entirely.
 
 ---
 

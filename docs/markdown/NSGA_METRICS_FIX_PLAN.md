@@ -300,7 +300,7 @@ com população truncada.
 
 ---
 
-## Fase 4 — Referências e definição das métricas (achados 5 e 6)
+## Fase 4 — Referências e definição das métricas (achados 5 e 6) · **concluída**
 
 ### 4.1 Fixar uma definição de GD e documentá-la
 
@@ -340,6 +340,82 @@ paridade com a API não corresponde ao comportamento.
   uma função única em `pylib` e consumi-la nos três caminhos.
 - No modo real, deixar explícito na resposta que HV vem do pior observado da
   própria execução — números de runs diferentes não são comparáveis entre si.
+
+### Correção ao próprio plano
+
+**O critério de saída que eu escrevi na 4.2 era inalcançável.** Ele dizia "GD de
+pontos exatamente sobre a frente < 1e-3 para M=2, 3 e 6", a ser obtido com uma
+amostra mais densa. Não dá: a frente é uma variedade de dimensão M−1, então a
+distância de preenchimento cai só com `N^(-1/(M-1))` e M=6 exigiria ~10¹⁵ pontos.
+Medido:
+
+| M | 500 pontos | 5 000 | 50 000 | 200 000 |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 | 0,001603 | 0,000157 | 0,000015 | 0,000004 |
+| 3 | 0,029646 | 0,008946 | 0,002873 | 0,001369 |
+| 6 | 0,193786 | 0,113705 | 0,069684 | 0,050984 |
+
+Também testei a alternativa que eu tinha proposto — grade Das–Dennis projetada
+na esfera em vez de amostra aleatória. Não resolve: em M=6 com 252 pontos ela é
+**pior** que a amostra aleatória (0,272 contra 0,194), porque a projeção radial
+não é uniforme na esfera. Ficou de fora.
+
+### O que foi entregue
+
+O caminho certo não era amostrar mais denso, era **não amostrar**.
+`benchmarks.front_distance` devolve a distância exata à frente analítica: para
+DTLZ2 a frente é a esfera unitária, então o ponto mais próximo de qualquer `f`
+do ortante positivo é `f/‖f‖` e a distância é `|‖f‖₂ − 1|`; ZDT1 e SCH1 são
+curvas planas, resolvidas por minimização paramétrica. Os mesmos pontos que
+pontuavam 0,194 passam a pontuar 5·10⁻¹⁷ — o erro sai por completo, em qualquer M.
+
+| M | referência de 500 pontos | forma fechada |
+| ---: | ---: | ---: |
+| 2 | 0,001603 | 4·10⁻¹⁷ |
+| 3 | 0,029646 | 4·10⁻¹⁷ |
+| 6 | 0,193786 | 5·10⁻¹⁷ |
+
+O ZDT1 precisou de reparametrização: `1 − √f₁` tem tangente vertical na origem,
+então passos iguais em `f₁` são passos muito desiguais ao longo da curva e a
+busca empacava ali. Parametrizado por `u` com `f₁ = u²` a curva é polinomial e
+bem condicionada de ponta a ponta.
+
+**IGD e IGD+ continuam sobre a referência amostrada, e continuam com o piso.**
+Eles calculam a média *sobre o conjunto de referência* — é isso que os faz medir
+cobertura — então não há o que substituir. Documentado como número comparativo
+entre execuções que compartilham a referência, não como distância absoluta.
+
+**Normalização** passou a usar a faixa ideal-nadir teórica do benchmark
+(`benchmarks.ideal` + `nadir`) em vez dos extremos da amostra, para o valor não
+depender de como a amostra foi sorteada.
+
+**Definição do GD** fixada e documentada em
+[SYNTHETIC_MODE.md §7](SYNTHETIC_MODE.md): média `p=1`, não a variante RMS. A
+resposta da API devolve `gd_method`, `gd_formula` e `normalization`, e a legenda
+do gráfico diz quando o GD escapou do piso de discretização. A metade do
+notebook do NSGA-Studies continua fora de alcance deste repositório.
+
+**4.3 — unificação.** A "função única em `pylib`" não é viável como escrita: os
+CLIs de `pareto-analysis` precisam rodar **sem `pylib` no path**, e a cópia em
+`lib/metrics.py` e `lib/true_fronts.py` é deliberada, guardada por testes de
+paridade. Adaptei: espelhei a mudança e **estendi os testes de paridade** ao
+novo contorno (`analytical_scale`, `bounds`, `gd_analytical`, `front_distance`,
+`true_ideal`). O defeito real do achado 6 foi corrigido —
+`compute_hv_gd.py` passou a usar `1,1 × nadir` com `--true-front-bench`, como a
+API e o `plot_pareto_results.py` já faziam; antes o mesmo experimento reportava
+um HV no CLI e outro na GUI.
+
+Lateral: a suíte de `pareto-analysis` estava sem coletar por falta de `requests`
+na venv local — a mesma lacuna que a auditoria registrou. Instalado; passam 76
+testes onde antes rodavam 24. O CI já instalava a dependência.
+
+### Efeito no baseline
+
+O HV não mudou; só o GD, ao trocar a referência amostrada pela distância exata.
+A queda é exatamente o erro de discretização que estava sendo lido como falta de
+convergência — 25× no `nsga2-sch1`, onde a população chega tão perto da frente
+que quase todo o GD relatado vinha da referência. Tabela completa em
+[tests/regression/README.md](../../mo-engine/tests/regression/README.md).
 
 ---
 

@@ -445,6 +445,85 @@ class TestGetHvGd:
 
 
 
+
+# ── GET /{experiment_id}/hv-gd — analytical GD ────────────────────────────────
+class TestHvGdAnalyticalDistance:
+    """Phase 4: for a known benchmark, GD is the exact distance to the true
+    front instead of the mean nearest-neighbour distance to a sampled one.
+
+    The audit measured points lying EXACTLY on the DTLZ2 front scoring GD 0.19
+    at M=6 against the 500-point reference — pure discretisation, reported as
+    lack of convergence.
+    """
+
+    def _setup(self, mock_factory, bench, objectives, individuals):
+        doc = sample_experiment()
+        doc["parameters"]["simulation"] = {"synthetic": {"enabled": True, "bench": bench}}
+        doc["pareto_front"] = [{"objectives": dict(zip(objectives, individuals[0]))}]
+        mock_factory.experiment_repo.get.return_value = doc
+        mock_factory.generation_repo.find_by_experiment.return_value = [
+            {"_id": ObjectId(GEN_ID), "index": 0}
+        ]
+        mock_factory.individual_repo.find_by_generation.return_value = [
+            {"objectives": o} for o in individuals
+        ]
+        return doc
+
+    def _call(self, client, objectives):
+        q = "&".join(
+            [f"objectives={o}" for o in objectives] + ["minimize=true"] * len(objectives)
+        )
+        return client.get(f"{BASE}/{EXP_ID}/hv-gd?{q}").json()
+
+    def test_points_on_the_true_front_score_zero(self, client, mock_factory):
+        """Three points exactly on the DTLZ2 unit sphere, M=3."""
+        on_sphere = [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [3 ** -0.5, 3 ** -0.5, 3 ** -0.5],
+        ]
+        self._setup(mock_factory, "DTLZ2", ["f1", "f2", "f3"], on_sphere)
+        data = self._call(client, ["f1", "f2", "f3"])
+        assert data["gd_method"] == "analytical"
+        assert data["gd"][0] == pytest.approx(0.0, abs=1e-12)
+
+    def test_distance_is_the_radial_error_on_dtlz2(self, client, mock_factory):
+        """A point at twice the radius sits exactly 1.0 from the front."""
+        self._setup(mock_factory, "DTLZ2", ["f1", "f2", "f3"], [[2.0, 0.0, 0.0]])
+        assert self._call(client, ["f1", "f2", "f3"])["gd"][0] == pytest.approx(1.0, abs=1e-12)
+
+    def test_sch1_distance_is_divided_by_the_analytical_range(self, client, mock_factory):
+        """SCH1's theoretical range is [0,4] on both axes, so raw / 4."""
+        # (0, 4) is the front's endpoint at x=0; (0, 5) is 1.0 away from it.
+        self._setup(mock_factory, "SCH1", ["f1", "f2"], [[0.0, 5.0]])
+        data = self._call(client, ["f1", "f2"])
+        assert data["gd_method"] == "analytical"
+        assert data["gd"][0] == pytest.approx(0.25, abs=1e-9)
+
+    def test_non_synthetic_keeps_the_reference_front(self, client, mock_factory):
+        doc = sample_experiment()          # no synthetic block
+        doc["pareto_front"] = [{"objectives": {"f1": 0.5, "f2": 0.3}}]
+        mock_factory.experiment_repo.get.return_value = doc
+        mock_factory.generation_repo.find_by_experiment.return_value = [
+            {"_id": ObjectId(GEN_ID), "index": 0}
+        ]
+        mock_factory.individual_repo.find_by_generation.return_value = [
+            {"objectives": [0.5, 0.3]}
+        ]
+        data = self._call(client, ["f1", "f2"])
+        assert data["gd_method"] == "reference_front"
+        assert data["normalization"] == "reference front ideal-nadir range"
+
+    def test_response_states_how_gd_was_measured(self, client, mock_factory):
+        self._setup(mock_factory, "DTLZ2", ["f1", "f2", "f3"], [[1.0, 0.0, 0.0]])
+        data = self._call(client, ["f1", "f2", "f3"])
+        assert data["normalization"] == "analytical ideal-nadir range"
+        assert "distance to the true front" in data["gd_formula"]
+
+    def test_unknown_bench_falls_back_to_the_reference_front(self, client, mock_factory):
+        self._setup(mock_factory, "NOPE", ["f1", "f2"], [[0.5, 0.3]])
+        assert self._call(client, ["f1", "f2"])["gd_method"] == "reference_front"
+
 # ── GET /{experiment_id}/hv-gd?population=… ───────────────────────────────────
 class TestHvGdMeasuredPopulation:
     """Phase 1 of the NSGA metrics fix plan: which set each generation is

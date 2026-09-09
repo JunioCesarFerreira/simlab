@@ -21,7 +21,7 @@ BASELINE_PATH = Path(__file__).with_name("baseline.json")
 
 # Bumped whenever a phase of the fix plan deliberately changes the numbers, so
 # a stale baseline reports as "wrong stage" instead of as a silent regression.
-BASELINE_STAGE = "phase-2"
+BASELINE_STAGE = "phase-4"
 
 # Comparison tolerance. Runs are bit-for-bit reproducible on one machine; this
 # absorbs only last-ulp differences from another BLAS/libm build.
