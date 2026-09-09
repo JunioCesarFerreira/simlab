@@ -5,6 +5,62 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — NSGA metrics: determinism and resume
+
+Phase 3 of [`docs/markdown/NSGA_METRICS_FIX_PLAN.md`](docs/markdown/NSGA_METRICS_FIX_PLAN.md).
+
+### Fixed
+
+- **The DEAP and pymoo NSGA-III backends ignored the experiment seed.** Five
+  identical calls produced five different selections. DEAP shuffles through the
+  process-wide `numpy.random` module; pymoo builds
+  `np.random.default_rng(None)` — OS entropy — whenever no `random_state` is
+  passed, which `np.random.seed` cannot reach. Both are now driven from the
+  experiment's `algorithm.random_seed`. The DEAP call runs inside a context that
+  seeds the global numpy stream and **restores** it afterwards, so the engine
+  does not disturb anything else sharing its interpreter.
+  *Correction to the audit report: only the two NSGA-III adapters were affected.
+  Rank-and-crowding survival has no random step, so the NSGA-II adapters were
+  already deterministic; they are seeded anyway, against future library changes.*
+- **Resuming a checkpoint restarted from the wrong population.**
+  `_restore_population_state` loaded the previous generation's *offspring* as
+  parents. Those documents are Q(t-1), not the survivors P(t-1), so every parent
+  environmental selection had kept from an older generation was dropped: 4 to 7
+  of 12 in the test scenario. Parents now come from that generation's
+  `survivors`.
+- **A resumed run drew from a fresh random stream.** Each generation document
+  now carries an `rng_state` snapshot, taken at enqueue time — before any draw
+  belonging to that generation. Because every library seed derives from the same
+  generator, that one snapshot is the whole random state of a run.
+- **Population order was lost on resume.** Individuals came back sorted by
+  chromosome hash while the live population is in generation order, and the
+  mating tournament draws by index — so a reordered population is a different
+  search. Individuals now record their `index` within the generation, and the
+  restore sorts by it.
+
+### Added
+
+- `mo-engine/lib/strategy/library_rng.py` — seed derivation, the numpy global
+  seeding context, and BSON-safe snapshot/restore of the engine generator.
+- `Generation.rng_state` and `Individual.index`.
+- `IndividualRepository.find_by_experiment_and_ids` — survivor hashes cannot be
+  resolved against one generation's documents.
+- `mo-engine/tests/test_resume_reproducibility.py` — 4 continuous generations
+  against 2 + resume + 2 must produce identical populations throughout, driving
+  the real `_generation_enqueue` and `_evolution`.
+
+### Notes
+
+- Experiments started before this change still resume: missing `rng_state` or
+  `survivors` logs a warning and falls back to the previous behaviour. A
+  survivor with no matching individual document aborts the resume rather than
+  continuing on a truncated population.
+- `Generation.survivors` is now stored verbatim — in selection order, repeats
+  included — because a resume rebuilds the population from it. De-duplicating
+  would be harmless for the metrics but would shrink the restored population.
+
+---
+
 ## [Unreleased] — NSGA metrics: genetic operators
 
 Phase 2 of [`docs/markdown/NSGA_METRICS_FIX_PLAN.md`](docs/markdown/NSGA_METRICS_FIX_PLAN.md).

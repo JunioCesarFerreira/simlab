@@ -108,16 +108,15 @@ def test_every_generation_records_its_survivors(run: _Run):
 
 
 def test_survivor_set_is_the_selected_population(run: _Run):
-    """One entry per selected individual, de-duplicated.
+    """One entry per selected SLOT, in selection order, repeats included.
 
-    The count can fall below ``POP_SIZE``: a child that reproduces a surviving
-    parent exactly enters the union twice, and selection may keep both slots.
-    That happens in roughly 4% of slots for both algorithms and predates this
-    work, so the survivor set records distinct chromosomes rather than slots.
+    A child that reproduces a surviving parent exactly enters the union twice
+    and selection may keep both slots — roughly 4% of slots, in both algorithms,
+    predating this work. The list stays faithful to P_t rather than being
+    de-duplicated, because a resume rebuilds the population from it.
     """
     for index, hashes in run.survivors_by_index.items():
-        assert 0 < len(hashes) <= POP_SIZE, f"generation {index} kept {len(hashes)} of {POP_SIZE}"
-        assert len(set(hashes)) == len(hashes), f"generation {index} recorded a duplicate"
+        assert len(hashes) == POP_SIZE, f"generation {index} kept {len(hashes)} of {POP_SIZE}"
 
 
 def test_last_generation_gets_an_environmental_selection(run: _Run):

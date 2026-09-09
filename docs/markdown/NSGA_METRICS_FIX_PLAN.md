@@ -219,7 +219,7 @@ item próprio se a densidade efetiva da população importar.
 
 ---
 
-## Fase 3 — Determinismo e retomada (achado 7) · alta quando esses caminhos são usados
+## Fase 3 — Determinismo e retomada (achado 7) · **concluída**
 
 ### 3.1 Ligar os RNGs de biblioteca à semente
 
@@ -249,6 +249,54 @@ sobreviventes. Na reprodução da auditoria, perdeu 4 de 10 pais.
   quando aplicável (pymoo mantém ideal/nadir entre gerações).
 - Teste: N gerações contínuas vs. execução interrompida e retomada no meio →
   mesma população final.
+
+### O que foi entregue
+
+**3.1 — RNGs de biblioteca.** [library_rng.py](../../mo-engine/lib/strategy/library_rng.py)
+concentra a semeadura. A DEAP sorteia pelo `numpy.random` global, então a
+seleção roda dentro de um contexto que semeia e **restaura** o estado global (o
+engine divide o interpretador com outro trabalho); a pymoo recebe `random_state`
+explícito. Todas as sementes de biblioteca são derivadas do mesmo
+`random.Random` do laço — decisão deliberada: a reprodutibilidade de uma
+execução inteira reduz-se a um único estado, que é também a única coisa que um
+checkpoint precisa persistir.
+
+Medição antes/depois, cinco chamadas idênticas com semente 42:
+
+| Estratégia | conjuntos distintos antes | depois |
+| --- | ---: | ---: |
+| NSGA2 / NSGA3 nativos | 1 | 1 |
+| NSGA2 DEAP / pymoo | 1 | 1 |
+| **NSGA3 DEAP** | **5** | 1 |
+| **NSGA3 pymoo** | **5** | 1 |
+
+Correção ao relatório da auditoria: o não determinismo estava só nos dois
+adaptadores **NSGA-III**, não em "cada adaptador DEAP/pymoo" — a sobrevivência
+rank-and-crowding não tem etapa aleatória.
+
+**3.2 — Retomada fiel.** `_restore_population_state` carrega `_parents` dos
+`survivors` da geração anterior e restaura o `_ga_rng` do snapshot
+`rng_state` gravado no documento da geração. No cenário de teste (população 12),
+carregar os descendentes em vez dos sobreviventes perderia **4 a 7 de 12 pais** —
+pior que os 4 de 10 medidos pela auditoria.
+
+**Item não previsto no plano, necessário para a retomada exata:** a *ordem* da
+população. `_load_generation_population` ordenava por hash, enquanto a população
+viva está em ordem de geração — e o torneio de acasalamento sorteia por índice,
+então uma população reordenada é outra busca. Cada indivíduo passou a gravar
+`index`, e a restauração ordena por ele, com fallback para a ordem por hash em
+documentos antigos.
+
+Critério de saída atingido:
+[test_resume_reproducibility.py](../../mo-engine/tests/test_resume_reproducibility.py)
+roda 4 gerações contínuas contra 2 + retomada + 2 e exige populações idênticas
+em todas as gerações, dirigindo o `_generation_enqueue` e o `_evolution` reais —
+só o disparo assíncrono e o upload de topologia são neutralizados.
+
+Retomadas de experimentos anteriores a esta mudança continuam funcionando: sem
+`rng_state` e sem `survivors` o código avisa e cai no comportamento antigo. Um
+sobrevivente sem documento correspondente aborta a retomada em vez de continuar
+com população truncada.
 
 ---
 

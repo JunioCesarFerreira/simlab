@@ -15,6 +15,14 @@ class Generation(TypedDict):
     # opposed to the offspring Q_t stored as this generation's individuals.
     # A survivor may come from an older generation, so these hashes must be
     # resolved against the whole experiment, not against this generation's
-    # individual documents. Absent on generations written before the field
-    # existed; consumers must fall back rather than assume an empty selection.
+    # individual documents. Recorded in selection order and WITH repeats: a
+    # child that reproduces a surviving parent exactly can occupy two slots, and
+    # a resume rebuilds the population from this list. Absent on generations
+    # written before the field existed; consumers must fall back rather than
+    # assume an empty selection.
     survivors: NotRequired[list[str]]
+    # Snapshot of the engine's random generator taken when this generation was
+    # enqueued — i.e. before any draw belonging to it. Every library seed
+    # (DEAP, pymoo) is derived from that one generator, so restoring it is
+    # enough to make a resumed run continue the uninterrupted one exactly.
+    rng_state: NotRequired[dict]

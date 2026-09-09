@@ -15,6 +15,7 @@ instantiation will fail with a clear ImportError.
 import numpy as np
 
 from .nsga3 import NSGA3LoopStrategy
+from .library_rng import derive_generator
 
 
 class NSGA3PymooStrategy(NSGA3LoopStrategy):
@@ -67,7 +68,10 @@ class NSGA3PymooStrategy(NSGA3LoopStrategy):
 
         # pymoo NSGA-III environmental selection (NDS + ref-dir niching).
         survived = self._pymoo_survival.do(
-            self._pymoo_problem, pop, n_survive=self._pop_size
+            self._pymoo_problem,
+            pop,
+            n_survive=self._pop_size,
+            random_state=derive_generator(self._ga_rng),
         )
 
         return [R_population[ind.get("simlab_idx")] for ind in survived]

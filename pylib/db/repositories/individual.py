@@ -36,6 +36,26 @@ class IndividualRepository:
         with self.connection.connect() as db:
             return list(db["individuals"].find({"generation_id": generation_id}))
 
+    def find_by_experiment_and_ids(
+        self,
+        experiment_id: ObjectId,
+        individual_ids: list[str],
+    ) -> list[Individual]:
+        """Individuals of one experiment, looked up by chromosome hash.
+
+        Survivor sets are hashes and a survivor may have been evaluated several
+        generations earlier, so they cannot be resolved against a single
+        generation's documents. The same hash can appear in more than one
+        generation; callers that need one document per hash keep the first.
+        """
+        if not individual_ids:
+            return []
+        with self.connection.connect() as db:
+            return list(db["individuals"].find({
+                "experiment_id": experiment_id,
+                "individual_id": {"$in": list(individual_ids)},
+            }))
+
     def update_objectives(
         self,
         individual_id: str,
