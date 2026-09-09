@@ -63,7 +63,11 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
         self._candidate_cover_bits: list[int] = build_candidate_cover_bits(
             self._coverage_matrix, len(self.problem.candidates)
         )
-        log.info(f"[P2] Coverage matrix built: {len(sampled)} sampled points x {len(self.problem.candidates)} candidates.")
+        log.info(
+            f"[P2] Coverage matrix built: {len(sampled)} sampled points x "
+            f"{len(self.problem.candidates)} candidates, "
+            f"alpha={self.problem.min_coverage_percentage:.2f}%."
+        )
 
 
     def coverage_score(self, mask: list[int]) -> float:

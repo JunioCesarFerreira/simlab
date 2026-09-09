@@ -44,12 +44,26 @@ export function hasTargets(name: string): boolean {
   return name === 'problem3'
 }
 
+/**
+ * Problems carrying the trajectory coverage constraint (alpha).
+ *
+ * P1 and P2 require the deployed motes to cover at least `alpha` percent of
+ * the sampled mobile-node trajectory points; individuals below the level are
+ * penalized by the adapter's `penalty_objectives`. P3 uses k-coverage over
+ * explicit targets instead, and P4 has no coverage constraint at all.
+ */
+export function hasCoverageConstraint(name: string): boolean {
+  return name === 'problem1' || name === 'problem2'
+}
+
 export type ProblemDraft = {
   name: string
   radiusOfReach: number
   radiusOfInter: number
   radiusOfCover: number
   kRequired: number
+  /** alpha: minimum trajectory coverage level, in percent [0, 100]. P1/P2 only. */
+  minCoveragePercentage: number
   region: Region
   sink: SinkPoint | null
   candidates: CandidatePoint[]
@@ -143,6 +157,8 @@ export type ExportedProblem = {
   region: Region
   sink: [number, number]
   k_required?: number
+  /** alpha: minimum trajectory coverage level, in percent [0, 100]. P1/P2 only. */
+  min_coverage_percentage?: number
   targets?: Array<[number, number]>
   candidates?: Array<[number, number]>
   number_of_relays?: number

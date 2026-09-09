@@ -5,6 +5,43 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Coverage level α as an explicit problem parameter
+
+### Added
+
+- **Web GUI — problem editor**: new **Coverage Level α (%)** field for Problems
+  P1 and P2, next to the communication radii. It edits the problem's
+  `min_coverage_percentage` — the minimum share of the sampled mobile-node
+  trajectory that must stay connected to the sink — and is validated to the
+  closed range `[0, 100]`. The field is hidden for P3/P4, whose adapters have
+  no trajectory coverage constraint.
+- **Web GUI — launch wizard**: step 1 (*Problem*) summarizes the value as
+  `Coverage level α  ≥ N%`, so the level in force is visible before an
+  experiment is created; the value is exported in `parameters.problem` for P1/P2
+  only.
+- **Web GUI — visualization**: the problem topology modal on the experiment
+  detail page shows an `α ≥ N%` pill, and the *Problem* parameter table lists
+  `min_coverage_percentage` like any other problem field. Experiments launched
+  before this change simply have no pill.
+- **`pylib/config/problems`**: `parse_min_coverage_percentage()` centralizes the
+  parsing for `ProblemP1`/`ProblemP2` and now **rejects** non-numeric values and
+  values outside `[0, 100]` at the cast boundary, so a mis-configured experiment
+  fails before any simulation is spent instead of silently penalizing the whole
+  population. The field stays optional and still defaults to `100.0`.
+- **mo-engine**: the P1 and P2 adapters log the α in force when the coverage
+  structures are built, so a run's log records the level it was executed with.
+
+### Notes
+
+- α remains a **problem** parameter, not a GA knob: it defines what *feasible*
+  means, while `apply_coverage_repair` / `repair_coverage_budget` control how
+  hard the operators try to reach it. The serialized key is unchanged
+  (`min_coverage_percentage`), so existing saved problems, stored experiments
+  and request payloads keep working — α is presentation and validation on top
+  of the field the engine has always read.
+
+---
+
 ## [Unreleased] — Inverted Generational Distance (IGD / IGD+)
 
 ### Added

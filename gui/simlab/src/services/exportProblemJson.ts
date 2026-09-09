@@ -1,5 +1,5 @@
 import type { ProblemDraft, ExportedProblemFile } from '../types/problem'
-import { hasCandidates, hasTargets } from '../types/problem'
+import { hasCandidates, hasTargets, hasCoverageConstraint } from '../types/problem'
 import { buildSegmentExpressions } from './segmentExpressionBuilder'
 
 export function exportProblem(draft: ProblemDraft): ExportedProblemFile {
@@ -17,6 +17,12 @@ export function exportProblem(draft: ProblemDraft): ExportedProblemFile {
       }
     : {}
 
+  // alpha — only P1/P2 declare the trajectory coverage constraint; emitting it
+  // elsewhere would ship a key those adapters silently ignore.
+  const coverageFields = hasCoverageConstraint(draft.name)
+    ? { min_coverage_percentage: draft.minCoveragePercentage }
+    : {}
+
   return {
     problem: {
       name: draft.name,
@@ -24,6 +30,7 @@ export function exportProblem(draft: ProblemDraft): ExportedProblemFile {
       radius_of_inter: draft.radiusOfInter,
       region: draft.region,
       ...targetFields,
+      ...coverageFields,
       sink: [draft.sink.x, draft.sink.y],
       ...candidatesOrSensors,
       mobile_nodes: draft.mobileNodes.map(m => ({

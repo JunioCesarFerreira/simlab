@@ -12,6 +12,11 @@
             <span v-if="candidateCount > 0" class="pill pill--blue">{{ candidateCount }} candidates</span>
             <span v-if="mobileNodeCount > 0" class="pill pill--green">{{ mobileNodeCount }} mobile nodes</span>
             <span v-if="targetCount > 0" class="pill pill--amber">{{ targetCount }} targets</span>
+            <span
+              v-if="minCoveragePercentage !== null"
+              class="pill pill--violet"
+              title="Minimum trajectory coverage level required by the problem (alpha)"
+            >α ≥ {{ minCoveragePercentage }}%</span>
           </div>
         </div>
         <div class="header-actions">
@@ -65,6 +70,12 @@ const problemName = computed(() => String(props.problem.name ?? ""));
 const numberOfRelays = computed(() => props.problem.number_of_relays ?? "?");
 const radiusOfReach = computed(() => props.problem.radius_of_reach ?? "?");
 const radiusOfInter = computed(() => props.problem.radius_of_inter ?? "?");
+// alpha — absent from problems without the trajectory coverage constraint
+// (P3/P4) and from experiments launched before it became an explicit field.
+const minCoveragePercentage = computed(() => {
+  const raw = props.problem.min_coverage_percentage;
+  return typeof raw === "number" ? raw : null;
+});
 const region = computed(() => (props.problem.region as [number, number, number, number]) ?? [-100, -100, 100, 100]);
 const sink = computed(() => (props.problem.sink as [number, number]) ?? [0, 0]);
 const candidates = computed(() => (props.problem.candidates as [number, number][] | undefined) ?? []);
@@ -438,6 +449,12 @@ onBeforeUnmount(() => {
   background: #fef3c7;
   border-color: #fde68a;
   color: #92400e;
+}
+
+.pill--violet {
+  background: #ede9fe;
+  border-color: #ddd6fe;
+  color: #5b21b6;
 }
 
 .header-actions {

@@ -31,6 +31,7 @@
             "radius_of_reach": 100,
             "radius_of_inter": 200,
             "region": [ -150, -150, 150, 150 ],
+            "min_coverage_percentage": 100,
             "sink": [ 0, 0 ],
             "candidates": [
                 [ -36, -57 ], [ -96, -48 ], [ 20, -117 ], [ 76, -31 ], [ 54, 70 ],

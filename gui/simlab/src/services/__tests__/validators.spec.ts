@@ -9,6 +9,7 @@ function baseDraft(overrides: Partial<ProblemDraft> = {}): ProblemDraft {
     radiusOfInter: 200,
     radiusOfCover: 90,
     kRequired: 1,
+    minCoveragePercentage: 100,
     region: [-100, -100, 100, 100],
     sink: { x: 0, y: 0 },
     candidates: [],
@@ -33,6 +34,24 @@ describe("validateProblem", () => {
     expect(fields).toContain("name");
     expect(fields).toContain("radius_of_reach");
     expect(fields).toContain("radius_of_inter");
+  });
+
+  it("bounds alpha to [0, 100] on the coverage-constrained problems", () => {
+    expect(
+      validateProblem(baseDraft({ name: "problem2", minCoveragePercentage: 101 })).map((e) => e.field),
+    ).toContain("min_coverage_percentage");
+    expect(
+      validateProblem(baseDraft({ name: "problem1", minCoveragePercentage: -1 })).map((e) => e.field),
+    ).toContain("min_coverage_percentage");
+    expect(
+      validateProblem(baseDraft({ name: "problem2", minCoveragePercentage: 0 })).map((e) => e.field),
+    ).not.toContain("min_coverage_percentage");
+  });
+
+  it("ignores alpha on problems without the coverage constraint", () => {
+    expect(
+      validateProblem(baseDraft({ name: "problem3", minCoveragePercentage: 999 })).map((e) => e.field),
+    ).not.toContain("min_coverage_percentage");
   });
 
   it("rejects an inverted region", () => {

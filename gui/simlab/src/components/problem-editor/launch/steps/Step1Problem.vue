@@ -44,6 +44,10 @@
         <span class="label">Num. sensors</span>
         <span class="value mono">{{ draft.numSensors }}</span>
       </div>
+      <div v-if="hasCoverageConstraint(draft.name)" class="summary-item">
+        <span class="label">Coverage level α</span>
+        <span class="value mono">≥ {{ draft.minCoveragePercentage }}%</span>
+      </div>
       <div class="summary-item">
         <span class="label">MAC protocol</span>
         <span class="value mono">{{ macProtocol }}</span>
@@ -59,6 +63,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useProblemStore } from '../../../../app/stores/problemStore'
+import { hasCoverageConstraint } from '../../../../types/problem'
 
 const problemStore = useProblemStore()
 const draft = computed(() => problemStore.draft)

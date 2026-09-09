@@ -70,9 +70,20 @@ A continuous deployment problem where fixed sensor motes must be placed freely i
 
   * communication radius $R_{\text{com}} > 0$;
   * interference radius $R_{\text{inter}} \ge 2 R_{\text{com}}$.
+* A required **coverage level** $\alpha \in [0, 100]$, in percent (JSON key
+  `min_coverage_percentage`, optional, default $100$).
 
 **Goal.**
 Determine a set of positions $P \subset \Omega$, with $|P| = N$, for the fixed motes such that, for all times $t \in \mathbb{R}*+$, every mobile mote can communicate with the sink through a multi-hop path whose individual hops do not exceed $R*{\text{com}}$.
+
+**Coverage level $\alpha$.**
+Time is discretized by sampling the trajectories, and the requirement above is
+enforced on the sampled points: at least $\alpha$ percent of them must lie
+within $R_{\text{com}}$ of the sink or of some deployed mote. With
+$\alpha = 100$ the constraint is the strict formulation; lower values relax it,
+which is useful when full coverage is infeasible for the given $N$ and
+$R_{\text{com}}$. Individuals below $\alpha$ are rejected by
+`penalty_objectives` and never reach simulation.
 
 ---
 
@@ -87,7 +98,10 @@ A discrete variant of Problem 1, where fixed motes can only be placed at predefi
 * A fixed sink at position $\sigma \in \Omega$;
 * A finite set of candidate positions $Q = {q_1, \dots, q_J} \subset \Omega$;
 * A set of $M$ mobile motes with continuous and recurrent trajectories;
-* Homogeneous communication and interference radii $R_{\text{com}}) and (R_{\text{inter}}$.
+* Homogeneous communication and interference radii $R_{\text{com}}) and (R_{\text{inter}}$;
+* A required **coverage level** $\alpha \in [0, 100]$, in percent (JSON key
+  `min_coverage_percentage`, optional, default $100$), with the same
+  discretized semantics as in Problem 1.
 
 **Goal.**
 Determine the **smallest subset** $P \subset Q$ of fixed mote positions such that, for all times $t \in \mathbb{R}*+$, each mobile mote can communicate with the sink via a multi-hop path with hop lengths bounded by $R*{\text{com}}$.
@@ -390,7 +404,7 @@ This guarantees that mutation never produces infeasible individuals.
 
 ### P2.4. Coverage Repair (optional)
 
-In addition to connectivity, Problem P2 carries a **trajectory coverage constraint**: the active candidates must cover at least `min_coverage_percentage` of the sampled trajectory points, otherwise the individual is penalized by `penalty_objectives` and skips simulation.
+In addition to connectivity, Problem P2 carries a **trajectory coverage constraint**: the active candidates must cover at least $\alpha$ (`min_coverage_percentage`, a *problem* parameter — not a GA knob) of the sampled trajectory points, otherwise the individual is penalized by `penalty_objectives` and skips simulation.
 
 When the algorithm parameter `apply_coverage_repair` is enabled (default `true`), a **greedy set-cover repair** is applied after every connectivity repair (random generation, crossover, and mutation):
 
@@ -461,5 +475,12 @@ crossover: feasibility-preserving pipelines (connectivity/coverage repair)
 are part of each problem's formulation, not tunable knobs. The GUI mirrors
 this table in `gui/simlab/src/lib/problemCapabilities.ts` — keep both in
 sync when an adapter starts consuming a new key.
+
+Note that $\alpha$ (`min_coverage_percentage`) is **not** in this table: it
+belongs to the problem instance, not to the algorithm, and therefore travels
+in `parameters.problem` — edited in the GUI's problem editor, summarized in the
+launch wizard, and shown on the problem visualization. `apply_coverage_repair`
+and `repair_coverage_budget` are the GA-side knobs that decide *how hard* the
+operators try to reach $\alpha$; $\alpha$ itself decides *what* feasible means.
 
 ---
