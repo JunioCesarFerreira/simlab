@@ -10,23 +10,34 @@ melhora. Cada fase abaixo termina com uma medição comparável à anterior.
 
 ---
 
-## Fase 0 — Rede de segurança (pré-requisito de todas as demais)
+## Fase 0 — Rede de segurança (pré-requisito de todas as demais) · **concluída**
 
 Sem baseline congelado, cada correção muda os números e não se separa efeito de
 regressão.
 
-1. Promover `experiments/nsga-metrics-audit/run_audit.py` a harness versionado em
-   `mo-engine/tests/regression/`, sem depender do notebook externo do
-   NSGA-Studies (hoje é arquivo local não versionado).
-2. Gerar um baseline JSON determinístico: NSGA-II e NSGA-III nativos, DTLZ2
-   (M=3, n=10), ZDT1 e SCH1, sementes 1/2/3/5/7, ruído zero, HV/GD/IGD por
-   geração para os três conjuntos (descendentes, sobreviventes, arquivo).
-3. Marcar o baseline como "pré-correção" no repositório. Ele é referência de
-   comparação, **não** meta a preservar — as fases 1–3 mudam esses números de
-   propósito.
+Entregue em [`mo-engine/tests/regression/`](../../mo-engine/tests/regression/README.md):
 
-Critério de saída: `run_regression --baseline` reproduz bit a bit em duas
-execuções seguidas.
+- `kernel.py` — harness síncrono sobre os métodos reais de reprodução e seleção
+  ambiental, sem MongoDB e **sem depender do notebook externo** do NSGA-Studies.
+  Registra HV/GD/IGD/IGD+ por geração para os três conjuntos (descendentes,
+  sobreviventes, arquivo), mais `radial_error` analítico no DTLZ2.
+- `baseline_pre_fix.json` — 30 execuções (NSGA-II e NSGA-III nativos × DTLZ2
+  M=3/n=10, ZDT1 M=2/n=10, SCH1 M=2/n=1 × sementes 1/2/3/5/7), marcado
+  `stage: "pre-fix"`. É referência de comparação, **não** meta a preservar.
+- `baseline.py` — `--write` / `--check` / `--summary`.
+- `test_baseline.py` — reprodutibilidade, sensibilidade à semente, comparação
+  com o baseline, e o achado 1 como invariante permanente.
+
+Critério de saída atingido: `--check` reproduz o baseline em execuções repetidas,
+e DTLZ2/NSGA-III reproduz os números da auditoria (HV final 0,581202 nos
+descendentes contra 0,620339 nos sobreviventes; maior queda por passo 0,042602
+contra 0,015225).
+
+Observação nova, vinda do baseline: `nsga3-sch1-m2-n1` é o único caso em que os
+**sobreviventes** também caem muito (0,569 contra 0,024 do NSGA-II no mesmo
+problema). Com M=2 e `divisions=10` são 11 direções para 50 indivíduos — o
+cenário em que os defeitos de niching do achado 2 mais pesam. Adotar como
+critério de saída da Fase 2.2.
 
 ---
 
