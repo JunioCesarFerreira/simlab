@@ -22,7 +22,11 @@ from lib.util.build_input_sim_cooja import create_files
 # NSGA utils
 from lib.nsga import fast_nondominated_sort
 from lib.nsga import select_next_population
-from lib.genetic_operators.selection import tournament_selection, compute_individual_ranks
+from lib.genetic_operators.selection import (
+    tournament_selection,
+    compute_individual_ranks,
+    compute_crowding_distances,
+)
 # Problem Adapter
 from lib.problem.adapter import ProblemAdapter, Chromosome
 from lib.problem.chromosomes import chromosome_from_dict
@@ -943,20 +947,30 @@ class NSGA2LoopStrategy(EngineStrategy):
             # is purely random. Gradient-penalty magnitudes must not bias exploration
             # when there is no feasible reference to guide convergence.
             individual_ranks: dict[int, int] = {i: 0 for i in range(len(parents))}
+            crowding: dict[int, float] | None = None
             logger.warning(
                 "[NSGA-II] All %d parents infeasible — uniform selection rank applied.", len(parents)
             )
         else:
             fronts: list[list[int]] = fast_nondominated_sort(parents_objectives)
             individual_ranks = compute_individual_ranks(fronts)
+            # Crowded-comparison operator: rank alone ties every member of a
+            # front with every other, and the first front is where mating
+            # pressure matters most. Breaking those ties by crowding distance is
+            # what makes the mating tournament NSGA-II's rather than a coin flip.
+            crowding = compute_crowding_distances(fronts, parents_objectives)
 
         max_attempts = self._pop_size * 10
         attempts = 0
 
         while len(children) < self._pop_size and attempts < max_attempts:
             attempts += 1
-            parent1: Chromosome = tournament_selection(parents, individual_ranks, self._ga_rng)
-            parent2: Chromosome = tournament_selection(parents, individual_ranks, self._ga_rng)
+            parent1: Chromosome = tournament_selection(
+                parents, individual_ranks, self._ga_rng, crowding
+            )
+            parent2: Chromosome = tournament_selection(
+                parents, individual_ranks, self._ga_rng, crowding
+            )
             if self._ga_rng.random() < self._prob_cx:
                 c1, c2 = self._problem_adapter.crossover([parent1, parent2])
             else:

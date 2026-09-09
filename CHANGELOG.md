@@ -5,6 +5,70 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — NSGA metrics: genetic operators
+
+Phase 2 of [`docs/markdown/NSGA_METRICS_FIX_PLAN.md`](docs/markdown/NSGA_METRICS_FIX_PLAN.md).
+
+### Fixed
+
+- **Bounded SBX gave both children the same spread factor**, computed from the
+  distance to the *lower* bound. The two children are pushed in opposite
+  directions, so each needs the distance to the bound it is heading towards.
+  Each child now derives its own factor from the same draw, matching DEAP's
+  `cxSimulatedBinaryBounded` exactly. This affects every strategy, the `_deap`
+  and `_pymoo` variants included — they replace only the survival step.
+- **Native NSGA-III niching was not the canonical algorithm.** Four defects,
+  all corrected: normalisation now uses ideal point, extreme points and
+  hyperplane intercepts over `St = accepted ∪ truncated front` instead of the
+  front's own min/range; association is by perpendicular distance to the
+  reference *direction* rather than Euclidean distance to the reference
+  *point*; niche occupancy is seeded from the already-accepted individuals
+  instead of starting at zero; and niches with no remaining candidate leave the
+  minimum-occupancy race, which removes a fallback that picked uniformly at
+  random from everything left without even updating the occupancy.
+  `associate_to_niches` was dead code in this module and is now the association
+  the selection uses.
+- **The NSGA-II mating tournament broke rank ties at random**, dropping the
+  crowded-comparison operator. Ties now go to the larger crowding distance.
+  NSGA-III deliberately keeps the random tie-break: Deb & Jain enforce diversity
+  through reference-point niching, not through a crowded tournament.
+
+### Notes
+
+- **DTLZ2 results get worse with the corrected operators, and the cause is
+  understood.** The old SBX clipped ~0.54% of children onto the *upper* bound
+  (0% onto the lower one — the defect was asymmetric). DTLZ2's position
+  variables must reach 0 or 1 to produce the front's corner solutions, which
+  dominate hypervolume, so the defect manufactured half of those corners for
+  free. The regression persists at 60 and 150 generations and under textbook
+  mutation, so it is not a short-budget artifact. The fix stands — the old
+  distribution is provably wrong — but **DTLZ2 numbers produced before this
+  change depend on that artifact and need recomputing.**
+- The crowded mating tournament's mean effect is within the 5-seed noise; what
+  it measurably does is raise run-to-run variance on DTLZ2 (M=3), consistent
+  with crowding distance being a weak diversity signal beyond two objectives.
+- Intercepts follow **pymoo**, not DEAP. DEAP solves the hyperplane in the
+  translated space and then divides by `intercepts - ideal`, subtracting the
+  ideal point a second time; pymoo returns `ideal + 1/x`, which is what Deb &
+  Jain's Eq. (4) describes. A test pins the choice.
+- The selected population carries ~4% duplicate slots — a child that reproduces
+  a surviving parent exactly enters the union twice. Pre-existing in both
+  algorithms and untouched here.
+
+### Added
+
+- `mo-engine/tests/test_sbx_bounded.py`, `test_niching_selection.py` and
+  `test_tournament_crowding.py` — parity against DEAP and pymoo, plus one test
+  per audit defect.
+- `compute_crowding_distances` in `lib.genetic_operators.selection`.
+- The regression baseline is re-frozen at stage `phase-2`
+  (`mo-engine/tests/regression/baseline.json`, renamed from
+  `baseline_pre_fix.json`). Its
+  [README](mo-engine/tests/regression/README.md) carries the per-operator
+  ablation, the bound-clipping measurements and the pre-fix table.
+
+---
+
 ## [Unreleased] — NSGA metrics: the measured population
 
 Phases 0 and 1 of [`docs/markdown/NSGA_METRICS_FIX_PLAN.md`](docs/markdown/NSGA_METRICS_FIX_PLAN.md),

@@ -17,11 +17,11 @@ import sys
 
 from .kernel import BASELINE_CONFIGS, SEEDS, run_grid
 
-BASELINE_PATH = Path(__file__).with_name("baseline_pre_fix.json")
+BASELINE_PATH = Path(__file__).with_name("baseline.json")
 
 # Bumped whenever a phase of the fix plan deliberately changes the numbers, so
 # a stale baseline reports as "wrong stage" instead of as a silent regression.
-BASELINE_STAGE = "pre-fix"
+BASELINE_STAGE = "phase-2"
 
 # Comparison tolerance. Runs are bit-for-bit reproducible on one machine; this
 # absorbs only last-ulp differences from another BLAS/libm build.

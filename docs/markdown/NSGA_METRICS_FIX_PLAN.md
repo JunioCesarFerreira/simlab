@@ -123,7 +123,7 @@ endpoint continua projetando objetivos por posição (Fase 5).
 
 ---
 
-## Fase 2 — Operadores genéticos (achados 3 e 2) · alta
+## Fase 2 — Operadores genéticos (achados 3 e 2) · **concluída**
 
 ### 2.1 SBX limitado — segundo filho (achado 3)
 
@@ -169,8 +169,53 @@ canônico por crowding distance em
 [tournament_selection.py](../../mo-engine/lib/genetic_operators/selection/tournament_selection.py),
 passando as distâncias já calculadas na seleção ambiental.
 
-Critério de saída: paridade com DEAP dentro da tolerância definida nos testes, e
-comparação Fase 1 vs. Fase 2 no baseline multi-semente.
+Critério de saída atingido, com uma ressalva importante registrada abaixo.
+
+**Correções aplicadas.** SBX com `betaq` próprio por filho, do mesmo sorteio
+(`_spread_factor`); niching canônico com normalização por extremos/interceptos
+do conjunto `St = aceitos ∪ frente`, associação perpendicular, ocupação semeada
+pelos já aceitos e remoção dos nichos sem candidatos; `associate_to_niches`
+deixou de ser código morto e é a função de associação usada. `accepted` entrou
+na assinatura de `niching_selection` e é passado por `_select_next_parents` e
+por `environmental_selection`. Torneio do NSGA-II com desempate por crowding;
+o NSGA-III segue sem, como Deb & Jain.
+
+**Verificação contra as referências.** SBX: par de filhos idêntico à DEAP em
+2000 casos aleatórios (a ordem de atribuição difere porque o SimLab restaura a
+ordem original dos pais). Niching: pontos extremos e associação idênticos à
+DEAP. Interceptos idênticos à **pymoo** e diferentes da DEAP — a DEAP resolve o
+hiperplano no espaço transladado e depois divide por `intercepts - ideal`,
+subtraindo o ideal duas vezes; seguimos a pymoo, que é o que a Eq. (4) de Deb &
+Jain descreve. `test_intercepts_match_pymoo_not_deap` fixa essa escolha.
+
+**Critério de saída da Fase 2.2 atingido**: em `nsga3-sch1` a maior queda de HV
+por passo nos sobreviventes cai de 0,569 para 0,229, e a ablação atribui o ganho
+ao niching.
+
+### Ressalva: operadores corretos pioram o DTLZ2
+
+Não é ruído nem orçamento curto — persiste em 60 e 150 gerações e sob mutação
+1/n. A causa está medida: o SBX antigo usava a distância ao limite **inferior**
+para os dois filhos, o que super-espalhava o filho de cima e o grampeava
+exatamente no limite superior em ~0,54% dos filhos (0% no limite inferior — o
+defeito era assimétrico). No DTLZ2 as variáveis de posição precisam chegar a 0
+ou 1 para gerar as soluções de canto, que dominam o HV: o bug entregava metade
+desses cantos de graça.
+
+Mantida a correção. O operador antigo é comprovadamente a distribuição errada e
+a vantagem que dava é artefato de um benchmark. Mas **os números de DTLZ2
+obtidos antes da Fase 2 dependiam desse artefato** e precisam ser recalculados
+onde tiverem sido publicados.
+
+Tabela de atribuição e medições completas em
+[tests/regression/README.md](../../mo-engine/tests/regression/README.md).
+
+### Observação lateral
+
+A população selecionada carrega ~4% de slots duplicados (um filho que reproduz
+exatamente um pai sobrevivente entra duas vezes na união). Ocorre nos dois
+algoritmos, é anterior a este trabalho e não foi tratado aqui — candidato a
+item próprio se a densidade efetiva da população importar.
 
 ---
 

@@ -887,7 +887,12 @@ class NSGA3LoopStrategy(EngineStrategy):
                 remaining = self._pop_size - len(selected_idx)
                 if remaining > 0:
                     partial = niching_selection(
-                        front, R_objectives, self._ref_points, remaining, self._ga_rng
+                        front,
+                        R_objectives,
+                        self._ref_points,
+                        remaining,
+                        self._ga_rng,
+                        accepted=selected_idx,
                     )
                     selected_idx.extend(partial)
                 break
@@ -963,6 +968,9 @@ class NSGA3LoopStrategy(EngineStrategy):
 
         while len(children) < self._pop_size and attempts < max_attempts:
             attempts += 1
+            # No crowding tie-break here, unlike NSGA-II: Deb & Jain leave mating
+            # selection unbiased and enforce diversity through reference-point
+            # niching in the environmental step instead.
             parent1: Chromosome = tournament_selection(parents, individual_ranks, self._ga_rng)
             parent2: Chromosome = tournament_selection(parents, individual_ranks, self._ga_rng)
             if self._ga_rng.random() < self._prob_cx:
