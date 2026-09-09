@@ -796,21 +796,12 @@ class NSGA3LoopStrategy(EngineStrategy):
         # ---------------- First PHASE P_1 ----------------
         if self._parents == []:
             self._parents = self._current_population.copy()
+            # P_0 survives trivially: there is no union to select from yet.
+            self._persist_survivors()
             offspring = self._run_genetic_algorithm()
             self._current_population = offspring
             self._generation_enqueue()
             logger.info("[NSGA-III] Enqueued P_{t+1}; waiting results.")
-            return
-
-        # Stop condition?
-        if self._gen_index > self._max_gen:
-            try:
-                first_pareto_front = self._final_pareto_front()
-            except Exception:
-                logger.exception("[NSGA-III] Could not compute final Pareto front.")
-                first_pareto_front = []
-
-            self._finalize_experiment(pareto_front=first_pareto_front)
             return
 
         # ------- PHASE P_{t+1}: environmental selection on union R_t = P_t ∪ P_{t-1} -------
@@ -840,6 +831,22 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._parents = self._select_next_parents(R_population, R_objectives)
         if self._parents is None:
             return  # _finalize_experiment already called inside
+        self._persist_survivors()
+
+        # Stop condition — checked AFTER the selection above. The reported
+        # result is then ND(P_final), the selected population of pop_size,
+        # instead of ND(P_{t-1} ∪ Q_t): a union of up to 2·pop_size candidates
+        # that no environmental selection ever ran on. The evaluation budget is
+        # unchanged — neither path enqueues another generation.
+        if self._gen_index > self._max_gen:
+            try:
+                first_pareto_front = self._final_pareto_front()
+            except Exception:
+                logger.exception("[NSGA-III] Could not compute final Pareto front.")
+                first_pareto_front = []
+
+            self._finalize_experiment(pareto_front=first_pareto_front)
+            return
 
         offspring = self._run_genetic_algorithm()
         self._current_population = offspring
@@ -886,6 +893,43 @@ class NSGA3LoopStrategy(EngineStrategy):
                 break
 
         return [R_population[idx] for idx in selected_idx]
+
+
+# ---------------------------------------
+# Survivor set (measured population)
+# ---------------------------------------
+    def _persist_survivors(self) -> None:
+        """Record P_t — the population environmental selection kept — on the
+        generation document that just finished.
+
+        Individuals are stored per generation as the offspring Q_t that were
+        *evaluated* there. Quality indicators computed over Q_t swing with each
+        batch of children and can drop even while the search is still holding an
+        excellent parent, because that parent is not among the children. The
+        surviving population is the set NSGA actually carries forward and the
+        one the reference notebooks plot, so it has to be recoverable after the
+        run — hence this write.
+
+        ``self._generation_id`` still points at the generation whose results
+        triggered this selection: ``_generation_enqueue`` only advances it when
+        the next generation is created, which happens later in ``_evolution``.
+
+        Best-effort by design: survivors are analysis metadata, and a failed
+        write must not abort a running experiment. Readers fall back to the
+        offspring when the field is absent.
+        """
+        if self._generation_id is None or not self._parents:
+            return
+        # dict.fromkeys de-duplicates while preserving selection order: a child
+        # identical to a surviving parent can appear twice in the union.
+        hashes = list(dict.fromkeys(genome.get_hash() for genome in self._parents))
+        try:
+            self.mongo.generation_repo.set_survivors(self._generation_id, hashes)
+        except Exception:
+            logger.exception(
+                "[NSGA-III] Could not persist survivors for generation %s.",
+                self._generation_id,
+            )
 
 
 # ---------------------------------------
@@ -1037,7 +1081,14 @@ class NSGA3LoopStrategy(EngineStrategy):
 
 
     def _final_pareto_front(self) -> list[dict]:
-        """Non-dominated front of the FINAL population (parents ∪ last offspring).
+        """Non-dominated front of P_final — the SELECTED final population.
+
+        ``self._parents`` holds the survivors of the last environmental
+        selection, which ``_evolution`` now runs before the stop condition. The
+        last offspring are already folded into that selection, so taking
+        ``parents ∪ last offspring`` here would report the non-dominated set of
+        a union of up to 2·pop_size candidates instead of the pop_size
+        population the algorithm actually converged to.
 
         This is the clean result standard NSGA reports: ~pop_size well-converged,
         well-distributed points. It deliberately excludes the whole archive
@@ -1045,7 +1096,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         accumulates near-front points from early, poorly-converged generations,
         producing a thick/noisy front that does not match a reference plot.
         """
-        final_population = list(dict.fromkeys(self._parents + self._current_population))
+        final_population = list(dict.fromkeys(self._parents))
         all_objectives: list[list[float]] = []
         pareto_items: list[dict] = []
         for genome in final_population:

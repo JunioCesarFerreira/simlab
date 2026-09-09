@@ -444,6 +444,112 @@ class TestGetHvGd:
         assert data["hv_cumulative"][1] >= data["hv"][1]
 
 
+
+# ── GET /{experiment_id}/hv-gd?population=… ───────────────────────────────────
+class TestHvGdMeasuredPopulation:
+    """Phase 1 of the NSGA metrics fix plan: which set each generation is
+    measured on.
+
+    The scenario is the one the audit reproduced. Generation 1's offspring are
+    all worse than the parents environmental selection kept, so the offspring
+    curve regresses while the search has not: measuring Q_t instead of P_t makes
+    a healthy run look like it is losing ground.
+    """
+
+    GEN0 = ObjectId("507f1f77bcf86cd799439021")
+    GEN1 = ObjectId("507f1f77bcf86cd799439022")
+
+    # Gen 0 population; "c" is dominated by neither extreme but is mid-front.
+    _GEN0 = [
+        {"individual_id": "a", "objectives": [0.1, 0.9]},
+        {"individual_id": "b", "objectives": [0.9, 0.1]},
+        {"individual_id": "c", "objectives": [0.5, 0.5]},
+    ]
+    # Gen 1 offspring: a single bad child, dominated by "c".
+    _GEN1 = [{"individual_id": "d", "objectives": [0.8, 0.8]}]
+
+    def _setup(self, mock_factory, survivors=None):
+        doc = sample_experiment()
+        doc["parameters"]["simulation"] = {"synthetic": {"enabled": True, "bench": "ZDT1"}}
+        doc["pareto_front"] = [{"objectives": {"f1": 0.1, "f2": 0.9}}]
+        mock_factory.experiment_repo.get.return_value = doc
+
+        gen0 = {"_id": self.GEN0, "index": 0}
+        gen1 = {"_id": self.GEN1, "index": 1}
+        if survivors is not None:
+            gen0["survivors"] = ["a", "b", "c"]
+            # Every gen-1 offspring lost: P_1 is carried over from gen 0, whose
+            # documents live in the PREVIOUS generation. Resolving these hashes
+            # is only possible experiment-wide.
+            gen1["survivors"] = survivors
+        mock_factory.generation_repo.find_by_experiment.return_value = [gen0, gen1]
+        mock_factory.individual_repo.find_by_generation.side_effect = (
+            lambda gid: self._GEN0 if gid == self.GEN0 else self._GEN1
+        )
+        return doc
+
+    def _call(self, client, population=None):
+        q = "objectives=f1&objectives=f2&minimize=true&minimize=true"
+        if population is not None:
+            q += f"&population={population}"
+        return client.get(f"{BASE}/{EXP_ID}/hv-gd?{q}")
+
+    def test_survivors_is_the_default(self, client, mock_factory):
+        self._setup(mock_factory, survivors=["a", "b"])
+        data = self._call(client).json()
+        assert data["population"] == "survivors"
+        assert data["population_source"] == "survivors"
+
+    def test_survivor_curve_holds_where_the_offspring_curve_regresses(self, client, mock_factory):
+        self._setup(mock_factory, survivors=["a", "b"])
+        survivors = self._call(client, "survivors").json()
+        self._setup(mock_factory, survivors=["a", "b"])
+        offspring = self._call(client, "offspring").json()
+
+        # Same run, same evaluations, same reference point — only the measured
+        # set differs. This is finding 1 in one assertion.
+        assert offspring["hv"][1] < offspring["hv"][0]
+        assert survivors["hv"][1] > offspring["hv"][1]
+        assert survivors["gd"][1] < offspring["gd"][1]
+
+    def test_survivors_resolve_across_generations(self, client, mock_factory):
+        """A survivor kept from an older generation has no document of its own
+        in the generation that kept it."""
+        self._setup(mock_factory, survivors=["a", "b"])
+        data = self._call(client, "survivors").json()
+        # ND{(0.1,0.9),(0.9,0.1)} against ref 1.1·nadir = [1.1, 1.1]:
+        # 1.0·0.2 + 0.2·1.0 − overlap 0.2·0.2 = 0.36
+        assert data["hv"][1] == pytest.approx(0.36, rel=1e-9)
+
+    def test_missing_survivor_sets_fall_back_to_offspring(self, client, mock_factory):
+        """Runs recorded before survivors were persisted must still plot."""
+        self._setup(mock_factory, survivors=None)
+        data = self._call(client, "survivors").json()
+        assert data["population"] == "survivors"
+        assert data["population_source"] == "offspring"
+        assert data["hv"][1] > 0.0
+
+    def test_archive_makes_every_metric_cumulative(self, client, mock_factory):
+        """Not only HV: the 'Cumulative' view used to leave GD/IGD on Q_t."""
+        self._setup(mock_factory, survivors=["a", "b"])
+        data = self._call(client, "archive").json()
+        assert data["hv"] == pytest.approx(data["hv_cumulative"])
+        assert data["gd"][1] <= data["gd"][0]
+
+    def test_cumulative_hv_ignores_the_measured_population(self, client, mock_factory):
+        """The archive folds in the offspring whichever set is reported —
+        survivors are a subset of earlier offspring, so restricting the fold to
+        them would silently shrink the best-so-far front."""
+        self._setup(mock_factory, survivors=["a", "b"])
+        survivors = self._call(client, "survivors").json()
+        self._setup(mock_factory, survivors=["a", "b"])
+        offspring = self._call(client, "offspring").json()
+        assert survivors["hv_cumulative"] == pytest.approx(offspring["hv_cumulative"])
+
+    def test_unknown_population_is_rejected(self, client, mock_factory):
+        self._setup(mock_factory, survivors=["a", "b"])
+        assert self._call(client, "elite").status_code == 422
+
 # ── POST /{experiment_id}/plot-pareto ─────────────────────────────────────────
 class TestPlotPareto:
     _BODY = {"objectives": ["f1", "f2", "f3"], "minimize": [True, True, True]}

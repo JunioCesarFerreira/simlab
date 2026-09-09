@@ -41,7 +41,7 @@ critério de saída da Fase 2.2.
 
 ---
 
-## Fase 1 — Definir e persistir o conjunto medido (achados 1 e 8) · alta
+## Fase 1 — Definir e persistir o conjunto medido (achados 1 e 8) · **concluída**
 
 É a causa mais provável da oscilação visível nos gráficos: hoje a curva mede
 `ND(Q_t)`, a frente dos **descendentes**, não a população preservada.
@@ -87,8 +87,39 @@ contra uma população selecionada de N.
   continuam sendo dos descendentes; ou estender ao arquivo, ou desabilitar a
   opção para GD/IGD.
 
-Critério de saída: reprodução do quadro da auditoria — queda máxima de HV por
-passo cai de ~0,0426 (descendentes) para ~0,0152 (sobreviventes) em DTLZ2/M=3.
+Critério de saída atingido. O que foi entregue:
+
+- `Generation.survivors` + `GenerationRepository.set_survivors`, escritos por
+  `_persist_survivors` em ambas as estratégias — inclusive na geração 0, onde
+  P_0 sobrevive trivialmente. Escrita best-effort: sobreviventes são metadado de
+  análise e uma falha não pode abortar um experimento em andamento.
+- `_evolution` reordenado nas duas estratégias: seleção → grava sobreviventes →
+  testa parada → finaliza com `ND(P_final)`. Orçamento de avaliações inalterado.
+- `_final_pareto_front` passa a usar só `self._parents`.
+- Endpoint com `population=survivors|offspring|archive` (default `survivors`),
+  resolvendo hashes no escopo do experimento e devolvendo `population_source`
+  com o fallback para `offspring` em runs antigos. `population=archive` estende
+  o acumulado a GD/IGD/IGD+, não só ao HV.
+- GUI: seletor **Measured set** substitui o toggle Per generation/Cumulative em
+  [HvGdChart.vue](../../gui/simlab/src/components/charts/HvGdChart.vue) e em
+  [ExperimentsComparison.vue](../../gui/simlab/src/pages/ExperimentsComparison.vue),
+  governando os três gráficos; a legenda diz qual conjunto foi medido e avisa
+  quando houve fallback.
+- Testes: [test_survivor_persistence.py](../../mo-engine/tests/test_survivor_persistence.py)
+  roda o `_evolution` real de forma síncrona e trava os achados 1 e 8;
+  `TestHvGdMeasuredPopulation` em `rest-api/tests/test_experiment.py` cobre o
+  endpoint, incluindo a resolução de sobreviventes entre gerações e o fallback.
+- [test_final_pareto_front.py](../../mo-engine/tests/test_final_pareto_front.py)
+  atualizado: o contrato agora é ND(P_final), e um filho não selecionado não
+  pode vazar para a frente reportada.
+
+O baseline da Fase 0 permanece idêntico — o kernel já media os três conjuntos e
+já aplicava a seleção ao último lote, então a Fase 1 alinhou a produção ao que o
+baseline media, sem mover os números.
+
+Pendências herdadas, tratadas nas fases seguintes: a retomada continua carregando
+os filhos como pais (Fase 3.2, agora trivial com `survivors` persistido), e o
+endpoint continua projetando objetivos por posição (Fase 5).
 
 ---
 

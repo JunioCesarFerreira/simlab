@@ -50,6 +50,16 @@ class GenerationRepository:
             result = db["generations"].update_one({"_id": generation_id}, {"$set": updates})
             return result.modified_count > 0
 
+    def set_survivors(self, generation_id: ObjectId, individual_ids: list[str]) -> bool:
+        """Record the population environmental selection kept at this generation.
+
+        Stored on the generation rather than as a flag on each individual: it is
+        one write per generation, it leaves the unique
+        ``(generation_id, individual_id)`` index alone, and a survivor carried
+        over from an older generation has no document in this generation to flag.
+        """
+        return self.update(generation_id, {"survivors": list(individual_ids)})
+
     def mark_waiting(self, generation_id: ObjectId):
         self.update(generation_id, {"status": EnumStatus.WAITING})
 

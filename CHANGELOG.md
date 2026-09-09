@@ -5,6 +5,66 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — NSGA metrics: the measured population
+
+Phases 0 and 1 of [`docs/markdown/NSGA_METRICS_FIX_PLAN.md`](docs/markdown/NSGA_METRICS_FIX_PLAN.md),
+the action plan derived from the audit in `experiments/nsga-metrics-audit`.
+
+### Fixed
+
+- **Quality indicators measured the wrong set.** HV, GD, IGD and IGD+ were
+  computed over the *offspring* `Q_t` — the children evaluated in a generation —
+  because those are the individuals a generation document stores. Environmental
+  selection can keep an excellent parent that never reappears among the
+  children, so the curves showed a regression while the search was in fact
+  holding that parent. `mo-engine` now persists the surviving population `P_t`
+  on each generation and `GET /experiments/{id}/hv-gd` measures it by default.
+- **The last generation never got an environmental selection.** The stop
+  condition in `_evolution` was tested *before* the selection, so the reported
+  Pareto front was `ND(P_{t-1} ∪ Q_t)` — a union of up to `2·pop_size`
+  candidates no selection had run on — instead of `ND(P_final)` of `pop_size`
+  individuals. The selection now runs first for both NSGA-II and NSGA-III. The
+  evaluation budget is unchanged: neither path enqueues another generation.
+- **"Cumulative" only ever applied to HV.** GD and IGD stayed on the offspring
+  whichever view was selected, so the two halves of the panel described
+  different sets. All indicators now follow one selector.
+
+### Added
+
+- **`GET /experiments/{id}/hv-gd?population=`** — `survivors` (default),
+  `offspring` or `archive`. The response reports `population_source`: runs
+  recorded before survivor sets existed degrade to `offspring` and say so,
+  rather than returning empty series. `hv_cumulative` is unchanged and stays
+  independent of the selection.
+- **`Generation.survivors`** — the chromosome hashes environmental selection
+  kept, written by `GenerationRepository.set_survivors`. Stored on the
+  generation rather than as a flag per individual: one write per generation, no
+  change to the unique `(generation_id, individual_id)` index, and a survivor
+  carried over from an older generation has no document in the current one to
+  flag. Writes are best-effort — survivors are analysis metadata and a failed
+  write must not abort a running experiment.
+- **Web GUI** — the HV-only *Per generation / Cumulative* toggle is replaced, on
+  both the experiment detail chart and the comparison page, by a **Measured
+  set** selector (*Survivors / Offspring / Archive*) that drives HV, GD and IGD
+  together. The caption states which set was measured and warns when a run fell
+  back to the offspring.
+- **`mo-engine/tests/regression/`** — a frozen pre-correction baseline (30 runs:
+  NSGA-II and NSGA-III over DTLZ2, ZDT1 and SCH1, seeds 1/2/3/5/7) with a
+  synchronous kernel harness that needs no MongoDB, so each later phase of the
+  fix plan produces an inspectable, attributable diff. See its
+  [README](mo-engine/tests/regression/README.md).
+
+### Notes
+
+- Reading survivors requires resolving chromosome hashes across the whole
+  experiment, not within one generation: a survivor may have been evaluated
+  several generations earlier.
+- Experiments finished before this change keep their stored `pareto_front`,
+  which was built from the unselected union. Re-running is the only way to get
+  the `ND(P_final)` front for them.
+
+---
+
 ## [Unreleased] — Coverage level α as an explicit problem parameter
 
 ### Added

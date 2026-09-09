@@ -10,29 +10,26 @@
     <div v-else-if="state === 'empty'" class="hvgd-placeholder">
       No reference front available yet.
     </div>
-    <div v-else class="hvgd-charts">
+    <div v-else class="hvgd-body">
+      <div class="population-bar">
+        <span class="population-label">Measured set</span>
+        <div class="population-toggle" role="group" aria-label="Measured population">
+          <button
+            v-for="opt in POPULATION_OPTIONS"
+            :key="opt.value"
+            type="button"
+            :class="['mode-btn', { active: population === opt.value }]"
+            :aria-pressed="population === opt.value"
+            :title="opt.hint"
+            @click="population = opt.value"
+          >
+            {{ opt.label }}
+          </button>
+        </div>
+      </div>
+      <div class="hvgd-charts">
       <div class="hvgd-col">
         <div class="controls-bar">
-          <div class="hv-mode-toggle" role="group" aria-label="Hypervolume mode">
-            <button
-              type="button"
-              :class="['mode-btn', { active: hvMode === 'perGen' }]"
-              :aria-pressed="hvMode === 'perGen'"
-              title="Hypervolume of each generation's own Pareto front"
-              @click="hvMode = 'perGen'"
-            >
-              Per generation
-            </button>
-            <button
-              type="button"
-              :class="['mode-btn', { active: hvMode === 'cumulative' }]"
-              :aria-pressed="hvMode === 'cumulative'"
-              title="Best-so-far hypervolume over every generation up to each point"
-              @click="hvMode = 'cumulative'"
-            >
-              Cumulative
-            </button>
-          </div>
           <ChartExportButton @click="handleExportImage('hv')" />
         </div>
         <div ref="hvEl" class="hvgd-chart" role="img" :aria-label="hvAriaLabel" />
@@ -49,8 +46,13 @@
         </div>
         <div ref="igdEl" class="hvgd-chart" role="img" aria-label="Inverted generational distance per generation chart" />
       </div>
+      </div>
     </div>
-    <p v-if="state === 'ready'" class="hvgd-caption" :class="{ 'is-warning': selfReferential }">
+    <p
+      v-if="state === 'ready'"
+      class="hvgd-caption"
+      :class="{ 'is-warning': selfReferential || populationFallback }"
+    >
       {{ referenceCaption }}
     </p>
   </div>
@@ -79,11 +81,29 @@ type State = "idle" | "loading" | "ready" | "empty" | "error";
 const state = ref<State>("idle");
 const errorMsg = ref("");
 
-// HV can be viewed per generation (each gen's own front) or cumulatively
-// (best-so-far front over all generations so far). Both curves come from a
-// single fetch, so switching is instant and never re-hits the backend.
-type HvMode = "perGen" | "cumulative";
-const hvMode = ref<HvMode>("perGen");
+// Which set each generation is measured on. This used to be an HV-only
+// "per generation / cumulative" toggle, which left GD and IGD on the offspring
+// whatever the user picked. All three indicators now follow one selector, and
+// the backend computes it — the survivor set cannot be derived client-side.
+type Population = "survivors" | "offspring" | "archive";
+const POPULATION_OPTIONS: { value: Population; label: string; hint: string }[] = [
+  {
+    value: "survivors",
+    label: "Survivors",
+    hint: "The population environmental selection kept (P_t) — what the search carries forward",
+  },
+  {
+    value: "offspring",
+    label: "Offspring",
+    hint: "Only the children evaluated in that generation (Q_t) — swings with each batch",
+  },
+  {
+    value: "archive",
+    label: "Archive",
+    hint: "Best-so-far: the non-dominated set of everything evaluated up to that generation",
+  },
+];
+const population = ref<Population>("survivors");
 
 // The distance indicators are null for a generation with no feasible
 // individual — a gap in the curve, which ECharts renders as a break, rather
@@ -99,13 +119,27 @@ interface HvGdData {
   reference_size: number;
   normalized: boolean;
   worst_point: Record<string, number>;
+  population: Population | null;
+  population_source: Population | null;
 }
 const data = ref<HvGdData | null>(null);
 
-const hvAriaLabel = computed(() =>
-  hvMode.value === "cumulative"
-    ? "Cumulative hypervolume chart"
-    : "Hypervolume per generation chart",
+const measuredSet = computed<Population>(
+  () => data.value?.population_source ?? population.value,
+);
+
+const measuredSetLabel = computed(
+  () => POPULATION_OPTIONS.find((o) => o.value === measuredSet.value)?.label ?? "",
+);
+
+const hvAriaLabel = computed(
+  () => `Hypervolume per generation chart, measured on the ${measuredSetLabel.value.toLowerCase()}`,
+);
+
+// The backend degrades to the offspring for runs recorded before survivor sets
+// were persisted. Say so rather than letting the two curves be read as one.
+const populationFallback = computed(
+  () => data.value != null && data.value.population !== data.value.population_source,
 );
 
 // Against the run's own final front, GD and IGD measure progress towards this
@@ -123,9 +157,13 @@ const referenceCaption = computed(() => {
     ? "normalized by the reference front's ideal-nadir range"
     : "in raw objective units";
   const size = `${d.reference_size} point${d.reference_size === 1 ? "" : "s"}`;
-  return selfReferential.value
+  const measured = populationFallback.value
+    ? "Measured on the offspring (Q_t): this run predates persisted survivor sets, so the population kept by environmental selection cannot be recovered."
+    : `Measured on the ${measuredSetLabel.value.toLowerCase()}.`;
+  const reference = selfReferential.value
     ? `GD / IGD reference: this run's own final Pareto front (${size}) — self-referential, so these measure progress towards this run's own result, not convergence to the true optimum, and are not comparable across runs. Distances ${scale}.`
     : `GD / IGD reference: the benchmark's analytical true front (${size}). Distances ${scale}.`;
+  return `${measured} ${reference}`;
 });
 
 // ── chart instances ─────────────────────────────────────────────────────────
@@ -162,6 +200,7 @@ async function fetchData() {
   const params = new URLSearchParams();
   props.objectiveNames.forEach((o) => params.append("objectives", o));
   minimize.forEach((m) => params.append("minimize", m));
+  params.append("population", population.value);
 
   try {
     const { data: res } = await client.get<HvGdData>(
@@ -181,13 +220,13 @@ async function fetchData() {
 
 // ── chart init & rendering ──────────────────────────────────────────────────
 
-function buildHvOption(d: HvGdData, dark: boolean, mode: HvMode): EChartsOption {
+function buildHvOption(d: HvGdData, dark: boolean): EChartsOption {
   const c = chartPalette(dark);
   const xLabels = d.generations.map((g) => `Gen ${g}`);
-  const cumulative = mode === "cumulative";
-  const series = cumulative ? d.hv_cumulative : d.hv;
-  const axisLabel = cumulative ? "HV (cumulative)" : "HV";
-  const seriesName = cumulative ? "Cumulative hypervolume" : "Hypervolume";
+  const label = POPULATION_OPTIONS.find((o) => o.value === d.population_source)?.label ?? "";
+  const series = d.hv;
+  const axisLabel = "HV";
+  const seriesName = `Hypervolume (${label.toLowerCase()})`;
 
   return {
     backgroundColor: c.bg,
@@ -394,7 +433,7 @@ function initCharts() {
 function renderCharts() {
   if (!data.value || !hvChart || !gdChart || !igdChart) return;
   const dark = isDark.value;
-  hvChart.setOption(buildHvOption(data.value, dark, hvMode.value), true);
+  hvChart.setOption(buildHvOption(data.value, dark), true);
   gdChart.setOption(buildGdOption(data.value, dark), true);
   igdChart.setOption(buildIgdOption(data.value, dark), true);
 }
@@ -431,12 +470,10 @@ watch(isDark, () => {
   if (state.value === "ready") renderCharts();
 });
 
-// Toggle per-generation ↔ cumulative — reuse the already-fetched data, only the
-// HV chart changes so the GD chart is left untouched.
-watch(hvMode, (mode) => {
-  if (state.value === "ready" && hvChart && data.value) {
-    hvChart.setOption(buildHvOption(data.value, isDark.value, mode), true);
-  }
+// Switching the measured set refetches: GD / IGD over the survivors or the
+// archive cannot be recomputed from the offspring series already in hand.
+watch(population, () => {
+  if (state.value === "ready" || state.value === "empty") fetchData();
 });
 
 // Refetch if experiment changes
@@ -458,11 +495,33 @@ watch(
   padding: 0 4px;
 }
 
+.hvgd-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 6px;
+}
+
 .hvgd-charts {
   display: flex;
   flex: 1;
   gap: 12px;
   min-height: 0;
+}
+
+/* The measured set drives all three charts, so it sits above them rather than
+   inside the hypervolume column. */
+.population-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.population-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
 }
 
 .hvgd-col {
@@ -501,9 +560,7 @@ watch(
   gap: 8px;
 }
 
-/* Toggle sits at the far left; the export button stays flush right. */
-.hv-mode-toggle {
-  margin-right: auto;
+.population-toggle {
   display: inline-flex;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);

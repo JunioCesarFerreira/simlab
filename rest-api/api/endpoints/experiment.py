@@ -520,6 +520,8 @@ def _empty_hv_gd() -> dict:
         "reference_size": 0,
         "normalized": False,
         "worst_point": {},
+        "population": None,
+        "population_source": None,
     }
 
 
@@ -528,6 +530,21 @@ def get_hv_gd(
     experiment_id: str,
     objectives: list[str] = Query(...),
     minimize: list[str] = Query(...),
+    population: str = Query(
+        "survivors",
+        pattern="^(survivors|offspring|archive)$",
+        description=(
+            "Which set each generation is measured on. 'survivors' is the "
+            "population environmental selection kept (P_t) — what the algorithm "
+            "carries forward and what the reference notebooks plot. 'offspring' "
+            "is the children evaluated in that generation (Q_t): it swings with "
+            "each batch and can drop while the search still holds a better "
+            "parent. 'archive' is the non-dominated set of everything seen so "
+            "far, which is monotone in HV by construction. Runs recorded before "
+            "survivor sets were persisted fall back to 'offspring'; the response "
+            "reports which set was actually used in 'population_source'."
+        ),
+    ),
     normalize: bool = Query(
         True,
         description=(
@@ -565,6 +582,10 @@ def get_hv_gd(
     gens = factory.generation_repo.find_by_experiment(exp_oid)
 
     individuals_per_gen: dict[int, list[list[float]]] = {}
+    # Survivors are chromosome hashes, and one may have been evaluated in an
+    # older generation, so they are resolved against the whole experiment.
+    objectives_by_hash: dict[str, list[float]] = {}
+    survivor_hashes_per_gen: dict[int, list[str]] = {}
     for gen in gens:
         gen_idx: int = gen["index"]
         individuals = factory.individual_repo.find_by_generation(gen["_id"])
@@ -577,10 +598,23 @@ def get_hv_gd(
             if _is_penalized(objs):
                 continue
             valid.append(objs)
+            ind_hash = ind.get("individual_id")
+            if ind_hash:
+                objectives_by_hash[ind_hash] = objs
         individuals_per_gen[gen_idx] = valid
+        stored_survivors = gen.get("survivors")
+        if stored_survivors:
+            survivor_hashes_per_gen[gen_idx] = list(stored_survivors)
 
     if not individuals_per_gen:
         return _empty_hv_gd()
+
+    # Experiments that ran before survivor sets were persisted have no P_t to
+    # read. Degrade to the offspring rather than reporting empty series, and say
+    # so in the response — the two curves are not interchangeable.
+    population_source = population
+    if population == "survivors" and not survivor_hashes_per_gen:
+        population_source = "offspring"
 
     # ── Reference front (GD/IGD/IGD+) + HV reference point ───────────────────
     # Synthetic experiments have a closed-form true Pareto front: use it as the
@@ -645,12 +679,15 @@ def get_hv_gd(
     # the spread requirement, and IGD+ is the Pareto-compliant variant.
     #
     # Two HV curves are returned:
-    #   • hv            — each generation's OWN Pareto front ("current" view).
+    #   • hv            — the Pareto front of the SELECTED population (see the
+    #     ``population`` parameter) at each generation.
     #   • hv_cumulative — the front of every individual seen up to and including
-    #     the generation ("best-so-far"). It is monotonically non-decreasing and
-    #     built incrementally: the running non-dominated set is folded with each
-    #     generation's front (never the whole population), keeping the cost at
-    #     O(G · front²) instead of O(G · population²).
+    #     the generation ("best-so-far"). It is monotonically non-decreasing,
+    #     independent of ``population``, and built incrementally: the running
+    #     non-dominated set is folded with each generation's offspring front
+    #     (never the whole population), keeping the cost at O(G · front²)
+    #     instead of O(G · population²). With ``population=archive`` the two
+    #     curves coincide by construction.
     generations_sorted = sorted(individuals_per_gen.keys())
     all_min_bools = [True] * n_obj      # min-space domination for the acc. front
     hv_values: list[float] = []
@@ -663,50 +700,69 @@ def get_hv_gd(
     acc_rows: list[list[float]] = []    # running non-dominated set (min-space)
     last_cum_hv = 0.0
 
+    def _front_rows(objs_list: list[list[float]]) -> list[list[float]]:
+        """Non-dominated subset in MINIMIZATION space, deduplicated by value."""
+        if not objs_list:
+            return []
+        seen_pts: set[tuple] = set()
+        rows: list[list[float]] = []
+        for i in _pareto_front(objs_list, minimize_bools):
+            key = tuple(
+                objs_list[i][j] if minimize_bools[j] else -objs_list[i][j]
+                for j in range(n_obj)
+            )
+            if key not in seen_pts:
+                seen_pts.add(key)
+                rows.append(list(key))
+        return rows
+
     for gen_idx in generations_sorted:
-        pop_objs = individuals_per_gen[gen_idx]
-        front_idx = _pareto_front(pop_objs, minimize_bools) if pop_objs else []
-        if not front_idx:
+        # The archive always folds in the OFFSPRING, whichever set is reported:
+        # it is the set of everything evaluated, and survivors are a subset of
+        # earlier offspring. A point off its own generation's front is dominated
+        # within that generation too, so it can never join the accumulated front
+        # — merging the front alone keeps the set minimal.
+        offspring_rows = _front_rows(individuals_per_gen.get(gen_idx, []))
+        for row in offspring_rows:
+            key = tuple(row)
+            if key not in acc_seen:
+                acc_seen.add(key)
+                acc_rows.append(row)
+        if acc_rows:
+            nd_idx = _pareto_front(acc_rows, all_min_bools)
+            acc_rows = [acc_rows[i] for i in nd_idx]
+            acc_seen = {tuple(r) for r in acc_rows}
+
+        if population_source == "survivors":
+            survivor_objs = [
+                objectives_by_hash[h]
+                for h in survivor_hashes_per_gen.get(gen_idx, [])
+                if h in objectives_by_hash
+            ]
+            pts_min_rows = _front_rows(survivor_objs)
+        elif population_source == "archive":
+            pts_min_rows = acc_rows
+        else:
+            pts_min_rows = offspring_rows
+
+        acc_arr = np.array(acc_rows, dtype=float) if acc_rows else np.empty((0, n_obj))
+        acc_dom = acc_arr[np.all(acc_arr < hv_ref_arr, axis=1)] if len(acc_arr) else acc_arr
+        cum_hv = float(moocore.hypervolume(acc_dom, ref=hv_ref)) if len(acc_dom) else last_cum_hv
+        last_cum_hv = cum_hv
+
+        if not pts_min_rows:
             hv_values.append(0.0)
-            hv_cumulative.append(last_cum_hv)   # empty gen adds nothing new
+            hv_cumulative.append(cum_hv)
             gd_values.append(None)
             igd_values.append(None)
             igd_plus_values.append(None)
             continue
 
-        # Minimization space + dedup by objective tuple
-        seen_pts: set[tuple] = set()
-        pts_min_rows: list[list[float]] = []
-        for i in front_idx:
-            key = tuple(
-                pop_objs[i][j] if minimize_bools[j] else -pop_objs[i][j]
-                for j in range(n_obj)
-            )
-            if key not in seen_pts:
-                seen_pts.add(key)
-                pts_min_rows.append(list(key))
         pts_min = np.array(pts_min_rows, dtype=float)
 
         # HV: only points that strictly dominate the (fixed) reference contribute.
         dominating = pts_min[np.all(pts_min < hv_ref_arr, axis=1)]
         hv_val = float(moocore.hypervolume(dominating, ref=hv_ref)) if len(dominating) else 0.0
-
-        # Cumulative HV: fold this generation's front into the running
-        # non-dominated set, then re-filter. A point off its own generation's
-        # front is dominated within that generation too, so it can never join the
-        # accumulated front — merging the front alone keeps the set minimal.
-        for row in pts_min_rows:
-            key = tuple(row)
-            if key not in acc_seen:
-                acc_seen.add(key)
-                acc_rows.append(row)
-        nd_idx = _pareto_front(acc_rows, all_min_bools)
-        acc_rows = [acc_rows[i] for i in nd_idx]
-        acc_seen = {tuple(r) for r in acc_rows}
-        acc_arr = np.array(acc_rows, dtype=float)
-        acc_dom = acc_arr[np.all(acc_arr < hv_ref_arr, axis=1)]
-        cum_hv = float(moocore.hypervolume(acc_dom, ref=hv_ref)) if len(acc_dom) else 0.0
-        last_cum_hv = cum_hv
 
         hv_values.append(hv_val)
         hv_cumulative.append(cum_hv)
@@ -727,4 +783,6 @@ def get_hv_gd(
         "reference_size": int(len(reference_front)),
         "normalized": bool(normalize),
         "worst_point": dict(zip(objectives, hv_ref)),
+        "population": population,
+        "population_source": population_source,
     }

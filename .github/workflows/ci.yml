@@ -24,7 +24,11 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r mo-engine/requirements.txt pytest
+          # moocore is a TEST-only dependency: tests/regression computes the
+          # frozen HV/GD baseline with it (via pylib.moo_metrics). Keep it out
+          # of requirements.txt so the runtime image stays lean, and keep the
+          # pin in step with pylib/rest-api/pareto-analysis.
+          pip install -r mo-engine/requirements.txt moocore==0.3.1 pytest
       - name: Run tests
         working-directory: mo-engine
         run: pytest -q
