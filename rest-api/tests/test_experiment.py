@@ -446,6 +446,145 @@ class TestGetHvGd:
 
 
 
+
+# ── GET /{experiment_id}/hv-gd — objective resolution & degenerate inputs ─────
+class TestHvGdObjectiveResolution:
+    """Phase 5: finding 9 of the audit.
+
+    Individuals store their objectives as a positional list in the order the
+    experiment declared them, but the reference front was assembled by NAME.
+    Reading the first n_obj entries therefore mismatched the moment a request
+    reordered or subsetted the objectives.
+    """
+
+    def _setup(self, mock_factory, *, declared, individuals, stored_front=None,
+               synthetic=None):
+        doc = sample_experiment()
+        doc["parameters"]["objectives"] = [
+            {"metric_name": name, "goal": "min"} for name in declared
+        ]
+        if synthetic:
+            doc["parameters"]["simulation"] = {"synthetic": {"enabled": True, "bench": synthetic}}
+        doc["pareto_front"] = stored_front
+        mock_factory.experiment_repo.get.return_value = doc
+        mock_factory.generation_repo.find_by_experiment.return_value = [
+            {"_id": ObjectId(GEN_ID), "index": 0}
+        ]
+        mock_factory.individual_repo.find_by_generation.return_value = [
+            {"objectives": o} for o in individuals
+        ]
+        return doc
+
+    def _call(self, client, objectives):
+        q = "&".join(
+            [f"objectives={o}" for o in objectives] + ["minimize=true"] * len(objectives)
+        )
+        return client.get(f"{BASE}/{EXP_ID}/hv-gd?{q}")
+
+    def test_reordering_objectives_does_not_change_the_distance(self, mock_factory, client):
+        """The audit's reproduction: the same solution used as its own reference
+        scored GD 0 in declared order and 11.313708 reordered."""
+        self._setup(
+            mock_factory,
+            declared=["f1", "f2"],
+            individuals=[[1.0, 9.0]],
+            stored_front=[{"objectives": {"f1": 1.0, "f2": 9.0}}],
+        )
+        forward = self._call(client, ["f1", "f2"]).json()
+
+        self._setup(
+            mock_factory,
+            declared=["f1", "f2"],
+            individuals=[[1.0, 9.0]],
+            stored_front=[{"objectives": {"f1": 1.0, "f2": 9.0}}],
+        )
+        reversed_ = self._call(client, ["f2", "f1"]).json()
+
+        assert forward["gd"][0] == pytest.approx(0.0, abs=1e-12)
+        assert reversed_["gd"][0] == pytest.approx(0.0, abs=1e-12)
+
+    def test_unknown_objective_is_rejected(self, mock_factory, client):
+        self._setup(mock_factory, declared=["f1", "f2"], individuals=[[1.0, 9.0]],
+                    stored_front=[{"objectives": {"f1": 1.0, "f2": 9.0}}])
+        response = self._call(client, ["f1", "nope"])
+        assert response.status_code == 422
+        assert "nope" in response.json()["detail"]
+
+    def test_a_subset_request_refuses_the_analytical_front(self, mock_factory, client):
+        """DTLZ2 with M=3 read on two axes is not DTLZ2 with M=2."""
+        self._setup(
+            mock_factory,
+            declared=["f1", "f2", "f3"],
+            individuals=[[0.5, 0.5, 0.5]],
+            stored_front=[{"objectives": {"f1": 0.5, "f2": 0.5, "f3": 0.5}}],
+            synthetic="DTLZ2",
+        )
+        data = self._call(client, ["f1", "f2"]).json()
+        assert data["reference"] == "final_front"
+        assert data["gd_method"] == "reference_front"
+
+    def test_a_permuted_request_keeps_the_analytical_front(self, mock_factory, client):
+        """A permutation is legitimate; the front is reordered to match.
+
+        ZDT1 is not symmetric in its objectives, so a permuted request measured
+        against the unpermuted front would be plainly wrong. (1, 0) is on the
+        ZDT1 front as (f1, f2); read as (f2, f1) it is the point (0, 1), which
+        is also on it.
+        """
+        for order in (["f1", "f2"], ["f2", "f1"]):
+            self._setup(
+                mock_factory,
+                declared=["f1", "f2"],
+                individuals=[[1.0, 0.0]],
+                stored_front=[{"objectives": {"f1": 1.0, "f2": 0.0}}],
+                synthetic="ZDT1",
+            )
+            data = self._call(client, order).json()
+            assert data["reference"] == "true_front", order
+            assert data["gd"][0] == pytest.approx(0.0, abs=1e-9), order
+
+    def test_all_individuals_penalized_returns_the_empty_shape(self, mock_factory, client):
+        """`max()` over the empty set used to surface as a 500."""
+        self._setup(
+            mock_factory,
+            declared=["f1", "f2"],
+            individuals=[[1e9, 1e9], [1e10, 1e10]],
+            stored_front=[{"objectives": {"f1": 1.0, "f2": 9.0}}],
+        )
+        response = self._call(client, ["f1", "f2"])
+        assert response.status_code == 200
+        assert response.json()["generations"] == []
+
+    def test_synthetic_run_without_a_stored_front_still_reports(self, mock_factory, client):
+        """The analytical front needs no stored one; the early return denied it."""
+        self._setup(
+            mock_factory,
+            declared=["f1", "f2"],
+            individuals=[[0.5, 0.5]],
+            stored_front=None,
+            synthetic="ZDT1",
+        )
+        data = self._call(client, ["f1", "f2"]).json()
+        assert data["reference"] == "true_front"
+        assert data["generations"] == [0]
+        assert data["gd"][0] is not None
+
+    def test_non_synthetic_run_without_a_stored_front_is_still_empty(self, mock_factory, client):
+        """There is no reference to measure against in that case."""
+        self._setup(mock_factory, declared=["f1", "f2"], individuals=[[0.5, 0.5]],
+                    stored_front=None)
+        assert self._call(client, ["f1", "f2"]).json()["generations"] == []
+
+    def test_experiments_without_declared_objectives_keep_positional_order(
+        self, mock_factory, client
+    ):
+        """Documents written before objectives were declared have nothing to
+        resolve against."""
+        self._setup(mock_factory, declared=[], individuals=[[1.0, 9.0]],
+                    stored_front=[{"objectives": {"f1": 1.0, "f2": 9.0}}])
+        data = self._call(client, ["f1", "f2"]).json()
+        assert data["gd"][0] == pytest.approx(0.0, abs=1e-12)
+
 # ── GET /{experiment_id}/hv-gd — analytical GD ────────────────────────────────
 class TestHvGdAnalyticalDistance:
     """Phase 4: for a known benchmark, GD is the exact distance to the true

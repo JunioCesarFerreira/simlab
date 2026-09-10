@@ -44,23 +44,30 @@ _STRATEGIES = {"nsga2": NSGA2LoopStrategy, "nsga3": NSGA3LoopStrategy}
 class KernelConfig:
     """One point of the baseline grid.
 
-    ``prob_mt``/``per_gene_prob`` default to the values the GUI actually sends
-    (finding 4), not to the textbook ones: the baseline must capture the
-    platform as it is today.
+    The defaults track what the launch wizard actually sends, so the baseline
+    keeps measuring the platform as shipped. Phase 6 moved the mutation
+    parameters to the textbook convention (every child mutated, each variable
+    with probability 1/n) and made ``divisions`` follow M and the population;
+    before that the wizard sent 0.1 x 0.05 — one variable mutated every twenty
+    children — and a fixed 10 divisions.
     """
 
     algorithm: str          # "nsga2" | "nsga3"
     bench: str              # "DTLZ2" | "ZDT1" | "SCH1"
     m: int
     n: int
+    divisions: int
     pop_size: int = 50
     generations: int = 20
-    divisions: int = 10
     prob_cx: float = 0.9
-    prob_mt: float = 0.1
-    per_gene_prob: float = 0.05
+    prob_mt: float = 1.0
+    per_gene_prob: float | None = None      # None -> 1/n, the wizard's default
     eta_cx: float = 20.0
     eta_mt: float = 20.0
+
+    @property
+    def gene_probability(self) -> float:
+        return 1.0 / self.n if self.per_gene_prob is None else self.per_gene_prob
 
     @property
     def label(self) -> str:
@@ -70,13 +77,16 @@ class KernelConfig:
 # The grid frozen for the pre-correction baseline. DTLZ2 M=3/n=10 mirrors the
 # GUI's synthetic draft default; ZDT1 and SCH1 cover the two-objective path,
 # SCH1 with the single decision variable used by the notebooks.
+# ``divisions`` is what the wizard now derives: the finest Das-Dennis lattice
+# that still fits in the population. M=3 with 50 individuals gives p=8 (45
+# directions; p=9 would be 55), M=2 gives p=49 (50 directions, one per slot).
 BASELINE_CONFIGS: tuple[KernelConfig, ...] = (
-    KernelConfig(algorithm="nsga2", bench="DTLZ2", m=3, n=10),
-    KernelConfig(algorithm="nsga3", bench="DTLZ2", m=3, n=10),
-    KernelConfig(algorithm="nsga2", bench="ZDT1", m=2, n=10),
-    KernelConfig(algorithm="nsga3", bench="ZDT1", m=2, n=10),
-    KernelConfig(algorithm="nsga2", bench="SCH1", m=2, n=1),
-    KernelConfig(algorithm="nsga3", bench="SCH1", m=2, n=1),
+    KernelConfig(algorithm="nsga2", bench="DTLZ2", m=3, n=10, divisions=8),
+    KernelConfig(algorithm="nsga3", bench="DTLZ2", m=3, n=10, divisions=8),
+    KernelConfig(algorithm="nsga2", bench="ZDT1", m=2, n=10, divisions=49),
+    KernelConfig(algorithm="nsga3", bench="ZDT1", m=2, n=10, divisions=49),
+    KernelConfig(algorithm="nsga2", bench="SCH1", m=2, n=1, divisions=49),
+    KernelConfig(algorithm="nsga3", bench="SCH1", m=2, n=1, divisions=49),
 )
 
 
@@ -101,7 +111,7 @@ def build_strategy(config: KernelConfig, seed: int):
                     "random_seed": seed,
                     "prob_cx": config.prob_cx,
                     "prob_mt": config.prob_mt,
-                    "per_gene_prob": config.per_gene_prob,
+                    "per_gene_prob": config.gene_probability,
                     "eta_cx": config.eta_cx,
                     "eta_mt": config.eta_mt,
                     "divisions": config.divisions,

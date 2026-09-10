@@ -5,6 +5,69 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — NSGA metrics: endpoint robustness and launch defaults
+
+Phases 5 and 6 of [`docs/markdown/NSGA_METRICS_FIX_PLAN.md`](docs/markdown/NSGA_METRICS_FIX_PLAN.md),
+which completes the plan.
+
+### Fixed
+
+- **`/hv-gd` read objectives by position while building the reference by name.**
+  Individuals store their objectives as a positional list in the order the
+  experiment declared them, so any request that reordered or subsetted the axes
+  compared one objective against another's reference — asking for `[f2, f1]`
+  turned a GD of 0 into 11.31. Requested names are now resolved against
+  `parameters.objectives[].metric_name`, and an unknown name returns 422.
+- **A subset request used the analytical front of a smaller benchmark.** DTLZ2
+  with M=3 read on two axes is not DTLZ2 M=2; a subset now falls back to the
+  empirical reference. A *permutation* keeps the analytical front, reordered to
+  match — ZDT1 and SCH1 are not symmetric in their objectives.
+- **All individuals penalised raised a 500.** `max()` over the empty set; it now
+  returns the empty response shape.
+- **A synthetic run with no stored `pareto_front` returned empty series** even
+  though its analytical front needed none. The early return moved into the
+  empirical branch, the only one that needs a stored front.
+- **The launch wizard's mutation defaults left the search crossover-driven.**
+  `prob_mt = 0.1` and `per_gene_prob = 0.05` compose: over 10 variables that is
+  one variable mutated every twenty children. The defaults are now the textbook
+  convention — every child mutated, each variable with probability `1/n`.
+- **A fixed `divisions = 10` fitted no objective count.** It gives 11 reference
+  directions in M=2 — a population of 50 competing for a tenth of the niches it
+  could use — and 3003 in M=6. It is now derived from M and the population.
+
+### Added
+
+- `suggestedDivisions` and `expectedMutatedVariables` in `gui/src/lib/nsga3.ts`.
+  The wizard shows the expected number of mutated variables per child, warning
+  below 0.1, and both launch wizards now warn when the reference lattice is far
+  *below* the population — the mirror of the existing H > population warning.
+- `docs/markdown/SYNTHETIC_MODE.md`: a protocol-conventions table (HV reference,
+  measured population, generation 0, evaluation budget, mutation composition,
+  divisions) and a note that SimLab's default SCH1 domain is `[-5, 5]` against
+  the `[-10, 10]` common in the literature — a different problem, not a harder
+  or easier one in any simple sense.
+
+### Notes
+
+- The mutation default was chosen on measurement, not convention. Over 15 seeds
+  and 40 generations the textbook rate is neutral on DTLZ2 (M=3) and large on
+  ZDT1: HV 0.619 → 0.802 for NSGA-II and 0.633 → 0.806 for NSGA-III, with the
+  seed-to-seed spread cut by a factor of three. **This corrects the phase-2
+  reading**, which at 5 seeds and 20 generations suggested the opposite; that
+  difference was noise.
+- The two mutation probabilities are not redundant at equal products.
+  Concentrating mutations in few children is a different search from spreading
+  them thinly across all of them.
+- The regression baseline is re-frozen at `phase-6`, its defaults tracking what
+  the wizard sends. `nsga3-sch1` rises from 16.110 to 16.522 and its worst
+  per-step HV drop among survivors falls from 0.229 to 0.041 — the case phase 0
+  opened as the one where survivors also dropped sharply is now closed. It was
+  the divisions.
+- The audit reported `rest-api/tests/test_experiment.py` hanging on
+  `TestClient`/AnyIO startup. That did not reproduce here; the suite runs.
+
+---
+
 ## [Unreleased] — NSGA metrics: exact generational distance
 
 Phase 4 of [`docs/markdown/NSGA_METRICS_FIX_PLAN.md`](docs/markdown/NSGA_METRICS_FIX_PLAN.md).

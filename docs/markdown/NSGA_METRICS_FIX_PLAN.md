@@ -419,7 +419,7 @@ que quase todo o GD relatado vinha da referência. Tabela completa em
 
 ---
 
-## Fase 5 — Robustez do endpoint (achado 9)
+## Fase 5 — Robustez do endpoint (achado 9) · **concluída**
 
 Em [rest-api/api/endpoints/experiment.py](../../rest-api/api/endpoints/experiment.py):
 
@@ -439,9 +439,34 @@ Em [rest-api/api/endpoints/experiment.py](../../rest-api/api/endpoints/experimen
   anyio/httpx/starlette) — sem isso essas correções ficam sem cobertura de
   integração.
 
+### O que foi entregue
+
+Todos os quatro pontos, com testes.
+
+**Objetivos por nome.** O endpoint lê a ordem canônica de
+`parameters.objectives[].metric_name` e projeta os indivíduos por índice mapeado,
+não por posição. Nome desconhecido devolve 422. Documentos antigos sem
+objetivos declarados caem na ordem posicional, que é tudo que têm. A reprodução
+da auditoria vira teste: a mesma solução usada como sua própria referência dava
+GD 0 na ordem declarada e 11,313708 reordenada; agora dá 0 nas duas.
+
+**Subconjunto contra frente analítica.** Um pedido de subconjunto passa a cair
+na referência empírica — DTLZ2 com M=3 lido em dois eixos não é DTLZ2 M=2. Uma
+**permutação** continua no caminho analítico, com a frente reordenada para
+casar: ZDT1 e SCH1 não são simétricos nos objetivos.
+
+**`all_min` vazio** devolve a forma vazia em vez de 500.
+
+**Sintético sem `pareto_front`** passa a receber a série analítica; o retorno
+antecipado foi movido para dentro do ramo empírico, o único que precisa da
+frente armazenada.
+
+**Testes HTTP**: rodaram normalmente neste ambiente (145 testes em `rest-api`).
+O travamento relatado na auditoria não se reproduziu.
+
 ---
 
-## Fase 6 — Alinhamento de protocolo com os notebooks (achado 4)
+## Fase 6 — Alinhamento de protocolo com os notebooks (achado 4) · **concluída**
 
 Deliberadamente por último: a ablação da auditoria mostra que mexer só na
 mutação **não** melhora tudo (NSGA-III piorou: HV 0,620 → 0,605). Isto é
@@ -462,6 +487,55 @@ Em [SyntheticLaunchWizard.vue:143-153](../../gui/simlab/src/components/synthetic
 Só depois desta fase: comparação multi-semente entre SimLab e notebooks com os
 mesmos problemas, populações iniciais e orçamento — com análise de significância,
 que a auditoria explicitamente não fez.
+
+### O que foi entregue
+
+**Mutação.** Defaults para a convenção de livro: `probMt=1.0` e `perGeneProb`
+derivado de `1/nVars`. A escolha não foi por convenção apenas — medi com 15
+sementes e 40 gerações, porque as leituras de 5 sementes da Fase 2 eram ruído:
+
+| problema | algoritmo | 0,1 × 0,05 | 1,0 × 1/n |
+| --- | --- | ---: | ---: |
+| DTLZ2 M=3 | NSGA-II | 0,545873 ± 0,039 | 0,550428 ± 0,034 |
+| DTLZ2 M=3 | NSGA-III | 0,633169 ± 0,023 | 0,635412 ± 0,021 |
+| ZDT1 M=2 | NSGA-II | 0,619231 ± 0,089 | **0,801769 ± 0,026** |
+| ZDT1 M=2 | NSGA-III | 0,632825 ± 0,082 | **0,805805 ± 0,017** |
+
+Neutro no DTLZ2, grande no ZDT1, e o desvio entre sementes cai por três. Isto
+corrige a leitura da Fase 2, que com 5 sementes e 20 gerações sugeria o
+contrário.
+
+O assistente passa a mostrar o **número esperado de variáveis mutadas por filho**
+(`probMt × perGeneProb × n`), com aviso abaixo de 0,1. As duas probabilidades
+compõem, e o valor antigo dava 0,05 — uma variável a cada vinte filhos. Registrei
+também que os dois botões **não são redundantes** com o mesmo produto: concentrar
+mutações em poucos filhos não é a mesma busca que espalhá-las por todos.
+
+**Divisões.** `suggestedDivisions(M, população)` devolve a malha Das–Dennis mais
+fina que ainda cabe na população, e é o novo default. O valor fixo 10 dava 11
+direções em M=2 e 3003 em M=6. Um segundo aviso, simétrico ao que já existia
+para H > população, cobre o caso oposto — H muito abaixo dela — nos dois
+assistentes.
+
+**Documentação.** [SYNTHETIC_MODE.md](SYNTHETIC_MODE.md) ganhou uma tabela de
+convenções de protocolo (referência de HV, conjunto medido, geração 0, orçamento
+de avaliações, composição da mutação, divisões) e o registro de que o domínio
+SCH1 padrão é `[-5, 5]` contra os `[-10, 10]` comuns na literatura — problemas
+diferentes, não um mais difícil que o outro de forma simples.
+
+Fora de alcance: o assistente de problemas (P1–P4) recebeu o aviso de divisões,
+mas não o de mutação nem novos defaults — a contagem de variáveis do cromossomo
+varia por problema e não está disponível ali, e o achado 4 foi medido sobre o
+assistente sintético.
+
+### Efeito no baseline
+
+Os defaults do kernel de regressão acompanham o que o assistente envia, então o
+baseline foi recongelado como `phase-6`. Ganhos grandes onde a malha de
+referência estava faminta — `nsga3-sch1` sobe de 16,110 para 16,522 e sua maior
+queda de HV entre sobreviventes cai de 0,229 para 0,041, fechando o caso que a
+Fase 0 tinha aberto. Tabela completa em
+[tests/regression/README.md](../../mo-engine/tests/regression/README.md).
 
 ---
 

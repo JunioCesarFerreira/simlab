@@ -576,10 +576,30 @@ def get_hv_gd(
         raise HTTPException(status_code=404, detail="Experiment not found")
 
     stored_pf: list[dict] = doc.get("pareto_front") or []
-    if not stored_pf:
-        return _empty_hv_gd()
-
     minimize_bools = [m.lower() == "true" for m in minimize]
+
+    # Individuals store their objectives as a POSITIONAL list, in the order the
+    # experiment declared them. Reading the first n_obj entries instead of
+    # looking the names up silently mismatches the moment the request reorders
+    # or subsets the objectives: asking for [f2, f1] used to compare f2 against
+    # the f1 reference, which turned a GD of 0 into 11.31.
+    declared = ((doc.get("parameters") or {}).get("objectives") or [])
+    canonical = [str(o.get("metric_name")) for o in declared if o.get("metric_name")]
+    if canonical:
+        unknown = [o for o in objectives if o not in canonical]
+        if unknown:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Unknown objective(s) {unknown}; this experiment declares "
+                    f"{canonical}."
+                ),
+            )
+        objective_columns = [canonical.index(o) for o in objectives]
+    else:
+        # Experiments written before objectives were declared on the document
+        # have nothing to resolve against; positional order is all there is.
+        objective_columns = list(range(n_obj))
 
     # ── Fetch generations + individuals directly from DB ─────────────────────
     gens = factory.generation_repo.find_by_experiment(exp_oid)
@@ -595,9 +615,9 @@ def get_hv_gd(
         valid: list[list[float]] = []
         for ind in individuals:
             raw = ind.get("objectives") or []
-            if len(raw) < n_obj:
+            if len(raw) <= max(objective_columns):
                 continue
-            objs = [float(raw[i]) for i in range(n_obj)]
+            objs = [float(raw[i]) for i in objective_columns]
             if _is_penalized(objs):
                 continue
             valid.append(objs)
@@ -627,7 +647,18 @@ def get_hv_gd(
     # empirical references (own stored front + population-derived worst point).
     syn = (((doc.get("parameters") or {}).get("simulation") or {}).get("synthetic") or {})
     bench = syn.get("bench")
-    is_synthetic = bool(syn.get("enabled")) and bool(bench) and all(minimize_bools)
+    # A benchmark's front is defined for the FULL objective set it was run with.
+    # The front of a projection onto fewer objectives is not the front of the
+    # smaller benchmark — DTLZ2 with M=3 read on two axes is not DTLZ2 M=2 — so
+    # a subset request falls back to the empirical reference. A permutation is
+    # fine: the analytical front is reordered to match below.
+    covers_all_objectives = bool(canonical) and sorted(objectives) == sorted(canonical)
+    is_synthetic = (
+        bool(syn.get("enabled"))
+        and bool(bench)
+        and all(minimize_bools)
+        and (covers_all_objectives or not canonical)
+    )
 
     reference_kind = "final_front"
     reference_front = None
@@ -639,14 +670,20 @@ def get_hv_gd(
     analytical_bounds: tuple[np.ndarray, np.ndarray] | None = None
     if is_synthetic:
         try:
-            reference_front = benchmarks.true_front(bench, n_obj)
-            hv_ref = [v * 1.1 for v in benchmarks.nadir(bench, n_obj)]
+            # Built in the experiment's declared order, then reordered to the
+            # request. ZDT1 and SCH1 are not symmetric in their objectives, so
+            # a permuted request needs a permuted front, not the same one.
+            columns = objective_columns if canonical else list(range(n_obj))
+            reference_front = benchmarks.true_front(bench, n_obj)[:, columns]
+            nadir = benchmarks.nadir(bench, n_obj)
+            ideal = benchmarks.ideal(bench, n_obj)
+            hv_ref = [nadir[i] * 1.1 for i in columns]
             analytical_bounds = (
-                np.array(benchmarks.ideal(bench, n_obj), dtype=float),
-                np.array(benchmarks.nadir(bench, n_obj), dtype=float),
+                np.array([ideal[i] for i in columns], dtype=float),
+                np.array([nadir[i] for i in columns], dtype=float),
             )
             reference_kind = "true_front"
-        except ValueError:
+        except (ValueError, IndexError):
             is_synthetic = False  # unknown benchmark → fall back to empirical
             analytical_bounds = None
 
@@ -659,8 +696,17 @@ def get_hv_gd(
             [o[i] if minimize_bools[i] else -o[i] for i in range(n_obj)]
             for v in individuals_per_gen.values() for o in v
         ]
+        # Every individual penalised (or none feasible) leaves nothing to derive
+        # a reference point from; max() on the empty set used to raise a 500.
+        if not all_min:
+            return _empty_hv_gd()
         worst = [max(row[i] for row in all_min) for i in range(n_obj)]
         hv_ref = [v + abs(v) * 0.05 + 1.0 for v in worst]
+        # The stored front is the empirical reference. Only this branch needs
+        # it, so a synthetic run with none still gets its analytical series —
+        # the early return here used to deny them to every experiment alike.
+        if not stored_pf:
+            return _empty_hv_gd()
         ref_min_rows: list[list[float]] = []
         for p in stored_pf:
             objs_dict: dict = p.get("objectives") or {}

@@ -49,7 +49,7 @@ class _Run:
     def __init__(self, cls):
         config = KernelConfig(
             algorithm="nsga2" if cls is NSGA2LoopStrategy else "nsga3",
-            bench=BENCH, m=M, n=N_VARS,
+            bench=BENCH, m=M, n=N_VARS, divisions=4,
             pop_size=POP_SIZE, generations=GENERATIONS,
         )
         self.strategy = build_strategy(config, seed=7)

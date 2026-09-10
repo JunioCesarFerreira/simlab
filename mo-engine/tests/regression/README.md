@@ -15,7 +15,10 @@ MongoDB, sem change streams, sem workers. Uma execução é função pura de
 
 Grade congelada: NSGA-II e NSGA-III nativos × DTLZ2 (M=3, n=10), ZDT1 (M=2,
 n=10) e SCH1 (M=2, n=1) × sementes 1, 2, 3, 5, 7 — população 50, 20 gerações,
-ruído zero, parâmetros padrão da GUI (`prob_mt=0.1`, `per_gene_prob=0.05`).
+ruído zero, **parâmetros padrão do assistente de lançamento**. Os defaults
+acompanham o que a interface realmente envia, para o baseline continuar medindo
+a plataforma como ela é entregue; a Fase 6 os moveu para `prob_mt=1.0`,
+`per_gene_prob=1/n` e `divisions` derivado de M e da população.
 
 Três conjuntos por geração, porque a auditoria mostrou que a plataforma plota um
 e os notebooks plotam outro:
@@ -58,20 +61,50 @@ que é a mudança pretendida**, então `--write` e subir `BASELINE_STAGE` em
 [`baseline.py`](baseline.py). Recongelar sem ler o diff anula o propósito do
 diretório.
 
-## Baseline `phase-4` (30 execuções)
+## Baseline `phase-6` (30 execuções)
 
 `drop` é a maior queda de HV em um único passo, sobre todas as sementes.
 
 ```
 config                     HV off    HV surv   drop off  drop surv    GD surv
 -----------------------------------------------------------------------------
-nsga2-dtlz2-m3-n10       0.442195   0.495511   0.111201   0.031077   0.141762
-nsga3-dtlz2-m3-n10       0.530671   0.569152   0.050310   0.010402   0.075072
-nsga2-zdt1-m2-n10        0.497700   0.509439   0.032654   0.000000   0.265773
-nsga3-zdt1-m2-n10        0.439273   0.447513   0.088306   0.000000   0.315554
-nsga2-sch1-m2-n1        16.390396  16.518083   0.340590   0.031402   0.000034
-nsga3-sch1-m2-n1        16.057579  16.110428   0.404301   0.229464   0.000270
+nsga2-dtlz2-m3-n10       0.415902   0.475401   0.095484   0.025915   0.170337
+nsga3-dtlz2-m3-n10       0.546410   0.568859   0.048615   0.007782   0.078157
+nsga2-zdt1-m2-n10        0.560509   0.570737   0.093423   0.000000   0.239160
+nsga3-zdt1-m2-n10        0.528164   0.544913   0.016820   0.000000   0.244904
+nsga2-sch1-m2-n1        16.395027  16.550427   1.252112   0.047228   0.000109
+nsga3-sch1-m2-n1        16.400878  16.521825   1.252112   0.040700   0.000063
 ```
+
+### O que a Fase 6 mudou (parâmetros padrão)
+
+| config | HV surv Fase 4 | HV surv Fase 6 | Δ |
+| --- | ---: | ---: | ---: |
+| nsga2-dtlz2-m3-n10 | 0,495511 | 0,475401 | −0,020 |
+| nsga3-dtlz2-m3-n10 | 0,569152 | 0,568859 | −0,000 |
+| nsga2-zdt1-m2-n10 | 0,509439 | **0,570737** | +0,061 |
+| nsga3-zdt1-m2-n10 | 0,447513 | **0,544913** | +0,097 |
+| nsga2-sch1-m2-n1 | 16,518083 | 16,550427 | +0,032 |
+| **nsga3-sch1-m2-n1** | 16,110428 | **16,521825** | **+0,411** |
+
+O salto de `nsga3-sch1` é o `divisions`: em M=2 o valor fixo 10 dava 11 direções
+de referência para 50 indivíduos. Derivado, dá 49 divisões (50 direções, uma por
+slot). Era exatamente o caso que a Fase 0 apontou como pior queda de HV entre
+sobreviventes (0,569) e que a Fase 2 reduziu a 0,229 — agora está em 0,041.
+
+O −0,020 do `nsga2-dtlz2` está dentro do desvio entre sementes (0,039 medido com
+15 sementes). Numa comparação com 15 sementes e 40 gerações, a mutação de livro
+é neutra no DTLZ2 e claramente melhor no ZDT1:
+
+| problema | algoritmo | 0,1 × 0,05 | 1,0 × 1/n |
+| --- | --- | ---: | ---: |
+| DTLZ2 M=3 | NSGA-II | 0,545873 ± 0,039 | 0,550428 ± 0,034 |
+| DTLZ2 M=3 | NSGA-III | 0,633169 ± 0,023 | 0,635412 ± 0,021 |
+| ZDT1 M=2 | NSGA-II | 0,619231 ± 0,089 | **0,801769 ± 0,026** |
+| ZDT1 M=2 | NSGA-III | 0,632825 ± 0,082 | **0,805805 ± 0,017** |
+
+Além da média, o desvio cai por um fator de três no ZDT1 — a taxa antiga
+deixava a busca à mercê da população inicial.
 
 A Fase 4 não mexeu no HV; só o GD mudou, ao trocar a referência amostrada pela
 distância exata. Quanto a coluna `GD surv` caiu é exatamente o erro de

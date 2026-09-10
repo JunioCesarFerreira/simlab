@@ -229,9 +229,46 @@ Notes:
   front is reached when those variables equal `0.5`.
 - **ZDT1** — `f₁ = x₀`, `g = 1 + 9·Σ(x₁…xₙ₋₁)/(n−1)`, `f₂ = g·(1 − √(f₁/g))`.
 - **SCH1** — uses the first decision variable mapped to the benchmark's
-  decision domain (configurable via `synthetic.sch1_domain`).
+  decision domain, `[-5, 5]` by default and configurable via
+  `synthetic.sch1_domain`. The Pareto-optimal set is `x ∈ [0, 2]`, so a domain
+  of exactly `(0, 2)` would make every point optimal and test spread only; the
+  default is deliberately wider so the optimiser has to converge first.
+  **This matters when comparing against published SCH1 runs**, which commonly
+  use `[-10, 10]` — a different problem, and not a harder-or-easier one in a
+  simple way, since it changes how much of the domain is already optimal.
 - Objective names/order come from `parameters.objectives[].metric_name`, so the
   stored `{name: value}` dict matches exactly what the mo-engine reads back.
+  `GET /experiments/{id}/hv-gd` resolves requested objectives against that same
+  list, so reordering or subsetting the axes is safe.
+
+### Protocol conventions — read before comparing with anything external
+
+| | SimLab |
+| --- | --- |
+| Hypervolume reference | `1.1 × nadir` of the benchmark (DTLZ2 `[1]*M`, ZDT1 `[1,1]`, SCH1 `[4,4]`) |
+| GD | exact distance to the analytical front (see §7) |
+| IGD / IGD+ | against a 500-point sampled front, normalised by the theoretical ideal-nadir range |
+| Measured population | the survivors `P_t` by default (`population=` selects) |
+| Generation 0 | the initial population, evaluated and counted as a generation |
+| Evaluation budget | `population_size × (number_of_generations + 1)` distinct genomes at most, since generation 0 is evaluated too |
+| Mutation | `prob_mt` (per child) × `per_gene_prob` (per variable) — the two COMPOSE |
+| NSGA-III divisions | derived from `M` and the population, not fixed |
+
+Two of these are easy to get wrong when reproducing a result:
+
+**The evaluation budget includes generation 0.** A run configured for 20
+generations evaluates 21 populations. Counting the initial population as
+generation 0 is a valid convention, but it is one evaluation batch more than a
+protocol that counts only the offspring batches.
+
+**The two mutation probabilities compose.** `prob_mt = 0.1` with
+`per_gene_prob = 0.05` over 10 variables mutates one variable every twenty
+children — a search driven almost entirely by crossover, which is what the GUI
+used to send. The defaults are now the textbook convention (`prob_mt = 1.0`,
+`per_gene_prob = 1/n`), and the launch wizard shows the expected number of
+mutated variables per child so the composition cannot hide. Note that the two
+knobs are not redundant even at equal products: concentrating mutations in few
+children is not the same search as spreading them thinly across all of them.
 
 ---
 

@@ -19,7 +19,8 @@ from tests.regression.kernel import BASELINE_CONFIGS, KernelConfig, run_kernel
 
 def test_kernel_is_bit_for_bit_reproducible():
     config = KernelConfig(
-        algorithm="nsga3", bench="DTLZ2", m=3, n=10, pop_size=20, generations=5
+        algorithm="nsga3", bench="DTLZ2", m=3, n=10, divisions=4,
+        pop_size=20, generations=5
     )
     assert run_kernel(config, 1) == run_kernel(config, 1)
 
@@ -27,7 +28,8 @@ def test_kernel_is_bit_for_bit_reproducible():
 def test_distinct_seeds_produce_distinct_runs():
     """Guards against a harness that is reproducible because it is constant."""
     config = KernelConfig(
-        algorithm="nsga3", bench="DTLZ2", m=3, n=10, pop_size=20, generations=5
+        algorithm="nsga3", bench="DTLZ2", m=3, n=10, divisions=4,
+        pop_size=20, generations=5
     )
     assert run_kernel(config, 1) != run_kernel(config, 2)
 
