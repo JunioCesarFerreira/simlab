@@ -11,7 +11,7 @@
       No reference front available yet.
     </div>
     <div v-else class="hvgd-body">
-      <div class="population-bar">
+      <div class="population-bar" :aria-busy="refreshing">
         <span class="population-label">Measured set</span>
         <div class="population-toggle" role="group" aria-label="Measured population">
           <button
@@ -26,6 +26,10 @@
             {{ opt.label }}
           </button>
         </div>
+        <span v-if="refreshing" class="population-refreshing">
+          <span class="spinner" />
+          updating…
+        </span>
       </div>
       <div class="hvgd-charts">
       <div class="hvgd-col">
@@ -80,6 +84,8 @@ const { isDark } = useTheme();
 type State = "idle" | "loading" | "ready" | "empty" | "error";
 const state = ref<State>("idle");
 const errorMsg = ref("");
+// A refetch that leaves the charts on screen (see fetchData).
+const refreshing = ref(false);
 
 // Which set each generation is measured on. This used to be an HV-only
 // "per generation / cumulative" toggle, which left GD and IGD on the offspring
@@ -199,10 +205,15 @@ function handleExportImage(kind: ChartKind) {
 }
 
 // ── fetch ───────────────────────────────────────────────────────────────────
-async function fetchData() {
+async function fetchData({ silent = false }: { silent?: boolean } = {}) {
   if (!props.experimentId || props.objectiveNames.length < 2) return;
 
-  state.value = "loading";
+  // A silent refetch keeps the panel in "ready". Dropping to "loading" would
+  // unmount the chart containers, and switching the measured set is a frequent,
+  // cheap action — a flash of empty panel on every click is worse than a moment
+  // of stale curve.
+  if (!silent) state.value = "loading";
+  refreshing.value = silent;
   errorMsg.value = "";
 
   const minimize = props.objectiveGoals.map((g) => (g === "min" ? "true" : "false"));
@@ -216,6 +227,7 @@ async function fetchData() {
       `/experiments/${props.experimentId}/hv-gd?${params.toString()}`,
     );
     if (!res.generations || res.generations.length === 0) {
+      data.value = null;
       state.value = "empty";
       return;
     }
@@ -224,6 +236,8 @@ async function fetchData() {
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : String(e);
     state.value = "error";
+  } finally {
+    refreshing.value = false;
   }
 }
 
@@ -465,31 +479,41 @@ onMounted(async () => {
 
 onBeforeUnmount(destroyCharts);
 
-// When data arrives, init + render charts
-watch(state, async (s) => {
-  if (s !== "ready") return;
-  // Wait for DOM update so the chart divs are visible
-  await new Promise((r) => setTimeout(r, 0));
-  if (!hvChart) initCharts();
-  renderCharts();
-});
+// The chart containers sit behind v-if, so every trip through loading / error /
+// empty destroys them and builds new ones. An ECharts instance kept across that
+// is bound to a detached node and quietly renders nothing — which is why this
+// follows the ELEMENTS rather than the state. Same reasoning as useEChart,
+// which solves it for the single-chart components. "post" runs the callback
+// after Vue has patched the DOM.
+watch(
+  [hvEl, gdEl, igdEl],
+  ([hv, gd, igd]) => {
+    destroyCharts();
+    if (hv && gd && igd) {
+      initCharts();
+      renderCharts();
+    }
+  },
+  { immediate: true, flush: "post" },
+);
+
+// Fresh data for containers that are already mounted.
+watch(data, () => renderCharts());
 
 // Re-render on theme change
-watch(isDark, () => {
-  if (state.value === "ready") renderCharts();
-});
+watch(isDark, () => renderCharts());
 
 // Switching the measured set refetches: GD / IGD over the survivors or the
 // archive cannot be recomputed from the offspring series already in hand.
 watch(population, () => {
-  if (state.value === "ready" || state.value === "empty") fetchData();
+  if (data.value) fetchData({ silent: true });
 });
 
 // Refetch if experiment changes
 watch(
   () => props.experimentId,
   () => {
-    destroyCharts();
+    data.value = null;
     fetchData();
   },
 );
@@ -530,6 +554,14 @@ watch(
 .population-label {
   font-size: 11px;
   font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.population-refreshing {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
   color: var(--color-text-muted);
 }
 
