@@ -494,6 +494,7 @@ async function fetchHvGd(id: string, objectives: ObjectiveItem[]): Promise<HvGdD
   objectives.forEach(o => params.append('objectives', o.metric_name));
   objectives.forEach(o => params.append('minimize', o.goal === 'min' ? 'true' : 'false'));
   params.append('population', population.value);
+  params.append('include_cumulative', 'false');
   try {
     const { data } = await client.get<HvGdData>(`/experiments/${id}/hv-gd?${params}`);
     return data.generations?.length ? data : null;

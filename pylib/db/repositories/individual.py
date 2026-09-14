@@ -36,6 +36,22 @@ class IndividualRepository:
         with self.connection.connect() as db:
             return list(db["individuals"].find({"generation_id": generation_id}))
 
+    def find_grouped_by_experiment(
+        self, experiment_id: ObjectId, *, objectives_only: bool = False,
+    ) -> dict[ObjectId, list[Individual]]:
+        """Read all generations in one indexed query, omitting heavy chart-irrelevant data."""
+        projection = (
+            {"_id": 0, "generation_id": 1, "individual_id": 1, "objectives": 1}
+            if objectives_only else None
+        )
+        grouped: dict[ObjectId, list[Individual]] = {}
+        with self.connection.connect() as db:
+            for individual in db["individuals"].find(
+                {"experiment_id": experiment_id}, projection,
+            ):
+                grouped.setdefault(individual["generation_id"], []).append(individual)
+        return grouped
+
     def find_by_experiment_and_ids(
         self,
         experiment_id: ObjectId,

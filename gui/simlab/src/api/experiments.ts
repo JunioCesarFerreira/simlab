@@ -35,9 +35,11 @@ export async function getExperiment(id: string): Promise<ExperimentDto> {
 
 export async function getExperimentFull(
   id: string,
+  signal?: AbortSignal,
 ): Promise<ExperimentFullDto> {
   const { data } = await client.get<ExperimentFullDto>(
     `/experiments/${id}/full`,
+    { signal },
   );
   return data;
 }

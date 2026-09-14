@@ -3,6 +3,33 @@ import { computeRanks, computeRanksWithDuplicates } from "../nonDominatedSort";
 
 const MIN2 = [true, true];
 
+it("matches repeated Pareto peeling for mixed goals and duplicates", () => {
+  let seed = 2026;
+  const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed; };
+  for (const dimensions of [2, 3, 6]) {
+    const minimize = Array.from({ length: dimensions }, (_, i) => i % 2 === 0);
+    for (let run = 0; run < 10; run++) {
+      const points = Array.from({ length: 80 }, (_, i) => ({
+        id: String(i), objectives: Array.from({ length: dimensions }, () => random() % 8),
+      }));
+      const expected = new Map<string, number>();
+      let remaining = points;
+      let rank = 0;
+      while (remaining.length) {
+        const front = remaining.filter((p) => !remaining.some((q) =>
+          q.objectives.every((v, i) => minimize[i] ? v <= p.objectives[i]! : v >= p.objectives[i]!) &&
+          q.objectives.some((v, i) => v !== p.objectives[i]),
+        ));
+        for (const p of front) expected.set(p.id, rank);
+        remaining = remaining.filter((p) => !expected.has(p.id));
+        rank++;
+      }
+      expect(computeRanks(points, minimize)).toEqual(expected);
+      expect(computeRanksWithDuplicates(points, minimize)).toEqual(expected);
+    }
+  }
+});
+
 describe("computeRanks", () => {
   it("puts mutually non-dominated points on the same front", () => {
     // Classic trade-off: each better on one objective

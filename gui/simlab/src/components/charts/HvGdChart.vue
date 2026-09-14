@@ -6,6 +6,7 @@
     </div>
     <div v-else-if="state === 'error'" class="hvgd-placeholder hvgd-error">
       {{ errorMsg }}
+      <button type="button" class="mode-btn" @click="retry">Try again</button>
     </div>
     <div v-else-if="state === 'empty'" class="hvgd-placeholder">
       No reference front available yet.
@@ -52,6 +53,10 @@
       </div>
       </div>
     </div>
+    <p v-if="errorMsg && state === 'ready'" class="hvgd-error" role="alert">
+      {{ errorMsg }}
+      <button type="button" class="mode-btn" @click="retry">Try again</button>
+    </p>
     <p
       v-if="state === 'ready'"
       class="hvgd-caption"
@@ -63,12 +68,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
+import { ref, computed, watch, onBeforeUnmount } from "vue";
 import * as echarts from "../../lib/echarts";
 import type { EChartsOption, DefaultLabelFormatterCallbackParams } from "echarts";
 import { useTheme } from "../../composables/useTheme";
 import { chartPalette, chartExportBackground } from "../../services/chartTheme";
-import client from "../../api/client";
+import type { HvGdData, Population } from "../../api/metrics";
+import { useHvGdData } from "../../composables/useHvGdData";
 import { exportChartImage, chartExportFilename } from "../../utils/chartExport";
 import ChartExportButton from "./ChartExportButton.vue";
 
@@ -76,22 +82,16 @@ const props = defineProps<{
   experimentId: string;
   objectiveNames: string[];
   objectiveGoals: string[];
+  revision?: number;
 }>();
 
 const { isDark } = useTheme();
 
 // ── state ──────────────────────────────────────────────────────────────────
-type State = "idle" | "loading" | "ready" | "empty" | "error";
-const state = ref<State>("idle");
-const errorMsg = ref("");
-// A refetch that leaves the charts on screen (see fetchData).
-const refreshing = ref(false);
-
 // Which set each generation is measured on. This used to be an HV-only
 // "per generation / cumulative" toggle, which left GD and IGD on the offspring
 // whatever the user picked. All three indicators now follow one selector, and
 // the backend computes it — the survivor set cannot be derived client-side.
-type Population = "survivors" | "offspring" | "archive";
 const POPULATION_OPTIONS: { value: Population; label: string; hint: string }[] = [
   {
     value: "survivors",
@@ -110,28 +110,14 @@ const POPULATION_OPTIONS: { value: Population; label: string; hint: string }[] =
   },
 ];
 const population = ref<Population>("survivors");
+const { data, state, errorMsg, refreshing, retry } = useHvGdData(() => ({
+  ...props, population: population.value,
+}));
 
 // The distance indicators are null for a generation with no feasible
 // individual — a gap in the curve, which ECharts renders as a break, rather
 // than a zero that would read as "perfect convergence".
-interface HvGdData {
-  generations: number[];
-  hv: number[];
-  hv_cumulative: number[];
-  gd: (number | null)[];
-  igd: (number | null)[];
-  igd_plus: (number | null)[];
-  reference: "true_front" | "final_front" | null;
-  reference_size: number;
-  normalized: boolean;
-  worst_point: Record<string, number>;
-  population: Population | null;
-  population_source: Population | null;
-  gd_method: "analytical" | "reference_front" | null;
-  gd_formula: string | null;
-  normalization: string | null;
-}
-const data = ref<HvGdData | null>(null);
+
 
 const measuredSet = computed<Population>(
   () => data.value?.population_source ?? population.value,
@@ -204,43 +190,6 @@ function handleExportImage(kind: ChartKind) {
   });
 }
 
-// ── fetch ───────────────────────────────────────────────────────────────────
-async function fetchData({ silent = false }: { silent?: boolean } = {}) {
-  if (!props.experimentId || props.objectiveNames.length < 2) return;
-
-  // A silent refetch keeps the panel in "ready". Dropping to "loading" would
-  // unmount the chart containers, and switching the measured set is a frequent,
-  // cheap action — a flash of empty panel on every click is worse than a moment
-  // of stale curve.
-  if (!silent) state.value = "loading";
-  refreshing.value = silent;
-  errorMsg.value = "";
-
-  const minimize = props.objectiveGoals.map((g) => (g === "min" ? "true" : "false"));
-  const params = new URLSearchParams();
-  props.objectiveNames.forEach((o) => params.append("objectives", o));
-  minimize.forEach((m) => params.append("minimize", m));
-  params.append("population", population.value);
-
-  try {
-    const { data: res } = await client.get<HvGdData>(
-      `/experiments/${props.experimentId}/hv-gd?${params.toString()}`,
-    );
-    if (!res.generations || res.generations.length === 0) {
-      data.value = null;
-      state.value = "empty";
-      return;
-    }
-    data.value = res;
-    state.value = "ready";
-  } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : String(e);
-    state.value = "error";
-  } finally {
-    refreshing.value = false;
-  }
-}
-
 // ── chart init & rendering ──────────────────────────────────────────────────
 
 function buildHvOption(d: HvGdData, dark: boolean): EChartsOption {
@@ -252,6 +201,7 @@ function buildHvOption(d: HvGdData, dark: boolean): EChartsOption {
   const seriesName = `Hypervolume (${label.toLowerCase()})`;
 
   return {
+    animation: false,
     backgroundColor: c.bg,
     tooltip: {
       trigger: "axis",
@@ -296,6 +246,7 @@ function buildHvOption(d: HvGdData, dark: boolean): EChartsOption {
         smooth: true,
         symbol: "circle",
         symbolSize: 6,
+        showSymbol: false,
         itemStyle: { color: c.hv },
         lineStyle: { color: c.hv, width: 2 },
         areaStyle: { color: c.hvArea },
@@ -309,6 +260,7 @@ function buildGdOption(d: HvGdData, dark: boolean): EChartsOption {
   const xLabels = d.generations.map((g) => `Gen ${g}`);
 
   return {
+    animation: false,
     backgroundColor: c.bg,
     tooltip: {
       trigger: "axis",
@@ -347,6 +299,7 @@ function buildGdOption(d: HvGdData, dark: boolean): EChartsOption {
         smooth: true,
         symbol: "circle",
         symbolSize: 6,
+        showSymbol: false,
         itemStyle: { color: c.gd },
         lineStyle: { color: c.gd, width: 2 },
         areaStyle: { color: c.gdArea },
@@ -364,6 +317,7 @@ function buildIgdOption(d: HvGdData, dark: boolean): EChartsOption {
   // corner of the front scores a near-zero GD and a large IGD, and putting the
   // two on one axis would flatten whichever is smaller into the baseline.
   return {
+    animation: false,
     backgroundColor: c.bg,
     tooltip: {
       trigger: "axis",
@@ -415,6 +369,7 @@ function buildIgdOption(d: HvGdData, dark: boolean): EChartsOption {
         smooth: true,
         symbol: "circle",
         symbolSize: 6,
+        showSymbol: false,
         itemStyle: { color: c.igd },
         lineStyle: { color: c.igd, width: 2 },
         areaStyle: { color: c.igdArea },
@@ -429,6 +384,7 @@ function buildIgdOption(d: HvGdData, dark: boolean): EChartsOption {
         smooth: true,
         symbol: "triangle",
         symbolSize: 6,
+        showSymbol: false,
         itemStyle: { color: c.igdPlus },
         lineStyle: { color: c.igdPlus, width: 2, type: "dashed" },
       },
@@ -438,9 +394,9 @@ function buildIgdOption(d: HvGdData, dark: boolean): EChartsOption {
 
 function initCharts() {
   if (!hvEl.value || !gdEl.value || !igdEl.value) return;
-  hvChart = echarts.init(hvEl.value, null, { renderer: "svg" });
-  gdChart = echarts.init(gdEl.value, null, { renderer: "svg" });
-  igdChart = echarts.init(igdEl.value, null, { renderer: "svg" });
+  hvChart = echarts.init(hvEl.value, null, { renderer: "canvas" });
+  gdChart = echarts.init(gdEl.value, null, { renderer: "canvas" });
+  igdChart = echarts.init(igdEl.value, null, { renderer: "canvas" });
 
   ro = new ResizeObserver(() => {
     // Skip collapsed/hidden passes — resizing to 0×0 blanks the chart.
@@ -473,10 +429,6 @@ function destroyCharts() {
 }
 
 // ── lifecycle ────────────────────────────────────────────────────────────────
-onMounted(async () => {
-  await fetchData();
-});
-
 onBeforeUnmount(destroyCharts);
 
 // The chart containers sit behind v-if, so every trip through loading / error /
@@ -503,20 +455,6 @@ watch(data, () => renderCharts());
 // Re-render on theme change
 watch(isDark, () => renderCharts());
 
-// Switching the measured set refetches: GD / IGD over the survivors or the
-// archive cannot be recomputed from the offspring series already in hand.
-watch(population, () => {
-  if (data.value) fetchData({ silent: true });
-});
-
-// Refetch if experiment changes
-watch(
-  () => props.experimentId,
-  () => {
-    data.value = null;
-    fetchData();
-  },
-);
 </script>
 
 <style scoped>

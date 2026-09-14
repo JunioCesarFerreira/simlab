@@ -1,0 +1,29 @@
+{
+  "dimensions": 3,
+  "generations": 30,
+  "points_per_generation": 50,
+  "include_cumulative": true,
+  "current": {
+    "first_seconds": 0.03583669429644942,
+    "repeat_seconds": 0.0021257852204144,
+    "individual_queries_per_request": {
+      "by_generation": 0,
+      "bulk": 1
+    }
+  },
+  "baseline": {
+    "first_seconds": 5.53460052004084,
+    "repeat_seconds": 5.431241778191179,
+    "individual_queries_per_request": {
+      "by_generation": 30,
+      "bulk": 0
+    }
+  },
+  "maximum_absolute_error": {
+    "hv": 0.0,
+    "gd": 0.0,
+    "igd": 0.0,
+    "igd_plus": 0.0,
+    "hv_cumulative": 0.0
+  }
+}

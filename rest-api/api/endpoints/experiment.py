@@ -19,6 +19,7 @@ from pylib import benchmarks, moo_metrics
 from pylib.db import MongoRepository
 from pylib.db.models.enums import EnumStatus
 from api.dependencies import get_factory
+from api.metrics_cache import hv_gd_cache
 from api.domain.experiment import ExperimentDto, ExperimentFullDto, ExperimentInfoDto
 from api.mappers.experiment import (
     experiment_from_mongo,
@@ -84,10 +85,11 @@ def get_experiment_full(
         sims_by_individual = factory.simulation_repo.find_ids_grouped_by_individual(
             ObjectId(experiment_id)
         )
+        individuals = factory.individual_repo.find_grouped_by_experiment(ObjectId(experiment_id))
         generations = [
             generation_from_mongo(
                 g,
-                factory.individual_repo.find_by_generation(g["_id"]),
+                individuals.get(g["_id"], []),
                 sims_by_individual,
             )
             for g in gens
@@ -480,31 +482,13 @@ def _is_penalized(objs: list[float]) -> bool:
     return any(abs(v) >= _PENALTY_THRESHOLD for v in objs)
 
 
-def _dominates(a: list[float], b: list[float], minimize: list[bool]) -> bool:
-    """True if a dominates b (at least as good everywhere, strictly better somewhere)."""
-    better = False
-    for ai, bi, m in zip(a, b, minimize):
-        if (m and ai > bi) or (not m and ai < bi):
-            return False
-        if (m and ai < bi) or (not m and ai > bi):
-            better = True
-    return better
-
-
-def _pareto_front(objs_list: list[list[float]], minimize: list[bool]) -> list[int]:
-    """Returns indices of the non-dominated (rank-0) individuals."""
-    n = len(objs_list)
-    dominated = [False] * n
-    for i in range(n):
-        if dominated[i]:
-            continue
-        for j in range(n):
-            if i == j:
-                continue
-            if _dominates(objs_list[j], objs_list[i], minimize):
-                dominated[i] = True
-                break
-    return [i for i in range(n) if not dominated[i]]
+def _front_rows(objs_list: list[list[float]], minimize: list[bool]) -> list[list[float]]:
+    """Deduplicated non-dominated subset, returned in minimization space."""
+    if not objs_list:
+        return []
+    points = np.asarray(objs_list, dtype=float)
+    points *= np.where(minimize, 1.0, -1.0)
+    return moocore.filter_dominated(points).tolist()
 
 
 def _empty_hv_gd() -> dict:
@@ -557,8 +541,12 @@ def get_hv_gd(
         ),
     ),
     factory: MongoRepository = Depends(get_factory),
+    include_cumulative: bool = True,
 ) -> dict:
-    """Compute hypervolume, GD, IGD and IGD+ per generation."""
+    """Compute exact indicators. Set include_cumulative=false to omit the extra
+    archive HV series (hv_cumulative=[]), avoiding its cost for population plots.
+    The selected population's HV/GD/IGD/IGD+ remain unchanged.
+    """
     try:
         exp_oid = ObjectId(experiment_id)
     except bson_errors.InvalidId:
@@ -575,6 +563,35 @@ def get_hv_gd(
     if not doc:
         raise HTTPException(status_code=404, detail="Experiment not found")
 
+    gens = factory.generation_repo.find_by_experiment(exp_oid)
+    individuals = factory.individual_repo.find_grouped_by_experiment(
+        exp_oid, objectives_only=True,
+    )
+    # Read current inputs before looking up the cache: objective updates within
+    # an existing generation and newly persisted survivor sets must invalidate it.
+    # Chromosomes, simulations and unrelated experiment metadata are excluded.
+    inputs = [
+        objectives, minimize, population, normalize, include_cumulative,
+        (doc.get("parameters") or {}).get("objectives"),
+        ((doc.get("parameters") or {}).get("simulation") or {}).get("synthetic"),
+        [p.get("objectives") for p in doc.get("pareto_front") or []],
+        [[g["index"], g.get("survivors"),
+          [[i.get("individual_id"), i.get("objectives")]
+           for i in individuals.get(g["_id"], [])]] for g in gens],
+    ]
+    return hv_gd_cache.get_or_compute(
+        inputs,
+        lambda: _compute_hv_gd(doc, gens, individuals, objectives, minimize, population,
+                               normalize, include_cumulative),
+    )
+
+
+def _compute_hv_gd(
+    doc: dict, gens: list[dict], individuals: dict,
+    objectives: list[str], minimize: list[str], population: str, normalize: bool,
+    include_cumulative: bool = True,
+) -> dict:
+    n_obj = len(objectives)
     stored_pf: list[dict] = doc.get("pareto_front") or []
     minimize_bools = [m.lower() == "true" for m in minimize]
 
@@ -601,9 +618,7 @@ def get_hv_gd(
         # have nothing to resolve against; positional order is all there is.
         objective_columns = list(range(n_obj))
 
-    # ── Fetch generations + individuals directly from DB ─────────────────────
-    gens = factory.generation_repo.find_by_experiment(exp_oid)
-
+    # ── Resolve the projected individuals and survivor sets ──────────────────
     individuals_per_gen: dict[int, list[list[float]]] = {}
     # Survivors are chromosome hashes, and one may have been evaluated in an
     # older generation, so they are resolved against the whole experiment.
@@ -611,14 +626,13 @@ def get_hv_gd(
     survivor_hashes_per_gen: dict[int, list[str]] = {}
     for gen in gens:
         gen_idx: int = gen["index"]
-        individuals = factory.individual_repo.find_by_generation(gen["_id"])
         valid: list[list[float]] = []
-        for ind in individuals:
+        for ind in individuals.get(gen["_id"], []):
             raw = ind.get("objectives") or []
             if len(raw) <= max(objective_columns):
                 continue
             objs = [float(raw[i]) for i in objective_columns]
-            if _is_penalized(objs):
+            if _is_penalized(objs) or not np.isfinite(objs).all():
                 continue
             valid.append(objs)
             ind_hash = ind.get("individual_id")
@@ -638,6 +652,7 @@ def get_hv_gd(
     population_source = population
     if population == "survivors" and not survivor_hashes_per_gen:
         population_source = "offspring"
+    needs_archive = include_cumulative or population_source == "archive"
 
     # ── Reference front (GD/IGD/IGD+) + HV reference point ───────────────────
     # Synthetic experiments have a closed-form true Pareto front: use it as the
@@ -748,6 +763,15 @@ def get_hv_gd(
             gd_scale = float(scale[0]) if normalize else 1.0
     gd_method = "analytical" if gd_scale is not None else "reference_front"
 
+    distance_reference = reference_front
+    if normalize:
+        if analytical_bounds is None:
+            distance_ideal, distance_scale = moo_metrics.normalization_bounds(reference_front)
+        else:
+            distance_ideal = analytical_bounds[0]
+            distance_scale = moo_metrics.analytical_scale(*analytical_bounds)
+        distance_reference = moo_metrics.normalize(reference_front, distance_ideal, distance_scale)
+
     # ── Per-generation HV / GD / IGD / IGD+ ──────────────────────────────────
     # GD, IGD and IGD+ are three readings of the same comparison and are cheap
     # once the reference front is in hand, so all three are returned: GD alone
@@ -761,11 +785,9 @@ def get_hv_gd(
     #     the generation ("best-so-far"). It is monotonically non-decreasing,
     #     independent of ``population``, and built incrementally: the running
     #     non-dominated set is folded with each generation's offspring front
-    #     (never the whole population), keeping the cost at O(G · front²)
-    #     instead of O(G · population²). With ``population=archive`` the two
+    #     using moocore's native dominance filter. With ``population=archive`` the two
     #     curves coincide by construction.
     generations_sorted = sorted(individuals_per_gen.keys())
-    all_min_bools = [True] * n_obj      # min-space domination for the acc. front
     hv_values: list[float] = []
     hv_cumulative: list[float] = []
     gd_values: list[float | None] = []
@@ -776,38 +798,25 @@ def get_hv_gd(
     acc_rows: list[list[float]] = []    # running non-dominated set (min-space)
     last_cum_hv = 0.0
 
-    def _front_rows(objs_list: list[list[float]]) -> list[list[float]]:
-        """Non-dominated subset in MINIMIZATION space, deduplicated by value."""
-        if not objs_list:
-            return []
-        seen_pts: set[tuple] = set()
-        rows: list[list[float]] = []
-        for i in _pareto_front(objs_list, minimize_bools):
-            key = tuple(
-                objs_list[i][j] if minimize_bools[j] else -objs_list[i][j]
-                for j in range(n_obj)
-            )
-            if key not in seen_pts:
-                seen_pts.add(key)
-                rows.append(list(key))
-        return rows
-
     for gen_idx in generations_sorted:
         # The archive always folds in the OFFSPRING, whichever set is reported:
         # it is the set of everything evaluated, and survivors are a subset of
         # earlier offspring. A point off its own generation's front is dominated
         # within that generation too, so it can never join the accumulated front
         # — merging the front alone keeps the set minimal.
-        offspring_rows = _front_rows(individuals_per_gen.get(gen_idx, []))
-        for row in offspring_rows:
-            key = tuple(row)
-            if key not in acc_seen:
-                acc_seen.add(key)
-                acc_rows.append(row)
-        if acc_rows:
-            nd_idx = _pareto_front(acc_rows, all_min_bools)
-            acc_rows = [acc_rows[i] for i in nd_idx]
-            acc_seen = {tuple(r) for r in acc_rows}
+        offspring_rows = (
+            _front_rows(individuals_per_gen.get(gen_idx, []), minimize_bools)
+            if needs_archive or population_source == "offspring" else []
+        )
+        new_rows = (
+            [row for row in offspring_rows if tuple(row) not in acc_seen] if needs_archive else []
+        )
+        archive_changed = False
+        if new_rows:
+            merged = moocore.filter_dominated(np.asarray(acc_rows + new_rows, dtype=float)).tolist()
+            merged_keys = {tuple(r) for r in merged}
+            archive_changed = merged_keys != acc_seen
+            acc_rows, acc_seen = merged, merged_keys
 
         if population_source == "survivors":
             survivor_objs = [
@@ -815,15 +824,17 @@ def get_hv_gd(
                 for h in survivor_hashes_per_gen.get(gen_idx, [])
                 if h in objectives_by_hash
             ]
-            pts_min_rows = _front_rows(survivor_objs)
+            pts_min_rows = _front_rows(survivor_objs, minimize_bools)
         elif population_source == "archive":
             pts_min_rows = acc_rows
         else:
             pts_min_rows = offspring_rows
 
-        acc_arr = np.array(acc_rows, dtype=float) if acc_rows else np.empty((0, n_obj))
-        acc_dom = acc_arr[np.all(acc_arr < hv_ref_arr, axis=1)] if len(acc_arr) else acc_arr
-        cum_hv = float(moocore.hypervolume(acc_dom, ref=hv_ref)) if len(acc_dom) else last_cum_hv
+        cum_hv = last_cum_hv
+        if archive_changed:
+            acc_arr = np.asarray(acc_rows, dtype=float)
+            acc_dom = acc_arr[np.all(acc_arr < hv_ref_arr, axis=1)]
+            cum_hv = float(moocore.hypervolume(acc_dom, ref=hv_ref)) if len(acc_dom) else 0.0
         last_cum_hv = cum_hv
 
         if not pts_min_rows:
@@ -838,10 +849,15 @@ def get_hv_gd(
 
         # HV: only points that strictly dominate the (fixed) reference contribute.
         dominating = pts_min[np.all(pts_min < hv_ref_arr, axis=1)]
-        hv_val = float(moocore.hypervolume(dominating, ref=hv_ref)) if len(dominating) else 0.0
+        hv_val = cum_hv if population_source == "archive" else (
+            float(moocore.hypervolume(dominating, ref=hv_ref)) if len(dominating) else 0.0
+        )
 
         hv_values.append(hv_val)
         hv_cumulative.append(cum_hv)
+        distance_points = (
+            moo_metrics.normalize(pts_min, distance_ideal, distance_scale) if normalize else pts_min
+        )
         if gd_scale is not None:
             gd_values.append(
                 moo_metrics.gd_analytical(
@@ -850,23 +866,23 @@ def get_hv_gd(
             )
         else:
             gd_values.append(
-                moo_metrics.gd(pts_min, reference_front, normalized=normalize)
+                moo_metrics.gd(distance_points, distance_reference, normalized=False)
             )
         igd_values.append(
             moo_metrics.igd(
-                pts_min, reference_front, normalized=normalize, bounds=analytical_bounds
+                distance_points, distance_reference, normalized=False
             )
         )
         igd_plus_values.append(
             moo_metrics.igd_plus(
-                pts_min, reference_front, normalized=normalize, bounds=analytical_bounds
+                distance_points, distance_reference, normalized=False
             )
         )
 
     return {
         "generations": generations_sorted,
         "hv": hv_values,
-        "hv_cumulative": hv_cumulative,
+        "hv_cumulative": hv_cumulative if include_cumulative else [],
         "gd": gd_values,
         "igd": igd_values,
         "igd_plus": igd_plus_values,

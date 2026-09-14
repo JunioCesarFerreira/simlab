@@ -36,7 +36,7 @@ class TestGetExperimentFull:
     def test_returns_experiment_with_generations_and_individuals(self, client, mock_factory):
         mock_factory.experiment_repo.get.return_value = sample_experiment()
         mock_factory.generation_repo.find_by_experiment.return_value = [sample_generation()]
-        mock_factory.individual_repo.find_by_generation.return_value = [sample_individual()]
+        mock_factory.individual_repo.find_grouped_by_experiment.return_value = {ObjectId(GEN_ID): [sample_individual()]}
 
         resp = client.get(f"{BASE}/{EXP_ID}/full")
 
@@ -247,7 +247,7 @@ class TestGetHvGd:
     def _setup(self, mock_factory, doc, ind_objs):
         mock_factory.experiment_repo.get.return_value = doc
         mock_factory.generation_repo.find_by_experiment.return_value = [{"_id": ObjectId(GEN_ID), "index": 0}]
-        mock_factory.individual_repo.find_by_generation.return_value = [{"objectives": o} for o in ind_objs]
+        mock_factory.individual_repo.find_grouped_by_experiment.return_value = {ObjectId(GEN_ID): [{"objectives": o} for o in ind_objs]}
 
     def test_synthetic_uses_true_front_and_returns_igd(self, client, mock_factory):
         doc = sample_experiment()
@@ -399,10 +399,7 @@ class TestGetHvGd:
             {"_id": ObjectId(GEN_ID), "index": 0},
             {"_id": ObjectId(IND_ID), "index": 1},
         ]
-        mock_factory.individual_repo.find_by_generation.side_effect = [
-            [{"objectives": [5.0, 5.0]}],   # gen 0
-            [{"objectives": [5.0, 8.0]}],   # gen 1 (better f2)
-        ]
+        mock_factory.individual_repo.find_grouped_by_experiment.return_value = {ObjectId(GEN_ID): [{"objectives": [5.0, 5.0]}], ObjectId(IND_ID): [{"objectives": [5.0, 8.0]}]}
 
         q = "objectives=f1&objectives=f2&minimize=true&minimize=false"
         data = client.get(f"{BASE}/{EXP_ID}/hv-gd?{q}").json()
@@ -425,10 +422,7 @@ class TestGetHvGd:
             {"_id": ObjectId(GEN_ID), "index": 0},
             {"_id": ObjectId(IND_ID), "index": 1},
         ]
-        mock_factory.individual_repo.find_by_generation.side_effect = [
-            [{"objectives": [1.0, 1.0]}],   # gen 0 (good)
-            [{"objectives": [2.0, 2.0]}],   # gen 1 (worse — regression)
-        ]
+        mock_factory.individual_repo.find_grouped_by_experiment.return_value = {ObjectId(GEN_ID): [{"objectives": [1.0, 1.0]}], ObjectId(IND_ID): [{"objectives": [2.0, 2.0]}]}
 
         data = self._call(client).json()   # objectives f1,f2 both minimized
 
@@ -470,9 +464,9 @@ class TestHvGdObjectiveResolution:
         mock_factory.generation_repo.find_by_experiment.return_value = [
             {"_id": ObjectId(GEN_ID), "index": 0}
         ]
-        mock_factory.individual_repo.find_by_generation.return_value = [
+        mock_factory.individual_repo.find_grouped_by_experiment.return_value = {ObjectId(GEN_ID): [
             {"objectives": o} for o in individuals
-        ]
+        ]}
         return doc
 
     def _call(self, client, objectives):
@@ -603,9 +597,9 @@ class TestHvGdAnalyticalDistance:
         mock_factory.generation_repo.find_by_experiment.return_value = [
             {"_id": ObjectId(GEN_ID), "index": 0}
         ]
-        mock_factory.individual_repo.find_by_generation.return_value = [
+        mock_factory.individual_repo.find_grouped_by_experiment.return_value = {ObjectId(GEN_ID): [
             {"objectives": o} for o in individuals
-        ]
+        ]}
         return doc
 
     def _call(self, client, objectives):
@@ -646,9 +640,9 @@ class TestHvGdAnalyticalDistance:
         mock_factory.generation_repo.find_by_experiment.return_value = [
             {"_id": ObjectId(GEN_ID), "index": 0}
         ]
-        mock_factory.individual_repo.find_by_generation.return_value = [
+        mock_factory.individual_repo.find_grouped_by_experiment.return_value = {ObjectId(GEN_ID): [
             {"objectives": [0.5, 0.3]}
-        ]
+        ]}
         data = self._call(client, ["f1", "f2"])
         assert data["gd_method"] == "reference_front"
         assert data["normalization"] == "reference front ideal-nadir range"
@@ -701,9 +695,7 @@ class TestHvGdMeasuredPopulation:
             # is only possible experiment-wide.
             gen1["survivors"] = survivors
         mock_factory.generation_repo.find_by_experiment.return_value = [gen0, gen1]
-        mock_factory.individual_repo.find_by_generation.side_effect = (
-            lambda gid: self._GEN0 if gid == self.GEN0 else self._GEN1
-        )
+        mock_factory.individual_repo.find_grouped_by_experiment.return_value = {self.GEN0: self._GEN0, self.GEN1: self._GEN1}
         return doc
 
     def _call(self, client, population=None):

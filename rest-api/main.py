@@ -1,5 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from contextlib import asynccontextmanager
 
 import os, sys
 project_path = os.path.abspath(os.path.join(os.getcwd(), ".."))
@@ -8,6 +10,15 @@ if project_path not in sys.path:
 
 from api.router import api_router
 from api.responses import SafeJSONResponse
+from api.dependencies import close_factory
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        yield
+    finally:
+        close_factory()
 
 app = FastAPI(
     title="Simulation Management API",
@@ -16,7 +27,10 @@ app = FastAPI(
     # Tolerate non-finite floats (inf/nan) in stored objectives so reading an
     # experiment never fails with HTTP 500 during JSON serialization.
     default_response_class=SafeJSONResponse,
+    lifespan=lifespan,
 )
+
+app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=4)
 
 app.add_middleware(
     CORSMiddleware,

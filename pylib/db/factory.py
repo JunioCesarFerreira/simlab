@@ -26,8 +26,10 @@ class MongoRepository(NamedTuple):
     problem_repo: ProblemRepository
 
 
-def create_mongo_repository_factory(mongo_uri: str, db_name: str) -> MongoRepository:
-    connection = MongoDBConnection(mongo_uri, db_name)
+def create_mongo_repository_factory(
+    mongo_uri: str, db_name: str, *, reuse_client: bool = False,
+) -> MongoRepository:
+    connection = MongoDBConnection(mongo_uri, db_name, reuse_client=reuse_client)
     fs_handler = MongoGridFSHandler(connection)
     experiment_repo = ExperimentRepository(connection)
     simulation_repo = SimulationRepository(connection)

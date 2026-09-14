@@ -11,18 +11,28 @@ logger = logging.getLogger(__name__)
 
 
 class MongoDBConnection:
-    def __init__(self, uri: str, db_name: str):
+    def __init__(self, uri: str, db_name: str, *, reuse_client: bool = False):
         logger.info(f"[MongoDBConnection] uri:{uri} db_name:{db_name}")
         self.uri = uri
         self.db_name = db_name
+        # The API owns one factory per worker and can share PyMongo's pool.
+        # Other services retain their existing connection lifecycle.
+        self._client = MongoClient(uri) if reuse_client else None
 
     @contextmanager
     def connect(self) -> Generator:
+        if self._client is not None:
+            yield self._client[self.db_name]
+            return
         client = MongoClient(self.uri)
         try:
             yield client[self.db_name]
         finally:
             client.close()
+
+    def close(self) -> None:
+        if self._client is not None:
+            self._client.close()
 
     def waiting_ping(self) -> None:
         while True:
