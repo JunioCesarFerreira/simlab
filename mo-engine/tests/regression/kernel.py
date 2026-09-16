@@ -1,24 +1,21 @@
 """Synchronous NSGA kernel harness for the metrics-regression baseline.
 
-Phase 0 of ``docs/markdown/NSGA_METRICS_FIX_PLAN.md``. It drives the *real*
-SimLab mating and environmental-selection methods over an analytical benchmark
+It drives the *real* SimLab mating and environmental-selection methods over an analytical benchmark
 with no MongoDB, no change streams and no simulation workers, so a run is a
 pure function of ``(config, seed)``.
 
 Three sets are recorded per generation, because the audit
-(``experiments/nsga-metrics-audit``) showed the platform currently plots one of
-them while the notebooks plot another:
+(``experiments/nsga-metrics-audit``) demonstrated that measuring different sets
+changes the interpretation of convergence:
 
-  * ``offspring``  — ND(Q_t), the newly generated children. This is what the
-    ``/hv-gd`` endpoint measures today.
-  * ``survivors``  — ND(P_t), the population kept by environmental selection.
-    This is what the NSGA-Studies notebooks measure.
+  * ``offspring``  — ND(Q_t), the newly generated children; also the fallback
+    when a generation has no persisted survivor set.
+  * ``survivors``  — ND(P_t), the population kept by environmental selection,
+    measured by default in the API and by the NSGA-Studies notebooks.
   * ``archive``    — ND of every individual evaluated so far.
 
-Deliberately different from production in one respect: the kernel applies
-environmental selection to the LAST offspring batch as well. Production skips
-it (finding 8), which Phase 1.2 will correct; the kernel already encodes the
-intended behaviour so the baseline does not have to be re-frozen for it.
+Like production, the kernel applies environmental selection to the last
+offspring batch, reporting the selected final population.
 """
 from __future__ import annotations
 

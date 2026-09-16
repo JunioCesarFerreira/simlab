@@ -11,19 +11,20 @@ different way:
 
 Both are driven from the experiment's ``algorithm.random_seed``, through the
 same ``random.Random`` the rest of the loop already uses. That is deliberate:
-every library seed is drawn from that one generator, so the reproducibility of
-a whole run reduces to a single piece of state — which is also the only thing a
-checkpoint has to persist.
+every library seed is drawn from that one generator. A checkpoint must also
+persist any non-random backend state, such as pymoo's hyperplane normalization.
 """
 from __future__ import annotations
 
 import contextlib
 import random
+from threading import RLock
 
 import numpy as np
 
 # numpy.random.seed accepts a 32-bit value.
 _SEED_SPACE = 2 ** 32
+_NUMPY_GLOBAL_LOCK = RLock()
 
 
 def derive_seed(rng: random.Random) -> int:
@@ -45,15 +46,17 @@ def derive_generator(rng: random.Random) -> "np.random.Generator":
 def numpy_global_seed(rng: random.Random):
     """Seed the process-wide numpy RNG for a DEAP call, then put it back.
 
-    Restoring the previous state on exit keeps this out of anything else running
-    in the process — the engine shares its interpreter with other work.
+    Serialize cooperating callers across experiments, including state capture
+    and restoration. Code using numpy.random directly must use this same guard
+    or its own Generator; the lock cannot protect unguarded global RNG access.
     """
-    state = np.random.get_state()
-    np.random.seed(derive_seed(rng))
-    try:
-        yield
-    finally:
-        np.random.set_state(state)
+    with _NUMPY_GLOBAL_LOCK:
+        state = np.random.get_state()
+        try:
+            np.random.seed(derive_seed(rng))
+            yield
+        finally:
+            np.random.set_state(state)
 
 
 def dump_random_state(rng: random.Random) -> dict:
@@ -61,7 +64,8 @@ def dump_random_state(rng: random.Random) -> dict:
 
     ``getstate`` returns ``(version, tuple_of_ints, gauss_next)``; Mongo stores
     lists rather than tuples. Because every library seed is derived from this
-    one generator, this snapshot is the whole random state of a run.
+    one generator, this snapshot is the whole random state of a run. Backend
+    normalization state is stored separately.
     """
     version, internal, gauss_next = rng.getstate()
     return {

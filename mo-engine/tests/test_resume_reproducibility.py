@@ -15,11 +15,14 @@ stream itself, snapshotted onto each generation document.
 from __future__ import annotations
 
 import random
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
-from bson import ObjectId
+from bson import BSON, ObjectId
+from pylib.db.models.enums import EnumStatus
 
 from pylib import benchmarks
 
@@ -176,7 +179,7 @@ class _ResumeHarness:
         return strategy
 
     def _insert_generation(self, generation: dict):
-        self.generations.append(dict(generation))
+        self.generations.append(BSON.encode(generation).decode())
         return generation["_id"]
 
     def _set_survivors(self, generation_id, hashes):
@@ -208,9 +211,8 @@ class _ResumeHarness:
     def resume(self):
         """A fresh strategy picking the checkpoint up, as ``start()`` would."""
         self.strategy = self._build()
-        self.strategy._generation_id = self.generations[-1]["_id"]
-        self.strategy._gen_index = int(self.generations[-1]["index"]) + 1
-        self.strategy._restore_population_state(self.generations, self.generations[-1])
+        replay = self.strategy._resume_existing_generation(self.generations)
+        assert replay == (self.generations[-1]["status"] == EnumStatus.DONE)
         return self.strategy
 
 
@@ -230,19 +232,31 @@ def test_resume_restores_the_surviving_population(cls):
     assert all(restored._map_genome_objectives.get(c) is not None for c in restored._parents)
 
 
-@pytest.mark.parametrize("cls", [NSGA2LoopStrategy, NSGA3LoopStrategy], ids=lambda c: c.__name__)
-def test_resumed_run_matches_the_uninterrupted_one(cls):
-    """The exit criterion: interrupting must not change the search."""
-    straight = _ResumeHarness(cls)
-    straight.start(generations=4)
+@pytest.mark.parametrize("cls", ALL_STRATEGIES, ids=lambda c: c.__name__)
+@pytest.mark.parametrize("seed", [1, 42])
+@pytest.mark.parametrize("checkpoint", [0, 1, 4])
+@pytest.mark.parametrize("status", [EnumStatus.WAITING, EnumStatus.DONE])
+def test_resumed_run_matches_the_uninterrupted_one(cls, seed, checkpoint, status):
+    """Compare exact trajectories after a BSON round-trip, not just indicators.
 
-    interrupted = _ResumeHarness(cls)
-    interrupted.start(generations=2)
+    Checkpoints precede the first selection as well as follow several selections;
+    seed 1 exposes pymoo's accumulated hyperplane state being lost on restart.
+    """
+    straight = _ResumeHarness(cls, seed)
+    straight.start(generations=8)
+    interrupted = _ResumeHarness(cls, seed)
+    interrupted.start(generations=checkpoint)
+    interrupted.generations[-1]["status"] = status
     strategy = interrupted.resume()
-    strategy._evolution()   # the generation the checkpoint stopped on
-    strategy._evolution()
+    for _ in range(8 - checkpoint):
+        strategy._evolution()
 
     assert interrupted.population_ids() == straight.population_ids()
+    assert [g.get("survivors") for g in interrupted.generations] == [
+        g.get("survivors") for g in straight.generations
+    ]
+    assert strategy._ga_rng.getstate() == straight.strategy._ga_rng.getstate()
+
 
 
 @pytest.mark.parametrize("cls", [NSGA2LoopStrategy, NSGA3LoopStrategy], ids=lambda c: c.__name__)
@@ -272,3 +286,101 @@ def test_resume_refuses_a_survivor_with_no_document(cls):
 
     with pytest.raises(RuntimeError, match="no individual document"):
         harness.resume()
+
+
+def test_numpy_global_seed_serializes_concurrent_calls():
+    """Two experiments must see their own stream and restore the caller's state."""
+    entered, attempted, second_entered, release = Event(), Event(), Event(), Event()
+    np.random.seed(123)
+    before = np.random.get_state()
+
+    def first():
+        with numpy_global_seed(random.Random(1)):
+            entered.set()
+            assert release.wait(5)
+            return np.random.random(5)
+
+    def second():
+        attempted.set()
+        with numpy_global_seed(random.Random(2)):
+            second_entered.set()
+            return np.random.random(5)
+
+    with ThreadPoolExecutor(2) as pool:
+        a = pool.submit(first)
+        assert entered.wait(5)
+        b = pool.submit(second)
+        try:
+            assert attempted.wait(5)
+            assert not second_entered.wait(0.1), "global RNG contexts overlapped"
+        finally:
+            release.set()
+        for future, seed in ((a, 1), (b, 2)):
+            expected = np.random.RandomState(derive_seed(random.Random(seed))).random(5)
+            np.testing.assert_array_equal(future.result(timeout=5), expected)
+    for actual, expected in zip(np.random.get_state(), before):
+        np.testing.assert_array_equal(actual, expected)
+
+
+def test_numpy_global_seed_restores_and_unlocks_after_exception():
+    np.random.seed(321)
+    before = np.random.get_state()
+    with pytest.raises(RuntimeError, match="selection failed"):
+        with numpy_global_seed(random.Random(1)):
+            np.random.random(5)
+            raise RuntimeError("selection failed")
+    for actual, expected in zip(np.random.get_state(), before):
+        np.testing.assert_array_equal(actual, expected)
+    with ThreadPoolExecutor(1) as pool:
+        def another_experiment():
+            with numpy_global_seed(random.Random(2)):
+                return np.random.random()
+        expected = np.random.RandomState(derive_seed(random.Random(2))).random()
+        assert pool.submit(another_experiment).result(timeout=5) == expected
+
+
+@pytest.mark.parametrize("checkpoint", [0, 1, 4])
+def test_pymoo_legacy_checkpoint_remains_readable(checkpoint, caplog):
+    harness = _ResumeHarness(NSGA3PymooStrategy, seed=1)
+    harness.start(generations=checkpoint)
+    for generation in harness.generations:
+        generation.pop("selection_state", None)
+    with caplog.at_level("WARNING"):
+        strategy = harness.resume()
+    assert ("no normalization checkpoint" in caplog.text) == (checkpoint > 1)
+    strategy._evolution()
+    assert len(harness.generations) == checkpoint + 2
+
+
+@pytest.mark.parametrize("corruption", ["version", "backend", "shape", "nan", "missing", "empty"])
+def test_pymoo_rejects_invalid_normalization_checkpoint(corruption):
+    harness = _ResumeHarness(NSGA3PymooStrategy, seed=1)
+    harness.start(generations=4)
+    snapshot = harness.generations[-1]["selection_state"]
+    if corruption == "version":
+        snapshot["version"] = 999
+    elif corruption == "backend":
+        snapshot["backend"] = "another_backend"
+    elif corruption == "shape":
+        snapshot["normalization"]["extreme_points"] = [[1.0]]
+    elif corruption == "nan":
+        snapshot["normalization"]["ideal_point"][0] = float("nan")
+    elif corruption == "empty":
+        snapshot["normalization"] = None
+    else:
+        del snapshot["normalization"]["worst_point"]
+    with pytest.raises(RuntimeError, match="invalid pymoo normalization checkpoint"):
+        harness.resume()
+
+
+def test_pymoo_checkpoint_is_a_detached_snapshot():
+    harness = _ResumeHarness(NSGA3PymooStrategy, seed=1)
+    harness.start(generations=4)
+    snapshot = harness.strategy._dump_selection_state()
+    frozen = BSON.encode(snapshot)
+    harness.strategy._evolution()
+    assert BSON.encode(snapshot) == frozen
+    restored = harness.resume()
+    stored = BSON.encode(harness.generations[-1])
+    restored._pymoo_survival.norm.ideal_point[:] = 0
+    assert BSON.encode(harness.generations[-1]) == stored

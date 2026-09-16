@@ -506,6 +506,7 @@ def _empty_hv_gd() -> dict:
         "worst_point": {},
         "population": None,
         "population_source": None,
+        "population_sources": [],
         "gd_method": None,
         "gd_formula": None,
         "normalization": None,
@@ -527,9 +528,10 @@ def get_hv_gd(
             "is the children evaluated in that generation (Q_t): it swings with "
             "each batch and can drop while the search still holds a better "
             "parent. 'archive' is the non-dominated set of everything seen so "
-            "far, which is monotone in HV by construction. Runs recorded before "
-            "survivor sets were persisted fall back to 'offspring'; the response "
-            "reports which set was actually used in 'population_source'."
+            "far, which is monotone in HV by construction. Generations without "
+            "a persisted survivor set fall back to 'offspring'; the response "
+            "reports each generation's set in 'population_sources'; "
+            "'population_source' is 'mixed' when the series uses both sets."
         ),
     ),
     normalize: bool = Query(
@@ -640,19 +642,23 @@ def _compute_hv_gd(
                 objectives_by_hash[ind_hash] = objs
         individuals_per_gen[gen_idx] = valid
         stored_survivors = gen.get("survivors")
-        if stored_survivors:
+        if stored_survivors is not None:
             survivor_hashes_per_gen[gen_idx] = list(stored_survivors)
 
     if not individuals_per_gen:
         return _empty_hv_gd()
 
-    # Experiments that ran before survivor sets were persisted have no P_t to
-    # read. Degrade to the offspring rather than reporting empty series, and say
-    # so in the response — the two curves are not interchangeable.
-    population_source = population
-    if population == "survivors" and not survivor_hashes_per_gen:
-        population_source = "offspring"
-    needs_archive = include_cumulative or population_source == "archive"
+    # Legacy generations, incomplete generations and failed metadata writes can
+    # leave P_t unavailable. Fall back only for those generations and report
+    # their source: a mixed series is not a homogeneous survivor trajectory.
+    generations_sorted = sorted(individuals_per_gen)
+    population_sources = [
+        "offspring" if population == "survivors" and g not in survivor_hashes_per_gen
+        else population for g in generations_sorted
+    ]
+    sources = set(population_sources)
+    population_source = population_sources[0] if len(sources) == 1 else "mixed"
+    needs_archive = include_cumulative or population == "archive"
 
     # ── Reference front (GD/IGD/IGD+) + HV reference point ───────────────────
     # Synthetic experiments have a closed-form true Pareto front: use it as the
@@ -686,8 +692,8 @@ def _compute_hv_gd(
     if is_synthetic:
         try:
             # Built in the experiment's declared order, then reordered to the
-            # request. ZDT1 and SCH1 are not symmetric in their objectives, so
-            # a permuted request needs a permuted front, not the same one.
+            # request. ZDT1 is not symmetric in its objectives, so a permuted
+            # request needs a permuted front, not the same one.
             columns = objective_columns if canonical else list(range(n_obj))
             reference_front = benchmarks.true_front(bench, n_obj)[:, columns]
             nadir = benchmarks.nadir(bench, n_obj)
@@ -787,7 +793,6 @@ def _compute_hv_gd(
     #     non-dominated set is folded with each generation's offspring front
     #     using moocore's native dominance filter. With ``population=archive`` the two
     #     curves coincide by construction.
-    generations_sorted = sorted(individuals_per_gen.keys())
     hv_values: list[float] = []
     hv_cumulative: list[float] = []
     gd_values: list[float | None] = []
@@ -798,7 +803,7 @@ def _compute_hv_gd(
     acc_rows: list[list[float]] = []    # running non-dominated set (min-space)
     last_cum_hv = 0.0
 
-    for gen_idx in generations_sorted:
+    for gen_idx, generation_source in zip(generations_sorted, population_sources):
         # The archive always folds in the OFFSPRING, whichever set is reported:
         # it is the set of everything evaluated, and survivors are a subset of
         # earlier offspring. A point off its own generation's front is dominated
@@ -806,7 +811,7 @@ def _compute_hv_gd(
         # — merging the front alone keeps the set minimal.
         offspring_rows = (
             _front_rows(individuals_per_gen.get(gen_idx, []), minimize_bools)
-            if needs_archive or population_source == "offspring" else []
+            if needs_archive or generation_source == "offspring" else []
         )
         new_rows = (
             [row for row in offspring_rows if tuple(row) not in acc_seen] if needs_archive else []
@@ -818,14 +823,14 @@ def _compute_hv_gd(
             archive_changed = merged_keys != acc_seen
             acc_rows, acc_seen = merged, merged_keys
 
-        if population_source == "survivors":
+        if generation_source == "survivors":
             survivor_objs = [
                 objectives_by_hash[h]
                 for h in survivor_hashes_per_gen.get(gen_idx, [])
                 if h in objectives_by_hash
             ]
             pts_min_rows = _front_rows(survivor_objs, minimize_bools)
-        elif population_source == "archive":
+        elif generation_source == "archive":
             pts_min_rows = acc_rows
         else:
             pts_min_rows = offspring_rows
@@ -849,7 +854,7 @@ def _compute_hv_gd(
 
         # HV: only points that strictly dominate the (fixed) reference contribute.
         dominating = pts_min[np.all(pts_min < hv_ref_arr, axis=1)]
-        hv_val = cum_hv if population_source == "archive" else (
+        hv_val = cum_hv if generation_source == "archive" else (
             float(moocore.hypervolume(dominating, ref=hv_ref)) if len(dominating) else 0.0
         )
 
@@ -859,9 +864,12 @@ def _compute_hv_gd(
             moo_metrics.normalize(pts_min, distance_ideal, distance_scale) if normalize else pts_min
         )
         if gd_scale is not None:
+            # The sampled reference follows the request order, but the analytical
+            # function is defined in benchmark order. Undo the permutation.
+            benchmark_points = pts_min[:, np.argsort(objective_columns)]
             gd_values.append(
                 moo_metrics.gd_analytical(
-                    benchmarks.front_distance(bench, pts_min, n_obj), scale=gd_scale
+                    benchmarks.front_distance(bench, benchmark_points, n_obj), scale=gd_scale
                 )
             )
         else:
@@ -892,6 +900,7 @@ def _compute_hv_gd(
         "worst_point": dict(zip(objectives, hv_ref)),
         "population": population,
         "population_source": population_source,
+        "population_sources": population_sources,
         # What the numbers mean, so a plot can label itself and two runs can be
         # compared knowingly. "analytical" GD is the exact distance to the true
         # front; "reference_front" is the mean nearest-neighbour distance to the

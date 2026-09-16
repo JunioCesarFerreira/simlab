@@ -23,6 +23,9 @@ class Generation(TypedDict):
     survivors: NotRequired[list[str]]
     # Snapshot of the engine's random generator taken when this generation was
     # enqueued — i.e. before any draw belonging to it. Every library seed
-    # (DEAP, pymoo) is derived from that one generator, so restoring it is
-    # enough to make a resumed run continue the uninterrupted one exactly.
+    # (DEAP, pymoo) is derived from that one generator. Stateful backends also
+    # require selection_state to reproduce the uninterrupted trajectory.
     rng_state: NotRequired[dict]
+    # Versioned BSON-safe backend state at enqueue, before this generation's
+    # environmental selection. Absent in legacy checkpoints/stateless backends.
+    selection_state: NotRequired[dict]

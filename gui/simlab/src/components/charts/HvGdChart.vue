@@ -73,7 +73,8 @@ import * as echarts from "../../lib/echarts";
 import type { EChartsOption, DefaultLabelFormatterCallbackParams } from "echarts";
 import { useTheme } from "../../composables/useTheme";
 import { chartPalette, chartExportBackground } from "../../services/chartTheme";
-import type { HvGdData, Population } from "../../api/metrics";
+import type { HvGdData, Population, PopulationSource } from "../../api/metrics";
+import { metricGenerationLabels, populationCaption, populationLabel } from "../../lib/metricPopulation";
 import { useHvGdData } from "../../composables/useHvGdData";
 import { exportChartImage, chartExportFilename } from "../../utils/chartExport";
 import ChartExportButton from "./ChartExportButton.vue";
@@ -119,12 +120,12 @@ const { data, state, errorMsg, refreshing, retry } = useHvGdData(() => ({
 // than a zero that would read as "perfect convergence".
 
 
-const measuredSet = computed<Population>(
+const measuredSet = computed<PopulationSource>(
   () => data.value?.population_source ?? population.value,
 );
 
 const measuredSetLabel = computed(
-  () => POPULATION_OPTIONS.find((o) => o.value === measuredSet.value)?.label ?? "",
+  () => populationLabel(measuredSet.value),
 );
 
 const hvAriaLabel = computed(
@@ -152,9 +153,7 @@ const referenceCaption = computed(() => {
     ? "normalized by the reference front's ideal-nadir range"
     : "in raw objective units";
   const size = `${d.reference_size} point${d.reference_size === 1 ? "" : "s"}`;
-  const measured = populationFallback.value
-    ? "Measured on the offspring (Q_t): this run predates persisted survivor sets, so the population kept by environmental selection cannot be recovered."
-    : `Measured on the ${measuredSetLabel.value.toLowerCase()}.`;
+  const measured = populationCaption(d);
   const reference = selfReferential.value
     ? `GD / IGD reference: this run's own final Pareto front (${size}) — self-referential, so these measure progress towards this run's own result, not convergence to the true optimum, and are not comparable across runs. Distances ${scale}.`
     : `IGD / IGD+ reference: the benchmark's analytical true front (${size}). Distances ${scale}.`;
@@ -194,8 +193,8 @@ function handleExportImage(kind: ChartKind) {
 
 function buildHvOption(d: HvGdData, dark: boolean): EChartsOption {
   const c = chartPalette(dark);
-  const xLabels = d.generations.map((g) => `Gen ${g}`);
-  const label = POPULATION_OPTIONS.find((o) => o.value === d.population_source)?.label ?? "";
+  const xLabels = metricGenerationLabels(d);
+  const label = populationLabel(d.population_source);
   const series = d.hv;
   const axisLabel = "HV";
   const seriesName = `Hypervolume (${label.toLowerCase()})`;
@@ -257,7 +256,7 @@ function buildHvOption(d: HvGdData, dark: boolean): EChartsOption {
 
 function buildGdOption(d: HvGdData, dark: boolean): EChartsOption {
   const c = chartPalette(dark);
-  const xLabels = d.generations.map((g) => `Gen ${g}`);
+  const xLabels = metricGenerationLabels(d);
 
   return {
     animation: false,
@@ -310,7 +309,7 @@ function buildGdOption(d: HvGdData, dark: boolean): EChartsOption {
 
 function buildIgdOption(d: HvGdData, dark: boolean): EChartsOption {
   const c = chartPalette(dark);
-  const xLabels = d.generations.map((g) => `Gen ${g}`);
+  const xLabels = metricGenerationLabels(d);
 
   // IGD and IGD+ answer the same question and live on the same scale, so they
   // share one panel. GD stays on its own: a population converged onto a single

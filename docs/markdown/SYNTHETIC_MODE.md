@@ -328,16 +328,13 @@ same one `/hv-gd` and `plot_pareto_results.py` use. `compute_hv_gd.py` used to
 derive it from the observed worst point regardless, so the same experiment
 reported one hypervolume on the CLI and another in the GUI.
 
-> **Self-reference does not mean zero.** The intuitive guess is that GD against
-> the run's own final front collapses to 0 on the last generation. It does not:
-> the engine builds that front from the merged pool (surviving parents ∪ last
-> offspring, `_final_pareto_front`), while a generation document records only
-> that generation's offspring. So the last generation's front contains points
-> dominated by a surviving parent — absent from the reference, hence GD > 0 —
-> and the reference contains surviving parents that never appear as individuals
-> of the last generation, hence IGD > 0. What self-reference *does* cost is
-> meaning: the indicators measure progress towards that one run's own result,
-> so they cannot be compared across runs or read as distance to the optimum.
+> **Self-reference measures agreement with this run, not the true optimum.**
+> The stored final front is built from the selected final survivors. Measuring
+> those same survivors against it gives zero GD/IGD (within numerical tolerance).
+> Offspring or archive series can differ from that reference and need not reach
+> zero. These empirical-reference distances describe progress towards this run's
+> own result; they are not comparable across runs or distances to the true optimum.
+
 The analytical fronts live in `pareto-analysis/lib/true_fronts.py` (DTLZ2 =
 unit hypersphere segment; ZDT1 = `1 − √f₁`; SCH1 = `x²`/`(x−2)²`, `x∈[0,2]`).
 
@@ -352,6 +349,28 @@ unit hypersphere segment; ZDT1 = `1 − √f₁`; SCH1 = `x²`/`(x−2)²`, `x�
 > The same definitions back `GET /experiments/{id}/hv-gd`, which is what the web
 > GUI plots: they live in `pylib/moo_metrics.py`, mirrored for the offline CLIs
 > in `pareto-analysis/lib/metrics.py` under a parity test.
+
+### Missing survivor sets and resume compatibility
+
+When `population=survivors`, each generation without a persisted survivor set
+falls back to its offspring. `population_sources` is aligned with `generations`;
+`population_source="mixed"` identifies a series containing both populations.
+An explicitly empty survivor set remains empty. A mixed series must not be
+interpreted as a trajectory measured exclusively on survivors. Both the detail
+and comparison charts identify the fallback.
+
+NSGA checkpoints preserve population order, previous survivors and RNG state.
+The pymoo NSGA-III backend additionally persists ideal, worst, nadir and extreme
+points in a versioned `selection_state`, captured at enqueue before selection
+of the current generation. This allows a completed generation to be replayed
+from its original selection state. An invalid snapshot stops resume explicitly.
+
+Legacy checkpoints remain readable. Missing RNG/survivor metadata, or missing
+pymoo normalization after the first selection, produces a warning: the original
+trajectory cannot be guaranteed without the missing history. Reproducibility
+is tested under the installed dependency versions; see the
+[regression validation](../../mo-engine/tests/regression/README.md#validation-of-integration-fixes).
+
 
 ### How GD is measured — and why IGD is not measured the same way
 

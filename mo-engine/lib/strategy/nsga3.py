@@ -339,6 +339,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         current_generation: Generation,
     ) -> None:
         current_index = int(current_generation["index"])
+        self._restore_selection_state(current_generation)
         self._current_population, current_map, pending_individuals = self._load_generation_population(
             current_generation["_id"]
         )
@@ -593,6 +594,13 @@ class NSGA3LoopStrategy(EngineStrategy):
 # ------------------------------
 # Generation / Queuing
 # ------------------------------
+    def _dump_selection_state(self) -> dict | None:
+        """Optional backend state, captured before selection of this generation."""
+        return None
+
+    def _restore_selection_state(self, generation: Generation) -> None:
+        """Native/DEAP selection has no history beyond the population and RNG."""
+
     def _generation_enqueue(self) -> None:
         assert self._exp_id is not None
         exp_oid = self._exp_id
@@ -623,6 +631,9 @@ class NSGA3LoopStrategy(EngineStrategy):
             # loop back on the exact stream it would have had.
             "rng_state": dump_random_state(self._ga_rng),
         }
+        selection_state = self._dump_selection_state()
+        if selection_state is not None:
+            gen_doc["selection_state"] = selection_state
         # Increment before inserting so the change-stream callback (which fires
         # asynchronously) always sees the already-updated index.
         self._gen_index += 1

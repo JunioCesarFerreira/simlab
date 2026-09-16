@@ -1,6 +1,7 @@
 import client from "./client";
 
 export type Population = "survivors" | "offspring" | "archive";
+export type PopulationSource = Population | "mixed";
 
 export interface HvGdData {
   generations: number[];
@@ -14,7 +15,9 @@ export interface HvGdData {
   normalized: boolean;
   worst_point: Record<string, number>;
   population: Population | null;
-  population_source: Population | null;
+  population_source: PopulationSource | null;
+  // Aligned with generations; optional when connected to an older API.
+  population_sources?: Population[];
   gd_method: "analytical" | "reference_front" | null;
   gd_formula: string | null;
   normalization: string | null;

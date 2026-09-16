@@ -517,25 +517,34 @@ class TestHvGdObjectiveResolution:
         assert data["reference"] == "final_front"
         assert data["gd_method"] == "reference_front"
 
-    def test_a_permuted_request_keeps_the_analytical_front(self, mock_factory, client):
-        """A permutation is legitimate; the front is reordered to match.
+    @pytest.mark.parametrize("normalize", [True, False])
+    @pytest.mark.parametrize("point", [[0.25, 0.5], [0.25, 0.8]])
+    def test_a_permuted_request_keeps_the_analytical_front(
+        self, mock_factory, client, normalize, point,
+    ):
+        """An interior ZDT1 point exposes the asymmetry hidden by its endpoints.
 
-        ZDT1 is not symmetric in its objectives, so a permuted request measured
-        against the unpermuted front would be plainly wrong. (1, 0) is on the
-        ZDT1 front as (f1, f2); read as (f2, f1) it is the point (0, 1), which
-        is also on it.
+        Both on-front and off-front distances must be invariant under an axis
+        permutation, as must HV/IGD/IGD+. Test raw and normalized distances.
         """
+        self._setup(mock_factory, declared=["f1", "f2"],
+                    individuals=[point], synthetic="ZDT1")
+        results = []
         for order in (["f1", "f2"], ["f2", "f1"]):
-            self._setup(
-                mock_factory,
-                declared=["f1", "f2"],
-                individuals=[[1.0, 0.0]],
-                stored_front=[{"objectives": {"f1": 1.0, "f2": 0.0}}],
-                synthetic="ZDT1",
-            )
-            data = self._call(client, order).json()
-            assert data["reference"] == "true_front", order
-            assert data["gd"][0] == pytest.approx(0.0, abs=1e-9), order
+            params = [("objectives", o) for o in order]
+            params += [("minimize", "true")] * 2 + [("normalize", str(normalize).lower())]
+            response = client.get(f"{BASE}/{EXP_ID}/hv-gd", params=params)
+            assert response.status_code == 200
+            results.append(response.json())
+        forward, permuted = results
+        assert forward["reference"] == permuted["reference"] == "true_front"
+        assert forward["gd_method"] == permuted["gd_method"] == "analytical"
+        for metric in ("gd", "hv", "igd", "igd_plus"):
+            assert permuted[metric] == pytest.approx(forward[metric], abs=1e-12)
+        if point == [0.25, 0.5]:
+            assert forward["gd"][0] == pytest.approx(0.0, abs=1e-12)
+        else:
+            assert forward["gd"][0] > 0.0
 
     def test_all_individuals_penalized_returns_the_empty_shape(self, mock_factory, client):
         """`max()` over the empty set used to surface as a 500."""
@@ -738,6 +747,49 @@ class TestHvGdMeasuredPopulation:
         assert data["population"] == "survivors"
         assert data["population_source"] == "offspring"
         assert data["hv"][1] > 0.0
+
+    @pytest.mark.parametrize("missing_index", [0, 1])
+    @pytest.mark.parametrize("include_cumulative", [True, False])
+    def test_partial_survivor_history_reports_each_measured_population(
+        self, client, mock_factory, missing_index, include_cumulative,
+    ):
+        """Legacy generations and a currently evaluating generation lack P_t.
+
+        Only those generations fall back to Q_t; the other generations must
+        still measure survivors, and the archive remains independent of this.
+        """
+        self._setup(mock_factory, survivors=["a", "b"])
+        expected_survivors = self._call(client, "survivors").json()
+        expected_offspring = self._call(client, "offspring").json()
+        gens = mock_factory.generation_repo.find_by_experiment.return_value
+        del gens[missing_index]["survivors"]
+        response = client.get(f"{BASE}/{EXP_ID}/hv-gd", params={
+            "objectives": ["f1", "f2"], "minimize": ["true", "true"],
+            "population": "survivors", "include_cumulative": include_cumulative,
+        })
+        assert response.status_code == 200
+        data = response.json()
+        assert data["population_source"] == "mixed"
+        assert data["population_sources"] == [
+            "offspring" if i == missing_index else "survivors" for i in range(2)
+        ]
+        for metric in ("hv", "gd", "igd", "igd_plus"):
+            expected = [
+                (expected_offspring if i == missing_index else expected_survivors)[metric][i]
+                for i in range(2)
+            ]
+            assert data[metric] == pytest.approx(expected)
+        assert data["hv_cumulative"] == (
+            expected_survivors["hv_cumulative"] if include_cumulative else []
+        )
+
+    def test_explicit_empty_survivors_do_not_fall_back(self, client, mock_factory):
+        self._setup(mock_factory, survivors=[])
+        data = self._call(client, "survivors").json()
+        assert data["population_source"] == "survivors"
+        assert data["population_sources"] == ["survivors", "survivors"]
+        assert data["hv"][1] == 0.0
+        assert data["gd"][1] is None
 
     def test_archive_makes_every_metric_cumulative(self, client, mock_factory):
         """Not only HV: the 'Cumulative' view used to leave GD/IGD on Q_t."""

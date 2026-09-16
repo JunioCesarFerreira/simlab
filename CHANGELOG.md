@@ -5,10 +5,35 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [Unreleased] — NSGA metrics: endpoint robustness and launch defaults
+## [Unreleased] — NSGA metrics: review corrections
 
-Phases 5 and 6 of [`docs/markdown/NSGA_METRICS_FIX_PLAN.md`](docs/markdown/NSGA_METRICS_FIX_PLAN.md),
-which completes the plan.
+### Fixed
+
+- Restore benchmark axis order before analytical GD, so a ZDT1 request with
+  permuted objectives has the same distance as the canonical request.
+- Resolve missing survivor sets per generation. `population_sources` reports
+  the set used for each generation; `population_source="mixed"` identifies a
+  heterogeneous series. Charts label the fallback and each compared run.
+- Serialize DEAP's global NumPy RNG context across experiments, including
+  restoration on exceptions.
+- Persist pymoo NSGA-III's hyperplane normalization in a versioned BSON-safe
+  `selection_state` checkpoint. Legacy records remain readable with a warning
+  when exact continuation cannot be guaranteed; malformed snapshots fail
+  explicitly.
+
+### Tests
+
+- Regressions cover interior/on-front and off-front ZDT1 permutations, partial
+  survivor histories with and without cumulative HV, empty survivor sets,
+  concurrent RNG contexts and exceptions, and exact resume trajectories for
+  all six backends across 72 seed/checkpoint/status combinations.
+- Frontend tests cover mixed-population labels and legacy API responses.
+- Validation and limitations are documented in
+  [NSGA regression validation](mo-engine/tests/regression/README.md#validation-of-integration-fixes).
+
+---
+
+## [Unreleased] — NSGA metrics: endpoint robustness and launch defaults
 
 ### Fixed
 
@@ -21,7 +46,7 @@ which completes the plan.
 - **A subset request used the analytical front of a smaller benchmark.** DTLZ2
   with M=3 read on two axes is not DTLZ2 M=2; a subset now falls back to the
   empirical reference. A *permutation* keeps the analytical front, reordered to
-  match — ZDT1 and SCH1 are not symmetric in their objectives.
+  match — ZDT1 is not symmetric in its objectives.
 - **All individuals penalised raised a 500.** `max()` over the empty set; it now
   returns the empty response shape.
 - **A synthetic run with no stored `pareto_front` returned empty series** even
@@ -69,8 +94,6 @@ which completes the plan.
 ---
 
 ## [Unreleased] — NSGA metrics: exact generational distance
-
-Phase 4 of [`docs/markdown/NSGA_METRICS_FIX_PLAN.md`](docs/markdown/NSGA_METRICS_FIX_PLAN.md).
 
 ### Fixed
 
@@ -134,8 +157,6 @@ Phase 4 of [`docs/markdown/NSGA_METRICS_FIX_PLAN.md`](docs/markdown/NSGA_METRICS
 
 ## [Unreleased] — NSGA metrics: determinism and resume
 
-Phase 3 of [`docs/markdown/NSGA_METRICS_FIX_PLAN.md`](docs/markdown/NSGA_METRICS_FIX_PLAN.md).
-
 ### Fixed
 
 - **The DEAP and pymoo NSGA-III backends ignored the experiment seed.** Five
@@ -189,8 +210,6 @@ Phase 3 of [`docs/markdown/NSGA_METRICS_FIX_PLAN.md`](docs/markdown/NSGA_METRICS
 ---
 
 ## [Unreleased] — NSGA metrics: genetic operators
-
-Phase 2 of [`docs/markdown/NSGA_METRICS_FIX_PLAN.md`](docs/markdown/NSGA_METRICS_FIX_PLAN.md).
 
 ### Fixed
 
@@ -254,8 +273,7 @@ Phase 2 of [`docs/markdown/NSGA_METRICS_FIX_PLAN.md`](docs/markdown/NSGA_METRICS
 
 ## [Unreleased] — NSGA metrics: the measured population
 
-Phases 0 and 1 of [`docs/markdown/NSGA_METRICS_FIX_PLAN.md`](docs/markdown/NSGA_METRICS_FIX_PLAN.md),
-the action plan derived from the audit in `experiments/nsga-metrics-audit`.
+Corrections derived from the [NSGA metrics audit](experiments/nsga-metrics-audit/README.md).
 
 ### Fixed
 
