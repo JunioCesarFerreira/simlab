@@ -177,6 +177,49 @@ export interface RuntimeMetricsSeriesResponseDto {
 }
 
 /* -------------------------------------------------------
+ * Firmware snapshot (traceability)
+ * Captured when the experiment starts: an immutable copy of
+ * every source file, owned by the experiment alone.
+ * ----------------------------------------------------- */
+
+export type FirmwareSnapshotStatus =
+  | "captured"
+  | "partial"
+  | "skipped"
+  | "failed"
+  | "capturing";
+
+export interface FirmwareFileDto {
+  file_name: string;
+  /** GridFS id of the copy owned by the experiment. Absent for missing files. */
+  file_id?: ID;
+  /** GridFS id in the shared source repository. */
+  origin_file_id?: ID;
+  size_bytes?: number;
+  sha256?: string;
+}
+
+export interface FirmwareRepositorySnapshotDto {
+  option_keys: string[];
+  source_repository_id: ID;
+  name: string;
+  description: string;
+  files: FirmwareFileDto[];
+  missing_files: FirmwareFileDto[];
+}
+
+export interface FirmwareSnapshotDto {
+  status: FirmwareSnapshotStatus;
+  captured_at?: ISODateTime | null;
+  schema_version?: number;
+  repositories: FirmwareRepositorySnapshotDto[];
+  /** Why nothing was captured (skipped). */
+  reason?: string;
+  /** Why the capture failed. */
+  error?: string;
+}
+
+/* -------------------------------------------------------
  * Individual (within a generation)
  * ----------------------------------------------------- */
 
@@ -232,6 +275,7 @@ export interface ExperimentDto {
   pareto_front?: ParetoFrontItemDto[] | null;
   analysis_files?: Record<string, ID>;
   runtime_metrics?: RuntimeMetricsDto | null;
+  firmware_snapshot?: FirmwareSnapshotDto | null;
 }
 
 export interface ExperimentFullDto extends ExperimentDto {

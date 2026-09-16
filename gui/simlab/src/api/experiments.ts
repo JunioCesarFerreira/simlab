@@ -5,6 +5,7 @@ import type {
   ExperimentFullDto,
   ExperimentInfoDto,
   ExperimentStatus,
+  FirmwareSnapshotDto,
   RuntimeMetricsDto,
   RuntimeMetricsSeriesResponseDto,
   RuntimeMetricsStatus,
@@ -116,6 +117,35 @@ export async function plotParetoResults(
   const { data } = await client.post<{ status: string; output: string }>(
     `/experiments/${id}/plot-pareto`,
     { objectives, minimize },
+  );
+  return data;
+}
+
+/**
+ * Firmware captured when the experiment started. Rejects with a 404 for runs
+ * that predate firmware tracking — snapshots are never backfilled.
+ */
+export async function getFirmwareSnapshot(
+  id: string,
+): Promise<FirmwareSnapshotDto> {
+  const { data } = await client.get<FirmwareSnapshotDto>(
+    `/experiments/${id}/firmware`,
+  );
+  return data;
+}
+
+/**
+ * Raw text of one firmware file, scoped to this experiment's snapshot.
+ * The default transform is disabled so a source file that happens to be valid
+ * JSON still comes back as text rather than a parsed object.
+ */
+export async function getFirmwareFileContent(
+  experimentId: string,
+  fileId: string,
+): Promise<string> {
+  const { data } = await client.get<string>(
+    `/experiments/${experimentId}/firmware/files/${fileId}/content`,
+    { responseType: "text", transformResponse: [(v) => v] },
   );
   return data;
 }

@@ -308,6 +308,9 @@ Todos os arquivos e metadados permanecem armazenados no MongoDB/GridFS, garantin
   [docs/markdown/SYNTHETIC_MODE.md](./docs/markdown/SYNTHETIC_MODE.md).
   As instâncias sintéticas são definidas visualmente na página **Synthetic Instances** da GUI (menu lateral → *Synthetic*) e codificadas como o problema analítico P0, avaliado **no próprio processo do mo-engine** — nenhuma simulação é criada e o master-node não participa (o master-node mantém um fallback sintético para a estratégia `batch`, experimentos legados e a variável `ENABLE_DATA_SYNTHETIC`).
 
+* **Guia de Rastreabilidade de Firmware**
+  Cada experimento guarda uma cópia imutável do firmware com que foi executado, armazenada no GridFS e pertencente apenas a ele — veja [docs/markdown/FIRMWARE_TRACEABILITY.md](./docs/markdown/FIRMWARE_TRACEABILITY.md). A cópia é feita no início do experimento, sobrevive a edições ou à exclusão do repositório de fontes compartilhado, e pode ser visualizada e baixada na página do experimento na GUI.
+
 * **Changelog**
   Atualizações e novas funcionalidades estão documentadas em [`CHANGELOG.md`](./CHANGELOG.md).
 

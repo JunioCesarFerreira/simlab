@@ -6,6 +6,7 @@ if project_path not in sys.path:
     sys.path.insert(0, project_path)
 
 from pylib.db import create_mongo_repository_factory, EnumStatus
+from pylib.firmware_snapshot import capture_firmware_snapshot
 from pylib.telemetry import start_runtime_metrics_watcher
 from lib.strategy.base import EngineStrategy
 from lib.strategy.nsga3 import NSGA3LoopStrategy
@@ -60,6 +61,10 @@ def select_strategy(exp_doc: dict) -> EngineStrategy:
 def process_experiment(exp_doc: dict) -> bool:
     exp_id = str(exp_doc["_id"])
     log.info(f"Processing experiment id: {exp_id}")
+    # Freeze the firmware before any simulation is queued: source repositories
+    # stay editable, so this copy is the only evidence of what actually ran.
+    # Best-effort by design — it records its own failures and never raises.
+    capture_firmware_snapshot(mongo, exp_doc)
     try:
         strategy = select_strategy(exp_doc)
         strategy.start()

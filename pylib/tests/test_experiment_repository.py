@@ -58,3 +58,48 @@ class TestSharedArtifactExclusion:
         for field in ("pos_file_id", "csc_file_id",
                       "log_cooja_id", "runtime_log_id", "csv_log_id"):
             assert field in ExperimentRepository._SIM_FILE_FIELDS
+
+
+class TestFirmwareSnapshotCleanup:
+    """The firmware copies belong to one experiment and die with it."""
+
+    def _snapshot(self, copy_a, copy_b, origin):
+        return {"repositories": [
+            {"name": "csma-fw", "files": [
+                {"file_name": "node.c", "file_id": copy_a, "origin_file_id": origin},
+            ]},
+            {"name": "tsch-fw", "files": [
+                {"file_name": "node.c", "file_id": copy_b, "origin_file_id": origin},
+            ]},
+        ]}
+
+    def test_collects_every_copy(self):
+        copy_a, copy_b, origin = ObjectId(), ObjectId(), ObjectId()
+        ids = ExperimentRepository._collect_firmware_file_ids(
+            self._snapshot(copy_a, copy_b, origin)
+        )
+        assert ids == [copy_a, copy_b]
+
+    def test_never_collects_the_shared_original(self):
+        copy_a, copy_b, origin = ObjectId(), ObjectId(), ObjectId()
+        ids = ExperimentRepository._collect_firmware_file_ids(
+            self._snapshot(copy_a, copy_b, origin)
+        )
+        # Deleting origin_file_id would corrupt the shared source repository.
+        assert origin not in ids
+
+    def test_ignores_missing_files_without_a_copy(self):
+        copy_a = ObjectId()
+        snapshot = {"repositories": [{
+            "name": "fw",
+            "files": [{"file_name": "node.c", "file_id": copy_a}],
+            "missing_files": [{"file_name": "root.c", "origin_file_id": ObjectId()}],
+        }]}
+        assert ExperimentRepository._collect_firmware_file_ids(snapshot) == [copy_a]
+
+    def test_tolerates_absent_or_empty_snapshots(self):
+        assert ExperimentRepository._collect_firmware_file_ids(None) == []
+        assert ExperimentRepository._collect_firmware_file_ids({}) == []
+        assert ExperimentRepository._collect_firmware_file_ids(
+            {"status": "skipped", "repositories": []}
+        ) == []

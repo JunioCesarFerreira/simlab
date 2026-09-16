@@ -38,16 +38,20 @@ import hljs from 'highlight.js/lib/core'
 import c from 'highlight.js/lib/languages/c'
 import cpp from 'highlight.js/lib/languages/cpp'
 import makefile from 'highlight.js/lib/languages/makefile'
-import { getFileContent } from '../../api/repositories'
 
 hljs.registerLanguage('c', c)
 hljs.registerLanguage('cpp', cpp)
 hljs.registerLanguage('makefile', makefile)
 
 const props = defineProps<{
-  repositoryId: string
+  /** Identifies the file being shown; a change reloads the content. */
   fileId: string
   fileName: string
+  /**
+   * Fetches the file's text. Injected by the caller so the same viewer serves
+   * a shared source repository and an experiment's firmware snapshot.
+   */
+  load: (fileId: string) => Promise<string>
 }>()
 
 const emit = defineEmits<{ (e: 'close'): void }>()
@@ -76,11 +80,11 @@ const rawContent = ref('')
 const loading = ref(true)
 const error = ref<string | null>(null)
 
-async function load() {
+async function loadContent() {
   loading.value = true
   error.value = null
   try {
-    rawContent.value = await getFileContent(props.repositoryId, props.fileId)
+    rawContent.value = await props.load(props.fileId)
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : 'Failed to load file.'
   } finally {
@@ -88,7 +92,7 @@ async function load() {
   }
 }
 
-watch(() => props.fileId, load, { immediate: true })
+watch(() => props.fileId, loadContent, { immediate: true })
 
 // ── Highlighting ──────────────────────────────────────────────────────────────
 

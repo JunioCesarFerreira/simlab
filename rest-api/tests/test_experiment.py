@@ -4,8 +4,9 @@ import pytest
 from bson import ObjectId, errors as bson_errors
 
 from tests.conftest import (
-    EXP_ID, GEN_ID, IND_ID,
+    EXP_ID, GEN_ID, IND_ID, SRC_ID, FW_FILE_ID,
     sample_experiment, sample_generation, sample_individual,
+    sample_firmware_snapshot,
 )
 
 BASE = "/api/v1/experiments"
@@ -862,3 +863,121 @@ class TestPlotPareto:
         resp = client.post(f"{BASE}/{EXP_ID}/plot-pareto", json=body)
         assert resp.status_code == 200
         assert "--true-front-bench" not in calls["cmd"]
+
+
+# ── GET /{experiment_id}/firmware ─────────────────────────────────────────────
+class TestGetExperimentFirmware:
+    def test_returns_snapshot_with_string_ids(self, client, mock_factory):
+        mock_factory.experiment_repo.get_firmware_snapshot.return_value = \
+            sample_firmware_snapshot()
+
+        resp = client.get(f"{BASE}/{EXP_ID}/firmware")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "captured"
+        assert body["schema_version"] == 1
+
+        repo = body["repositories"][0]
+        assert repo["name"] == "rpl-udp-csma"
+        assert repo["option_keys"] == ["csma"]
+        assert repo["source_repository_id"] == SRC_ID
+        assert [f["file_name"] for f in repo["files"]] == ["main.c", "Makefile"]
+        assert repo["files"][0]["file_id"] == FW_FILE_ID
+        assert repo["files"][0]["sha256"] == "a" * 64
+
+    def test_internal_claim_marker_is_not_exposed(self, client, mock_factory):
+        snapshot = sample_firmware_snapshot()
+        snapshot["claimed_at"] = "2024-01-01T00:00:00"
+        mock_factory.experiment_repo.get_firmware_snapshot.return_value = snapshot
+
+        resp = client.get(f"{BASE}/{EXP_ID}/firmware")
+        assert resp.status_code == 200
+        assert "claimed_at" not in resp.json()
+
+    def test_skipped_snapshot_keeps_its_reason(self, client, mock_factory):
+        mock_factory.experiment_repo.get_firmware_snapshot.return_value = {
+            "status": "skipped", "repositories": [], "reason": "no source repository",
+        }
+        resp = client.get(f"{BASE}/{EXP_ID}/firmware")
+        assert resp.status_code == 200
+        assert resp.json()["reason"] == "no source repository"
+
+    def test_absent_snapshot_returns_404(self, client, mock_factory):
+        # Runs that predate firmware tracking are never backfilled.
+        mock_factory.experiment_repo.get_firmware_snapshot.return_value = {}
+        resp = client.get(f"{BASE}/{EXP_ID}/firmware")
+        assert resp.status_code == 404
+
+    def test_invalid_id_returns_400(self, client, mock_factory):
+        mock_factory.experiment_repo.get_firmware_snapshot.side_effect = \
+            bson_errors.InvalidId()
+        resp = client.get(f"{BASE}/bad-id/firmware")
+        assert resp.status_code == 400
+
+    def test_repo_error_returns_500(self, client, mock_factory):
+        mock_factory.experiment_repo.get_firmware_snapshot.side_effect = RuntimeError("db")
+        resp = client.get(f"{BASE}/{EXP_ID}/firmware")
+        assert resp.status_code == 500
+
+
+# ── GET /{experiment_id}/firmware/files/{file_id}/content ─────────────────────
+class TestGetExperimentFirmwareFileContent:
+    def test_returns_raw_text(self, client, mock_factory):
+        mock_factory.experiment_repo.get_firmware_snapshot.return_value = \
+            sample_firmware_snapshot()
+        mock_factory.fs_handler.read_file_content.return_value = b"int main(void) {}"
+
+        resp = client.get(f"{BASE}/{EXP_ID}/firmware/files/{FW_FILE_ID}/content")
+        assert resp.status_code == 200
+        assert resp.text == "int main(void) {}"
+
+    def test_decodes_invalid_utf8_without_failing(self, client, mock_factory):
+        mock_factory.experiment_repo.get_firmware_snapshot.return_value = \
+            sample_firmware_snapshot()
+        mock_factory.fs_handler.read_file_content.return_value = b"\xff\xfe"
+
+        resp = client.get(f"{BASE}/{EXP_ID}/firmware/files/{FW_FILE_ID}/content")
+        assert resp.status_code == 200
+
+    def test_file_outside_the_snapshot_returns_404(self, client, mock_factory):
+        # The endpoint is scoped to the experiment: an arbitrary GridFS id must
+        # not be readable through it.
+        mock_factory.experiment_repo.get_firmware_snapshot.return_value = \
+            sample_firmware_snapshot()
+
+        resp = client.get(f"{BASE}/{EXP_ID}/firmware/files/{IND_ID}/content")
+        assert resp.status_code == 404
+        mock_factory.fs_handler.read_file_content.assert_not_called()
+
+    def test_absent_snapshot_returns_404(self, client, mock_factory):
+        mock_factory.experiment_repo.get_firmware_snapshot.return_value = None
+        resp = client.get(f"{BASE}/{EXP_ID}/firmware/files/{FW_FILE_ID}/content")
+        assert resp.status_code == 404
+
+    def test_gridfs_error_returns_500(self, client, mock_factory):
+        mock_factory.experiment_repo.get_firmware_snapshot.return_value = \
+            sample_firmware_snapshot()
+        mock_factory.fs_handler.read_file_content.side_effect = RuntimeError("gridfs")
+
+        resp = client.get(f"{BASE}/{EXP_ID}/firmware/files/{FW_FILE_ID}/content")
+        assert resp.status_code == 500
+
+
+# ── firmware_snapshot in GET /{experiment_id} ─────────────────────────────────
+class TestExperimentCarriesFirmwareSnapshot:
+    def test_exposed_on_the_experiment_document(self, client, mock_factory):
+        doc = sample_experiment()
+        doc["firmware_snapshot"] = sample_firmware_snapshot()
+        mock_factory.experiment_repo.get.return_value = doc
+
+        resp = client.get(f"{BASE}/{EXP_ID}")
+        assert resp.status_code == 200
+        snapshot = resp.json()["firmware_snapshot"]
+        assert snapshot["status"] == "captured"
+        assert snapshot["repositories"][0]["files"][0]["file_id"] == FW_FILE_ID
+
+    def test_null_when_never_captured(self, client, mock_factory):
+        mock_factory.experiment_repo.get.return_value = sample_experiment()
+        resp = client.get(f"{BASE}/{EXP_ID}")
+        assert resp.status_code == 200
+        assert resp.json()["firmware_snapshot"] is None

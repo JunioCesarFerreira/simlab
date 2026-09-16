@@ -89,6 +89,46 @@ class ExperimentRepository:
             return result.modified_count > 0
 
     # ------------------------------
+    # Firmware traceability
+    # ------------------------------
+    def claim_firmware_snapshot(self, experiment_id: str, claimed_at: datetime) -> bool:
+        """Atomically claim the firmware capture for an experiment.
+
+        Only succeeds when no ``firmware_snapshot`` block exists yet, so a
+        restarted engine (or a concurrent trigger) never copies the same
+        firmware twice into GridFS.
+        """
+        with self.connection.connect() as db:
+            result = db["experiments"].update_one(
+                {"_id": ObjectId(experiment_id), "firmware_snapshot": {"$exists": False}},
+                {"$set": {"firmware_snapshot": {
+                    "status": "capturing",
+                    "claimed_at": claimed_at,
+                }}}
+            )
+            return result.modified_count > 0
+
+    def set_firmware_snapshot(self, experiment_id: str, block: dict) -> bool:
+        with self.connection.connect() as db:
+            result = db["experiments"].update_one(
+                {"_id": ObjectId(experiment_id)},
+                {"$set": {"firmware_snapshot": block}}
+            )
+            return result.modified_count > 0
+
+    def get_firmware_snapshot(self, experiment_id: str) -> Optional[dict]:
+        try:
+            oid = ObjectId(experiment_id)
+        except errors.InvalidId:
+            log.error("Invalid ID: %s", experiment_id)
+            return None
+        with self.connection.connect() as db:
+            doc = db["experiments"].find_one({"_id": oid}, {"firmware_snapshot": 1})
+            if doc is None:
+                return None
+            return doc.get("firmware_snapshot") or {}
+
+    # ------------------------------
     # Runtime (computational) telemetry
     # ------------------------------
     def claim_runtime_metrics_collection(
@@ -273,12 +313,16 @@ class ExperimentRepository:
 
             exp_doc = db["experiments"].find_one(
                 {"_id": exp_oid},
-                {"analysis_files": 1, "runtime_metrics.artifact.file_id": 1},
+                {"analysis_files": 1, "runtime_metrics.artifact.file_id": 1,
+                 "firmware_snapshot": 1},
             )
             if exp_doc:
                 file_ids.extend((exp_doc.get("analysis_files") or {}).values())
                 file_ids.append(
                     ((exp_doc.get("runtime_metrics") or {}).get("artifact") or {}).get("file_id")
+                )
+                file_ids.extend(
+                    self._collect_firmware_file_ids(exp_doc.get("firmware_snapshot"))
                 )
 
             files_deleted = self._delete_files(fs, file_ids)
@@ -304,6 +348,21 @@ class ExperimentRepository:
                 "deleted_genome_cache": int(cache_deleted),
                 "deleted_files": files_deleted,
             }
+
+    @staticmethod
+    def _collect_firmware_file_ids(snapshot: Optional[dict]) -> list[ObjectId]:
+        """GridFS ids of the firmware copies owned by a single experiment.
+
+        Only the copies (``file_id``) are returned: ``origin_file_id`` points
+        into a shared source repository and must survive the experiment.
+        """
+        ids: list[ObjectId] = []
+        for repo in (snapshot or {}).get("repositories") or []:
+            for entry in (repo or {}).get("files") or []:
+                fid = (entry or {}).get("file_id")
+                if fid is not None:
+                    ids.append(fid)
+        return ids
 
     @staticmethod
     def _delete_files(fs: gridfs.GridFS, file_ids: Iterable[Optional[ObjectId]]) -> int:

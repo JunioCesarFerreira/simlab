@@ -1,8 +1,14 @@
+import io
+import json
+import zipfile
 from pathlib import Path
 from bson import ObjectId
 from gridfs.errors import NoFile
 
-from tests.conftest import EXP_ID, GEN_ID, SIM_ID, FILE_ID, sample_experiment, sample_generation, sample_individual
+from tests.conftest import (
+    EXP_ID, GEN_ID, SIM_ID, FILE_ID, FW_FILE_ID,
+    sample_experiment, sample_generation, sample_individual, sample_firmware_snapshot,
+)
 
 BASE = "/api/v1/files"
 
@@ -148,3 +154,77 @@ class TestDownloadTopologiesZip:
         resp = client.get(f"{BASE}/experiments/{EXP_ID}/topologies/zip")
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "application/zip"
+
+
+# ── GET /experiments/{experiment_id}/firmware/zip ─────────────────────────────
+class TestDownloadFirmwareZip:
+    def test_invalid_id_returns_400(self, client, mock_factory):
+        resp = client.get(f"{BASE}/experiments/bad-id/firmware/zip")
+        assert resp.status_code == 400
+
+    def test_no_snapshot_returns_404(self, client, mock_factory):
+        mock_factory.experiment_repo.get_firmware_snapshot.return_value = None
+        resp = client.get(f"{BASE}/experiments/{EXP_ID}/firmware/zip")
+        assert resp.status_code == 404
+
+    def test_snapshot_without_captured_files_returns_404(self, client, mock_factory):
+        mock_factory.experiment_repo.get_firmware_snapshot.return_value = {
+            "status": "skipped", "repositories": [],
+        }
+        resp = client.get(f"{BASE}/experiments/{EXP_ID}/firmware/zip")
+        assert resp.status_code == 404
+
+    def test_success_contains_files_and_manifest(self, client, mock_factory):
+        mock_factory.experiment_repo.get_firmware_snapshot.return_value = \
+            sample_firmware_snapshot()
+        mock_factory.fs_handler.download_file.side_effect = _fake_download(b"int main(void) {}")
+
+        resp = client.get(f"{BASE}/experiments/{EXP_ID}/firmware/zip")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/zip"
+
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+            names = set(zf.namelist())
+            assert "rpl-udp-csma/main.c" in names
+            assert "rpl-udp-csma/Makefile" in names
+            assert "MANIFEST.json" in names
+            assert zf.read("rpl-udp-csma/main.c") == b"int main(void) {}"
+
+            manifest = json.loads(zf.read("MANIFEST.json"))
+            assert manifest["experiment_id"] == EXP_ID
+            assert manifest["status"] == "captured"
+            assert manifest["captured_at"].startswith("2024-01-01T10:30")
+            files = manifest["repositories"][0]["files"]
+            # The manifest is the evidence: ids and digests must survive it.
+            assert files[0]["file_id"] == FW_FILE_ID
+            assert files[0]["sha256"] == "a" * 64
+
+    def test_unreadable_file_is_skipped_but_archive_is_served(self, client, mock_factory):
+        mock_factory.experiment_repo.get_firmware_snapshot.return_value = \
+            sample_firmware_snapshot()
+        mock_factory.fs_handler.download_file.side_effect = NoFile("gone")
+
+        resp = client.get(f"{BASE}/experiments/{EXP_ID}/firmware/zip")
+        assert resp.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+            # The manifest still documents what should have been there.
+            assert zf.namelist() == ["MANIFEST.json"]
+
+    def test_repository_name_is_sanitized_into_one_path_segment(self, client, mock_factory):
+        snapshot = sample_firmware_snapshot()
+        snapshot["repositories"][0]["name"] = "../../etc"
+        mock_factory.experiment_repo.get_firmware_snapshot.return_value = snapshot
+        mock_factory.fs_handler.download_file.side_effect = _fake_download(b"x")
+
+        resp = client.get(f"{BASE}/experiments/{EXP_ID}/firmware/zip")
+        assert resp.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+            assert all(".." not in name for name in zf.namelist())
+
+    def test_malformed_snapshot_returns_500(self, client, mock_factory):
+        # A corrupted document must surface as a server error, not a traceback.
+        mock_factory.experiment_repo.get_firmware_snapshot.return_value = {
+            "status": "captured", "repositories": [{"name": "fw", "files": 5}],
+        }
+        resp = client.get(f"{BASE}/experiments/{EXP_ID}/firmware/zip")
+        assert resp.status_code == 500

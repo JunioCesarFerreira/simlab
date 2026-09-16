@@ -9,6 +9,7 @@ import numpy as np
 import moocore
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
+from fastapi.responses import PlainTextResponse
 from bson import errors as bson_errors
 from tempfile import NamedTemporaryFile
 from pydantic import BaseModel
@@ -17,12 +18,19 @@ from bson import ObjectId
 
 from pylib import benchmarks, moo_metrics
 from pylib.db import MongoRepository
+from pylib.firmware_snapshot import iter_snapshot_files
 from pylib.db.models.enums import EnumStatus
 from api.dependencies import get_factory
 from api.metrics_cache import hv_gd_cache
-from api.domain.experiment import ExperimentDto, ExperimentFullDto, ExperimentInfoDto
+from api.domain.experiment import (
+    ExperimentDto,
+    ExperimentFullDto,
+    ExperimentInfoDto,
+    FirmwareSnapshotDto,
+)
 from api.mappers.experiment import (
     experiment_from_mongo,
+    firmware_snapshot_from_mongo,
     experiment_full_from_mongo,
     experiment_info_from_mongo,
     experiment_to_mongo,
@@ -192,6 +200,60 @@ async def attach_analysis_file(
         raise HTTPException(status_code=400, detail="Invalid experiment_id")
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Firmware traceability ────────────────────────────────────────────────────
+
+@router.get("/{experiment_id}/firmware", response_model=FirmwareSnapshotDto)
+def get_experiment_firmware(
+    experiment_id: str,
+    factory: MongoRepository = Depends(get_factory)
+) -> FirmwareSnapshotDto:
+    """Firmware snapshot captured when the experiment started.
+
+    404 when the experiment ran before firmware tracking existed (or has not
+    started yet): snapshots are never backfilled, since copying the *current*
+    state of a shared repository into a past run would fake its provenance.
+    """
+    try:
+        snapshot = factory.experiment_repo.get_firmware_snapshot(experiment_id)
+    except bson_errors.InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid experiment_id")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    dto = firmware_snapshot_from_mongo(snapshot)
+    if dto is None:
+        raise HTTPException(status_code=404, detail="No firmware snapshot for this experiment")
+    return dto
+
+
+@router.get("/{experiment_id}/firmware/files/{file_id}/content")
+def get_experiment_firmware_file_content(
+    experiment_id: str,
+    file_id: str,
+    factory: MongoRepository = Depends(get_factory)
+) -> PlainTextResponse:
+    """Raw text of a single firmware file captured for this experiment."""
+    try:
+        snapshot = factory.experiment_repo.get_firmware_snapshot(experiment_id)
+        if not snapshot:
+            raise HTTPException(status_code=404, detail="No firmware snapshot for this experiment")
+
+        # The file must belong to this snapshot: the generic /files endpoint
+        # serves any GridFS id, this one is scoped to the experiment.
+        known = {str(entry.get("file_id")) for _, entry in iter_snapshot_files(snapshot)}
+        if file_id not in known:
+            raise HTTPException(status_code=404, detail="File not found in this firmware snapshot")
+
+        raw = factory.fs_handler.read_file_content(file_id)
+        return PlainTextResponse(raw.decode("utf-8", errors="replace"))
+    except HTTPException:
+        raise
+    except bson_errors.InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid id")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

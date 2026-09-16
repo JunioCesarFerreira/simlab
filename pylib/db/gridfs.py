@@ -1,4 +1,6 @@
 import logging
+from typing import Any, Optional
+
 import gridfs
 from bson import ObjectId
 
@@ -11,11 +13,12 @@ class MongoGridFSHandler:
     def __init__(self, connection: MongoDBConnection):
         self.connection = connection
 
-    def upload_file(self, path: str, name: str) -> ObjectId:
+    def upload_file(self, path: str, name: str,
+                    metadata: Optional[dict[str, Any]] = None) -> ObjectId:
         with self.connection.connect() as db:
             fs = gridfs.GridFS(db)
             with open(path, "rb") as f:
-                file_id = fs.put(f, filename=name)
+                file_id = fs.put(f, filename=name, **self._extra(metadata))
         return ObjectId(file_id)
 
     def download_file(self, file_id: str, local_path: str):
@@ -34,11 +37,18 @@ class MongoGridFSHandler:
             fs = gridfs.GridFS(db)
             return fs.get(ObjectId(file_id)).read()
 
-    def upload_bytes(self, data: bytes, name: str) -> ObjectId:
+    def upload_bytes(self, data: bytes, name: str,
+                     metadata: Optional[dict[str, Any]] = None) -> ObjectId:
         with self.connection.connect() as db:
             fs = gridfs.GridFS(db)
-            file_id = fs.put(data, filename=name)
+            file_id = fs.put(data, filename=name, **self._extra(metadata))
         return ObjectId(file_id)
+
+    @staticmethod
+    def _extra(metadata: Optional[dict[str, Any]]) -> dict[str, Any]:
+        """Optional GridFS ``metadata`` document, omitted when not provided so
+        existing callers keep writing exactly the same file records."""
+        return {"metadata": metadata} if metadata else {}
 
     def delete_file(self, file_id: str) -> None:
         with self.connection.connect() as db:

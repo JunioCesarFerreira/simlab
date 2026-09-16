@@ -80,3 +80,9 @@ export async function downloadTopologiesZip(experimentId: ID): Promise<void> {
   const blob = await fetchBlob(url);
   triggerDownload(blob, `${experimentId}_topologies.zip`);
 }
+
+export async function downloadFirmwareZip(experimentId: ID): Promise<void> {
+  const url = `${baseUrl}/files/experiments/${experimentId}/firmware/zip`;
+  const blob = await fetchBlob(url);
+  triggerDownload(blob, `${experimentId}_firmware.zip`);
+}

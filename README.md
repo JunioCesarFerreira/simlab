@@ -314,6 +314,9 @@ All raw outputs, logs, and metadata are stored in MongoDB/GridFS for reproducibi
 * **Synthetic Problems Guide**
   A detailed usage guide for running synthetic benchmark problems (DTLZ2, ZDT1, SCH1) without requiring Cooja is available in the [documentation directory](./docs/markdown/SYNTHETIC_MODE.md). Synthetic instances are defined visually from the **Synthetic Instances** page in the GUI (sidebar → *Synthetic*) and encoded as the analytical problem P0, which the mo-engine evaluates **in-process** — no simulation jobs are created and the master-node is not involved (the master-node retains a synthetic fallback for the `batch` strategy, legacy experiments, and the `ENABLE_DATA_SYNTHETIC` override).
 
+* **Firmware Traceability Guide**
+  Every experiment keeps an immutable copy of the firmware it ran with, stored in GridFS and owned by that experiment alone — see [docs/markdown/FIRMWARE_TRACEABILITY.md](./docs/markdown/FIRMWARE_TRACEABILITY.md). The snapshot is taken when the experiment starts, survives later edits or deletion of the shared source repository, and is browsable and downloadable from the experiment page in the GUI.
+
 * **Changelog**
   Recent updates and feature additions are documented in the [`CHANGELOG.md`](./CHANGELOG.md) file.
 

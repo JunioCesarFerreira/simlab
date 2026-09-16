@@ -51,6 +51,33 @@ class RuntimeMetricsDto(TypedDict, total=False):
     error: str
 
 
+class FirmwareFileDto(TypedDict, total=False):
+    file_name: str
+    file_id: str          # GridFS copy owned by the experiment
+    origin_file_id: str   # file in the shared source repository
+    size_bytes: int
+    sha256: str
+
+
+class FirmwareRepositorySnapshotDto(TypedDict, total=False):
+    option_keys: list[str]
+    source_repository_id: str
+    name: str
+    description: str
+    files: list[FirmwareFileDto]
+    missing_files: list[FirmwareFileDto]
+
+
+class FirmwareSnapshotDto(TypedDict, total=False):
+    """Immutable record of the firmware an experiment was executed with."""
+    status: str
+    captured_at: Optional[datetime]
+    schema_version: int
+    repositories: list[FirmwareRepositorySnapshotDto]
+    reason: str
+    error: str
+
+
 class ExperimentDto(TypedDict):
     id: Optional[str]
     name: str
@@ -66,6 +93,7 @@ class ExperimentDto(TypedDict):
     generations: NotRequired[list[GenerationDto]]
     analysis_files: NotRequired[dict[str, str]]
     runtime_metrics: NotRequired[Optional[RuntimeMetricsDto]]
+    firmware_snapshot: NotRequired[Optional[FirmwareSnapshotDto]]
 
 
 class ExperimentFullDto(TypedDict):
@@ -83,6 +111,7 @@ class ExperimentFullDto(TypedDict):
     pareto_front: Optional[list[ParetoFrontItemDto]]
     analysis_files: NotRequired[dict[str, str]]
     runtime_metrics: NotRequired[Optional[RuntimeMetricsDto]]
+    firmware_snapshot: NotRequired[Optional[FirmwareSnapshotDto]]
     generations: list[GenerationDto]
 
 

@@ -5,6 +5,58 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Firmware traceability per experiment
+
+### Added
+
+- **Firmware snapshot at experiment start.** Source repositories are shared and
+  mutable, so a finished experiment could reference firmware that is no longer
+  the code it ran. The mo-engine now copies every referenced source file into
+  GridFS — owned by that experiment alone — and records name, size and `sha256`
+  in a `firmware_snapshot` block on the experiment document. The capture is
+  idempotent (atomic claim) and best-effort: `partial`/`failed` states are
+  persisted and shown instead of aborting the run. Experiments that reference
+  no firmware (synthetic runs) are recorded as `skipped`.
+- **API.** `GET /experiments/{id}/firmware` (the snapshot),
+  `GET /experiments/{id}/firmware/files/{file_id}/content` (one file, scoped to
+  the experiment) and `GET /files/experiments/{id}/firmware/zip` (all files as
+  `{repository}/{file}` plus a `MANIFEST.json` with ids and digests). The block
+  is also part of `GET /experiments/{id}`.
+- **GUI.** A *Firmware* card on the experiment page lists each repository and
+  its files with size and short digest, opens any file in the existing
+  syntax-highlighted viewer, and downloads a single file or the whole snapshot.
+- Documentation: [Firmware traceability](docs/markdown/FIRMWARE_TRACEABILITY.md).
+
+### Changed
+
+- `ExperimentRepository.delete` also removes the firmware copies owned by the
+  experiment. The shared source repositories remain untouched.
+- `MongoGridFSHandler.upload_file`/`upload_bytes` accept optional GridFS
+  `metadata`, used to mark each copy with its provenance.
+- `SourceFileViewer` now receives a `load` callback instead of a repository id,
+  so the same viewer serves source repositories and firmware snapshots.
+
+### Notes
+
+- Snapshots are **not** backfilled: runs that predate the feature show
+  "not recorded", since copying a repository's current state into a past run
+  would fabricate provenance.
+- The master-node still fetches firmware from the shared repository when
+  dispatching simulations; the snapshot is the record of the state at start time.
+
+### Tests
+
+- `pylib`: capture contract (copies, digests, provenance metadata, repository
+  deduplication), degraded paths (unreadable file, deleted repository),
+  `skipped`/`failed` isolation, idempotency, and the delete cascade collecting
+  only the copies — never the shared originals.
+- `rest-api`: the three endpoints, including a file outside the snapshot being
+  rejected, ZIP contents and manifest, name sanitization, and malformed input.
+- GUI: presentation helpers and a render test of the *Firmware* card (listing,
+  viewer wiring, downloads, partial/skipped/absent states).
+
+---
+
 ## [Unreleased] — NSGA metrics: review corrections
 
 ### Fixed

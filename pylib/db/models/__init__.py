@@ -13,6 +13,9 @@ from pylib.db.models.experiment import (
     ParetoFrontItem,
     RuntimeMetricsArtifact,
     RuntimeMetrics,
+    FirmwareFile,
+    FirmwareRepositorySnapshot,
+    FirmwareSnapshot,
     Experiment,
 )
 from pylib.db.models.campaign import Campaign
@@ -33,6 +36,9 @@ __all__ = [
     "ParetoFrontItem",
     "RuntimeMetricsArtifact",
     "RuntimeMetrics",
+    "FirmwareFile",
+    "FirmwareRepositorySnapshot",
+    "FirmwareSnapshot",
     "Experiment",
     "Campaign",
 ]

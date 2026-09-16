@@ -339,6 +339,14 @@
         @collected="store.refresh(props.id)"
       />
 
+      <!-- Firmware actually used by this run, copied to GridFS at start time.
+           Always rendered: "no record" is itself relevant to traceability. -->
+      <FirmwareSnapshotSection
+        :experiment-id="props.id"
+        :snapshot="store.experiment.firmware_snapshot"
+        :started="!!store.experiment.start_time"
+      />
+
       <!-- Progress bar for running experiments -->
       <div v-if="store.isRunning" class="progress-section card">
         <div class="progress-header">
@@ -401,6 +409,7 @@ import HvGdChart from "../components/charts/HvGdChart.vue";
 import ParetoParallelChart from "../components/charts/ParetoParallelChart.vue";
 import IndividualDetailPanel from "../components/detail/IndividualDetailPanel.vue";
 import RuntimeMetricsSection from "../components/detail/RuntimeMetricsSection.vue";
+import FirmwareSnapshotSection from "../components/detail/FirmwareSnapshotSection.vue";
 import ProblemVizModal from "../components/detail/ProblemVizModal.vue";
 import { downloadAnalysisZip, downloadTopologiesZip } from "../api/files";
 import { updateExperiment, updateExperimentStatus, plotParetoResults, deleteExperiment } from "../api/experiments";
