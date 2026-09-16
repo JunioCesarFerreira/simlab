@@ -1,0 +1,21 @@
+{
+  "gd_original_order": [
+    0.0
+  ],
+  "gd_reordered_names": [
+    11.313708498984761
+  ],
+  "no_feasible_individuals": "ValueError: max() iterable argument is empty",
+  "synthetic_without_final_front": {
+    "generations": [],
+    "hv": [],
+    "hv_cumulative": [],
+    "gd": [],
+    "igd": [],
+    "igd_plus": [],
+    "reference": null,
+    "reference_size": 0,
+    "normalized": false,
+    "worst_point": {}
+  }
+}

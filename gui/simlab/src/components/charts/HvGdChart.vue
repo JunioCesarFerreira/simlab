@@ -6,33 +6,35 @@
     </div>
     <div v-else-if="state === 'error'" class="hvgd-placeholder hvgd-error">
       {{ errorMsg }}
+      <button type="button" class="mode-btn" @click="retry">Try again</button>
     </div>
     <div v-else-if="state === 'empty'" class="hvgd-placeholder">
       No reference front available yet.
     </div>
-    <div v-else class="hvgd-charts">
+    <div v-else class="hvgd-body">
+      <div class="population-bar" :aria-busy="refreshing">
+        <span class="population-label">Measured set</span>
+        <div class="population-toggle" role="group" aria-label="Measured population">
+          <button
+            v-for="opt in POPULATION_OPTIONS"
+            :key="opt.value"
+            type="button"
+            :class="['mode-btn', { active: population === opt.value }]"
+            :aria-pressed="population === opt.value"
+            :title="opt.hint"
+            @click="population = opt.value"
+          >
+            {{ opt.label }}
+          </button>
+        </div>
+        <span v-if="refreshing" class="population-refreshing">
+          <span class="spinner" />
+          updating…
+        </span>
+      </div>
+      <div class="hvgd-charts">
       <div class="hvgd-col">
         <div class="controls-bar">
-          <div class="hv-mode-toggle" role="group" aria-label="Hypervolume mode">
-            <button
-              type="button"
-              :class="['mode-btn', { active: hvMode === 'perGen' }]"
-              :aria-pressed="hvMode === 'perGen'"
-              title="Hypervolume of each generation's own Pareto front"
-              @click="hvMode = 'perGen'"
-            >
-              Per generation
-            </button>
-            <button
-              type="button"
-              :class="['mode-btn', { active: hvMode === 'cumulative' }]"
-              :aria-pressed="hvMode === 'cumulative'"
-              title="Best-so-far hypervolume over every generation up to each point"
-              @click="hvMode = 'cumulative'"
-            >
-              Cumulative
-            </button>
-          </div>
           <ChartExportButton @click="handleExportImage('hv')" />
         </div>
         <div ref="hvEl" class="hvgd-chart" role="img" :aria-label="hvAriaLabel" />
@@ -49,20 +51,31 @@
         </div>
         <div ref="igdEl" class="hvgd-chart" role="img" aria-label="Inverted generational distance per generation chart" />
       </div>
+      </div>
     </div>
-    <p v-if="state === 'ready'" class="hvgd-caption" :class="{ 'is-warning': selfReferential }">
+    <p v-if="errorMsg && state === 'ready'" class="hvgd-error" role="alert">
+      {{ errorMsg }}
+      <button type="button" class="mode-btn" @click="retry">Try again</button>
+    </p>
+    <p
+      v-if="state === 'ready'"
+      class="hvgd-caption"
+      :class="{ 'is-warning': selfReferential || populationFallback }"
+    >
       {{ referenceCaption }}
     </p>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
+import { ref, computed, watch, onBeforeUnmount } from "vue";
 import * as echarts from "../../lib/echarts";
 import type { EChartsOption, DefaultLabelFormatterCallbackParams } from "echarts";
 import { useTheme } from "../../composables/useTheme";
 import { chartPalette, chartExportBackground } from "../../services/chartTheme";
-import client from "../../api/client";
+import type { HvGdData, Population, PopulationSource } from "../../api/metrics";
+import { metricGenerationLabels, populationCaption, populationLabel } from "../../lib/metricPopulation";
+import { useHvGdData } from "../../composables/useHvGdData";
 import { exportChartImage, chartExportFilename } from "../../utils/chartExport";
 import ChartExportButton from "./ChartExportButton.vue";
 
@@ -70,42 +83,59 @@ const props = defineProps<{
   experimentId: string;
   objectiveNames: string[];
   objectiveGoals: string[];
+  revision?: number;
 }>();
 
 const { isDark } = useTheme();
 
 // ── state ──────────────────────────────────────────────────────────────────
-type State = "idle" | "loading" | "ready" | "empty" | "error";
-const state = ref<State>("idle");
-const errorMsg = ref("");
-
-// HV can be viewed per generation (each gen's own front) or cumulatively
-// (best-so-far front over all generations so far). Both curves come from a
-// single fetch, so switching is instant and never re-hits the backend.
-type HvMode = "perGen" | "cumulative";
-const hvMode = ref<HvMode>("perGen");
+// Which set each generation is measured on. This used to be an HV-only
+// "per generation / cumulative" toggle, which left GD and IGD on the offspring
+// whatever the user picked. All three indicators now follow one selector, and
+// the backend computes it — the survivor set cannot be derived client-side.
+const POPULATION_OPTIONS: { value: Population; label: string; hint: string }[] = [
+  {
+    value: "survivors",
+    label: "Survivors",
+    hint: "The population environmental selection kept (P_t) — what the search carries forward",
+  },
+  {
+    value: "offspring",
+    label: "Offspring",
+    hint: "Only the children evaluated in that generation (Q_t) — swings with each batch",
+  },
+  {
+    value: "archive",
+    label: "Archive",
+    hint: "Best-so-far: the non-dominated set of everything evaluated up to that generation",
+  },
+];
+const population = ref<Population>("survivors");
+const { data, state, errorMsg, refreshing, retry } = useHvGdData(() => ({
+  ...props, population: population.value,
+}));
 
 // The distance indicators are null for a generation with no feasible
 // individual — a gap in the curve, which ECharts renders as a break, rather
 // than a zero that would read as "perfect convergence".
-interface HvGdData {
-  generations: number[];
-  hv: number[];
-  hv_cumulative: number[];
-  gd: (number | null)[];
-  igd: (number | null)[];
-  igd_plus: (number | null)[];
-  reference: "true_front" | "final_front" | null;
-  reference_size: number;
-  normalized: boolean;
-  worst_point: Record<string, number>;
-}
-const data = ref<HvGdData | null>(null);
 
-const hvAriaLabel = computed(() =>
-  hvMode.value === "cumulative"
-    ? "Cumulative hypervolume chart"
-    : "Hypervolume per generation chart",
+
+const measuredSet = computed<PopulationSource>(
+  () => data.value?.population_source ?? population.value,
+);
+
+const measuredSetLabel = computed(
+  () => populationLabel(measuredSet.value),
+);
+
+const hvAriaLabel = computed(
+  () => `Hypervolume per generation chart, measured on the ${measuredSetLabel.value.toLowerCase()}`,
+);
+
+// The backend degrades to the offspring for runs recorded before survivor sets
+// were persisted. Say so rather than letting the two curves be read as one.
+const populationFallback = computed(
+  () => data.value != null && data.value.population !== data.value.population_source,
 );
 
 // Against the run's own final front, GD and IGD measure progress towards this
@@ -123,9 +153,17 @@ const referenceCaption = computed(() => {
     ? "normalized by the reference front's ideal-nadir range"
     : "in raw objective units";
   const size = `${d.reference_size} point${d.reference_size === 1 ? "" : "s"}`;
-  return selfReferential.value
+  const measured = populationCaption(d);
+  const reference = selfReferential.value
     ? `GD / IGD reference: this run's own final Pareto front (${size}) — self-referential, so these measure progress towards this run's own result, not convergence to the true optimum, and are not comparable across runs. Distances ${scale}.`
-    : `GD / IGD reference: the benchmark's analytical true front (${size}). Distances ${scale}.`;
+    : `IGD / IGD+ reference: the benchmark's analytical true front (${size}). Distances ${scale}.`;
+  // A sampled reference cannot measure GD below its own fill distance — points
+  // exactly on the DTLZ2 front score 0.19 at M=6 against 500 reference points.
+  // Say when GD escaped that, since it makes the two curves read differently.
+  const gd = d.gd_method === "analytical"
+    ? " GD is the exact distance to the true front, free of the reference front's discretisation error; IGD and IGD+ still carry it."
+    : "";
+  return `${measured} ${reference}${gd}`;
 });
 
 // ── chart instances ─────────────────────────────────────────────────────────
@@ -151,45 +189,18 @@ function handleExportImage(kind: ChartKind) {
   });
 }
 
-// ── fetch ───────────────────────────────────────────────────────────────────
-async function fetchData() {
-  if (!props.experimentId || props.objectiveNames.length < 2) return;
-
-  state.value = "loading";
-  errorMsg.value = "";
-
-  const minimize = props.objectiveGoals.map((g) => (g === "min" ? "true" : "false"));
-  const params = new URLSearchParams();
-  props.objectiveNames.forEach((o) => params.append("objectives", o));
-  minimize.forEach((m) => params.append("minimize", m));
-
-  try {
-    const { data: res } = await client.get<HvGdData>(
-      `/experiments/${props.experimentId}/hv-gd?${params.toString()}`,
-    );
-    if (!res.generations || res.generations.length === 0) {
-      state.value = "empty";
-      return;
-    }
-    data.value = res;
-    state.value = "ready";
-  } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : String(e);
-    state.value = "error";
-  }
-}
-
 // ── chart init & rendering ──────────────────────────────────────────────────
 
-function buildHvOption(d: HvGdData, dark: boolean, mode: HvMode): EChartsOption {
+function buildHvOption(d: HvGdData, dark: boolean): EChartsOption {
   const c = chartPalette(dark);
-  const xLabels = d.generations.map((g) => `Gen ${g}`);
-  const cumulative = mode === "cumulative";
-  const series = cumulative ? d.hv_cumulative : d.hv;
-  const axisLabel = cumulative ? "HV (cumulative)" : "HV";
-  const seriesName = cumulative ? "Cumulative hypervolume" : "Hypervolume";
+  const xLabels = metricGenerationLabels(d);
+  const label = populationLabel(d.population_source);
+  const series = d.hv;
+  const axisLabel = "HV";
+  const seriesName = `Hypervolume (${label.toLowerCase()})`;
 
   return {
+    animation: false,
     backgroundColor: c.bg,
     tooltip: {
       trigger: "axis",
@@ -234,6 +245,7 @@ function buildHvOption(d: HvGdData, dark: boolean, mode: HvMode): EChartsOption 
         smooth: true,
         symbol: "circle",
         symbolSize: 6,
+        showSymbol: false,
         itemStyle: { color: c.hv },
         lineStyle: { color: c.hv, width: 2 },
         areaStyle: { color: c.hvArea },
@@ -244,9 +256,10 @@ function buildHvOption(d: HvGdData, dark: boolean, mode: HvMode): EChartsOption 
 
 function buildGdOption(d: HvGdData, dark: boolean): EChartsOption {
   const c = chartPalette(dark);
-  const xLabels = d.generations.map((g) => `Gen ${g}`);
+  const xLabels = metricGenerationLabels(d);
 
   return {
+    animation: false,
     backgroundColor: c.bg,
     tooltip: {
       trigger: "axis",
@@ -285,6 +298,7 @@ function buildGdOption(d: HvGdData, dark: boolean): EChartsOption {
         smooth: true,
         symbol: "circle",
         symbolSize: 6,
+        showSymbol: false,
         itemStyle: { color: c.gd },
         lineStyle: { color: c.gd, width: 2 },
         areaStyle: { color: c.gdArea },
@@ -295,13 +309,14 @@ function buildGdOption(d: HvGdData, dark: boolean): EChartsOption {
 
 function buildIgdOption(d: HvGdData, dark: boolean): EChartsOption {
   const c = chartPalette(dark);
-  const xLabels = d.generations.map((g) => `Gen ${g}`);
+  const xLabels = metricGenerationLabels(d);
 
   // IGD and IGD+ answer the same question and live on the same scale, so they
   // share one panel. GD stays on its own: a population converged onto a single
   // corner of the front scores a near-zero GD and a large IGD, and putting the
   // two on one axis would flatten whichever is smaller into the baseline.
   return {
+    animation: false,
     backgroundColor: c.bg,
     tooltip: {
       trigger: "axis",
@@ -353,6 +368,7 @@ function buildIgdOption(d: HvGdData, dark: boolean): EChartsOption {
         smooth: true,
         symbol: "circle",
         symbolSize: 6,
+        showSymbol: false,
         itemStyle: { color: c.igd },
         lineStyle: { color: c.igd, width: 2 },
         areaStyle: { color: c.igdArea },
@@ -367,6 +383,7 @@ function buildIgdOption(d: HvGdData, dark: boolean): EChartsOption {
         smooth: true,
         symbol: "triangle",
         symbolSize: 6,
+        showSymbol: false,
         itemStyle: { color: c.igdPlus },
         lineStyle: { color: c.igdPlus, width: 2, type: "dashed" },
       },
@@ -376,9 +393,9 @@ function buildIgdOption(d: HvGdData, dark: boolean): EChartsOption {
 
 function initCharts() {
   if (!hvEl.value || !gdEl.value || !igdEl.value) return;
-  hvChart = echarts.init(hvEl.value, null, { renderer: "svg" });
-  gdChart = echarts.init(gdEl.value, null, { renderer: "svg" });
-  igdChart = echarts.init(igdEl.value, null, { renderer: "svg" });
+  hvChart = echarts.init(hvEl.value, null, { renderer: "canvas" });
+  gdChart = echarts.init(gdEl.value, null, { renderer: "canvas" });
+  igdChart = echarts.init(igdEl.value, null, { renderer: "canvas" });
 
   ro = new ResizeObserver(() => {
     // Skip collapsed/hidden passes — resizing to 0×0 blanks the chart.
@@ -394,7 +411,7 @@ function initCharts() {
 function renderCharts() {
   if (!data.value || !hvChart || !gdChart || !igdChart) return;
   const dark = isDark.value;
-  hvChart.setOption(buildHvOption(data.value, dark, hvMode.value), true);
+  hvChart.setOption(buildHvOption(data.value, dark), true);
   gdChart.setOption(buildGdOption(data.value, dark), true);
   igdChart.setOption(buildIgdOption(data.value, dark), true);
 }
@@ -411,42 +428,32 @@ function destroyCharts() {
 }
 
 // ── lifecycle ────────────────────────────────────────────────────────────────
-onMounted(async () => {
-  await fetchData();
-});
-
 onBeforeUnmount(destroyCharts);
 
-// When data arrives, init + render charts
-watch(state, async (s) => {
-  if (s !== "ready") return;
-  // Wait for DOM update so the chart divs are visible
-  await new Promise((r) => setTimeout(r, 0));
-  if (!hvChart) initCharts();
-  renderCharts();
-});
+// The chart containers sit behind v-if, so every trip through loading / error /
+// empty destroys them and builds new ones. An ECharts instance kept across that
+// is bound to a detached node and quietly renders nothing — which is why this
+// follows the ELEMENTS rather than the state. Same reasoning as useEChart,
+// which solves it for the single-chart components. "post" runs the callback
+// after Vue has patched the DOM.
+watch(
+  [hvEl, gdEl, igdEl],
+  ([hv, gd, igd]) => {
+    destroyCharts();
+    if (hv && gd && igd) {
+      initCharts();
+      renderCharts();
+    }
+  },
+  { immediate: true, flush: "post" },
+);
+
+// Fresh data for containers that are already mounted.
+watch(data, () => renderCharts());
 
 // Re-render on theme change
-watch(isDark, () => {
-  if (state.value === "ready") renderCharts();
-});
+watch(isDark, () => renderCharts());
 
-// Toggle per-generation ↔ cumulative — reuse the already-fetched data, only the
-// HV chart changes so the GD chart is left untouched.
-watch(hvMode, (mode) => {
-  if (state.value === "ready" && hvChart && data.value) {
-    hvChart.setOption(buildHvOption(data.value, isDark.value, mode), true);
-  }
-});
-
-// Refetch if experiment changes
-watch(
-  () => props.experimentId,
-  () => {
-    destroyCharts();
-    fetchData();
-  },
-);
 </script>
 
 <style scoped>
@@ -458,11 +465,41 @@ watch(
   padding: 0 4px;
 }
 
+.hvgd-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 6px;
+}
+
 .hvgd-charts {
   display: flex;
   flex: 1;
   gap: 12px;
   min-height: 0;
+}
+
+/* The measured set drives all three charts, so it sits above them rather than
+   inside the hypervolume column. */
+.population-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.population-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.population-refreshing {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--color-text-muted);
 }
 
 .hvgd-col {
@@ -501,9 +538,7 @@ watch(
   gap: 8px;
 }
 
-/* Toggle sits at the far left; the export button stays flush right. */
-.hv-mode-toggle {
-  margin-right: auto;
+.population-toggle {
   display: inline-flex;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);

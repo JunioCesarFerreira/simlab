@@ -60,3 +60,31 @@ def test_normalization_is_on_by_default_in_both(sets):
     front, reference = sets
     assert metrics.gd(front, reference) == metrics.gd(front, reference, normalized=True)
     assert canonical.gd(front, reference) == canonical.gd(front, reference, normalized=True)
+
+
+def test_analytical_scale_matches(sets):
+    ideal, nadir = np.zeros(3), np.array([1.0, 4.0, 0.0])
+    assert np.array_equal(
+        metrics.analytical_scale(ideal, nadir),
+        canonical.analytical_scale(ideal, nadir),
+    )
+
+
+@pytest.mark.parametrize("name", ["gd", "igd", "igd_plus"])
+def test_explicit_bounds_match(sets, name):
+    """The theoretical ideal-nadir range must be honoured identically."""
+    front, reference = sets
+    bounds = (np.zeros(3), np.array([1.0, 1.0, 1.0]))
+    mine = getattr(metrics, name)(front, reference, bounds=bounds)
+    theirs = getattr(canonical, name)(front, reference, bounds=bounds)
+    assert mine == theirs
+    # And they must actually differ from the sampled-reference normalisation,
+    # or the parameter would be untested.
+    assert mine != getattr(metrics, name)(front, reference)
+
+
+def test_gd_analytical_matches():
+    distances = np.array([0.0, 0.25, 1.5, 3.0])
+    assert metrics.gd_analytical(distances, scale=4.0) == canonical.gd_analytical(
+        distances, scale=4.0
+    )

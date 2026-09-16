@@ -302,6 +302,7 @@
               :experiment-id="props.id"
               :objective-names="store.objectiveNames"
               :objective-goals="store.objectiveGoals"
+              :revision="store.revision"
             />
           </ResizableChartCard>
           <ResizableChartCard v-model="evolutionH" label="Objectives evolution chart">
@@ -409,7 +410,8 @@ import { confirmDialog } from "../composables/useConfirm";
 import { reportRuntimeError } from "../composables/useRuntimeError";
 import type { IndividualDto, JsonObject, ParetoFrontItemDto } from "../types/simlab";
 import { isPenalized } from "../types/simlab";
-import { computeRanks, computeRanksWithDuplicates } from "../utils/nonDominatedSort";
+import { computeRanks } from "../utils/nonDominatedSort";
+import { useParetoRanks } from "../composables/useParetoRanks";
 
 const props = defineProps<{ id: string }>();
 const store = useExperimentDetailStore();
@@ -559,17 +561,11 @@ const paretoGenerations = computed(() => {
   return store.experiment?.generations ?? [];
 });
 
-// Non-dominated rank per individual (0 = best front), over the FULL objective
-// vector, computed from `paretoGenerations` (so it respects the all/last-gen
-// scope toggle above). This is O(n²) and used to be recomputed independently
-// inside BOTH ParetoFrontChart and ParetoFront3DChart — every poll tick while
-// the experiment is running, and again every time the user toggled between
-// the 2D/3D views (which unmounts one and throws its cached result away).
-// Computing it once here, in the parent that never unmounts across that
-// toggle, means it's shared by whichever chart is currently visible.
-const individualRankMap = computed<Map<string, number>>(() => {
+// Rank the selected scope in a worker so large populations do not block
+// painting the other charts, scrolling, or receiving metric responses.
+const rankInput = computed(() => {
   const goals = store.objectiveGoals;
-  if (goals.length === 0) return new Map();
+  if (goals.length === 0) return { points: [], minimize: [] };
   const minimize = goals.map((g) => g === "min");
   const seen = new Set<string>();
   const points: { id: string; objectives: number[] }[] = [];
@@ -578,11 +574,12 @@ const individualRankMap = computed<Map<string, number>>(() => {
       if (seen.has(ind.individual_id)) continue;
       seen.add(ind.individual_id);
       if (isPenalized(ind.objectives)) continue;
-      points.push({ id: ind.individual_id, objectives: ind.objectives });
+      points.push({ id: ind.individual_id, objectives: [...ind.objectives] });
     }
   }
-  return computeRanksWithDuplicates(points, minimize);
+  return { points, minimize };
 });
+const individualRankMap = useParetoRanks(rankInput);
 
 // Pareto front points passed to the charts. For "all" this is the global front
 // computed server-side; for "last" it is the non-dominated set of the last
@@ -698,7 +695,7 @@ async function saveEdit() {
   savingName.value = true;
   try {
     await updateExperiment(props.id, { name: draftName.value.trim() });
-    store.experiment!.name = draftName.value.trim();
+    store.experiment = { ...store.experiment!, name: draftName.value.trim() };
     editing.value = false;
   } catch (e) {
     reportRuntimeError(e, "Failed to rename experiment");

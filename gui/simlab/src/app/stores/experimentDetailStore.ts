@@ -1,14 +1,19 @@
 import { defineStore } from "pinia";
-import { ref, computed } from "vue";
+import { ref, shallowRef, computed } from "vue";
 import type { ExperimentFullDto } from "../../types/simlab";
 import { getExperimentFull } from "../../api/experiments";
 import { stableStringify } from "../../utils/stableStringify";
 
 export const useExperimentDetailStore = defineStore("experimentDetail", () => {
-  const experiment = ref<ExperimentFullDto | null>(null);
+  // API snapshots are replaced as a whole; proxying every chromosome and point
+  // adds substantial traversal overhead to large chart datasets.
+  const experiment = shallowRef<ExperimentFullDto | null>(null);
+  const revision = ref(0);
   const loading = ref(false);
   const error = ref<string | null>(null);
-  let _pollInterval: ReturnType<typeof setInterval> | null = null;
+  let _pollInterval: ReturnType<typeof setTimeout> | null = null;
+  let _pollVersion = 0;
+  let _request: { id: string; controller: AbortController; promise: Promise<void> } | null = null;
   // Serialized form of the last payload assigned to `experiment`. Polling
   // replaces the whole object every tick; when the backend returns identical
   // data that would still invalidate every computed downstream (including the
@@ -21,6 +26,7 @@ export const useExperimentDetailStore = defineStore("experimentDetail", () => {
     if (payload === _lastPayload) return;
     _lastPayload = payload;
     experiment.value = data;
+    revision.value++;
   }
 
   const isRunning = computed(
@@ -51,46 +57,71 @@ export const useExperimentDetailStore = defineStore("experimentDetail", () => {
     return map;
   });
 
-  async function fetch(id: string) {
-    loading.value = true;
-    error.value = null;
-    try {
-      setExperiment(await getExperimentFull(id));
-    } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : String(e);
-    } finally {
-      loading.value = false;
+  function load(id: string, foreground: boolean): Promise<void> {
+    if (_request?.id === id) return _request.promise;
+    _request?.controller.abort();
+    if (experiment.value?.id !== id) {
+      experiment.value = null;
+      _lastPayload = "";
     }
+    if (foreground) {
+      loading.value = true;
+      error.value = null;
+    }
+    const controller = new AbortController();
+    const promise = getExperimentFull(id, controller.signal)
+      .then((data) => {
+        if (!controller.signal.aborted) setExperiment(data);
+      })
+      .catch((e: unknown) => {
+        if (!controller.signal.aborted && foreground) {
+          error.value = e instanceof Error ? e.message : String(e);
+        }
+      })
+      .finally(() => {
+        if (_request?.controller === controller) {
+          _request = null;
+          loading.value = false;
+        }
+      });
+    _request = { id, controller, promise };
+    return promise;
   }
 
-  async function refresh(id: string) {
-    try {
-      setExperiment(await getExperimentFull(id));
-    } catch {
-      // silently ignore polling errors
-    }
+  function fetch(id: string) {
+    return load(id, true);
+  }
+
+  function refresh(id: string) {
+    return load(id, false);
   }
 
   function startPolling(id: string, intervalMs = 3000) {
     stopPolling();
-    _pollInterval = setInterval(async () => {
-      if (isRunning.value) {
-        await refresh(id);
-      } else {
-        stopPolling();
-      }
-    }, intervalMs);
+    const version = _pollVersion;
+    const schedule = () => {
+      if (version !== _pollVersion || !isRunning.value) return;
+      _pollInterval = setTimeout(async () => {
+        // A slow response postpones the next poll, instead of adding requests.
+        if (typeof document === "undefined" || !document.hidden) await refresh(id);
+        schedule();
+      }, intervalMs);
+    };
+    schedule();
   }
 
   function stopPolling() {
+    _pollVersion++;
     if (_pollInterval !== null) {
-      clearInterval(_pollInterval);
+      clearTimeout(_pollInterval);
       _pollInterval = null;
     }
   }
 
   function clear() {
     stopPolling();
+    _request?.controller.abort();
+    _request = null;
     experiment.value = null;
     error.value = null;
     loading.value = false;
@@ -99,6 +130,7 @@ export const useExperimentDetailStore = defineStore("experimentDetail", () => {
 
   return {
     experiment,
+    revision,
     loading,
     error,
     isRunning,

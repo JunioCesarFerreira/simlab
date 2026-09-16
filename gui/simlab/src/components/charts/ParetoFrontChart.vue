@@ -214,8 +214,8 @@ const RANK_PALETTE = [
 const RANK_SIZES = [11, 10, 9, 8, 7, 6] as const;
 
 /** Map individualId → 0-indexed rank, capped at MAX_LABELED_RANKS.
- *  The expensive O(n²) dominance sort itself lives in the store
- *  (individualRankMap) — this is just a cheap O(n) capping pass. */
+ *  The page computes ranks asynchronously in a worker; this is an O(n)
+ *  capping pass for the chart palette. */
 const rankMap = computed<Map<string, number>>(() => {
   const raw = props.rankMap;
   if (!raw || raw.size === 0) return new Map();
@@ -441,8 +441,11 @@ function buildOption() {
 // markedPoints is a computed that returns a fresh array on every recompute
 // (flatMap), so plain reference comparison already catches every pin change
 // — no need for a deep watch here (would also deep-traverse `generations`).
+// Observe rankMap explicitly: with no pins, markedPoints never reads the rank
+// groups, so it cannot trigger repainting when the worker finishes.
 watch(
-  [ready, () => props.paretoFront, () => props.generations, () => props.objectiveGoals, xKey, yKey, markedPoints],
+  [ready, () => props.paretoFront, () => props.generations, () => props.objectiveGoals,
+    () => props.rankMap, xKey, yKey, markedPoints],
   buildOption,
 );
 

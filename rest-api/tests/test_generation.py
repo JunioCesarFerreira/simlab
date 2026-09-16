@@ -11,7 +11,7 @@ class TestGetGenerationsByExperiment:
         gen = sample_generation()
         ind = sample_individual()
         mock_factory.generation_repo.find_by_experiment.return_value = [gen]
-        mock_factory.individual_repo.find_by_generation.return_value = [ind]
+        mock_factory.individual_repo.find_grouped_by_experiment.return_value = {ObjectId(GEN_ID): [ind]}
 
         resp = client.get(f"{BASE}/by-experiment/{EXP_ID}")
 
@@ -30,7 +30,7 @@ class TestGetGenerationsByExperiment:
         ind = sample_individual()
         ind["individual_id"] = 3099568720531170764   # int hash
         mock_factory.generation_repo.find_by_experiment.return_value = [gen]
-        mock_factory.individual_repo.find_by_generation.return_value = [ind]
+        mock_factory.individual_repo.find_grouped_by_experiment.return_value = {ObjectId(GEN_ID): [ind]}
 
         resp = client.get(f"{BASE}/by-experiment/{EXP_ID}")
 

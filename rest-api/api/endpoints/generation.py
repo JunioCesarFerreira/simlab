@@ -22,7 +22,8 @@ def get_generations_by_experiment(
     """Retrieve all generations of an experiment ordered by index, each with its individuals."""
     try:
         gens = factory.generation_repo.find_by_experiment(ObjectId(experiment_id))
-        return [_build_generation(g, factory) for g in gens]
+        individuals = factory.individual_repo.find_grouped_by_experiment(ObjectId(experiment_id))
+        return [generation_from_mongo(g, individuals.get(g["_id"], [])) for g in gens]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

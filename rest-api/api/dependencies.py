@@ -12,4 +12,10 @@ def get_factory() -> MongoRepository:
     """
     mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017/?replicaSet=rs0")
     db_name = os.getenv("DB_NAME", "simlab")
-    return create_mongo_repository_factory(mongo_uri, db_name)
+    return create_mongo_repository_factory(mongo_uri, db_name, reuse_client=True)
+
+
+def close_factory() -> None:
+    if get_factory.cache_info().currsize:
+        get_factory().experiment_repo.connection.close()
+        get_factory.cache_clear()

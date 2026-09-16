@@ -22,11 +22,16 @@ from lib.util.build_input_sim_cooja import create_files
 # NSGA utils
 from lib.nsga import fast_nondominated_sort
 from lib.nsga import select_next_population
-from lib.genetic_operators.selection import tournament_selection, compute_individual_ranks
+from lib.genetic_operators.selection import (
+    tournament_selection,
+    compute_individual_ranks,
+    compute_crowding_distances,
+)
 # Problem Adapter
 from lib.problem.adapter import ProblemAdapter, Chromosome
 from lib.problem.chromosomes import chromosome_from_dict
 from lib.problem.resolve import build_adapter
+from .library_rng import dump_random_state, load_random_state
 from .analytical import analytical_objectives
 from pylib import benchmarks
 
@@ -338,6 +343,14 @@ class NSGA2LoopStrategy(EngineStrategy):
         self._map_genome_objectives.update(current_map)
         self._count_sims_inserted = pending_individuals * len(self._sim_rand_seeds)
 
+        if not load_random_state(self._ga_rng, current_generation.get("rng_state")):
+            logger.warning(
+                "[NSGA-II] Generation %s carries no usable RNG snapshot; resuming on a "
+                "fresh stream. The run stays valid but no longer reproduces the "
+                "uninterrupted one.",
+                current_index,
+            )
+
         if current_index == 0:
             self._parents = []
             return
@@ -351,8 +364,68 @@ class NSGA2LoopStrategy(EngineStrategy):
                 f"Cannot resume generation {current_index}: previous generation {current_index - 1} not found."
             )
 
-        self._parents, parent_map, _ = self._load_generation_population(previous_generation["_id"])
+        # P_{t-1} is the SURVIVING population of the previous generation, not the
+        # offspring stored there. Selection keeps individuals from older
+        # generations too, and loading the offspring silently drops them — the
+        # audit measured 4 of 10 parents lost on a checkpoint of population 10.
+        survivors = previous_generation.get("survivors")
+        if survivors:
+            self._parents, parent_map = self._load_survivor_population(survivors)
+        else:
+            logger.warning(
+                "[NSGA-II] Generation %s predates survivor sets; falling back to its "
+                "offspring as parents. Any parent selection had kept from an older "
+                "generation is lost.",
+                current_index - 1,
+            )
+            self._parents, parent_map, _ = self._load_generation_population(
+                previous_generation["_id"]
+            )
         self._map_genome_objectives.update(parent_map)
+
+    def _load_survivor_population(
+        self,
+        survivor_ids: list[str],
+    ) -> "tuple[list[Chromosome], dict[Chromosome, list[float]]]":
+        """Rebuild P_t from the chromosome hashes environmental selection kept.
+
+        Resolved experiment-wide, and returned in the stored order — the
+        selection order the live run had, repeats included. Restoring the list
+        verbatim is what makes the resumed offspring identical.
+        """
+        assert self._exp_id is not None
+        documents = self.mongo.individual_repo.find_by_experiment_and_ids(
+            self._exp_id, list(dict.fromkeys(survivor_ids))
+        )
+        by_hash: dict[str, dict] = {}
+        for document in documents:
+            by_hash.setdefault(document["individual_id"], document)
+
+        missing = [h for h in survivor_ids if h not in by_hash]
+        if missing:
+            raise RuntimeError(
+                f"Cannot resume: {len(missing)} survivor(s) have no individual document "
+                f"in experiment {self._exp_id} (first: {missing[0]})."
+            )
+
+        population: list[Chromosome] = []
+        objectives_map: dict[Chromosome, list[float]] = {}
+        for individual_id in survivor_ids:
+            document = by_hash[individual_id]
+            chromosome = chromosome_from_dict(self._problem_name, document["chromosome"])
+            population.append(chromosome)
+
+            stored = document.get("objectives")
+            if stored:
+                objectives_map[chromosome] = self._objectives_list_to_minimization(
+                    [float(value) for value in stored]
+                )
+                continue
+            cached = self._genome_objectives_cache.get(individual_id)
+            if cached:
+                objectives_map[chromosome] = [float(value) for value in cached]
+
+        return population, objectives_map
 
     def _load_generation_population(
         self,
@@ -366,7 +439,15 @@ class NSGA2LoopStrategy(EngineStrategy):
         objectives_map: dict[Chromosome, list[float]] = {}
         pending_individuals = 0
 
-        for ind in sorted(individuals, key=lambda item: item["individual_id"]):
+        # Population order, not hash order: the mating tournament draws by index,
+        # so a differently ordered population is a different search. ``index``
+        # is absent on documents written before it existed, and those fall back
+        # to the previous hash ordering rather than to Mongo's natural order.
+        ordered = sorted(
+            individuals,
+            key=lambda item: (item.get("index") is None, item.get("index", 0), item["individual_id"]),
+        )
+        for ind in ordered:
             chromosome = chromosome_from_dict(self._problem_name, ind["chromosome"])
             population.append(chromosome)
 
@@ -534,6 +615,11 @@ class NSGA2LoopStrategy(EngineStrategy):
             "status": EnumStatus.WAITING,
             "start_time": datetime.now(),
             "end_time": None,
+            # Captured here because nothing in this generation has drawn from
+            # the generator yet: the offspring were produced by the caller, and
+            # enqueueing itself never draws. Restoring this on resume puts the
+            # loop back on the exact stream it would have had.
+            "rng_state": dump_random_state(self._ga_rng),
         }
         # Increment before inserting so the change-stream callback (which fires
         # asynchronously) always sees the already-updated index.
@@ -573,6 +659,7 @@ class NSGA2LoopStrategy(EngineStrategy):
                     "experiment_id": exp_oid,
                     "generation_id": gen_oid,
                     "individual_id": genome_hash,
+                    "index": i,
                     "chromosome": genome.to_dict(),
                     "objectives": self._objectives_list_to_original(cached_obj),
                     "topology_picture_id": None,
@@ -607,6 +694,7 @@ class NSGA2LoopStrategy(EngineStrategy):
                     "experiment_id": exp_oid,
                     "generation_id": gen_oid,
                     "individual_id": genome_hash,
+                    "index": i,
                     "chromosome": genome.to_dict(),
                     "objectives": self._objectives_list_to_original(obj_min),
                     "topology_picture_id": None,
@@ -636,6 +724,7 @@ class NSGA2LoopStrategy(EngineStrategy):
                     "experiment_id": exp_oid,
                     "generation_id": gen_oid,
                     "individual_id": genome_hash,
+                    "index": i,
                     "chromosome": genome.to_dict(),
                     "objectives": self._objectives_list_to_original(penalty),
                     "topology_picture_id": None,
@@ -670,6 +759,7 @@ class NSGA2LoopStrategy(EngineStrategy):
                 "experiment_id": exp_oid,
                 "generation_id": gen_oid,
                 "individual_id": genome_hash,
+                "index": i,
                 "chromosome": genome.to_dict(),
                 "objectives": [],
                 "topology_picture_id": None,
@@ -802,21 +892,12 @@ class NSGA2LoopStrategy(EngineStrategy):
         # ---------------- First PHASE P_1 ----------------
         if self._parents == []:
             self._parents = self._current_population.copy()
+            # P_0 survives trivially: there is no union to select from yet.
+            self._persist_survivors()
             offspring = self._run_genetic_algorithm()
             self._current_population = offspring
             self._generation_enqueue()
             logger.info("[NSGA-II] Enqueued P_{t+1}; waiting results.")
-            return
-
-        # Stop condition?
-        if self._gen_index > self._max_gen:
-            try:
-                first_pareto_front = self._final_pareto_front()
-            except Exception:
-                logger.exception("[NSGA-II] Could not compute final Pareto front.")
-                first_pareto_front = []
-
-            self._finalize_experiment(pareto_front=first_pareto_front)
             return
 
         # ------- PHASE P_{t+1}: environmental selection on union R_t = P_t ∪ P_{t-1} -------
@@ -843,6 +924,22 @@ class NSGA2LoopStrategy(EngineStrategy):
         self._parents = self._select_next_parents(R_population, R_F_list)
         if self._parents is None:
             return  # _finalize_experiment already called inside
+        self._persist_survivors()
+
+        # Stop condition — checked AFTER the selection above. The reported
+        # result is then ND(P_final), the selected population of pop_size,
+        # instead of ND(P_{t-1} ∪ Q_t): a union of up to 2·pop_size candidates
+        # that no environmental selection ever ran on. The evaluation budget is
+        # unchanged — neither path enqueues another generation.
+        if self._gen_index > self._max_gen:
+            try:
+                first_pareto_front = self._final_pareto_front()
+            except Exception:
+                logger.exception("[NSGA-II] Could not compute final Pareto front.")
+                first_pareto_front = []
+
+            self._finalize_experiment(pareto_front=first_pareto_front)
+            return
 
         offspring = self._run_genetic_algorithm()
         self._current_population = offspring
@@ -881,6 +978,47 @@ class NSGA2LoopStrategy(EngineStrategy):
 
 
 # ---------------------------------------
+# Survivor set (measured population)
+# ---------------------------------------
+    def _persist_survivors(self) -> None:
+        """Record P_t — the population environmental selection kept — on the
+        generation document that just finished.
+
+        Individuals are stored per generation as the offspring Q_t that were
+        *evaluated* there. Quality indicators computed over Q_t swing with each
+        batch of children and can drop even while the search is still holding an
+        excellent parent, because that parent is not among the children. The
+        surviving population is the set NSGA actually carries forward and the
+        one the reference notebooks plot, so it has to be recoverable after the
+        run — hence this write.
+
+        ``self._generation_id`` still points at the generation whose results
+        triggered this selection: ``_generation_enqueue`` only advances it when
+        the next generation is created, which happens later in ``_evolution``.
+
+        Written verbatim, in selection order and with repeats: a child that
+        reproduces a surviving parent exactly enters the union twice and
+        selection may keep both slots. De-duplicating here would be harmless for
+        the metrics (a front ignores repeats) but would shrink the population a
+        resume rebuilds, so the list stays faithful to P_t.
+
+        Best-effort by design: survivors are analysis metadata, and a failed
+        write must not abort a running experiment. Readers fall back to the
+        offspring when the field is absent.
+        """
+        if self._generation_id is None or not self._parents:
+            return
+        hashes = [genome.get_hash() for genome in self._parents]
+        try:
+            self.mongo.generation_repo.set_survivors(self._generation_id, hashes)
+        except Exception:
+            logger.exception(
+                "[NSGA-II] Could not persist survivors for generation %s.",
+                self._generation_id,
+            )
+
+
+# ---------------------------------------
 # Run Genetic Algorithm
 # ---------------------------------------
     def _run_genetic_algorithm(self) -> list[list[float]]:
@@ -899,20 +1037,30 @@ class NSGA2LoopStrategy(EngineStrategy):
             # is purely random. Gradient-penalty magnitudes must not bias exploration
             # when there is no feasible reference to guide convergence.
             individual_ranks: dict[int, int] = {i: 0 for i in range(len(parents))}
+            crowding: dict[int, float] | None = None
             logger.warning(
                 "[NSGA-II] All %d parents infeasible — uniform selection rank applied.", len(parents)
             )
         else:
             fronts: list[list[int]] = fast_nondominated_sort(parents_objectives)
             individual_ranks = compute_individual_ranks(fronts)
+            # Crowded-comparison operator: rank alone ties every member of a
+            # front with every other, and the first front is where mating
+            # pressure matters most. Breaking those ties by crowding distance is
+            # what makes the mating tournament NSGA-II's rather than a coin flip.
+            crowding = compute_crowding_distances(fronts, parents_objectives)
 
         max_attempts = self._pop_size * 10
         attempts = 0
 
         while len(children) < self._pop_size and attempts < max_attempts:
             attempts += 1
-            parent1: Chromosome = tournament_selection(parents, individual_ranks, self._ga_rng)
-            parent2: Chromosome = tournament_selection(parents, individual_ranks, self._ga_rng)
+            parent1: Chromosome = tournament_selection(
+                parents, individual_ranks, self._ga_rng, crowding
+            )
+            parent2: Chromosome = tournament_selection(
+                parents, individual_ranks, self._ga_rng, crowding
+            )
             if self._ga_rng.random() < self._prob_cx:
                 c1, c2 = self._problem_adapter.crossover([parent1, parent2])
             else:
@@ -1029,7 +1177,14 @@ class NSGA2LoopStrategy(EngineStrategy):
 
 
     def _final_pareto_front(self) -> list[dict]:
-        """Non-dominated front of the FINAL population (parents ∪ last offspring).
+        """Non-dominated front of P_final — the SELECTED final population.
+
+        ``self._parents`` holds the survivors of the last environmental
+        selection, which ``_evolution`` now runs before the stop condition. The
+        last offspring are already folded into that selection, so taking
+        ``parents ∪ last offspring`` here would report the non-dominated set of
+        a union of up to 2·pop_size candidates instead of the pop_size
+        population the algorithm actually converged to.
 
         This is the clean result standard NSGA reports: ~pop_size well-converged,
         well-distributed points. It deliberately excludes the whole archive
@@ -1037,7 +1192,7 @@ class NSGA2LoopStrategy(EngineStrategy):
         accumulates near-front points from early, poorly-converged generations,
         producing a thick/noisy front that does not match a reference plot.
         """
-        final_population = list(dict.fromkeys(self._parents + self._current_population))
+        final_population = list(dict.fromkeys(self._parents))
         all_objectives: list[list[float]] = []
         pareto_items: list[dict] = []
         for genome in final_population:

@@ -734,11 +734,14 @@ function buildOption() {
 
 // ── Reactivity ────────────────────────────────────────────────────────────────
 
+// Worker results arrive after the initial population render. With no pins,
+// markedPoints does not depend on ranks, so rankMap must be observed directly.
 watch(
   [
     () => props.paretoFront,
     () => props.generations,
     () => props.objectiveGoals,
+    () => props.rankMap,
     () => props.strategy,
     () => props.referencePointDivisions,
     xKey, yKey, zKey,

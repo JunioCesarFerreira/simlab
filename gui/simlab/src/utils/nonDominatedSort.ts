@@ -29,46 +29,37 @@ export function computeRanks(
   points: SortablePoint[],
   minimize: boolean[],
 ): Map<string, number> {
-  const n = points.length;
-  const domCount  = new Int32Array(n);       // how many points dominate point i
-  const dominated = Array.from({ length: n }, () => [] as number[]); // which points i dominates
-
-  for (let i = 0; i < n; i++) {
-    const pi = points[i]!;
-    for (let j = i + 1; j < n; j++) {
-      const pj = points[j]!;
-      if (dominates(pj.objectives, pi.objectives, minimize)) {
-        domCount[i] = domCount[i]! + 1;
-        dominated[j]!.push(i);
-      } else if (dominates(pi.objectives, pj.objectives, minimize)) {
-        domCount[j] = domCount[j]! + 1;
-        dominated[i]!.push(j);
-      }
+  // Lexicographic order places every possible dominator before its target.
+  // Insert into the first front that does not dominate the point. A binary
+  // search over fronts avoids storing the quadratic graph of dominance edges.
+  const ordered = points.map((p) => ({
+    id: p.id,
+    objectives: p.objectives.map((v, i) => minimize[i] ? v : -v),
+  })).sort((a, b) => {
+    for (let i = 0; i < a.objectives.length; i++) {
+      const difference = a.objectives[i]! - b.objectives[i]!;
+      if (difference !== 0) return difference;
     }
-  }
-
-  const rank = new Int32Array(n);
-  let current: number[] = [];
-
-  for (let i = 0; i < n; i++) {
-    if (domCount[i] === 0) current.push(i);
-  }
-
-  let r = 0;
-  while (current.length > 0) {
-    const next: number[] = [];
-    for (const i of current) {
-      rank[i] = r;
-      for (const j of dominated[i]!) {
-        if (--domCount[j]! === 0) next.push(j);
-      }
-    }
-    r++;
-    current = next;
-  }
-
+    return 0;
+  });
+  const fronts: number[][][] = [];
+  const allMin = minimize.map(() => true);
   const result = new Map<string, number>();
-  for (let i = 0; i < n; i++) result.set(points[i]!.id, rank[i]!);
+  for (const point of ordered) {
+    let low = 0;
+    let high = fronts.length;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if (fronts[mid]!.some((other) => dominates(other, point.objectives, allMin))) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    if (low === fronts.length) fronts.push([]);
+    fronts[low]!.push(point.objectives);
+    result.set(point.id, low);
+  }
   return result;
 }
 

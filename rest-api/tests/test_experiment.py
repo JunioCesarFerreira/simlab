@@ -36,7 +36,7 @@ class TestGetExperimentFull:
     def test_returns_experiment_with_generations_and_individuals(self, client, mock_factory):
         mock_factory.experiment_repo.get.return_value = sample_experiment()
         mock_factory.generation_repo.find_by_experiment.return_value = [sample_generation()]
-        mock_factory.individual_repo.find_by_generation.return_value = [sample_individual()]
+        mock_factory.individual_repo.find_grouped_by_experiment.return_value = {ObjectId(GEN_ID): [sample_individual()]}
 
         resp = client.get(f"{BASE}/{EXP_ID}/full")
 
@@ -247,7 +247,7 @@ class TestGetHvGd:
     def _setup(self, mock_factory, doc, ind_objs):
         mock_factory.experiment_repo.get.return_value = doc
         mock_factory.generation_repo.find_by_experiment.return_value = [{"_id": ObjectId(GEN_ID), "index": 0}]
-        mock_factory.individual_repo.find_by_generation.return_value = [{"objectives": o} for o in ind_objs]
+        mock_factory.individual_repo.find_grouped_by_experiment.return_value = {ObjectId(GEN_ID): [{"objectives": o} for o in ind_objs]}
 
     def test_synthetic_uses_true_front_and_returns_igd(self, client, mock_factory):
         doc = sample_experiment()
@@ -399,10 +399,7 @@ class TestGetHvGd:
             {"_id": ObjectId(GEN_ID), "index": 0},
             {"_id": ObjectId(IND_ID), "index": 1},
         ]
-        mock_factory.individual_repo.find_by_generation.side_effect = [
-            [{"objectives": [5.0, 5.0]}],   # gen 0
-            [{"objectives": [5.0, 8.0]}],   # gen 1 (better f2)
-        ]
+        mock_factory.individual_repo.find_grouped_by_experiment.return_value = {ObjectId(GEN_ID): [{"objectives": [5.0, 5.0]}], ObjectId(IND_ID): [{"objectives": [5.0, 8.0]}]}
 
         q = "objectives=f1&objectives=f2&minimize=true&minimize=false"
         data = client.get(f"{BASE}/{EXP_ID}/hv-gd?{q}").json()
@@ -425,10 +422,7 @@ class TestGetHvGd:
             {"_id": ObjectId(GEN_ID), "index": 0},
             {"_id": ObjectId(IND_ID), "index": 1},
         ]
-        mock_factory.individual_repo.find_by_generation.side_effect = [
-            [{"objectives": [1.0, 1.0]}],   # gen 0 (good)
-            [{"objectives": [2.0, 2.0]}],   # gen 1 (worse — regression)
-        ]
+        mock_factory.individual_repo.find_grouped_by_experiment.return_value = {ObjectId(GEN_ID): [{"objectives": [1.0, 1.0]}], ObjectId(IND_ID): [{"objectives": [2.0, 2.0]}]}
 
         data = self._call(client).json()   # objectives f1,f2 both minimized
 
@@ -443,6 +437,380 @@ class TestGetHvGd:
         assert data["hv_cumulative"][1] >= data["hv_cumulative"][0]
         assert data["hv_cumulative"][1] >= data["hv"][1]
 
+
+
+
+
+# ── GET /{experiment_id}/hv-gd — objective resolution & degenerate inputs ─────
+class TestHvGdObjectiveResolution:
+    """Phase 5: finding 9 of the audit.
+
+    Individuals store their objectives as a positional list in the order the
+    experiment declared them, but the reference front was assembled by NAME.
+    Reading the first n_obj entries therefore mismatched the moment a request
+    reordered or subsetted the objectives.
+    """
+
+    def _setup(self, mock_factory, *, declared, individuals, stored_front=None,
+               synthetic=None):
+        doc = sample_experiment()
+        doc["parameters"]["objectives"] = [
+            {"metric_name": name, "goal": "min"} for name in declared
+        ]
+        if synthetic:
+            doc["parameters"]["simulation"] = {"synthetic": {"enabled": True, "bench": synthetic}}
+        doc["pareto_front"] = stored_front
+        mock_factory.experiment_repo.get.return_value = doc
+        mock_factory.generation_repo.find_by_experiment.return_value = [
+            {"_id": ObjectId(GEN_ID), "index": 0}
+        ]
+        mock_factory.individual_repo.find_grouped_by_experiment.return_value = {ObjectId(GEN_ID): [
+            {"objectives": o} for o in individuals
+        ]}
+        return doc
+
+    def _call(self, client, objectives):
+        q = "&".join(
+            [f"objectives={o}" for o in objectives] + ["minimize=true"] * len(objectives)
+        )
+        return client.get(f"{BASE}/{EXP_ID}/hv-gd?{q}")
+
+    def test_reordering_objectives_does_not_change_the_distance(self, mock_factory, client):
+        """The audit's reproduction: the same solution used as its own reference
+        scored GD 0 in declared order and 11.313708 reordered."""
+        self._setup(
+            mock_factory,
+            declared=["f1", "f2"],
+            individuals=[[1.0, 9.0]],
+            stored_front=[{"objectives": {"f1": 1.0, "f2": 9.0}}],
+        )
+        forward = self._call(client, ["f1", "f2"]).json()
+
+        self._setup(
+            mock_factory,
+            declared=["f1", "f2"],
+            individuals=[[1.0, 9.0]],
+            stored_front=[{"objectives": {"f1": 1.0, "f2": 9.0}}],
+        )
+        reversed_ = self._call(client, ["f2", "f1"]).json()
+
+        assert forward["gd"][0] == pytest.approx(0.0, abs=1e-12)
+        assert reversed_["gd"][0] == pytest.approx(0.0, abs=1e-12)
+
+    def test_unknown_objective_is_rejected(self, mock_factory, client):
+        self._setup(mock_factory, declared=["f1", "f2"], individuals=[[1.0, 9.0]],
+                    stored_front=[{"objectives": {"f1": 1.0, "f2": 9.0}}])
+        response = self._call(client, ["f1", "nope"])
+        assert response.status_code == 422
+        assert "nope" in response.json()["detail"]
+
+    def test_a_subset_request_refuses_the_analytical_front(self, mock_factory, client):
+        """DTLZ2 with M=3 read on two axes is not DTLZ2 with M=2."""
+        self._setup(
+            mock_factory,
+            declared=["f1", "f2", "f3"],
+            individuals=[[0.5, 0.5, 0.5]],
+            stored_front=[{"objectives": {"f1": 0.5, "f2": 0.5, "f3": 0.5}}],
+            synthetic="DTLZ2",
+        )
+        data = self._call(client, ["f1", "f2"]).json()
+        assert data["reference"] == "final_front"
+        assert data["gd_method"] == "reference_front"
+
+    @pytest.mark.parametrize("normalize", [True, False])
+    @pytest.mark.parametrize("point", [[0.25, 0.5], [0.25, 0.8]])
+    def test_a_permuted_request_keeps_the_analytical_front(
+        self, mock_factory, client, normalize, point,
+    ):
+        """An interior ZDT1 point exposes the asymmetry hidden by its endpoints.
+
+        Both on-front and off-front distances must be invariant under an axis
+        permutation, as must HV/IGD/IGD+. Test raw and normalized distances.
+        """
+        self._setup(mock_factory, declared=["f1", "f2"],
+                    individuals=[point], synthetic="ZDT1")
+        results = []
+        for order in (["f1", "f2"], ["f2", "f1"]):
+            params = [("objectives", o) for o in order]
+            params += [("minimize", "true")] * 2 + [("normalize", str(normalize).lower())]
+            response = client.get(f"{BASE}/{EXP_ID}/hv-gd", params=params)
+            assert response.status_code == 200
+            results.append(response.json())
+        forward, permuted = results
+        assert forward["reference"] == permuted["reference"] == "true_front"
+        assert forward["gd_method"] == permuted["gd_method"] == "analytical"
+        for metric in ("gd", "hv", "igd", "igd_plus"):
+            assert permuted[metric] == pytest.approx(forward[metric], abs=1e-12)
+        if point == [0.25, 0.5]:
+            assert forward["gd"][0] == pytest.approx(0.0, abs=1e-12)
+        else:
+            assert forward["gd"][0] > 0.0
+
+    def test_all_individuals_penalized_returns_the_empty_shape(self, mock_factory, client):
+        """`max()` over the empty set used to surface as a 500."""
+        self._setup(
+            mock_factory,
+            declared=["f1", "f2"],
+            individuals=[[1e9, 1e9], [1e10, 1e10]],
+            stored_front=[{"objectives": {"f1": 1.0, "f2": 9.0}}],
+        )
+        response = self._call(client, ["f1", "f2"])
+        assert response.status_code == 200
+        assert response.json()["generations"] == []
+
+    def test_synthetic_run_without_a_stored_front_still_reports(self, mock_factory, client):
+        """The analytical front needs no stored one; the early return denied it."""
+        self._setup(
+            mock_factory,
+            declared=["f1", "f2"],
+            individuals=[[0.5, 0.5]],
+            stored_front=None,
+            synthetic="ZDT1",
+        )
+        data = self._call(client, ["f1", "f2"]).json()
+        assert data["reference"] == "true_front"
+        assert data["generations"] == [0]
+        assert data["gd"][0] is not None
+
+    def test_non_synthetic_run_without_a_stored_front_is_still_empty(self, mock_factory, client):
+        """There is no reference to measure against in that case."""
+        self._setup(mock_factory, declared=["f1", "f2"], individuals=[[0.5, 0.5]],
+                    stored_front=None)
+        assert self._call(client, ["f1", "f2"]).json()["generations"] == []
+
+    def test_experiments_without_declared_objectives_keep_positional_order(
+        self, mock_factory, client
+    ):
+        """Documents written before objectives were declared have nothing to
+        resolve against."""
+        self._setup(mock_factory, declared=[], individuals=[[1.0, 9.0]],
+                    stored_front=[{"objectives": {"f1": 1.0, "f2": 9.0}}])
+        data = self._call(client, ["f1", "f2"]).json()
+        assert data["gd"][0] == pytest.approx(0.0, abs=1e-12)
+
+# ── GET /{experiment_id}/hv-gd — analytical GD ────────────────────────────────
+class TestHvGdAnalyticalDistance:
+    """Phase 4: for a known benchmark, GD is the exact distance to the true
+    front instead of the mean nearest-neighbour distance to a sampled one.
+
+    The audit measured points lying EXACTLY on the DTLZ2 front scoring GD 0.19
+    at M=6 against the 500-point reference — pure discretisation, reported as
+    lack of convergence.
+    """
+
+    def _setup(self, mock_factory, bench, objectives, individuals):
+        doc = sample_experiment()
+        doc["parameters"]["simulation"] = {"synthetic": {"enabled": True, "bench": bench}}
+        doc["pareto_front"] = [{"objectives": dict(zip(objectives, individuals[0]))}]
+        mock_factory.experiment_repo.get.return_value = doc
+        mock_factory.generation_repo.find_by_experiment.return_value = [
+            {"_id": ObjectId(GEN_ID), "index": 0}
+        ]
+        mock_factory.individual_repo.find_grouped_by_experiment.return_value = {ObjectId(GEN_ID): [
+            {"objectives": o} for o in individuals
+        ]}
+        return doc
+
+    def _call(self, client, objectives):
+        q = "&".join(
+            [f"objectives={o}" for o in objectives] + ["minimize=true"] * len(objectives)
+        )
+        return client.get(f"{BASE}/{EXP_ID}/hv-gd?{q}").json()
+
+    def test_points_on_the_true_front_score_zero(self, client, mock_factory):
+        """Three points exactly on the DTLZ2 unit sphere, M=3."""
+        on_sphere = [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [3 ** -0.5, 3 ** -0.5, 3 ** -0.5],
+        ]
+        self._setup(mock_factory, "DTLZ2", ["f1", "f2", "f3"], on_sphere)
+        data = self._call(client, ["f1", "f2", "f3"])
+        assert data["gd_method"] == "analytical"
+        assert data["gd"][0] == pytest.approx(0.0, abs=1e-12)
+
+    def test_distance_is_the_radial_error_on_dtlz2(self, client, mock_factory):
+        """A point at twice the radius sits exactly 1.0 from the front."""
+        self._setup(mock_factory, "DTLZ2", ["f1", "f2", "f3"], [[2.0, 0.0, 0.0]])
+        assert self._call(client, ["f1", "f2", "f3"])["gd"][0] == pytest.approx(1.0, abs=1e-12)
+
+    def test_sch1_distance_is_divided_by_the_analytical_range(self, client, mock_factory):
+        """SCH1's theoretical range is [0,4] on both axes, so raw / 4."""
+        # (0, 4) is the front's endpoint at x=0; (0, 5) is 1.0 away from it.
+        self._setup(mock_factory, "SCH1", ["f1", "f2"], [[0.0, 5.0]])
+        data = self._call(client, ["f1", "f2"])
+        assert data["gd_method"] == "analytical"
+        assert data["gd"][0] == pytest.approx(0.25, abs=1e-9)
+
+    def test_non_synthetic_keeps_the_reference_front(self, client, mock_factory):
+        doc = sample_experiment()          # no synthetic block
+        doc["pareto_front"] = [{"objectives": {"f1": 0.5, "f2": 0.3}}]
+        mock_factory.experiment_repo.get.return_value = doc
+        mock_factory.generation_repo.find_by_experiment.return_value = [
+            {"_id": ObjectId(GEN_ID), "index": 0}
+        ]
+        mock_factory.individual_repo.find_grouped_by_experiment.return_value = {ObjectId(GEN_ID): [
+            {"objectives": [0.5, 0.3]}
+        ]}
+        data = self._call(client, ["f1", "f2"])
+        assert data["gd_method"] == "reference_front"
+        assert data["normalization"] == "reference front ideal-nadir range"
+
+    def test_response_states_how_gd_was_measured(self, client, mock_factory):
+        self._setup(mock_factory, "DTLZ2", ["f1", "f2", "f3"], [[1.0, 0.0, 0.0]])
+        data = self._call(client, ["f1", "f2", "f3"])
+        assert data["normalization"] == "analytical ideal-nadir range"
+        assert "distance to the true front" in data["gd_formula"]
+
+    def test_unknown_bench_falls_back_to_the_reference_front(self, client, mock_factory):
+        self._setup(mock_factory, "NOPE", ["f1", "f2"], [[0.5, 0.3]])
+        assert self._call(client, ["f1", "f2"])["gd_method"] == "reference_front"
+
+# ── GET /{experiment_id}/hv-gd?population=… ───────────────────────────────────
+class TestHvGdMeasuredPopulation:
+    """Phase 1 of the NSGA metrics fix plan: which set each generation is
+    measured on.
+
+    The scenario is the one the audit reproduced. Generation 1's offspring are
+    all worse than the parents environmental selection kept, so the offspring
+    curve regresses while the search has not: measuring Q_t instead of P_t makes
+    a healthy run look like it is losing ground.
+    """
+
+    GEN0 = ObjectId("507f1f77bcf86cd799439021")
+    GEN1 = ObjectId("507f1f77bcf86cd799439022")
+
+    # Gen 0 population; "c" is dominated by neither extreme but is mid-front.
+    _GEN0 = [
+        {"individual_id": "a", "objectives": [0.1, 0.9]},
+        {"individual_id": "b", "objectives": [0.9, 0.1]},
+        {"individual_id": "c", "objectives": [0.5, 0.5]},
+    ]
+    # Gen 1 offspring: a single bad child, dominated by "c".
+    _GEN1 = [{"individual_id": "d", "objectives": [0.8, 0.8]}]
+
+    def _setup(self, mock_factory, survivors=None):
+        doc = sample_experiment()
+        doc["parameters"]["simulation"] = {"synthetic": {"enabled": True, "bench": "ZDT1"}}
+        doc["pareto_front"] = [{"objectives": {"f1": 0.1, "f2": 0.9}}]
+        mock_factory.experiment_repo.get.return_value = doc
+
+        gen0 = {"_id": self.GEN0, "index": 0}
+        gen1 = {"_id": self.GEN1, "index": 1}
+        if survivors is not None:
+            gen0["survivors"] = ["a", "b", "c"]
+            # Every gen-1 offspring lost: P_1 is carried over from gen 0, whose
+            # documents live in the PREVIOUS generation. Resolving these hashes
+            # is only possible experiment-wide.
+            gen1["survivors"] = survivors
+        mock_factory.generation_repo.find_by_experiment.return_value = [gen0, gen1]
+        mock_factory.individual_repo.find_grouped_by_experiment.return_value = {self.GEN0: self._GEN0, self.GEN1: self._GEN1}
+        return doc
+
+    def _call(self, client, population=None):
+        q = "objectives=f1&objectives=f2&minimize=true&minimize=true"
+        if population is not None:
+            q += f"&population={population}"
+        return client.get(f"{BASE}/{EXP_ID}/hv-gd?{q}")
+
+    def test_survivors_is_the_default(self, client, mock_factory):
+        self._setup(mock_factory, survivors=["a", "b"])
+        data = self._call(client).json()
+        assert data["population"] == "survivors"
+        assert data["population_source"] == "survivors"
+
+    def test_survivor_curve_holds_where_the_offspring_curve_regresses(self, client, mock_factory):
+        self._setup(mock_factory, survivors=["a", "b"])
+        survivors = self._call(client, "survivors").json()
+        self._setup(mock_factory, survivors=["a", "b"])
+        offspring = self._call(client, "offspring").json()
+
+        # Same run, same evaluations, same reference point — only the measured
+        # set differs. This is finding 1 in one assertion.
+        assert offspring["hv"][1] < offspring["hv"][0]
+        assert survivors["hv"][1] > offspring["hv"][1]
+        assert survivors["gd"][1] < offspring["gd"][1]
+
+    def test_survivors_resolve_across_generations(self, client, mock_factory):
+        """A survivor kept from an older generation has no document of its own
+        in the generation that kept it."""
+        self._setup(mock_factory, survivors=["a", "b"])
+        data = self._call(client, "survivors").json()
+        # ND{(0.1,0.9),(0.9,0.1)} against ref 1.1·nadir = [1.1, 1.1]:
+        # 1.0·0.2 + 0.2·1.0 − overlap 0.2·0.2 = 0.36
+        assert data["hv"][1] == pytest.approx(0.36, rel=1e-9)
+
+    def test_missing_survivor_sets_fall_back_to_offspring(self, client, mock_factory):
+        """Runs recorded before survivors were persisted must still plot."""
+        self._setup(mock_factory, survivors=None)
+        data = self._call(client, "survivors").json()
+        assert data["population"] == "survivors"
+        assert data["population_source"] == "offspring"
+        assert data["hv"][1] > 0.0
+
+    @pytest.mark.parametrize("missing_index", [0, 1])
+    @pytest.mark.parametrize("include_cumulative", [True, False])
+    def test_partial_survivor_history_reports_each_measured_population(
+        self, client, mock_factory, missing_index, include_cumulative,
+    ):
+        """Legacy generations and a currently evaluating generation lack P_t.
+
+        Only those generations fall back to Q_t; the other generations must
+        still measure survivors, and the archive remains independent of this.
+        """
+        self._setup(mock_factory, survivors=["a", "b"])
+        expected_survivors = self._call(client, "survivors").json()
+        expected_offspring = self._call(client, "offspring").json()
+        gens = mock_factory.generation_repo.find_by_experiment.return_value
+        del gens[missing_index]["survivors"]
+        response = client.get(f"{BASE}/{EXP_ID}/hv-gd", params={
+            "objectives": ["f1", "f2"], "minimize": ["true", "true"],
+            "population": "survivors", "include_cumulative": include_cumulative,
+        })
+        assert response.status_code == 200
+        data = response.json()
+        assert data["population_source"] == "mixed"
+        assert data["population_sources"] == [
+            "offspring" if i == missing_index else "survivors" for i in range(2)
+        ]
+        for metric in ("hv", "gd", "igd", "igd_plus"):
+            expected = [
+                (expected_offspring if i == missing_index else expected_survivors)[metric][i]
+                for i in range(2)
+            ]
+            assert data[metric] == pytest.approx(expected)
+        assert data["hv_cumulative"] == (
+            expected_survivors["hv_cumulative"] if include_cumulative else []
+        )
+
+    def test_explicit_empty_survivors_do_not_fall_back(self, client, mock_factory):
+        self._setup(mock_factory, survivors=[])
+        data = self._call(client, "survivors").json()
+        assert data["population_source"] == "survivors"
+        assert data["population_sources"] == ["survivors", "survivors"]
+        assert data["hv"][1] == 0.0
+        assert data["gd"][1] is None
+
+    def test_archive_makes_every_metric_cumulative(self, client, mock_factory):
+        """Not only HV: the 'Cumulative' view used to leave GD/IGD on Q_t."""
+        self._setup(mock_factory, survivors=["a", "b"])
+        data = self._call(client, "archive").json()
+        assert data["hv"] == pytest.approx(data["hv_cumulative"])
+        assert data["gd"][1] <= data["gd"][0]
+
+    def test_cumulative_hv_ignores_the_measured_population(self, client, mock_factory):
+        """The archive folds in the offspring whichever set is reported —
+        survivors are a subset of earlier offspring, so restricting the fold to
+        them would silently shrink the best-so-far front."""
+        self._setup(mock_factory, survivors=["a", "b"])
+        survivors = self._call(client, "survivors").json()
+        self._setup(mock_factory, survivors=["a", "b"])
+        offspring = self._call(client, "offspring").json()
+        assert survivors["hv_cumulative"] == pytest.approx(offspring["hv_cumulative"])
+
+    def test_unknown_population_is_rejected(self, client, mock_factory):
+        self._setup(mock_factory, survivors=["a", "b"])
+        assert self._call(client, "elite").status_code == 422
 
 # ── POST /{experiment_id}/plot-pareto ─────────────────────────────────────────
 class TestPlotPareto:

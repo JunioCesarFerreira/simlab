@@ -19,6 +19,7 @@ from pylib import benchmarks, moo_metrics
 from pylib.db import MongoRepository
 from pylib.db.models.enums import EnumStatus
 from api.dependencies import get_factory
+from api.metrics_cache import hv_gd_cache
 from api.domain.experiment import ExperimentDto, ExperimentFullDto, ExperimentInfoDto
 from api.mappers.experiment import (
     experiment_from_mongo,
@@ -84,10 +85,11 @@ def get_experiment_full(
         sims_by_individual = factory.simulation_repo.find_ids_grouped_by_individual(
             ObjectId(experiment_id)
         )
+        individuals = factory.individual_repo.find_grouped_by_experiment(ObjectId(experiment_id))
         generations = [
             generation_from_mongo(
                 g,
-                factory.individual_repo.find_by_generation(g["_id"]),
+                individuals.get(g["_id"], []),
                 sims_by_individual,
             )
             for g in gens
@@ -480,31 +482,13 @@ def _is_penalized(objs: list[float]) -> bool:
     return any(abs(v) >= _PENALTY_THRESHOLD for v in objs)
 
 
-def _dominates(a: list[float], b: list[float], minimize: list[bool]) -> bool:
-    """True if a dominates b (at least as good everywhere, strictly better somewhere)."""
-    better = False
-    for ai, bi, m in zip(a, b, minimize):
-        if (m and ai > bi) or (not m and ai < bi):
-            return False
-        if (m and ai < bi) or (not m and ai > bi):
-            better = True
-    return better
-
-
-def _pareto_front(objs_list: list[list[float]], minimize: list[bool]) -> list[int]:
-    """Returns indices of the non-dominated (rank-0) individuals."""
-    n = len(objs_list)
-    dominated = [False] * n
-    for i in range(n):
-        if dominated[i]:
-            continue
-        for j in range(n):
-            if i == j:
-                continue
-            if _dominates(objs_list[j], objs_list[i], minimize):
-                dominated[i] = True
-                break
-    return [i for i in range(n) if not dominated[i]]
+def _front_rows(objs_list: list[list[float]], minimize: list[bool]) -> list[list[float]]:
+    """Deduplicated non-dominated subset, returned in minimization space."""
+    if not objs_list:
+        return []
+    points = np.asarray(objs_list, dtype=float)
+    points *= np.where(minimize, 1.0, -1.0)
+    return moocore.filter_dominated(points).tolist()
 
 
 def _empty_hv_gd() -> dict:
@@ -520,6 +504,12 @@ def _empty_hv_gd() -> dict:
         "reference_size": 0,
         "normalized": False,
         "worst_point": {},
+        "population": None,
+        "population_source": None,
+        "population_sources": [],
+        "gd_method": None,
+        "gd_formula": None,
+        "normalization": None,
     }
 
 
@@ -528,6 +518,22 @@ def get_hv_gd(
     experiment_id: str,
     objectives: list[str] = Query(...),
     minimize: list[str] = Query(...),
+    population: str = Query(
+        "survivors",
+        pattern="^(survivors|offspring|archive)$",
+        description=(
+            "Which set each generation is measured on. 'survivors' is the "
+            "population environmental selection kept (P_t) — what the algorithm "
+            "carries forward and what the reference notebooks plot. 'offspring' "
+            "is the children evaluated in that generation (Q_t): it swings with "
+            "each batch and can drop while the search still holds a better "
+            "parent. 'archive' is the non-dominated set of everything seen so "
+            "far, which is monotone in HV by construction. Generations without "
+            "a persisted survivor set fall back to 'offspring'; the response "
+            "reports each generation's set in 'population_sources'; "
+            "'population_source' is 'mixed' when the series uses both sets."
+        ),
+    ),
     normalize: bool = Query(
         True,
         description=(
@@ -537,8 +543,12 @@ def get_hv_gd(
         ),
     ),
     factory: MongoRepository = Depends(get_factory),
+    include_cumulative: bool = True,
 ) -> dict:
-    """Compute hypervolume, GD, IGD and IGD+ per generation."""
+    """Compute exact indicators. Set include_cumulative=false to omit the extra
+    archive HV series (hv_cumulative=[]), avoiding its cost for population plots.
+    The selected population's HV/GD/IGD/IGD+ remain unchanged.
+    """
     try:
         exp_oid = ObjectId(experiment_id)
     except bson_errors.InvalidId:
@@ -555,32 +565,100 @@ def get_hv_gd(
     if not doc:
         raise HTTPException(status_code=404, detail="Experiment not found")
 
-    stored_pf: list[dict] = doc.get("pareto_front") or []
-    if not stored_pf:
-        return _empty_hv_gd()
+    gens = factory.generation_repo.find_by_experiment(exp_oid)
+    individuals = factory.individual_repo.find_grouped_by_experiment(
+        exp_oid, objectives_only=True,
+    )
+    # Read current inputs before looking up the cache: objective updates within
+    # an existing generation and newly persisted survivor sets must invalidate it.
+    # Chromosomes, simulations and unrelated experiment metadata are excluded.
+    inputs = [
+        objectives, minimize, population, normalize, include_cumulative,
+        (doc.get("parameters") or {}).get("objectives"),
+        ((doc.get("parameters") or {}).get("simulation") or {}).get("synthetic"),
+        [p.get("objectives") for p in doc.get("pareto_front") or []],
+        [[g["index"], g.get("survivors"),
+          [[i.get("individual_id"), i.get("objectives")]
+           for i in individuals.get(g["_id"], [])]] for g in gens],
+    ]
+    return hv_gd_cache.get_or_compute(
+        inputs,
+        lambda: _compute_hv_gd(doc, gens, individuals, objectives, minimize, population,
+                               normalize, include_cumulative),
+    )
 
+
+def _compute_hv_gd(
+    doc: dict, gens: list[dict], individuals: dict,
+    objectives: list[str], minimize: list[str], population: str, normalize: bool,
+    include_cumulative: bool = True,
+) -> dict:
+    n_obj = len(objectives)
+    stored_pf: list[dict] = doc.get("pareto_front") or []
     minimize_bools = [m.lower() == "true" for m in minimize]
 
-    # ── Fetch generations + individuals directly from DB ─────────────────────
-    gens = factory.generation_repo.find_by_experiment(exp_oid)
+    # Individuals store their objectives as a POSITIONAL list, in the order the
+    # experiment declared them. Reading the first n_obj entries instead of
+    # looking the names up silently mismatches the moment the request reorders
+    # or subsets the objectives: asking for [f2, f1] used to compare f2 against
+    # the f1 reference, which turned a GD of 0 into 11.31.
+    declared = ((doc.get("parameters") or {}).get("objectives") or [])
+    canonical = [str(o.get("metric_name")) for o in declared if o.get("metric_name")]
+    if canonical:
+        unknown = [o for o in objectives if o not in canonical]
+        if unknown:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Unknown objective(s) {unknown}; this experiment declares "
+                    f"{canonical}."
+                ),
+            )
+        objective_columns = [canonical.index(o) for o in objectives]
+    else:
+        # Experiments written before objectives were declared on the document
+        # have nothing to resolve against; positional order is all there is.
+        objective_columns = list(range(n_obj))
 
+    # ── Resolve the projected individuals and survivor sets ──────────────────
     individuals_per_gen: dict[int, list[list[float]]] = {}
+    # Survivors are chromosome hashes, and one may have been evaluated in an
+    # older generation, so they are resolved against the whole experiment.
+    objectives_by_hash: dict[str, list[float]] = {}
+    survivor_hashes_per_gen: dict[int, list[str]] = {}
     for gen in gens:
         gen_idx: int = gen["index"]
-        individuals = factory.individual_repo.find_by_generation(gen["_id"])
         valid: list[list[float]] = []
-        for ind in individuals:
+        for ind in individuals.get(gen["_id"], []):
             raw = ind.get("objectives") or []
-            if len(raw) < n_obj:
+            if len(raw) <= max(objective_columns):
                 continue
-            objs = [float(raw[i]) for i in range(n_obj)]
-            if _is_penalized(objs):
+            objs = [float(raw[i]) for i in objective_columns]
+            if _is_penalized(objs) or not np.isfinite(objs).all():
                 continue
             valid.append(objs)
+            ind_hash = ind.get("individual_id")
+            if ind_hash:
+                objectives_by_hash[ind_hash] = objs
         individuals_per_gen[gen_idx] = valid
+        stored_survivors = gen.get("survivors")
+        if stored_survivors is not None:
+            survivor_hashes_per_gen[gen_idx] = list(stored_survivors)
 
     if not individuals_per_gen:
         return _empty_hv_gd()
+
+    # Legacy generations, incomplete generations and failed metadata writes can
+    # leave P_t unavailable. Fall back only for those generations and report
+    # their source: a mixed series is not a homogeneous survivor trajectory.
+    generations_sorted = sorted(individuals_per_gen)
+    population_sources = [
+        "offspring" if population == "survivors" and g not in survivor_hashes_per_gen
+        else population for g in generations_sorted
+    ]
+    sources = set(population_sources)
+    population_source = population_sources[0] if len(sources) == 1 else "mixed"
+    needs_archive = include_cumulative or population == "archive"
 
     # ── Reference front (GD/IGD/IGD+) + HV reference point ───────────────────
     # Synthetic experiments have a closed-form true Pareto front: use it as the
@@ -590,18 +668,45 @@ def get_hv_gd(
     # empirical references (own stored front + population-derived worst point).
     syn = (((doc.get("parameters") or {}).get("simulation") or {}).get("synthetic") or {})
     bench = syn.get("bench")
-    is_synthetic = bool(syn.get("enabled")) and bool(bench) and all(minimize_bools)
+    # A benchmark's front is defined for the FULL objective set it was run with.
+    # The front of a projection onto fewer objectives is not the front of the
+    # smaller benchmark — DTLZ2 with M=3 read on two axes is not DTLZ2 M=2 — so
+    # a subset request falls back to the empirical reference. A permutation is
+    # fine: the analytical front is reordered to match below.
+    covers_all_objectives = bool(canonical) and sorted(objectives) == sorted(canonical)
+    is_synthetic = (
+        bool(syn.get("enabled"))
+        and bool(bench)
+        and all(minimize_bools)
+        and (covers_all_objectives or not canonical)
+    )
 
     reference_kind = "final_front"
     reference_front = None
     hv_ref: list[float] = []
+    # Theoretical ideal-nadir range, when the benchmark provides one. Used both
+    # to normalise the indicators (instead of the sampled reference's extremes,
+    # which depend on how that sample was drawn) and to decide whether GD can
+    # take the exact route below.
+    analytical_bounds: tuple[np.ndarray, np.ndarray] | None = None
     if is_synthetic:
         try:
-            reference_front = benchmarks.true_front(bench, n_obj)
-            hv_ref = [v * 1.1 for v in benchmarks.nadir(bench, n_obj)]
+            # Built in the experiment's declared order, then reordered to the
+            # request. ZDT1 is not symmetric in its objectives, so a permuted
+            # request needs a permuted front, not the same one.
+            columns = objective_columns if canonical else list(range(n_obj))
+            reference_front = benchmarks.true_front(bench, n_obj)[:, columns]
+            nadir = benchmarks.nadir(bench, n_obj)
+            ideal = benchmarks.ideal(bench, n_obj)
+            hv_ref = [nadir[i] * 1.1 for i in columns]
+            analytical_bounds = (
+                np.array([ideal[i] for i in columns], dtype=float),
+                np.array([nadir[i] for i in columns], dtype=float),
+            )
             reference_kind = "true_front"
-        except ValueError:
+        except (ValueError, IndexError):
             is_synthetic = False  # unknown benchmark → fall back to empirical
+            analytical_bounds = None
 
     if not is_synthetic:
         # Reference point in MINIMIZATION space, consistent with pts_min below.
@@ -612,8 +717,17 @@ def get_hv_gd(
             [o[i] if minimize_bools[i] else -o[i] for i in range(n_obj)]
             for v in individuals_per_gen.values() for o in v
         ]
+        # Every individual penalised (or none feasible) leaves nothing to derive
+        # a reference point from; max() on the empty set used to raise a 500.
+        if not all_min:
+            return _empty_hv_gd()
         worst = [max(row[i] for row in all_min) for i in range(n_obj)]
         hv_ref = [v + abs(v) * 0.05 + 1.0 for v in worst]
+        # The stored front is the empirical reference. Only this branch needs
+        # it, so a synthetic run with none still gets its analytical series —
+        # the early return here used to deny them to every experiment alike.
+        if not stored_pf:
+            return _empty_hv_gd()
         ref_min_rows: list[list[float]] = []
         for p in stored_pf:
             objs_dict: dict = p.get("objectives") or {}
@@ -638,6 +752,32 @@ def get_hv_gd(
 
     hv_ref_arr = np.array(hv_ref, dtype=float)
 
+    # GD is the mean distance from each front point to the true front. With a
+    # sampled reference that mean cannot go below the sample's fill distance —
+    # points sitting EXACTLY on the DTLZ2 front score 0.19 at M=6 against the
+    # 500-point reference, and still 0.05 against 200 000 points, because the
+    # fill distance of a (M-1)-dimensional manifold shrinks only as
+    # N**(-1/(M-1)). Where the distance has a closed form, use it: the same
+    # points then score ~5e-17. IGD and IGD+ average over the reference set
+    # itself, so they keep the sampled front and its floor.
+    gd_scale: float | None = None
+    if analytical_bounds is not None:
+        scale = moo_metrics.analytical_scale(*analytical_bounds)
+        # The closed forms are Euclidean in raw space, so only an isotropic
+        # range carries through exactly. All current benchmarks have one.
+        if np.allclose(scale, scale[0]):
+            gd_scale = float(scale[0]) if normalize else 1.0
+    gd_method = "analytical" if gd_scale is not None else "reference_front"
+
+    distance_reference = reference_front
+    if normalize:
+        if analytical_bounds is None:
+            distance_ideal, distance_scale = moo_metrics.normalization_bounds(reference_front)
+        else:
+            distance_ideal = analytical_bounds[0]
+            distance_scale = moo_metrics.analytical_scale(*analytical_bounds)
+        distance_reference = moo_metrics.normalize(reference_front, distance_ideal, distance_scale)
+
     # ── Per-generation HV / GD / IGD / IGD+ ──────────────────────────────────
     # GD, IGD and IGD+ are three readings of the same comparison and are cheap
     # once the reference front is in hand, so all three are returned: GD alone
@@ -645,14 +785,14 @@ def get_hv_gd(
     # the spread requirement, and IGD+ is the Pareto-compliant variant.
     #
     # Two HV curves are returned:
-    #   • hv            — each generation's OWN Pareto front ("current" view).
+    #   • hv            — the Pareto front of the SELECTED population (see the
+    #     ``population`` parameter) at each generation.
     #   • hv_cumulative — the front of every individual seen up to and including
-    #     the generation ("best-so-far"). It is monotonically non-decreasing and
-    #     built incrementally: the running non-dominated set is folded with each
-    #     generation's front (never the whole population), keeping the cost at
-    #     O(G · front²) instead of O(G · population²).
-    generations_sorted = sorted(individuals_per_gen.keys())
-    all_min_bools = [True] * n_obj      # min-space domination for the acc. front
+    #     the generation ("best-so-far"). It is monotonically non-decreasing,
+    #     independent of ``population``, and built incrementally: the running
+    #     non-dominated set is folded with each generation's offspring front
+    #     using moocore's native dominance filter. With ``population=archive`` the two
+    #     curves coincide by construction.
     hv_values: list[float] = []
     hv_cumulative: list[float] = []
     gd_values: list[float | None] = []
@@ -663,63 +803,94 @@ def get_hv_gd(
     acc_rows: list[list[float]] = []    # running non-dominated set (min-space)
     last_cum_hv = 0.0
 
-    for gen_idx in generations_sorted:
-        pop_objs = individuals_per_gen[gen_idx]
-        front_idx = _pareto_front(pop_objs, minimize_bools) if pop_objs else []
-        if not front_idx:
+    for gen_idx, generation_source in zip(generations_sorted, population_sources):
+        # The archive always folds in the OFFSPRING, whichever set is reported:
+        # it is the set of everything evaluated, and survivors are a subset of
+        # earlier offspring. A point off its own generation's front is dominated
+        # within that generation too, so it can never join the accumulated front
+        # — merging the front alone keeps the set minimal.
+        offspring_rows = (
+            _front_rows(individuals_per_gen.get(gen_idx, []), minimize_bools)
+            if needs_archive or generation_source == "offspring" else []
+        )
+        new_rows = (
+            [row for row in offspring_rows if tuple(row) not in acc_seen] if needs_archive else []
+        )
+        archive_changed = False
+        if new_rows:
+            merged = moocore.filter_dominated(np.asarray(acc_rows + new_rows, dtype=float)).tolist()
+            merged_keys = {tuple(r) for r in merged}
+            archive_changed = merged_keys != acc_seen
+            acc_rows, acc_seen = merged, merged_keys
+
+        if generation_source == "survivors":
+            survivor_objs = [
+                objectives_by_hash[h]
+                for h in survivor_hashes_per_gen.get(gen_idx, [])
+                if h in objectives_by_hash
+            ]
+            pts_min_rows = _front_rows(survivor_objs, minimize_bools)
+        elif generation_source == "archive":
+            pts_min_rows = acc_rows
+        else:
+            pts_min_rows = offspring_rows
+
+        cum_hv = last_cum_hv
+        if archive_changed:
+            acc_arr = np.asarray(acc_rows, dtype=float)
+            acc_dom = acc_arr[np.all(acc_arr < hv_ref_arr, axis=1)]
+            cum_hv = float(moocore.hypervolume(acc_dom, ref=hv_ref)) if len(acc_dom) else 0.0
+        last_cum_hv = cum_hv
+
+        if not pts_min_rows:
             hv_values.append(0.0)
-            hv_cumulative.append(last_cum_hv)   # empty gen adds nothing new
+            hv_cumulative.append(cum_hv)
             gd_values.append(None)
             igd_values.append(None)
             igd_plus_values.append(None)
             continue
 
-        # Minimization space + dedup by objective tuple
-        seen_pts: set[tuple] = set()
-        pts_min_rows: list[list[float]] = []
-        for i in front_idx:
-            key = tuple(
-                pop_objs[i][j] if minimize_bools[j] else -pop_objs[i][j]
-                for j in range(n_obj)
-            )
-            if key not in seen_pts:
-                seen_pts.add(key)
-                pts_min_rows.append(list(key))
         pts_min = np.array(pts_min_rows, dtype=float)
 
         # HV: only points that strictly dominate the (fixed) reference contribute.
         dominating = pts_min[np.all(pts_min < hv_ref_arr, axis=1)]
-        hv_val = float(moocore.hypervolume(dominating, ref=hv_ref)) if len(dominating) else 0.0
-
-        # Cumulative HV: fold this generation's front into the running
-        # non-dominated set, then re-filter. A point off its own generation's
-        # front is dominated within that generation too, so it can never join the
-        # accumulated front — merging the front alone keeps the set minimal.
-        for row in pts_min_rows:
-            key = tuple(row)
-            if key not in acc_seen:
-                acc_seen.add(key)
-                acc_rows.append(row)
-        nd_idx = _pareto_front(acc_rows, all_min_bools)
-        acc_rows = [acc_rows[i] for i in nd_idx]
-        acc_seen = {tuple(r) for r in acc_rows}
-        acc_arr = np.array(acc_rows, dtype=float)
-        acc_dom = acc_arr[np.all(acc_arr < hv_ref_arr, axis=1)]
-        cum_hv = float(moocore.hypervolume(acc_dom, ref=hv_ref)) if len(acc_dom) else 0.0
-        last_cum_hv = cum_hv
+        hv_val = cum_hv if generation_source == "archive" else (
+            float(moocore.hypervolume(dominating, ref=hv_ref)) if len(dominating) else 0.0
+        )
 
         hv_values.append(hv_val)
         hv_cumulative.append(cum_hv)
-        gd_values.append(moo_metrics.gd(pts_min, reference_front, normalized=normalize))
-        igd_values.append(moo_metrics.igd(pts_min, reference_front, normalized=normalize))
+        distance_points = (
+            moo_metrics.normalize(pts_min, distance_ideal, distance_scale) if normalize else pts_min
+        )
+        if gd_scale is not None:
+            # The sampled reference follows the request order, but the analytical
+            # function is defined in benchmark order. Undo the permutation.
+            benchmark_points = pts_min[:, np.argsort(objective_columns)]
+            gd_values.append(
+                moo_metrics.gd_analytical(
+                    benchmarks.front_distance(bench, benchmark_points, n_obj), scale=gd_scale
+                )
+            )
+        else:
+            gd_values.append(
+                moo_metrics.gd(distance_points, distance_reference, normalized=False)
+            )
+        igd_values.append(
+            moo_metrics.igd(
+                distance_points, distance_reference, normalized=False
+            )
+        )
         igd_plus_values.append(
-            moo_metrics.igd_plus(pts_min, reference_front, normalized=normalize)
+            moo_metrics.igd_plus(
+                distance_points, distance_reference, normalized=False
+            )
         )
 
     return {
         "generations": generations_sorted,
         "hv": hv_values,
-        "hv_cumulative": hv_cumulative,
+        "hv_cumulative": hv_cumulative if include_cumulative else [],
         "gd": gd_values,
         "igd": igd_values,
         "igd_plus": igd_plus_values,
@@ -727,4 +898,15 @@ def get_hv_gd(
         "reference_size": int(len(reference_front)),
         "normalized": bool(normalize),
         "worst_point": dict(zip(objectives, hv_ref)),
+        "population": population,
+        "population_source": population_source,
+        "population_sources": population_sources,
+        # What the numbers mean, so a plot can label itself and two runs can be
+        # compared knowingly. "analytical" GD is the exact distance to the true
+        # front; "reference_front" is the mean nearest-neighbour distance to the
+        # reference, which carries that sample's discretisation floor.
+        "gd_method": gd_method,
+        "gd_formula": "mean of each front point's distance to the true front (p=1)",
+        "normalization": "analytical ideal-nadir range" if analytical_bounds is not None
+                         else "reference front ideal-nadir range",
     }

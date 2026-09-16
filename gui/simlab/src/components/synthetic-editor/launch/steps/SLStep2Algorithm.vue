@@ -78,7 +78,7 @@
           @input="updateNum('divisions', ($event.target as HTMLInputElement).value, 'int')"
         />
         <span class="hint-small">Das-Dennis reference points for NSGA-III niching.</span>
-        <div class="h-calc" :class="{ warn: refPointsExceedPop }">
+        <div class="h-calc" :class="{ warn: refPointsExceedPop || refPointsStarvePop }">
           <span>
             H = C(M+p−1, p) = C({{ objectivesCount + modelValue.divisions - 1 }}, {{ modelValue.divisions }}) =
             <strong>{{ refPoints }}</strong> reference points
@@ -91,6 +91,14 @@
             @click="updateNum('populationSize', String(suggestedPop), 'int')"
           >
             set population to {{ suggestedPop }}
+          </button>
+          <button
+            v-else-if="refPointsStarvePop && suggestedP > modelValue.divisions"
+            class="h-calc-apply"
+            title="Far fewer reference directions than individuals: most niches hold several solutions and niching loses its grip on the spread"
+            @click="updateNum('divisions', String(suggestedP), 'int')"
+          >
+            set divisions to {{ suggestedP }}
           </button>
         </div>
       </div>
@@ -117,6 +125,17 @@ id="prob-mt" :value="modelValue.probMt" type="number" min="0" max="1" step="0.01
           <input
 id="per-gene-prob" :value="modelValue.perGeneProb" type="number" min="0" max="1" step="0.01"
             @input="updateNum('perGeneProb', ($event.target as HTMLInputElement).value, 'float')" />
+          <div class="h-calc" :class="{ warn: mutationIsNegligible }">
+            <span>
+              The two probabilities compose:
+              <strong>{{ expectedMutated.toFixed(3) }}</strong>
+              variables mutated per child on average
+              <span class="h-calc-detail">
+                ({{ modelValue.probMt }} × {{ modelValue.perGeneProb }} × {{ nVars }} variables;
+                the textbook convention is 1)
+              </span>
+            </span>
+          </div>
         </div>
         <div class="field-group">
           <label class="field-label" for="random-seed">Random seed</label>
@@ -168,7 +187,12 @@ id="random-seed" :value="modelValue.randomSeed" type="number" step="1"
 
 <script setup lang="ts">
 import { reactive, computed } from 'vue'
-import { referencePointCount, suggestedPopulationSize } from '../../../../lib/nsga3'
+import {
+  expectedMutatedVariables,
+  referencePointCount,
+  suggestedDivisions,
+  suggestedPopulationSize,
+} from '../../../../lib/nsga3'
 
 export interface SLStep2Value {
   name: string
@@ -187,7 +211,12 @@ export interface SLStep2Value {
 const NSGA3_STRATEGIES = ['nsga3', 'nsga3_deap', 'nsga3_pymoo']
 const EVOLUTIONARY_STRATEGIES = ['nsga2', 'nsga2_deap', 'nsga2_pymoo', 'nsga3', 'nsga3_deap', 'nsga3_pymoo']
 
-const props = defineProps<{ modelValue: SLStep2Value; objectivesCount: number; showValidation: boolean }>()
+const props = defineProps<{
+  modelValue: SLStep2Value
+  objectivesCount: number
+  nVars: number
+  showValidation: boolean
+}>()
 const emit = defineEmits<{ 'update:modelValue': [v: SLStep2Value] }>()
 
 const isNsga3 = computed(() => NSGA3_STRATEGIES.includes(props.modelValue.strategy))
@@ -196,6 +225,22 @@ const isEvolutionary = computed(() => EVOLUTIONARY_STRATEGIES.includes(props.mod
 const refPoints = computed(() => referencePointCount(props.objectivesCount, props.modelValue.divisions))
 const suggestedPop = computed(() => suggestedPopulationSize(refPoints.value))
 const refPointsExceedPop = computed(() => refPoints.value > 0 && props.modelValue.populationSize < refPoints.value)
+
+// The opposite failure, which had no warning: p = 10 gives 11 directions in
+// M = 2, so a population of 50 competes for a tenth of the niches it could use.
+const refPointsStarvePop = computed(
+  () => refPoints.value > 0 && refPoints.value * 2 < props.modelValue.populationSize,
+)
+const suggestedP = computed(
+  () => suggestedDivisions(props.objectivesCount, props.modelValue.populationSize),
+)
+
+const expectedMutated = computed(() =>
+  expectedMutatedVariables(props.modelValue.probMt, props.modelValue.perGeneProb, props.nVars),
+)
+// Below a tenth of a variable per child the search is crossover-only in
+// practice — the state the wizard used to ship (0.1 × 0.05 × 10 = 0.05).
+const mutationIsNegligible = computed(() => expectedMutated.value < 0.1)
 
 const touched = reactive({ name: false, populationSize: false, numberOfGenerations: false })
 function touch(field: keyof typeof touched) { touched[field] = true }

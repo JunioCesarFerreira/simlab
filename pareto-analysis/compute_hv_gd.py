@@ -31,7 +31,7 @@ def _empty() -> str:
         "generations": [], "hv": [], "hv_cumulative": [],
         "gd": [], "igd": [], "igd_plus": [],
         "reference": None, "reference_size": 0, "normalized": False,
-        "worst_point": {},
+        "worst_point": {}, "gd_method": None, "gd_formula": None, "normalization": None,
     })
 
 
@@ -88,10 +88,11 @@ def main() -> None:
 
     # Reference front — either the benchmark's analytical (true) front or the
     # experiment's own stored final front.
-    if args.true_front_bench:
+    bench = args.true_front_bench
+    m = args.true_front_m or len(objectives)
+    if bench:
         from lib.true_fronts import sample_true_front
-        m = args.true_front_m or len(objectives)
-        true_front = sample_true_front(args.true_front_bench, m)
+        true_front = sample_true_front(bench, m)
         reference_rows = to_minimization_array(true_front, objectives=objectives, minimize=minimize)
         reference_kind = "true_front"
     else:
@@ -118,9 +119,18 @@ def main() -> None:
         print(_empty())
         return
 
-    # Reference point: worst feasible objective + 5% margin
-    worst_raw = compute_worst_point(individuals_per_gen, tuple(objectives), minimize=minimize)
-    worst_point_ref = [coord + abs(coord) * 0.05 + 1.0 for coord in worst_raw]
+    # HV reference point. With a known benchmark it is the FIXED analytical
+    # nadir + 10%, matching the /hv-gd endpoint and plot_pareto_results — this
+    # used to derive it from the observed worst point regardless, so the same
+    # experiment reported one HV here and another one in the GUI, and no two
+    # runs were comparable. Without a benchmark the observed worst point is all
+    # there is.
+    if bench:
+        from lib.true_fronts import true_nadir
+        worst_point_ref = [v * 1.1 for v in true_nadir(bench, m)]
+    else:
+        worst_raw = compute_worst_point(individuals_per_gen, tuple(objectives), minimize=minimize)
+        worst_point_ref = [coord + abs(coord) * 0.05 + 1.0 for coord in worst_raw]
 
     conv = compute_convergence_metrics(
         individuals_per_gen=individuals_per_gen,
@@ -129,6 +139,7 @@ def main() -> None:
         hv_ref=worst_point_ref,
         reference_front_min=reference_front,
         normalized=normalized,
+        bench=bench,
     )
 
     # NaN marks a generation with no feasible individual; JSON has no NaN, so it
@@ -147,6 +158,10 @@ def main() -> None:
         "reference_size": int(len(reference_front)),
         "normalized": normalized,
         "worst_point": dict(zip(objectives, worst_point_ref)),
+        "gd_method": "analytical" if bench else "reference_front",
+        "gd_formula": "mean of each front point's distance to the true front (p=1)",
+        "normalization": "analytical ideal-nadir range" if bench
+                         else "reference front ideal-nadir range",
     }))
 
 

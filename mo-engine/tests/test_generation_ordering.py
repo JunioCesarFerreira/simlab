@@ -5,6 +5,7 @@ the generation document did not exist yet, master-node's generation mark_done()
 would target a missing document (no-op) and the generation would hang at index 0.
 This test locks the ordering invariant for every strategy that enqueues work.
 """
+import random
 from unittest.mock import MagicMock
 
 from bson import ObjectId
@@ -24,6 +25,8 @@ def _make_strategy(cls, enqueue_name):
     strat._exp_id = ObjectId()
     strat._gen_index = 0
     strat._sim_rand_seeds = [42]
+    # The enqueue snapshots this onto the generation document, for resume.
+    strat._ga_rng = random.Random(42)
     strat._genome_objectives_cache = {}
     strat._inserted_genomes = set()
     strat._sim_done_count = 0
@@ -90,6 +93,8 @@ def test_analytical_enqueue_skips_simulations(cls):
     strat._exp_id = ObjectId()
     strat._gen_index = 0
     strat._sim_rand_seeds = [42]
+    # The enqueue snapshots this onto the generation document, for resume.
+    strat._ga_rng = random.Random(42)
     strat._genome_objectives_cache = {}
     strat._inserted_genomes = set()
     strat._count_sims_inserted = 0

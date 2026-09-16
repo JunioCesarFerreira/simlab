@@ -10,10 +10,12 @@ import numpy as np
 
 from lib.true_fronts import (
     dtlz2_front,
-    zdt1_front,
-    sch1_front,
+    front_distance,
     sample_true_front,
+    sch1_front,
+    true_ideal,
     true_nadir,
+    zdt1_front,
 )
 from pylib import benchmarks as bm
 
@@ -42,3 +44,17 @@ def test_true_nadir_matches_canonical():
     assert true_nadir("DTLZ2", 5) == bm.nadir("DTLZ2", 5)
     assert true_nadir("ZDT1", 2) == bm.nadir("ZDT1", 2)
     assert true_nadir("SCH1", 2) == bm.nadir("SCH1", 2)
+
+
+def test_true_ideal_matches_canonical():
+    for bench, m in (("DTLZ2", 2), ("DTLZ2", 3), ("DTLZ2", 6), ("ZDT1", 2), ("SCH1", 2)):
+        assert true_ideal(bench, m) == bm.ideal(bench, m)
+
+
+def test_front_distance_matches_canonical():
+    rng = np.random.default_rng(4)
+    for bench, m in (("DTLZ2", 2), ("DTLZ2", 3), ("DTLZ2", 6), ("ZDT1", 2), ("SCH1", 2)):
+        points = rng.random((40, m)) * 3.0
+        assert np.array_equal(
+            front_distance(bench, points, m), bm.front_distance(bench, points, m)
+        )

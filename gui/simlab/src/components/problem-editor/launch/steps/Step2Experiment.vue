@@ -128,7 +128,7 @@
           @input="updateNum('divisions', ($event.target as HTMLInputElement).value, 'int')"
         />
         <span class="hint-small">Partitions per objective axis for NSGA-III niching (das-Dennis).</span>
-        <div class="h-calc" :class="{ warn: refPointsExceedPop }">
+        <div class="h-calc" :class="{ warn: refPointsExceedPop || refPointsStarvePop }">
           <span>
             H = C(M+p−1, p) = C({{ objectivesCount + modelValue.divisions - 1 }}, {{ modelValue.divisions }}) =
             <strong>{{ refPoints }}</strong> reference points
@@ -141,6 +141,14 @@
             @click="updateNum('populationSize', String(suggestedPop), 'int')"
           >
             set population to {{ suggestedPop }}
+          </button>
+          <button
+            v-else-if="refPointsStarvePop && suggestedP > modelValue.divisions"
+            class="h-calc-apply"
+            title="Far fewer reference directions than individuals: most niches hold several solutions and niching loses its grip on the spread"
+            @click="updateNum('divisions', String(suggestedP), 'int')"
+          >
+            set divisions to {{ suggestedP }}
           </button>
         </div>
       </div>
@@ -274,7 +282,11 @@
 import { reactive, computed } from 'vue'
 import type { SourceRepositoryDto } from '../../../../types/simlab'
 import { capabilitiesFor } from '../../../../lib/problemCapabilities'
-import { referencePointCount, suggestedPopulationSize } from '../../../../lib/nsga3'
+import {
+  referencePointCount,
+  suggestedDivisions,
+  suggestedPopulationSize,
+} from '../../../../lib/nsga3'
 
 export interface SourceOption {
   protocol: string
@@ -324,6 +336,15 @@ const emit = defineEmits<{ 'update:modelValue': [v: Step2Value] }>()
 const refPoints = computed(() => referencePointCount(props.objectivesCount, props.modelValue.divisions))
 const suggestedPop = computed(() => suggestedPopulationSize(refPoints.value))
 const refPointsExceedPop = computed(() => refPoints.value > 0 && props.modelValue.populationSize < refPoints.value)
+
+// The opposite failure, which had no warning: a fixed p gives 11 directions in
+// M = 2, so a population of 50 competes for a tenth of the niches it could use.
+const refPointsStarvePop = computed(
+  () => refPoints.value > 0 && refPoints.value * 2 < props.modelValue.populationSize,
+)
+const suggestedP = computed(
+  () => suggestedDivisions(props.objectivesCount, props.modelValue.populationSize),
+)
 
 const caps = computed(() => capabilitiesFor(props.problemName))
 const isNsga3 = computed(() => NSGA3_STRATEGIES.includes(props.modelValue.strategy))

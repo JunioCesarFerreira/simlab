@@ -340,6 +340,7 @@ def compute_convergence_metrics(
     hv_ref: list[float],
     reference_front_min: np.ndarray,
     normalized: bool = True,
+    bench: str | None = None,
 ) -> ConvergenceMetrics:
     """
     Compute per-generation HV, cumulative HV, GD, IGD and IGD+.
@@ -348,6 +349,14 @@ def compute_convergence_metrics(
     ``metrics.sanitize_reference_front`` already.  The three distance
     indicators are normalized by its ideal-nadir range unless ``normalized`` is
     False; HV is always in raw units, since it carries its own reference point.
+
+    Pass ``bench`` for a synthetic experiment.  GD is then the EXACT distance to
+    the analytical front and the normalization uses the benchmark's theoretical
+    ideal-nadir range rather than the sampled reference's extremes.  A sampled
+    reference cannot measure GD below its own fill distance: points lying
+    exactly on the DTLZ2 front score 0.19 at M=6 against a 500-point reference,
+    and still 0.05 against 200 000 points.  IGD and IGD+ average over the
+    reference set itself, so they keep it, and keep that floor.
 
     Returns
     -------
@@ -371,6 +380,23 @@ def compute_convergence_metrics(
     igd_plus_values: list[float] = []
 
     hv_ref_arr = np.asarray(hv_ref, dtype=float)
+
+    bounds = None
+    gd_scale: float | None = None
+    if bench:
+        from lib.true_fronts import front_distance, true_ideal, true_nadir
+
+        m = reference_front_min.shape[1]
+        bounds = (
+            np.asarray(true_ideal(bench, m), dtype=float),
+            np.asarray(true_nadir(bench, m), dtype=float),
+        )
+        scale = metrics.analytical_scale(*bounds)
+        # The closed forms are Euclidean in raw space, so only an isotropic
+        # range carries through exactly. All current benchmarks have one.
+        if np.allclose(scale, scale[0]):
+            gd_scale = float(scale[0]) if normalized else 1.0
+
     acc_seen: set[tuple] = set()        # dedup keys of the running front
     acc_rows: list[list[float]] = []    # running non-dominated set (min-space)
     last_cum_hv = 0.0
@@ -413,10 +439,19 @@ def compute_convergence_metrics(
 
         hv_values.append(hv_val)
         hv_cumulative.append(cum_hv)
-        gd_values.append(metrics.gd(pts_min, reference_front_min, normalized=normalized))
-        igd_values.append(metrics.igd(pts_min, reference_front_min, normalized=normalized))
+        if gd_scale is not None:
+            gd_values.append(
+                metrics.gd_analytical(
+                    front_distance(bench, pts_min, pts_min.shape[1]), scale=gd_scale
+                )
+            )
+        else:
+            gd_values.append(metrics.gd(pts_min, reference_front_min, normalized=normalized))
+        igd_values.append(
+            metrics.igd(pts_min, reference_front_min, normalized=normalized, bounds=bounds)
+        )
         igd_plus_values.append(
-            metrics.igd_plus(pts_min, reference_front_min, normalized=normalized)
+            metrics.igd_plus(pts_min, reference_front_min, normalized=normalized, bounds=bounds)
         )
 
     return ConvergenceMetrics(
@@ -845,7 +880,9 @@ def main():
         )
         worst_point = [v * 1.1 for v in true_nadir(args.true_front_bench, m)]
         reference_label = f"the true {args.true_front_bench} front"
+        bench_for_metrics = args.true_front_bench
     else:
+        bench_for_metrics = None
         # Reference point: worst feasible values + margin (no penalty contamination).
         worst_point = compute_worst_point(
             individuals_per_gen,
@@ -894,6 +931,7 @@ def main():
         hv_ref=worst_point,
         reference_front_min=reference_front_min,
         normalized=not args.raw_distances,
+        bench=bench_for_metrics,
     )
 
     hv_gd_plot = Path(f"hv_gd_{args.expid}.png")
