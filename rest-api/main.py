@@ -22,7 +22,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Simulation Management API",
-    version="2.0.0",
+    version="2.1.0",
     openapi_version="3.0.3",
     # Tolerate non-finite floats (inf/nan) in stored objectives so reading an
     # experiment never fails with HTTP 500 during JSON serialization.
