@@ -167,13 +167,25 @@ def prepare_simulation_files(
     remote_files: list[str] = []
 
     # CSC/XML
-    mongo.fs_handler.download_file(sim["csc_file_id"], str(local_xml))
+    try:
+        mongo.fs_handler.download_file(sim["csc_file_id"], str(local_xml))
+    except Exception as e:
+        # Never ship a partial input to Cooja: the run would look successful
+        # and its metrics would be attributed to a valid individual.
+        log.error("Failed to download simulation.csc %s for simulation %s: %s",
+                  sim.get("csc_file_id"), sim.get("_id"), e)
+        return False, local_files, remote_files
     local_files.append(str(local_xml))
     remote_files.append("simulation.csc")
 
     # Positions (optional)
     if sim.get("pos_file_id"):
-        mongo.fs_handler.download_file(sim["pos_file_id"], str(local_dat))
+        try:
+            mongo.fs_handler.download_file(sim["pos_file_id"], str(local_dat))
+        except Exception as e:
+            log.error("Failed to download positions.dat %s for simulation %s: %s",
+                      sim.get("pos_file_id"), sim.get("_id"), e)
+            return False, local_files, remote_files
         local_files.append(str(local_dat))
         remote_files.append("positions.dat")
 
@@ -186,7 +198,12 @@ def prepare_simulation_files(
 
     for sf in src["source_files"]:
         file_path = str(tmp_dir / sf["file_name"])
-        mongo.fs_handler.download_file(sf["id"], file_path)
+        try:
+            mongo.fs_handler.download_file(sf["id"], file_path)
+        except Exception as e:
+            log.error("Failed to download firmware file %s (%s) for simulation %s: %s",
+                      sf.get("file_name"), sf.get("id"), sim.get("_id"), e)
+            return False, local_files, remote_files
         local_files.append(file_path)
         remote_files.append(sf["file_name"])
 

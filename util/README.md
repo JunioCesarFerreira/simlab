@@ -52,6 +52,46 @@ Output structure: `<output>/<timestamp>/<collection>/<_id>.json`
 
 ---
 
+### `gridfs_compact.py` — GridFS Compaction
+
+Re-encodes stored GridFS files with zstd, in place and reversibly. New uploads
+are already compressed by `pylib/db/gridfs.py`; this backfills the files that
+predate it.
+
+```bash
+python gridfs_compact.py --dry-run
+python gridfs_compact.py --filename sim_result.log --limit 100
+python gridfs_compact.py                      # everything eligible
+python gridfs_compact.py --revert             # back to plain bytes
+python gridfs_compact.py --recover            # restore orphaned backups
+```
+
+| Argument | Env var | Default | Description |
+|---|---|---|---|
+| `--uri` | `MONGO_URI` | `mongodb://localhost:27017/?directConnection=true` | MongoDB connection URI |
+| `--db` | `DB_NAME` | `simlab` | Database name |
+| `--filename` | — | all | Only files with this exact filename |
+| `--limit` | — | all | Stop after N files |
+| `--level` | — | `12` | zstd level |
+| `--dry-run` | — | off | Report what would be converted, change nothing |
+| `--revert` | — | off | Decompress back to plain bytes |
+| `--recover` | — | off | Restore backups left by an interrupted run |
+
+Every file keeps its `_id`, so no document that references it is touched —
+which is what makes `--revert` possible. Per file the tool hashes the original,
+checks the new frame decodes back to that hash *before* deleting anything,
+stores an untouched backup, rewrites under the same `_id`, verifies the
+read-back, and only then drops the backup. A crash in between leaves the backup
+for `--recover`; an interrupted run can simply be restarted, since files that
+already carry a `metadata.compression` block are skipped.
+
+> **Run it with the stack idle.** Each file is briefly deleted and re-inserted
+> under the same `_id`; a reader hitting that window gets a missing file. The
+> tool also holds one file fully in memory at a time, so peak usage tracks the
+> largest file rather than the collection.
+
+---
+
 ### `create_exp.py` — Create Experiment
 
 Script template for creating experiments via the SimLab REST API. Edit the `body` dict and the `API_KEY` constant before running.

@@ -3,3 +3,4 @@ scp==0.15.0
 pymongo==4.17.0
 numpy==2.4.4
 pandas==3.0.2
+zstandard==0.25.0
