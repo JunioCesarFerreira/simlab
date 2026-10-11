@@ -1,0 +1,306 @@
+"""SSH transport, with an optional jump through the host.
+
+The two-hop path: connect to the host, open a ``direct-tcpip`` channel to the
+container's address, and hand that channel to a second client as its socket.
+From there SCP and command execution are byte-for-byte what the master-node
+already did — which is why no container port has to be published on the LAN.
+
+The local host takes the same code path with ``jump=None`` and behaves exactly
+as before.
+"""
+import logging
+import shlex
+import time
+from typing import Iterator, Optional
+
+import paramiko
+from paramiko import SSHClient
+from paramiko.ssh_exception import NoValidConnectionsError, SSHException
+from scp import SCPClient, SCPException
+
+from lib.credentials import SSHCredential
+from lib.transport.base import (
+    ExecResult,
+    ProbeResult,
+    TransportError,
+    TransportUnreachable,
+)
+from lib.transport.hostkey import TunnelledHostKeyPolicy
+from lib.transport.plan import ConnectionPlan
+from lib.transport.session import KEEPALIVE_INTERVAL, connect_host
+
+log = logging.getLogger(__name__)
+
+# Per-run artifacts a Cooja run leaves inside the container. Unchanged from the
+# single-hop implementation: build/cooja holds the mtype*.cooja libraries
+# compiled for each simulation, whose names are random per run.
+GENERATED_ARTIFACTS = ("build/cooja", "COOJA.testlog", "COOJA.log")
+
+CONNECT_TIMEOUT = 20.0
+
+
+def build_cleanup_command(remote_dir: str, remote_files: Optional[list[str]] = None) -> str:
+    """Compose the per-run cleanup, refusing anything that escapes remote_dir.
+
+    Names come from GridFS documents, so a crafted file name must not be able
+    to delete files shipped in the image.
+    """
+    targets = list(GENERATED_ARTIFACTS)
+    for name in remote_files or []:
+        if name.startswith("/") or ".." in name:
+            log.warning("Skipping unsafe cleanup target: %s", name)
+            continue
+        targets.append(name)
+    quoted = " ".join(shlex.quote(t) for t in targets)
+    return f"cd {shlex.quote(remote_dir)} && rm -rf -- {quoted}"
+
+
+class SSHTransport:
+    """One SSH connection to one container, optionally through its host."""
+
+    def __init__(
+        self,
+        plan: ConnectionPlan,
+        target_credential: SSHCredential,
+        jump_credential: Optional[SSHCredential] = None,
+        *,
+        pinned_host_key: Optional[str] = None,
+        on_learn_host_key: Optional[callable] = None,
+        connect_timeout: float = CONNECT_TIMEOUT,
+    ):
+        if plan.is_tunnelled and jump_credential is None:
+            raise TransportError(
+                f"{plan.describe()} needs a host credential for the first hop"
+            )
+        self.plan = plan
+        self._target_credential = target_credential
+        self._jump_credential = jump_credential
+        self._pinned_host_key = pinned_host_key
+        self._on_learn_host_key = on_learn_host_key
+        self._connect_timeout = connect_timeout
+        self._jump: Optional[SSHClient] = None
+        self._client: Optional[SSHClient] = None
+
+    # ── lifecycle ──────────────────────────────────────────────────────────
+
+    def open(self) -> None:
+        if self._client is not None:
+            return
+        sock = None
+        try:
+            if self.plan.is_tunnelled:
+                self._jump = self._connect_jump()
+                sock = self._open_tunnel(self._jump)
+            self._client = self._connect_target(sock)
+        except BaseException:
+            # A half-open pair would leak a file descriptor and, worse, leave a
+            # reservation looking live while nothing is connected.
+            self.close()
+            raise
+        log.info("Transport open: %s", self.plan.describe())
+
+    def _connect_jump(self) -> SSHClient:
+        assert self.plan.jump is not None
+        return connect_host(
+            self.plan.jump,
+            self._jump_credential,
+            pinned_host_key=self._pinned_host_key,
+            on_learn_host_key=self._on_learn_host_key,
+            timeout=self._connect_timeout,
+        )
+
+    def _open_tunnel(self, jump: SSHClient):
+        transport = jump.get_transport()
+        if transport is None:  # pragma: no cover - defensive
+            raise TransportError(f"no transport on the jump to {self.plan.jump}")
+        try:
+            return transport.open_channel(
+                "direct-tcpip",
+                dest_addr=(self.plan.target.address, self.plan.target.port),
+                src_addr=("127.0.0.1", 0),
+            )
+        except SSHException as e:
+            raise TransportUnreachable(
+                f"host {self.plan.jump} could not reach container "
+                f"{self.plan.target}: {e}"
+            ) from None
+
+    def _connect_target(self, sock) -> SSHClient:
+        client = paramiko.SSHClient()
+        # Container keys are ephemeral and the tunnel is already authenticated
+        # by hop 1 — see lib/transport/hostkey.py for why this is not pinned.
+        client.set_missing_host_key_policy(TunnelledHostKeyPolicy())
+        try:
+            client.connect(
+                self.plan.target.address,
+                port=self.plan.target.port,
+                timeout=self._connect_timeout,
+                sock=sock,
+                **self._target_credential.connect_kwargs(),
+            )
+        except (NoValidConnectionsError, OSError) as e:
+            client.close()
+            raise TransportUnreachable(
+                f"container {self.plan.target} is unreachable: {e}"
+            ) from None
+        except SSHException as e:
+            client.close()
+            raise TransportError(
+                f"SSH to container {self.plan.target} failed: {e}"
+            ) from None
+        transport = client.get_transport()
+        if transport is not None:
+            transport.set_keepalive(KEEPALIVE_INTERVAL)
+        return client
+
+    def close(self) -> None:
+        for attr in ("_client", "_jump"):
+            client = getattr(self, attr, None)
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:  # pragma: no cover - best effort
+                    log.debug("Error closing %s for %s", attr, self.plan.describe())
+                setattr(self, attr, None)
+
+    def __enter__(self) -> "SSHTransport":
+        self.open()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    @property
+    def _active(self) -> SSHClient:
+        if self._client is None:
+            raise TransportError(f"transport for {self.plan.describe()} is not open")
+        return self._client
+
+    # ── files ──────────────────────────────────────────────────────────────
+
+    def put_files(self, local_paths: list[str], remote_names: list[str]) -> None:
+        if len(local_paths) != len(remote_names):
+            raise TransportError(
+                f"{len(local_paths)} local files for {len(remote_names)} remote names"
+            )
+        try:
+            with SCPClient(self._active.get_transport()) as scp:
+                for local, name in zip(local_paths, remote_names):
+                    remote = f"{self.plan.remote_dir}/{name}"
+                    log.info("Sending %s to %s", local, remote)
+                    scp.put(local, remote)
+        except (SCPException, SSHException, OSError) as e:
+            raise TransportError(f"file transfer to {self.plan.target} failed: {e}") from None
+
+    def get_file(self, remote_name: str, local_path: str) -> None:
+        remote = (
+            remote_name if remote_name.startswith("/")
+            else f"{self.plan.remote_dir}/{remote_name}"
+        )
+        try:
+            with SCPClient(self._active.get_transport()) as scp:
+                scp.get(remote, local_path)
+        except (SCPException, SSHException, OSError) as e:
+            raise TransportError(f"could not fetch {remote}: {e}") from None
+
+    # ── commands ───────────────────────────────────────────────────────────
+
+    def exec_command(self, command: str, timeout: Optional[float] = None) -> ExecResult:
+        try:
+            _, stdout, stderr = self._active.exec_command(command, timeout=timeout)
+            out = stdout.read().decode("utf-8", errors="ignore")
+            err = stderr.read().decode("utf-8", errors="ignore")
+            return ExecResult(stdout.channel.recv_exit_status(), out, err)
+        except SSHException as e:
+            raise TransportError(f"command failed on {self.plan.target}: {e}") from None
+
+    def stream_command(
+        self, command: str, timeout: Optional[float] = None
+    ) -> Iterator[tuple[str, str]]:
+        """Run a command, yielding output as it arrives.
+
+        Kept for interactive probes and short commands. The simulation itself
+        no longer uses this: tying a multi-hour JVM to a channel makes a
+        dropped tunnel fatal, so it is launched detached instead.
+        """
+        try:
+            _, stdout, stderr = self._active.exec_command(
+                command, get_pty=True, timeout=timeout)
+        except SSHException as e:
+            raise TransportError(f"command failed on {self.plan.target}: {e}") from None
+
+        chan = stdout.channel
+        chan.settimeout(5.0)
+        while not chan.exit_status_ready():
+            if chan.recv_ready():
+                data = chan.recv(4096).decode("utf-8", errors="ignore")
+                if data:
+                    yield "stdout", data
+            if chan.recv_stderr_ready():
+                data = chan.recv_stderr(4096).decode("utf-8", errors="ignore")
+                if data:
+                    yield "stderr", data
+            time.sleep(0.1)
+        remaining_out = stdout.read().decode("utf-8", errors="ignore")
+        if remaining_out:
+            yield "stdout", remaining_out
+        remaining_err = stderr.read().decode("utf-8", errors="ignore")
+        if remaining_err:
+            yield "stderr", remaining_err
+
+    # ── readiness and hygiene ──────────────────────────────────────────────
+
+    def probe(self) -> ProbeResult:
+        """Check that this container can actually run a simulation.
+
+        Being open is not enough to answer that: a container can accept SSH
+        while its Cooja build is missing. Both facts are reported so the GUI
+        can say which level failed instead of only that something did.
+        """
+        jar = f"{self.plan.remote_dir}/build/libs/cooja.jar"
+        command = (
+            f"sha256sum {shlex.quote(jar)} 2>/dev/null | cut -d' ' -f1; "
+            "/opt/java/openjdk/bin/java -version 2>&1 | head -n1"
+        )
+        try:
+            result = self.exec_command(command, timeout=30)
+        except TransportUnreachable as e:
+            return ProbeResult(reachable=False, message=str(e))
+        except TransportError as e:
+            return ProbeResult(reachable=True, message=str(e))
+
+        lines = [l.strip() for l in result.stdout.splitlines() if l.strip()]
+        sha = next((l for l in lines if len(l) == 64 and all(
+            c in "0123456789abcdef" for c in l)), None)
+        java = next((l for l in lines if "version" in l.lower()), None)
+        if sha is None:
+            return ProbeResult(
+                reachable=True,
+                cooja_present=False,
+                java_version=java,
+                message=f"cooja.jar not found at {jar}",
+            )
+        return ProbeResult(
+            reachable=True,
+            cooja_present=True,
+            java_version=java,
+            cooja_jar_sha256=sha,
+            message="ready",
+        )
+
+    def cleanup(self, remote_names: Optional[list[str]] = None) -> bool:
+        """Remove per-run files. Best-effort: never aborts the simulation flow."""
+        command = build_cleanup_command(self.plan.remote_dir, remote_names)
+        try:
+            result = self.exec_command(command, timeout=60)
+        except TransportError as e:
+            log.warning("Remote cleanup failed on %s: %s", self.plan.describe(), e)
+            return False
+        if not result.ok:
+            log.warning(
+                "Remote cleanup exited with status %s on %s: %s",
+                result.exit_status, self.plan.describe(), result.stderr.strip(),
+            )
+            return False
+        log.info("Remote cleanup done in %s", self.plan.remote_dir)
+        return True
