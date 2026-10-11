@@ -9,8 +9,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Thread
 from bson import ObjectId
-from paramiko import SSHClient
-from scp import SCPClient
 
 # SysPath for common modules
 project_path = os.path.abspath(os.path.join(os.getcwd(), ".."))
@@ -18,8 +16,9 @@ if project_path not in sys.path:
     sys.path.insert(0, project_path)
 
 # lib master-node
-from lib.sshscp import create_ssh_client, send_files_scp, cleanup_remote_files
+from lib.bootstrap import local_host_document, local_resource_documents
 from lib.synthetic_data import run_synthetic_simulation, resolve_synthetic_settings
+from lib.transport import SSHTransport, TransportError, build_transport
 
 # pylib
 from pylib.db import create_mongo_repository_factory, MongoRepository, EnumStatus
@@ -149,7 +148,6 @@ def recover_stuck_simulations(mongo: MongoRepository) -> None:
 
 def prepare_simulation_files(
     sim: Simulation,
-    worker_id: int,
     mongo: MongoRepository,
 ) -> tuple[bool, list[str], list[str]]:
     """
@@ -157,7 +155,10 @@ def prepare_simulation_files(
     Returns (success, local_files, remote_files).
     """
     sim_oid = ObjectId(sim["_id"]) if not isinstance(sim["_id"], ObjectId) else sim["_id"]
-    tmp_dir = Path(f"tmp/worker_{worker_id}")
+    # Keyed by simulation, not by worker: a thread is no longer bound to one
+    # container, so two runs could otherwise share a directory and overwrite
+    # each other's firmware before it is sent.
+    tmp_dir = Path(f"tmp/sim_{sim_oid}")
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     local_xml = tmp_dir / f"simulation_{sim_oid}.xml"
@@ -212,55 +213,50 @@ def prepare_simulation_files(
 
 def run_cooja_simulation(
     sim: Simulation,
-    port: int,
-    hostname: str,
+    transport: SSHTransport,
     mongo: MongoRepository,
     remote_files: list[str] | None = None,
 ) -> None:
     """
-    Executes the simulation in the container via SSH, monitors logs, and stores results in GridFS.
+    Executes the simulation in the container, monitors logs, and stores results in GridFS.
     Per-run files (remote artifacts and local log/csv) are always removed before returning.
+
+    The connection arrives already open: the caller owns it, because it also
+    sent the input files over it and because closing it is what releases the
+    container. Everything below is the same sequence as before — only the
+    paramiko calls moved behind the transport.
     """
     sim_oid = ObjectId(sim["_id"]) if not isinstance(sim["_id"], ObjectId) else sim["_id"]
+    where = transport.plan.describe()
     log_path = f"{SET.local_log_dir}/sim_{sim_oid}.log"
     csv_path = f"{SET.local_log_dir}/sim_{sim_oid}.csv"
-    ssh: SSHClient = create_ssh_client(hostname, port, "root", "root")
     try:
-        log.info("[port=%s host=%s] Starting simulation %s", port, hostname, sim_oid)
+        log.info("[%s] Starting simulation %s", where, sim_oid)
         mongo.simulation_repo.mark_running(sim_oid)
 
         command = (
-            f"cd {SET.remote_dir} && "
+            f"cd {transport.plan.remote_dir} && "
             f"/opt/java/openjdk/bin/java --enable-preview -Xms{SET.jvm_xms} -Xmx{SET.jvm_xmx} "
             f"-jar build/libs/cooja.jar --no-gui simulation.csc"
         )
 
-        stdin, stdout, stderr = ssh.exec_command(command, get_pty=True, timeout=SET.sim_timeout_sec or None)
+        for channel, text in transport.stream_command(
+            command, timeout=SET.sim_timeout_sec or None
+        ):
+            if channel == "stderr":
+                log.error("[ssh][%s][stderr] %s", where, text)
+            else:
+                log.info("[ssh][%s][stdout] %s", where, text)
 
-        chan = stdout.channel
-        chan.settimeout(5.0)
-        while not chan.exit_status_ready():
-            if chan.recv_ready():
-                out = chan.recv(4096).decode("utf-8", errors="ignore")
-                if out:
-                    log.info("[ssh][%s][stdout] %s", hostname if SET.is_docker else port, out)
-            if chan.recv_stderr_ready():
-                err = chan.recv_stderr(4096).decode("utf-8", errors="ignore")
-                if err:
-                    log.error("[ssh][%s][stderr] %s", hostname if SET.is_docker else port, err)
-            time.sleep(0.1)
-
-        with SCPClient(ssh.get_transport()) as scp:
-            remote_log = f"{SET.remote_dir}/COOJA.testlog"
-            log.info("[port=%s] Copying log to %s", port, log_path)
-            scp.get(remote_log, log_path)
+        log.info("[%s] Copying log to %s", where, log_path)
+        transport.get_file("COOJA.testlog", log_path)
 
         log_id = mongo.fs_handler.upload_file(log_path, "sim_result.log")
-        log.info("[port=%s] Log saved with ID: %s", port, log_id)
+        log.info("[%s] Log saved with ID: %s", where, log_id)
 
         cooja_files.convert_cooja_log_to_csv(log_path, csv_path)
         csv_id = mongo.fs_handler.upload_file(csv_path, "sim_result.csv")
-        log.info("[port=%s] Log converted CSV and saved with ID: %s", port, csv_id)
+        log.info("[%s] Log converted CSV and saved with ID: %s", where, csv_id)
 
         csv_file = Path(csv_path)
         if csv_file.exists() and csv_file.stat().st_size != 0:
@@ -268,7 +264,7 @@ def run_cooja_simulation(
             exp_id = sim["experiment_id"]
             cfg = mongo.experiment_repo.get_metrics_data_conversion(str(exp_id))
             net_meas = statistics.evaluate_config(df, cfg, log)
-            log.info("[port=%s] Metrics calculated: %s", port, net_meas)
+            log.info("[%s] Metrics calculated: %s", where, net_meas)
 
             # RPL DODAG analysis (formation time + tree) from the raw testlog.
             # Best-effort: never let it fail the simulation result.
@@ -276,25 +272,25 @@ def run_cooja_simulation(
             try:
                 dodag = rpl_dodag.analyze_dodag_full(log_path)
                 log.info(
-                    "[port=%s] DODAG: %d/%d joined, convergence=%s ms",
-                    port,
+                    "[%s] DODAG: %d/%d joined, convergence=%s ms",
+                    where,
                     dodag["convergence"]["n_nodes"],
                     dodag["deployed_nodes"],
                     dodag["convergence"]["convergence_time_ms"],
                 )
             except Exception:
-                log.exception("[port=%s] DODAG analysis failed", port)
+                log.exception("[%s] DODAG analysis failed", where)
 
             mongo.simulation_repo.mark_done(sim_oid, log_id, csv_id, net_meas, dodag)
         else:
-            log.warning("[port=%s] CSV file is missing or empty for simulation %s", port, sim_oid)
+            log.warning("[%s] CSV file is missing or empty for simulation %s", where, sim_oid)
             mongo.simulation_repo.mark_error(sim_oid, "CSV file is missing or empty after conversion")
 
         if sim.get("generation_id"):
             _check_and_close_generation(sim["generation_id"], mongo)
 
     except Exception as e:
-        log.exception("[port=%s host=%s] Simulation ERROR %s: %s", port, hostname, sim_oid, e)
+        log.exception("[%s] Simulation ERROR %s: %s", where, sim_oid, e)
         try:
             mongo.simulation_repo.mark_error(sim_oid, str(e))
         except Exception:
@@ -302,8 +298,7 @@ def run_cooja_simulation(
         if sim.get("generation_id"):
             _check_and_close_generation(sim["generation_id"], mongo)
     finally:
-        cleanup_remote_files(ssh, SET.remote_dir, remote_files)
-        ssh.close()
+        transport.cleanup(remote_files)
         for path in (log_path, csv_path):
             try:
                 Path(path).unlink(missing_ok=True)
@@ -311,13 +306,24 @@ def run_cooja_simulation(
                 log.warning("Failed to remove temp file %s: %s", path, ex)
 
 
-def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostname: str) -> None:
+def simulation_worker(
+    worker_id: int,
+    sim_queue: queue.Queue,
+    host: dict,
+    resource: dict,
+) -> None:
     """
     Worker that consumes simulation IDs from the queue and executes each one.
     The full simulation document is fetched from MongoDB at execution time.
     Simulations not in WAITING status are skipped (already claimed by another worker).
+
+    The worker is still bound to one container, as before. What changed is how
+    it reaches it: a transport built from the host and resource records, so the
+    same code serves a local container and one on a remote host. The placement
+    decision itself still belongs to whoever fills the queue.
     """
     mongo = create_mongo_repository_factory(SET.mongo_uri, SET.db_name)
+    where = f"{host.get('name')}/{resource.get('name')}"
     while True:
         sim_id = sim_queue.get()
         sim = None
@@ -328,12 +334,12 @@ def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostnam
 
             sim = mongo.simulation_repo.get(sim_id)
             if sim is None:
-                log.warning("[port=%s] Simulation %s not found; skipping.", port, sim_id)
+                log.warning("[%s] Simulation %s not found; skipping.", where, sim_id)
                 continue
 
             if sim.get("status") != EnumStatus.WAITING:
-                log.info("[port=%s] Simulation %s already in status '%s'; skipping.",
-                         port, sim_id, sim.get("status"))
+                log.info("[%s] Simulation %s already in status '%s'; skipping.",
+                         where, sim_id, sim.get("status"))
                 continue
 
             # Resolve synthetic mode: per-experiment config takes priority over env var.
@@ -341,24 +347,24 @@ def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostnam
             exp_doc = mongo.experiment_repo.get(exp_id)
             if exp_doc is None:
                 log.warning(
-                    "[port=%s] Experiment %s not found for simulation %s; "
+                    "[%s] Experiment %s not found for simulation %s; "
                     "falling back to the env-var synthetic setting.",
-                    port, exp_id, sim_id,
+                    where, exp_id, sim_id,
                 )
             mode, bench, noise_std = resolve_synthetic_settings(exp_doc)
             log.info(
-                "[port=%s] sim %s → mode=%s (exp=%s)",
-                port, sim_id, "Synthetic Data" if mode else "Simulation", exp_id,
+                "[%s] sim %s → mode=%s (exp=%s)",
+                where, sim_id, "Synthetic Data" if mode else "Simulation", exp_id,
             )
             if mode:
                 run_synthetic_simulation(sim, mongo, bench=bench, noise_std=noise_std)
                 continue
 
-            log.info("[port=%s host=%s] Preparing simulation %s", port, hostname, sim_id)
+            log.info("[%s] Preparing simulation %s", where, sim_id)
 
-            success, local_files, remote_files = prepare_simulation_files(sim, worker_id, mongo)
+            success, local_files, remote_files = prepare_simulation_files(sim, mongo)
             if not success:
-                log.warning("[port=%s] Skipping simulation %s (prepare failed)", port, sim_id)
+                log.warning("[%s] Skipping simulation %s (prepare failed)", where, sim_id)
                 try:
                     mongo.simulation_repo.mark_error(ObjectId(sim["_id"]), "Failed to prepare simulation files")
                 except Exception:
@@ -367,19 +373,19 @@ def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostnam
                     _check_and_close_generation(sim["generation_id"], mongo)
                 continue
 
-            ssh = create_ssh_client(hostname, port, "root", "root")
-            try:
+            # One connection for the whole run, where there used to be two: the
+            # upload and the execution share it, and closing it is what ends
+            # the attempt. Over a tunnel a second handshake is not free.
+            transport = build_transport(host, resource)
+            with transport:
                 # Defensive: clear artifacts left behind if a previous run
                 # crashed before its own cleanup could execute.
-                cleanup_remote_files(ssh, SET.remote_dir)
-                send_files_scp(ssh, SET.local_dir, SET.remote_dir, local_files, remote_files)
-            finally:
-                ssh.close()
-
-            run_cooja_simulation(sim, port, hostname, mongo, remote_files)
+                transport.cleanup()
+                transport.put_files(local_files, remote_files)
+                run_cooja_simulation(sim, transport, mongo, remote_files)
 
         except Exception as e:
-            log.exception("[port=%s host=%s] General ERROR: %s", port, hostname, e)
+            log.exception("[%s] General ERROR: %s", where, e)
             try:
                 if sim and "_id" in sim:
                     mongo.simulation_repo.mark_error(ObjectId(sim["_id"]), str(e))
@@ -398,11 +404,17 @@ def simulation_worker(worker_id: int, sim_queue: queue.Queue, port: int, hostnam
 
 def start_workers(num_workers: int) -> queue.Queue:
     _assert_capacity(num_workers)
+    host = local_host_document(is_docker=SET.is_docker)
+    resources = local_resource_documents(
+        hostnames=SET.hostnames,
+        ports=SET.ports,
+        remote_dir=SET.remote_dir,
+    )
     q: queue.Queue = queue.Queue()
     for i in range(num_workers):
         t = Thread(
             target=simulation_worker,
-            args=(i, q, SET.ports[i], SET.hostnames[i]),
+            args=(i, q, host, resources[i]),
             daemon=True,
         )
         t.start()

@@ -359,3 +359,51 @@ class TestCleanupCommand:
     def test_uploaded_files_are_removed_too(self):
         cmd = build_cleanup_command("/opt/cooja", ["simulation.csc", "node.c"])
         assert "simulation.csc" in cmd and "node.c" in cmd
+
+    def test_shell_metacharacters_are_quoted(self):
+        cmd = build_cleanup_command("/opt/cooja", ["a b;reboot.c"])
+        assert "'a b;reboot.c'" in cmd
+
+
+class TestCleanupIsBestEffort:
+    """Cleanup must never abort the simulation flow.
+
+    Ported from the single-hop implementation these behaviours were written
+    for: the command composition moved to the transport, but a failure to tidy
+    up is still reported through the return value rather than raised.
+    """
+
+    def _transport_with(self, result=None, error=None) -> SSHTransport:
+        transport = local_transport()
+        if error is not None:
+            patcher = patch.object(SSHTransport, "exec_command", side_effect=error)
+        else:
+            patcher = patch.object(SSHTransport, "exec_command", return_value=result)
+        self._patcher = patcher
+        patcher.start()
+        return transport
+
+    def teardown_method(self):
+        patcher = getattr(self, "_patcher", None)
+        if patcher is not None:
+            patcher.stop()
+            self._patcher = None
+
+    def test_success_runs_the_composed_command(self):
+        from lib.transport.base import ExecResult
+        transport = self._transport_with(result=ExecResult(0, "", ""))
+
+        assert transport.cleanup(["node.c"]) is True
+
+        sent = SSHTransport.exec_command.call_args.args[0]
+        assert sent == build_cleanup_command(transport.plan.remote_dir, ["node.c"])
+
+    def test_nonzero_exit_returns_false(self):
+        from lib.transport.base import ExecResult
+        transport = self._transport_with(
+            result=ExecResult(1, "", "rm: permission denied"))
+        assert transport.cleanup() is False
+
+    def test_transport_failure_is_swallowed(self):
+        transport = self._transport_with(error=TransportError("connection lost"))
+        assert transport.cleanup() is False
