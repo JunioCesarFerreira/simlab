@@ -19,6 +19,24 @@ from pylib.db.models.experiment import (
     Experiment,
 )
 from pylib.db.models.campaign import Campaign
+from pylib.db.models.infra import (
+    EnumHostType,
+    EnumHostStatus,
+    EnumResourceStatus,
+    EnumAuthMethod,
+    EnumAddressMode,
+    EnumContainerState,
+    AccessConfig,
+    ContainerAccess,
+    DiscoveryConfig,
+    Host,
+    ContainerInfo,
+    ResourceEndpoint,
+    ResourceProbe,
+    CoojaResource,
+    InfraCrypto,
+    InfraCryptoKey,
+)
 
 __all__ = [
     "EnumStatus",
@@ -41,4 +59,20 @@ __all__ = [
     "FirmwareSnapshot",
     "Experiment",
     "Campaign",
+    "EnumHostType",
+    "EnumHostStatus",
+    "EnumResourceStatus",
+    "EnumAuthMethod",
+    "EnumAddressMode",
+    "EnumContainerState",
+    "AccessConfig",
+    "ContainerAccess",
+    "DiscoveryConfig",
+    "Host",
+    "ContainerInfo",
+    "ResourceEndpoint",
+    "ResourceProbe",
+    "CoojaResource",
+    "InfraCrypto",
+    "InfraCryptoKey",
 ]

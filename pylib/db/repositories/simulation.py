@@ -134,6 +134,59 @@ class SimulationRepository:
                 }}
             )
 
+    def set_assignment(
+        self,
+        sim_id: ObjectId,
+        *,
+        host_id: ObjectId,
+        host_name: str,
+        resource_id: ObjectId,
+        resource_name: str,
+        attempt_id: str,
+        container_id: Optional[str] = None,
+    ) -> bool:
+        """Record where this simulation was placed, and under which attempt.
+
+        Written at reservation time, before anything runs, so a master-node
+        that restarts mid-simulation can find its way back to the container
+        instead of guessing. The names are denormalized on purpose: a finished
+        simulation must still say where it ran after the host registration is
+        edited or removed, which is what keeps the chain experiment → generation
+        → individual → simulation → host → container readable later.
+        """
+        with self.connection.connect() as db:
+            res = db["simulations"].update_one(
+                {"_id": sim_id},
+                {"$set": {
+                    "assigned_host_id": host_id,
+                    "assigned_host_name": host_name,
+                    "assigned_resource_id": resource_id,
+                    "assigned_resource_name": resource_name,
+                    "assigned_container_id": container_id,
+                    "attempt_id": attempt_id,
+                    "assigned_at": datetime.now(),
+                }},
+            )
+            return res.matched_count > 0
+
+    def set_remote_pid(self, sim_id: ObjectId, attempt_id: str, remote_pid: int) -> bool:
+        """Record the detached Cooja process, for this attempt only.
+
+        The PID is what lets a reconnecting master-node ask "is it still
+        running?" instead of assuming a dropped channel means a dead run. The
+        attempt guard keeps a stale thread from overwriting a newer placement.
+        """
+        with self.connection.connect() as db:
+            res = db["simulations"].update_one(
+                {"_id": sim_id, "attempt_id": attempt_id},
+                {"$set": {"remote_pid": remote_pid}},
+            )
+            return res.modified_count > 0
+
+    def find_assigned_to_resource(self, resource_id: ObjectId) -> list[Simulation]:
+        with self.connection.connect() as db:
+            return list(db["simulations"].find({"assigned_resource_id": resource_id}))
+
     def delete_by_id(self, simulation_id: str) -> bool:
         try:
             oid = ObjectId(simulation_id)

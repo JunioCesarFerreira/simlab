@@ -24,3 +24,14 @@ class Simulation(TypedDict):
     csv_log_id: ObjectId
     network_metrics: dict[str, float]
     dodag: Optional[dict]
+    # Placement, written at reservation time by the master-node's dispatcher.
+    # Host and resource names are denormalized so a finished simulation still
+    # says where it ran after the registration is edited or removed.
+    assigned_host_id: ObjectId
+    assigned_host_name: str
+    assigned_resource_id: ObjectId
+    assigned_resource_name: str
+    assigned_container_id: Optional[str]
+    attempt_id: str
+    assigned_at: datetime
+    remote_pid: Optional[int]
