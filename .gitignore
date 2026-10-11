@@ -21,3 +21,6 @@ rest-api/tests/__pycache__
 dc7.yaml
 dc8.yaml
 dc-local.yml
+
+# Deployment settings and secrets (see .env.example)
+.env

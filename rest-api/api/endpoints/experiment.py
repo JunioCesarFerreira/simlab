@@ -496,9 +496,13 @@ def plot_pareto_results(
         "--expid", experiment_id,
         "--objectives", *body.objectives[:3],
         "--minimize", *minimize_strs,
-        # The script reads generations and uploads the plots back over HTTP, so
-        # it needs a URL for this same API; the default is the port it serves on.
-        "--api-base", os.getenv("SIMLAB_API_BASE", "http://localhost:8000/api/v1"),
+        # Deliberately plain HTTP on localhost, and deliberately NOT read from
+        # SIMLAB_API_BASE: that variable now carries the *external* proxy URL
+        # for the host-side scripts (https://<host>/api/v1), and this call runs
+        # *inside* the rest_api container against its own uvicorn. Honouring the
+        # override here would send an internal call back through the proxy -
+        # needing DNS, a trusted certificate and a network hop it never needs.
+        "--api-base", "http://localhost:8000/api/v1",
         "--api-key", api_key,
     ]
 

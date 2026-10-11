@@ -15,6 +15,7 @@ import numpy as np
 
 from lib import metrics
 from lib.api import (
+    DEFAULT_API_BASE,
     build_session,
     get_generations_from_experiment,
     get_experiment_pareto_front,
@@ -37,7 +38,8 @@ def _empty() -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compute HV, GD and IGD per generation")
-    parser.add_argument("--api-base", default="http://localhost:8000/api/v1")
+    parser.add_argument("--api-base", default=DEFAULT_API_BASE,
+                        help="SimLab REST API base URL  [env: SIMLAB_API_BASE]")
     parser.add_argument("--api-key", default=os.getenv("SIMLAB_API_KEY", "api-password"))
     parser.add_argument("--expid", required=True)
     parser.add_argument("--objectives", nargs="+", required=True)

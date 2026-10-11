@@ -44,6 +44,7 @@ import moocore
 
 from lib import metrics
 from lib.api import (
+    DEFAULT_API_BASE,
     build_session,
     get_generations_from_experiment,
     get_experiment_pareto_front,
@@ -741,7 +742,8 @@ def main():
         description="Pareto front dominance analysis (API-based)"
     )
 
-    parser.add_argument("--api-base", default="http://localhost:8000/api/v1")
+    parser.add_argument("--api-base", default=DEFAULT_API_BASE,
+                        help="SimLab REST API base URL  [env: SIMLAB_API_BASE]")
     parser.add_argument("--api-key", default=os.getenv("SIMLAB_API_KEY", "api-password"))
     parser.add_argument("--expid", required=True)
     parser.add_argument("--keep-the-files", action="store_true", default=False)
