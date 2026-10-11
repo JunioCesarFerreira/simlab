@@ -4,3 +4,8 @@ pymongo==4.17.0
 numpy==2.4.4
 pandas==3.0.2
 zstandard==0.25.0
+# Pinned explicitly, not left to paramiko: pylib.crypto.sealed opens the host
+# credentials with PyNaCl's SealedBox, so a paramiko release that drops or
+# bumps these would silently change the only code path that can read a secret.
+pynacl==1.6.2
+cryptography==47.0.0
