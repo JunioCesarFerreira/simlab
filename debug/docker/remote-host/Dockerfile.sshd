@@ -1,0 +1,33 @@
+# A stand-in for a remote computational host.
+#
+# Runs sshd and carries the Docker CLI, pointed at the developer machine's own
+# daemon through the mounted socket. That is enough to exercise the whole
+# remote path — hop 1 into the host, `docker ps` there, hop 2 tunnelled into a
+# container — on a single machine, without installing sshd on the machine
+# itself or needing a second one.
+#
+# For development only. Key authentication, no password, root login: the point
+# is to reproduce the production code path, not the production hardening.
+FROM alpine:3.20
+
+RUN apk add --no-cache openssh-server docker-cli \
+    && ssh-keygen -A \
+    && mkdir -p /root/.ssh \
+    && chmod 700 /root/.ssh
+
+# Key only. A password would let the fixture pass while the key path — the one
+# the feature recommends — stayed untested.
+RUN printf '%s\n' \
+        'PermitRootLogin prohibit-password' \
+        'PasswordAuthentication no' \
+        'PubkeyAuthentication yes' \
+        'AuthorizedKeysFile /root/.ssh/authorized_keys' \
+        'UsePAM no' \
+        'PrintMotd no' \
+    > /etc/ssh/sshd_config.d/simlab.conf
+
+EXPOSE 22
+
+# -D stays in the foreground, -e logs to stderr so `docker logs` shows the
+# authentication attempts — which is what you read when hop 1 fails.
+CMD ["/usr/sbin/sshd", "-D", "-e"]

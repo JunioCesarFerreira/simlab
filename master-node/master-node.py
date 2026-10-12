@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Thread
+from typing import Callable
 from bson import ObjectId
 
 # SysPath for common modules
@@ -16,9 +17,19 @@ if project_path not in sys.path:
     sys.path.insert(0, project_path)
 
 # lib master-node
-from lib.bootstrap import local_host_document, local_resource_documents
+from lib.bootstrap import (
+    ensure_local_host,
+    local_host_document,
+    local_resource_documents,
+    publish_public_key,
+)
+from lib.credentials import SecretOpener
+from lib.scheduler import Dispatcher, SimulationRunner, build_policy
 from lib.synthetic_data import run_synthetic_simulation, resolve_synthetic_settings
 from lib.transport import SSHTransport, TransportError, build_transport
+
+# pylib crypto — master-node only; the API deliberately cannot open a secret.
+from pylib.crypto.sealed import DEFAULT_KEY_PATH, Keystore
 
 # pylib
 from pylib.db import create_mongo_repository_factory, MongoRepository, EnumStatus
@@ -49,6 +60,9 @@ class Settings:
     sim_timeout_sec: int
     jvm_xms: str
     jvm_xmx: str
+    infra_mode: str
+    sched_policy: str
+    infra_key_path: str
 
     @staticmethod
     def from_env() -> "Settings":
@@ -77,6 +91,15 @@ class Settings:
         jvm_xms = os.getenv("COOJA_JVM_XMS", "1g")
         jvm_xmx = os.getenv("COOJA_JVM_XMX", "2g")
 
+        # "managed" places work by policy across the registered hosts.
+        # "legacy" keeps the pre-feature pool: one worker per container from
+        # NUMBER_OF_CONTAINERS, all racing for the queue. Kept as an escape
+        # hatch for the transition and meant to be removed once the managed
+        # path has been exercised in deployment.
+        infra_mode = os.getenv("INFRA_MODE", "managed").strip().lower()
+        sched_policy = os.getenv("SCHED_POLICY", "least_loaded_host")
+        infra_key_path = os.getenv("INFRA_KEY_PATH", DEFAULT_KEY_PATH)
+
         return Settings(
             is_docker=is_docker,
             mongo_uri=mongo_uri,
@@ -89,6 +112,9 @@ class Settings:
             sim_timeout_sec=sim_timeout_sec,
             jvm_xms=jvm_xms,
             jvm_xmx=jvm_xmx,
+            infra_mode=infra_mode,
+            sched_policy=sched_policy,
+            infra_key_path=infra_key_path,
         )
 
 
@@ -422,23 +448,28 @@ def start_workers(num_workers: int) -> queue.Queue:
     return q
 
 
-def load_initial_waiting_jobs(mongo: MongoRepository, sim_queue: queue.Queue) -> None:
-    """Enqueue IDs of all WAITING simulations found at startup."""
+def load_initial_waiting_jobs(
+    mongo: MongoRepository, submit: Callable[[str], None]
+) -> None:
+    """Offer every WAITING simulation found at startup."""
     log.info("Searching for pending simulations...")
     pending = mongo.simulation_repo.find_pending()
     for sim in pending:
         sim_id = str(sim["_id"])
         log.info("Pending simulation: %s", sim_id)
-        sim_queue.put(sim_id)
+        submit(sim_id)
 
 
 def watch_status_waiting_enqueue(
     simRepo: SimulationRepository,
-    sim_queue: queue.Queue
+    submit: Callable[[str], None],
 ) -> None:
     """
-    Subscribes to the simulations Change Stream and enqueues simulation IDs
+    Subscribes to the simulations Change Stream and offers simulation IDs
     as they enter WAITING status.
+
+    ``submit`` is a callable rather than a queue so the same producer feeds
+    the managed dispatcher and the legacy worker pool.
     """
     log.info("[mongowatch] Watching for WAITING simulations...")
 
@@ -449,27 +480,121 @@ def watch_status_waiting_enqueue(
             return
         sim_id = str(doc["_id"])
         log.info("[mongowatch] Enqueuing simulation %s", sim_id)
-        sim_queue.put(sim_id)
+        submit(sim_id)
 
     simRepo.watch_status_waiting(on_simulation_event)
+
+
+def _cleanup_local_files(paths: list[str]) -> None:
+    for path in paths:
+        try:
+            Path(path).unlink(missing_ok=True)
+        except Exception as ex:
+            log.warning("Failed to remove temp file %s: %s", path, ex)
+
+
+def _run_synthetic_if_requested(sim: Simulation, mongo: MongoRepository) -> bool:
+    """Handle a synthetic simulation without placing it on a container.
+
+    Synthetic runs never touch Cooja, so holding a container for one would
+    take capacity away from work that needs it.
+    """
+    exp_id = sim.get("experiment_id")
+    exp_doc = mongo.experiment_repo.get(exp_id)
+    if exp_doc is None:
+        log.warning(
+            "Experiment %s not found for simulation %s; "
+            "falling back to the env-var synthetic setting.", exp_id, sim.get("_id"),
+        )
+    mode, bench, noise_std = resolve_synthetic_settings(exp_doc)
+    if not mode:
+        return False
+    log.info("sim %s → Synthetic Data (exp=%s)", sim.get("_id"), exp_id)
+    run_synthetic_simulation(sim, mongo, bench=bench, noise_std=noise_std)
+    return True
+
+
+def build_dispatcher(mongo: MongoRepository, keystore: Keystore) -> Dispatcher:
+    """Assemble the managed scheduling path."""
+    opener = SecretOpener(keystore)
+
+    def learn_host_key(host_id, fingerprint: str) -> None:
+        mongo.host_repo.update(host_id, {"access.host_key_fingerprint": fingerprint})
+
+    runner = SimulationRunner(
+        mongo,
+        execute=run_cooja_simulation,
+        prepare=prepare_simulation_files,
+        opener=opener,
+        cleanup_local=_cleanup_local_files,
+        on_learn_host_key=learn_host_key,
+    )
+    dispatcher = Dispatcher(
+        mongo,
+        runner,
+        policy=build_policy(SET.sched_policy),
+        # Synthetic runs never touch Cooja, so they are completed here instead
+        # of being placed: reserving a container for one would take capacity
+        # away from work that actually needs it.
+        intercept=lambda sim: _run_synthetic_if_requested(sim, mongo),
+    )
+
+    # A release frees a container, and a change to the pool may add one. Both
+    # wake a decision that is holding a job for want of capacity.
+    Thread(
+        target=mongo.resource_repo.watch,
+        args=(lambda _change: dispatcher.notify_capacity(),),
+        daemon=True, name="watch-resources",
+    ).start()
+    Thread(
+        target=mongo.host_repo.watch,
+        args=(lambda _change: dispatcher.notify_capacity(),),
+        daemon=True, name="watch-hosts",
+    ).start()
+    return dispatcher
 
 
 def main() -> None:
     number_of_containers = len(SET.hostnames)
     log.info("start")
     log.info("number of containers: %s", number_of_containers)
-    log.info("env: MONGO_URI=%s | DB_NAME=%s | IS_DOCKER=%s", SET.mongo_uri, SET.db_name, SET.is_docker)
+    log.info(
+        "env: MONGO_URI=%s | DB_NAME=%s | IS_DOCKER=%s | INFRA_MODE=%s",
+        SET.mongo_uri, SET.db_name, SET.is_docker, SET.infra_mode,
+    )
 
     mongo = create_mongo_repository_factory(SET.mongo_uri, SET.db_name)
 
     recover_stuck_simulations(mongo)
-    sim_queue = start_workers(number_of_containers)
-    load_initial_waiting_jobs(mongo, sim_queue)
+
+    if SET.infra_mode == "legacy":
+        log.warning(
+            "INFRA_MODE=legacy: one worker per container from "
+            "NUMBER_OF_CONTAINERS, no host balancing. This path exists for "
+            "the transition and will be removed."
+        )
+        sim_queue = start_workers(number_of_containers)
+        submit = sim_queue.put
+    else:
+        keystore = Keystore.load_or_create(SET.infra_key_path)
+        publish_public_key(mongo, keystore)
+        ensure_local_host(
+            mongo,
+            is_docker=SET.is_docker,
+            hostnames=SET.hostnames,
+            ports=SET.ports,
+            remote_dir=SET.remote_dir,
+        )
+        dispatcher = build_dispatcher(mongo, keystore)
+        Thread(target=dispatcher.run, daemon=True, name="dispatcher").start()
+        submit = dispatcher.submit
+
+    load_initial_waiting_jobs(mongo, submit)
 
     Thread(
         target=watch_status_waiting_enqueue,
-        args=(mongo.simulation_repo, sim_queue,),
-        daemon=True,
+        args=(mongo.simulation_repo, submit),
+        daemon=True, name="watch-simulations",
     ).start()
 
     try:

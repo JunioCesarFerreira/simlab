@@ -330,9 +330,17 @@ services:
       - DB_NAME=simlab
       - MONGO_URI=mongodb://mongodb:27017/?replicaSet=rs0
       - IS_DOCKER=True
+      # Seeds the local host's resources on first start; the real inventory
+      # comes from Docker discovery afterwards.
       - NUMBER_OF_CONTAINERS=8
       - COOJA_JVM_XMS=4g
       - COOJA_JVM_XMX=4g
+      # managed: place work by policy across the registered hosts.
+      # legacy:  the pre-feature pool, one worker per container, no balancing.
+      #          Kept as an escape hatch for the transition.
+      - INFRA_MODE=managed
+      - SCHED_POLICY=least_loaded_host
+      - INFRA_KEY_PATH=/run/secrets/simlab-infra/x25519.json
       # Synthetic benchmark mode (global fallback — prefer per-experiment config via GUI)
       # ENABLE_DATA_SYNTHETIC=True  → bypass Cooja and evaluate BENCH analytically
       # BENCH=DTLZ2                 → benchmark function: DTLZ2 | ZDT1 | SCH1
@@ -343,6 +351,17 @@ services:
     ports:
       # Loopback only: SSH into the container is a debugging entry point.
       - "127.0.0.1:2220:22"
+    volumes:
+      # Reads which Cooja containers exist on this machine, and their
+      # addresses. Read-only protects the socket file, not the API: anything
+      # that can talk to the daemon has effective root on the host. That is
+      # the same access cAdvisor above already holds; the documented
+      # hardening is a read-only socket proxy in front of it.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # The X25519 private key that opens stored host credentials. Generated
+      # on first start if absent. BACK THIS UP: without it every registered
+      # host has to be entered again.
+      - infra_keys:/run/secrets/simlab-infra
     labels:
       - "simlab.type=master"
       - "simlab.role=controller"
@@ -484,6 +503,7 @@ services:
 volumes:
   mongo_data:
   mongo_config:
+  infra_keys:
   prometheus-data:
   grafana-storage:
 

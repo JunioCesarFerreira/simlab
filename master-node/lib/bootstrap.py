@@ -10,6 +10,7 @@ Keeping it in one place is what makes ``docker compose up`` continue to work
 with no registration step: the documents the scheduler reads for the local host
 are the documents the environment already described.
 """
+import logging
 from datetime import datetime
 from typing import Any, Optional
 
@@ -23,6 +24,8 @@ from pylib.db.models.infra import (
     EnumHostType,
     EnumResourceStatus,
 )
+
+log = logging.getLogger(__name__)
 
 LOCAL_HOST_NAME = "local"
 # The label every Cooja service in docker-compose.yaml already carries.
@@ -136,3 +139,55 @@ def local_resource_documents(
             document["host_id"] = host_id
         documents.append(document)
     return documents
+
+
+def ensure_local_host(
+    mongo: Any,
+    *,
+    is_docker: bool,
+    hostnames: list[str],
+    ports: list[int],
+    remote_dir: str,
+) -> ObjectId:
+    """Persist the local host and its seeded resources, idempotently.
+
+    Runs on every start, which is what makes ``docker compose up`` work with no
+    registration step. It must therefore add what is missing without undoing
+    anything an operator changed, so both writes are insert-only:
+    ``upsert_bootstrap`` for the host and ``insert_seeded`` for each resource.
+    A resource that discovery has since described, that was disabled, or that
+    is holding a simulation is left exactly as it is.
+
+    Returns the host's id.
+    """
+    host_id = mongo.host_repo.upsert_bootstrap(local_host_document(is_docker=is_docker))
+
+    seeded = local_resource_documents(
+        hostnames=hostnames, ports=ports, remote_dir=remote_dir, host_id=host_id)
+    created = sum(
+        1 for document in seeded if mongo.resource_repo.insert_seeded(document))
+
+    log.info(
+        "Local host %s ready: %d of %d resource(s) seeded (the rest already existed)",
+        host_id, created, len(seeded),
+    )
+    return host_id
+
+
+def publish_public_key(mongo: Any, keystore: Any) -> None:
+    """Publish the keystore's public half, so the browser can seal to it.
+
+    The API serves this; it holds no private key and could not produce it. Only
+    public material is written — the private key never leaves its mounted file.
+    """
+    mongo.infra_crypto_repo.publish(
+        alg="crypto_box_seal",
+        key_id=keystore.key_id,
+        public_key=keystore.public_key_b64,
+        fingerprint=keystore.fingerprint,
+        retired_key_ids=keystore.retired_key_ids,
+    )
+    log.info(
+        "Published infrastructure public key %s (%s)",
+        keystore.key_id, keystore.fingerprint,
+    )

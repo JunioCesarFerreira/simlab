@@ -7,13 +7,17 @@ resolve to the same SSH targets the master-node used before this feature.
 These tests are the guard on that equivalence, and on the one that follows
 from it — that `docker compose up` needs no registration step.
 """
+from unittest.mock import MagicMock
+
 import pytest
 
 from lib.bootstrap import (
     DEFAULT_COOJA_LABEL,
     LOCAL_HOST_NAME,
+    ensure_local_host,
     local_host_document,
     local_resource_documents,
+    publish_public_key,
 )
 from lib.transport.plan import build_plan
 
@@ -138,3 +142,90 @@ class TestLocalResources:
     def test_count_follows_the_environment(self):
         assert len(docker_resources(8)) == 8
         assert len(docker_resources(0)) == 0
+
+
+# ── Persisting it, without undoing anything ──────────────────────────────────
+
+class FakeMongo:
+    def __init__(self, inserted=True):
+        self.host_repo = MagicMock()
+        self.resource_repo = MagicMock()
+        self.infra_crypto_repo = MagicMock()
+        self.host_repo.upsert_bootstrap.return_value = "HOST_ID"
+        self.resource_repo.insert_seeded.return_value = inserted
+
+
+class TestEnsureLocalHost:
+    def test_the_host_goes_through_the_insert_only_upsert(self):
+        mongo = FakeMongo()
+        host_id = ensure_local_host(
+            mongo, is_docker=True, hostnames=["cooja1"], ports=[22],
+            remote_dir=REMOTE_DIR)
+
+        assert host_id == "HOST_ID"
+        # Not `insert` and not `update`: a restart must not re-enable a host an
+        # operator disabled, nor undo its access configuration.
+        mongo.host_repo.upsert_bootstrap.assert_called_once()
+        mongo.host_repo.insert.assert_not_called()
+        mongo.host_repo.update.assert_not_called()
+
+    def test_every_described_container_is_offered(self):
+        mongo = FakeMongo()
+        ensure_local_host(
+            mongo, is_docker=True,
+            hostnames=["cooja1", "cooja2", "cooja3"], ports=[22, 22, 22],
+            remote_dir=REMOTE_DIR)
+
+        offered = [c.args[0]["name"] for c in mongo.resource_repo.insert_seeded.call_args_list]
+        assert offered == ["cooja1", "cooja2", "cooja3"]
+
+    def test_resources_carry_the_host_id(self):
+        mongo = FakeMongo()
+        ensure_local_host(
+            mongo, is_docker=True, hostnames=["cooja1"], ports=[22],
+            remote_dir=REMOTE_DIR)
+        assert mongo.resource_repo.insert_seeded.call_args.args[0]["host_id"] == "HOST_ID"
+
+    def test_no_pre_check_reads_the_collection(self):
+        # insert_seeded is $setOnInsert, so a second run is a no-op per
+        # resource and the decision belongs to the database. Reading first to
+        # decide would be both redundant and racy: two master-nodes starting
+        # together would each see "absent" and both try to create it.
+        mongo = FakeMongo(inserted=False)
+        ensure_local_host(
+            mongo, is_docker=True, hostnames=["cooja1", "cooja2"], ports=[22, 22],
+            remote_dir=REMOTE_DIR)
+
+        mongo.resource_repo.find_by_host.assert_not_called()
+        # Still offered, even though the repository reports nothing inserted.
+        assert mongo.resource_repo.insert_seeded.call_count == 2
+
+    def test_no_containers_configured_is_not_an_error(self):
+        mongo = FakeMongo()
+        assert ensure_local_host(
+            mongo, is_docker=True, hostnames=[], ports=[],
+            remote_dir=REMOTE_DIR) == "HOST_ID"
+        mongo.resource_repo.insert_seeded.assert_not_called()
+
+
+class TestPublishPublicKey:
+    def test_only_public_material_is_published(self):
+        mongo = FakeMongo()
+        keystore = MagicMock()
+        keystore.key_id = "b114dd6d8410a62a"
+        keystore.public_key_b64 = "cHVibGlj"
+        keystore.fingerprint = "SHA256:abc"
+        keystore.retired_key_ids = ["old"]
+
+        publish_public_key(mongo, keystore)
+
+        kwargs = mongo.infra_crypto_repo.publish.call_args.kwargs
+        assert kwargs == {
+            "alg": "crypto_box_seal",
+            "key_id": "b114dd6d8410a62a",
+            "public_key": "cHVibGlj",
+            "fingerprint": "SHA256:abc",
+            "retired_key_ids": ["old"],
+        }
+        # The private key never leaves its mounted file.
+        assert "private" not in repr(kwargs)

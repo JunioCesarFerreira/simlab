@@ -351,6 +351,31 @@ class TestSyncDiscovered:
         pool_filter = coll.update_many.call_args_list[1].args[0]
         assert EnumResourceStatus.BUSY.value not in pool_filter["status"]["$in"]
 
+    def test_seeded_insert_never_overwrites(self, resources):
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(upserted_id=ObjectId())
+
+        inserted = repo.insert_seeded({
+            "host_id": HOST_ID, "name": "cooja1",
+            "status": EnumResourceStatus.AVAILABLE.value, "enabled": True,
+        })
+
+        assert inserted is True
+        flt, update = coll.update_one.call_args.args[:2]
+        assert flt == {"host_id": HOST_ID, "name": "cooja1"}
+        # $setOnInsert only, and no $set at all: the startup seed must not
+        # overwrite a resource discovery has described, one an operator
+        # disabled, or one holding a simulation right now.
+        assert set(update) == {"$setOnInsert"}
+        assert "host_id" not in update["$setOnInsert"]
+        assert "name" not in update["$setOnInsert"]
+        assert coll.update_one.call_args.kwargs["upsert"] is True
+
+    def test_seeded_insert_reports_when_it_did_nothing(self, resources):
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(upserted_id=None)
+        assert repo.insert_seeded({"host_id": HOST_ID, "name": "cooja1"}) is False
+
     def test_unnamed_container_is_skipped(self, resources):
         repo, coll = resources
         coll.find.return_value = []

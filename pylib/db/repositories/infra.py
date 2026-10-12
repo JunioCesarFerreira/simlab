@@ -758,6 +758,26 @@ class CoojaResourceRepository:
             "missing_occupied": missing_occupied,
         }
 
+    def insert_seeded(self, resource: CoojaResource) -> bool:
+        """Insert a seeded resource, or leave the existing one untouched.
+
+        ``$setOnInsert`` only: the startup seed must never overwrite a resource
+        that discovery has since described, that an operator disabled, or that
+        is holding a simulation right now. Returns whether it inserted.
+
+        Atomic by construction, so two master-nodes starting at once cannot
+        both create the same container — the unique (host_id, name) index
+        decides, and the loser simply makes no change.
+        """
+        document = {k: v for k, v in resource.items() if k not in ("host_id", "name")}
+        with self.connection.connect() as db:
+            result = db[RESOURCES_COLLECTION].update_one(
+                {"host_id": resource["host_id"], "name": resource["name"]},
+                {"$setOnInsert": document},
+                upsert=True,
+            )
+            return result.upserted_id is not None
+
     def delete_by_host(self, host_id: Any) -> int:
         oid = _oid(host_id)
         if oid is None:
