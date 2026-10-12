@@ -866,6 +866,14 @@ class CoojaResourceRepository:
         if not payload:
             return False
         payload["updated_time"] = datetime.now()
+        if "connection" in payload or "endpoint" in payload:
+            # Configuring how a worker is reached takes ownership of it, even
+            # if it first appeared through discovery. `origin` then means "who
+            # decides this worker's connection", which is the distinction the
+            # health cycle and the discovery sync both need — without it, the
+            # next discovery pass marks a hand-configured worker as missing
+            # and the probe never runs.
+            payload["origin"] = "manual"
         with self.connection.connect() as db:
             res = db[RESOURCES_COLLECTION].update_one({"_id": oid}, {"$set": payload})
             return res.matched_count > 0

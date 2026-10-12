@@ -36,6 +36,8 @@ from lib.credentials import CredentialError, SecretOpener
 from lib.discovery import discover_host
 from lib.transport import PlanError, TransportError, build_transport
 from pylib.db.models.infra import (
+    EnumAddressMode,
+    EnumDiscoveryMode,
     EnumHostStatus,
     EnumHostType,
     EnumResourceStatus,
@@ -184,9 +186,19 @@ class HealthMonitor:
 
         container_state = (resource.get("container") or {}).get("state")
         checked_at = (resource.get("container") or {}).get("checked_at")
-        if checked_at is not None and container_state != "running":
-            # Level 1 already answered. No point opening an SSH connection to
-            # a container Docker says is not running.
+        if (
+            checked_at is not None
+            and container_state != "running"
+            # ...unless the operator stated where this worker is. Docker not
+            # seeing it then means only "I could not see it" — on a host whose
+            # SSH user has no access to the daemon, it never will — and must
+            # not overrule an address a person typed. Observed in deployment:
+            # two workers configured with their own addresses and credentials
+            # were marked `container is missing` and never probed at all.
+            and not operator_configured(host, resource)
+        ):
+            # Level 1 already answered, and nothing contradicts it: no point
+            # opening an SSH connection to a container Docker says is down.
             self._mongo.resource_repo.update_probe(
                 resource["_id"], {"ssh_ok": False, "message": f"container {container_state}"})
             self._mongo.resource_repo.mark_offline(
@@ -351,6 +363,33 @@ class HealthMonitor:
         if swept and self._on_capacity is not None:
             self._on_capacity()
         return swept
+
+
+def operator_configured(host: dict, resource: dict) -> bool:
+    """Whether a person, not Docker, decided how this worker is reached.
+
+    When they did, the SSH probe is the whole of the evidence: Docker's
+    silence about a worker says nothing about whether it answers, and on a
+    shared host the daemon may be unreachable by design.
+
+    Three signals, any of which is enough:
+
+    * the worker carries its own ``connection`` settings;
+    * it was registered by hand (``origin`` is ``manual``);
+    * its host lists workers manually, or states addresses explicitly.
+    """
+    connection = resource.get("connection") or {}
+    # `transport` alone is a default the mapper always writes, so it does not
+    # count as the operator having configured anything.
+    if any(key != "transport" for key in connection):
+        return True
+    if resource.get("origin") == "manual":
+        return True
+    discovery_mode = (host.get("discovery") or {}).get("mode")
+    if discovery_mode == EnumDiscoveryMode.MANUAL.value:
+        return True
+    address_mode = (host.get("container_access") or {}).get("address_mode")
+    return address_mode == EnumAddressMode.EXPLICIT.value
 
 
 def local_host_only(hosts: list[dict]) -> list[dict]:

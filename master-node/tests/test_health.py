@@ -39,9 +39,12 @@ NO_COOJA = ProbeResult(reachable=True, cooja_present=False,
 
 
 def resource(name="cooja1", status="offline", enabled=True,
-             container_state="running", checked=True, _id=RES_ID) -> dict:
+             container_state="running", checked=True, _id=RES_ID,
+             connection=None, origin="discovered") -> dict:
     return {
         "_id": _id, "name": name, "status": status, "enabled": enabled,
+        "origin": origin,
+        "connection": connection or {},
         "container": {
             "state": container_state,
             "checked_at": datetime.now() if checked else None,
@@ -174,6 +177,93 @@ class TestContainerState:
 
         assert len(probed) == 1
         assert result.ready == ["cooja1"]
+
+
+class TestOperatorConfiguredWorkers:
+    """Regression: Docker's silence overruled an address a person typed.
+
+    Observed in deployment. Two workers were configured by hand with their
+    own addresses (`localhost:2222`, `localhost:2223`) and their own sealed
+    credentials, on a host left in `docker` mode whose SSH user cannot reach
+    the daemon. Discovery found nothing and marked both `missing`, and the
+    level-1 short-circuit then skipped the SSH probe entirely — so two
+    perfectly reachable workers sat `offline` with "container is missing" and
+    never got a single connection attempt.
+
+    Where the operator stated the address, the probe is the whole of the
+    evidence.
+    """
+
+    def test_a_worker_with_its_own_connection_is_probed_anyway(self):
+        probed: list = []
+        mongo = fake_mongo(resources=[resource(
+            container_state="missing",
+            connection={"transport": "ssh", "port": 2222, "username": "root"},
+        )])
+
+        result = build_monitor(
+            mongo, probe=lambda h, r: probed.append(r) or READY).check_host(HOST)
+
+        assert len(probed) == 1
+        assert result.ready == ["cooja1"]
+        mongo.resource_repo.mark_available.assert_called_once()
+
+    def test_a_manually_registered_worker_is_probed_anyway(self):
+        probed: list = []
+        mongo = fake_mongo(resources=[resource(
+            container_state="missing", origin="manual")])
+
+        build_monitor(mongo, probe=lambda h, r: probed.append(r) or READY) \
+            .check_host(HOST)
+
+        assert len(probed) == 1
+
+    def test_a_host_listing_workers_manually_probes_all_of_them(self):
+        probed: list = []
+        host = {**HOST, "discovery": {"mode": "manual"}}
+        mongo = fake_mongo(resources=[resource(container_state="missing")])
+
+        build_monitor(mongo, probe=lambda h, r: probed.append(r) or READY) \
+            .check_host(host)
+
+        assert len(probed) == 1
+
+    def test_an_explicit_address_mode_probes_all_of_them(self):
+        probed: list = []
+        host = {**HOST, "container_access": {"username": "root", "port": 22,
+                                             "address_mode": "explicit"}}
+        mongo = fake_mongo(resources=[resource(container_state="missing")])
+
+        build_monitor(mongo, probe=lambda h, r: probed.append(r) or READY) \
+            .check_host(host)
+
+        assert len(probed) == 1
+
+    def test_a_purely_discovered_worker_still_short_circuits(self):
+        # The optimization is kept where it is sound: Docker saw the container
+        # and it is down, and nobody claimed otherwise. Probing every stopped
+        # container would cost one connection timeout each, per cycle.
+        probed: list = []
+        mongo = fake_mongo(resources=[resource(
+            container_state="exited", origin="discovered")])
+
+        result = build_monitor(
+            mongo, probe=lambda h, r: probed.append(r) or READY).check_host(HOST)
+
+        assert probed == []
+        assert result.unhealthy == ["cooja1"]
+
+    def test_transport_alone_does_not_count_as_configured(self):
+        # The mapper always writes `transport`, so it is not evidence that a
+        # person set anything.
+        probed: list = []
+        mongo = fake_mongo(resources=[resource(
+            container_state="exited", connection={"transport": "ssh"})])
+
+        build_monitor(mongo, probe=lambda h, r: probed.append(r) or READY) \
+            .check_host(HOST)
+
+        assert probed == []
 
 
 # ── Thresholds and hysteresis ────────────────────────────────────────────────
