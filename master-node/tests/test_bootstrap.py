@@ -72,22 +72,22 @@ class TestLocalHost:
         assert discovery["label_filter"] == DEFAULT_COOJA_LABEL
         assert discovery["endpoint"] == "socket"
 
-    def test_starts_schedulable(self):
-        """Regression: an OFFLINE bootstrap host deadlocks the whole pool.
+    def test_starts_unmeasured_rather_than_assumed(self):
+        """Nothing here claims the host works; the health cycle decides.
 
-        The resources are seeded AVAILABLE because the environment asserts
-        they exist. Persisting the host OFFLINE at the same time made nothing
-        schedulable, and the health cycle that would promote it does not
-        exist yet — so the dispatcher held every simulation forever while the
-        queue filled. Observed in deployment: 60 simulations Waiting, 8
-        containers available, nothing running.
+        This briefly asserted the opposite. The bootstrap used to mark the
+        host ONLINE because nothing measured anything, and an earlier version
+        marking it OFFLINE deadlocked the pool outright — observed in
+        deployment as 60 simulations Waiting with 8 containers free.
+
+        The protection is no longer the default. It is that a health cycle
+        runs synchronously before the dispatcher places any work, so the first
+        decision reads a measurement. See
+        ``test_health.TestFirstCycle.test_an_unmeasured_pool_becomes_usable``.
         """
-        from pylib.db.models.infra import SCHEDULABLE_HOST_STATUSES
-
         host = local_host_document(is_docker=True)
         assert host["enabled"] is True
-        assert host["status"] in [s.value for s in SCHEDULABLE_HOST_STATUSES]
-        # Still unchecked: the first real probe replaces this assumption.
+        assert host["status"] == "offline"
         assert host["last_check"] is None
 
     def test_marked_as_bootstrapped(self):
@@ -125,11 +125,10 @@ class TestLocalResources:
     def test_names_are_kept_when_they_identify_the_container(self):
         assert [r["name"] for r in docker_resources(2)] == ["cooja1", "cooja2"]
 
-    def test_seeded_resources_are_available(self):
-        # The pre-feature stance: the environment asserted these containers
-        # exist, and a worker found out otherwise by failing. Discovery and
-        # the probe take that judgement over as soon as they run.
-        assert all(r["status"] == "available" for r in docker_resources(2))
+    def test_seeded_resources_wait_to_be_measured(self):
+        # Nothing enters the pool on an assertion, including this one: the
+        # container has to be running per Docker and answer the SSH probe.
+        assert all(r["status"] == "offline" for r in docker_resources(2))
         assert all(r["enabled"] for r in docker_resources(2))
 
     def test_container_facts_are_not_claimed(self):
@@ -210,20 +209,6 @@ class TestEnsureLocalHost:
         mongo.resource_repo.find_by_host.assert_not_called()
         # Still offered, even though the repository reports nothing inserted.
         assert mongo.resource_repo.insert_seeded.call_count == 2
-
-    def test_an_existing_unchecked_host_is_corrected(self):
-        # A database written before the fix holds the local host as OFFLINE,
-        # and upsert_bootstrap is insert-only, so it would stay that way and
-        # keep the pool deadlocked. This is what repairs it on the next start.
-        from pylib.db.models.infra import EnumHostStatus
-
-        mongo = FakeMongo()
-        ensure_local_host(
-            mongo, is_docker=True, hostnames=["cooja1"], ports=[22],
-            remote_dir=REMOTE_DIR)
-
-        mongo.host_repo.set_status_if_unchecked.assert_called_once_with(
-            "HOST_ID", EnumHostStatus.ONLINE)
 
     def test_no_containers_configured_is_not_an_error(self):
         mongo = FakeMongo()

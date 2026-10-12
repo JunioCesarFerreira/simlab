@@ -551,23 +551,6 @@ class TestHosts:
         # Claiming "online" without probing would show a state nobody measured.
         assert "status" not in coll.update_one.call_args.args[1]["$set"]
 
-    def test_status_is_only_assumed_while_unchecked(self, hosts):
-        repo, coll = hosts
-        coll.update_one.return_value = MagicMock(modified_count=1)
-
-        repo.set_status_if_unchecked(HOST_ID, EnumHostStatus.ONLINE)
-
-        flt, update = coll.update_one.call_args.args[:2]
-        # The precondition lives in the filter: once a real check has run,
-        # this cannot overwrite what was measured.
-        assert flt == {"_id": HOST_ID, "last_check": None}
-        assert update["$set"]["status"] == EnumHostStatus.ONLINE.value
-
-    def test_assumed_status_reports_whether_it_applied(self, hosts):
-        repo, coll = hosts
-        coll.update_one.return_value = MagicMock(modified_count=0)
-        assert repo.set_status_if_unchecked(HOST_ID, EnumHostStatus.ONLINE) is False
-
     def test_check_result_skips_a_disabled_host(self, hosts):
         repo, coll = hosts
         coll.update_one.return_value = MagicMock(matched_count=1)

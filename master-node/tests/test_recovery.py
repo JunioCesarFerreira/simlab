@@ -135,6 +135,72 @@ class TestAdoption:
         assert report.released == ["cooja1"]
 
 
+class TestResumingAdoptedRuns:
+    """Adoption hands the run on to be followed, not just left alone.
+
+    Without this the container is correctly preserved but the run is wasted:
+    nothing collects its result, so it resolves through SIM_TIMEOUT_SEC.
+    """
+
+    def test_an_adopted_run_is_handed_over_for_following(self):
+        resumed: list = []
+        mongo = FakeMongo(occupied=[resource()], simulation=simulation("Running"))
+        mongo.resource_repo.find_occupied.return_value = [
+            {**resource(), "attempt_id": "att-1"}]
+
+        reconcile_occupied_resources(
+            mongo, probe=lambda *a: True,
+            on_adopt=lambda sim, host, res, attempt, pid: resumed.append(
+                (sim["_id"], host["name"], res["name"], attempt, pid)))
+
+        assert resumed == [(SIM_1, "local", "cooja1", "att-1", 4242)]
+
+    def test_the_attempt_id_falls_back_to_the_simulation(self):
+        resumed: list = []
+        mongo = FakeMongo(
+            occupied=[resource()],
+            simulation={**simulation("Running"), "attempt_id": "from-sim"})
+
+        reconcile_occupied_resources(
+            mongo, probe=lambda *a: True,
+            on_adopt=lambda sim, host, res, attempt, pid: resumed.append(attempt))
+
+        assert resumed == ["from-sim"]
+
+    def test_without_an_attempt_id_it_is_left_alone(self):
+        # Resuming needs it to release the container afterwards, and leaving
+        # the run untouched beats freeing a container something is using.
+        resumed: list = []
+        mongo = FakeMongo(occupied=[resource()], simulation=simulation("Running"))
+        report = reconcile_occupied_resources(
+            mongo, probe=lambda *a: True, on_adopt=lambda *a: resumed.append(a))
+        assert resumed == []
+        assert report.adopted == ["cooja1"]
+        mongo.resource_repo.force_release.assert_not_called()
+
+    def test_a_failing_handover_does_not_release_the_container(self):
+        def exploding(*args):
+            raise RuntimeError("thread pool exhausted")
+
+        mongo = FakeMongo(occupied=[resource()], simulation=simulation("Running"))
+        mongo.resource_repo.find_occupied.return_value = [
+            {**resource(), "attempt_id": "att-1"}]
+
+        report = reconcile_occupied_resources(
+            mongo, probe=lambda *a: True, on_adopt=exploding)
+
+        assert report.adopted == ["cooja1"]
+        mongo.resource_repo.force_release.assert_not_called()
+        mongo.simulation_repo.mark_error.assert_not_called()
+
+    def test_nothing_is_handed_over_for_a_dead_run(self):
+        resumed: list = []
+        mongo = FakeMongo(occupied=[resource()], simulation=simulation("Running"))
+        reconcile_occupied_resources(
+            mongo, probe=lambda *a: False, on_adopt=lambda *a: resumed.append(a))
+        assert resumed == []
+
+
 class TestReleasesOrphans:
     def test_nothing_held_is_a_no_op(self):
         mongo = FakeMongo()

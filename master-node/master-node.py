@@ -25,6 +25,7 @@ from lib.bootstrap import (
 )
 from lib.credentials import SecretOpener
 from lib.detached import RUN_ARTIFACTS, DetachedRun, is_running
+from lib.health import HealthMonitor
 from lib.recovery import reconcile_occupied_resources
 from lib.scheduler import Dispatcher, SimulationRunner, build_policy
 from lib.synthetic_data import run_synthetic_simulation, resolve_synthetic_settings
@@ -66,6 +67,9 @@ class Settings:
     sched_policy: str
     infra_key_path: str
     run_poll_interval_sec: float
+    infra_check_interval_sec: float
+    infra_failure_threshold: int
+    reservation_ttl_sec: float
 
     @staticmethod
     def from_env() -> "Settings":
@@ -106,6 +110,9 @@ class Settings:
         # each time (~40ms measured), so this is about log latency rather than
         # load; it also bounds how long a finished run holds its container.
         run_poll_interval_sec = float(os.getenv("RUN_POLL_INTERVAL_SEC", "5"))
+        infra_check_interval_sec = float(os.getenv("INFRA_CHECK_INTERVAL_SEC", "30"))
+        infra_failure_threshold = int(os.getenv("INFRA_FAILURE_THRESHOLD", "3"))
+        reservation_ttl_sec = float(os.getenv("RESERVATION_TTL_SEC", "600"))
 
         return Settings(
             is_docker=is_docker,
@@ -123,6 +130,9 @@ class Settings:
             sched_policy=sched_policy,
             infra_key_path=infra_key_path,
             run_poll_interval_sec=run_poll_interval_sec,
+            infra_check_interval_sec=infra_check_interval_sec,
+            infra_failure_threshold=infra_failure_threshold,
+            reservation_ttl_sec=reservation_ttl_sec,
         )
 
 
@@ -251,6 +261,7 @@ def run_cooja_simulation(
     mongo: MongoRepository,
     remote_files: list[str] | None = None,
     on_started: Callable[[int], None] | None = None,
+    adopt_pid: int | None = None,
 ) -> None:
     """
     Executes the simulation in the container, monitors logs, and stores results in GridFS.
@@ -258,33 +269,51 @@ def run_cooja_simulation(
 
     The connection arrives already open: the caller owns it, because it also
     sent the input files over it and because closing it is what releases the
-    container. Everything below is the same sequence as before — only the
-    paramiko calls moved behind the transport.
+    container.
+
+    With ``adopt_pid`` the run is *already going* — a simulation that outlived
+    a master-node restart — so it is followed from where it is instead of
+    being started. Collecting the result is identical either way, which is why
+    this is one function with one branch rather than two that drift apart.
     """
     sim_oid = ObjectId(sim["_id"]) if not isinstance(sim["_id"], ObjectId) else sim["_id"]
     where = transport.plan.describe()
     log_path = f"{SET.local_log_dir}/sim_{sim_oid}.log"
     csv_path = f"{SET.local_log_dir}/sim_{sim_oid}.csv"
     try:
-        log.info("[%s] Starting simulation %s", where, sim_oid)
-        mongo.simulation_repo.mark_running(sim_oid)
-
-        # No `cd` and no channel: the run is launched in its own session with
-        # its output going to a file, so the JVM outlives a dropped
-        # connection instead of being killed by SIGHUP.
-        command = (
-            f"/opt/java/openjdk/bin/java --enable-preview "
-            f"-Xms{SET.jvm_xms} -Xmx{SET.jvm_xmx} "
-            f"-jar build/libs/cooja.jar --no-gui simulation.csc"
-        )
-
         runner = DetachedRun(transport, poll_interval_sec=SET.run_poll_interval_sec)
-        handle = runner.launch(command)
-        if on_started is not None:
-            on_started(handle.pid)
+
+        if adopt_pid:
+            log.info("[%s] Resuming simulation %s (pid %s)", where, sim_oid, adopt_pid)
+            runner.attach(adopt_pid)
+            # The deadline counts from when the run actually started, not from
+            # now: a restart must not hand a simulation a fresh timeout.
+            timeout_sec = _remaining_timeout(sim)
+            if timeout_sec is not None and timeout_sec <= 0:
+                runner.terminate()
+                raise RuntimeError(
+                    "the simulation had already exceeded SIM_TIMEOUT_SEC when it "
+                    "was resumed"
+                )
+        else:
+            log.info("[%s] Starting simulation %s", where, sim_oid)
+            mongo.simulation_repo.mark_running(sim_oid)
+
+            # No `cd` and no channel: the run is launched in its own session
+            # with its output going to a file, so the JVM outlives a dropped
+            # connection instead of being killed by SIGHUP.
+            command = (
+                f"/opt/java/openjdk/bin/java --enable-preview "
+                f"-Xms{SET.jvm_xms} -Xmx{SET.jvm_xmx} "
+                f"-jar build/libs/cooja.jar --no-gui simulation.csc"
+            )
+            handle = runner.launch(command)
+            if on_started is not None:
+                on_started(handle.pid)
+            timeout_sec = SET.sim_timeout_sec or None
 
         outcome = runner.wait(
-            timeout_sec=SET.sim_timeout_sec or None,
+            timeout_sec=timeout_sec,
             on_output=lambda text: log.info("[cooja][%s] %s", where, text.rstrip()),
         )
         if not outcome.completed:
@@ -517,6 +546,21 @@ def watch_status_waiting_enqueue(
     simRepo.watch_status_waiting(on_simulation_event)
 
 
+def _remaining_timeout(sim: Simulation) -> float | None:
+    """How much of SIM_TIMEOUT_SEC is left for a simulation already running.
+
+    Without this a restart would reset the clock, so a stuck simulation could
+    hold a container indefinitely by being adopted again and again.
+    """
+    if not SET.sim_timeout_sec:
+        return None
+    started = sim.get("start_time")
+    if not isinstance(started, datetime):
+        return float(SET.sim_timeout_sec)
+    spent = (datetime.now() - started).total_seconds()
+    return float(SET.sim_timeout_sec) - spent
+
+
 def _cleanup_local_files(paths: list[str]) -> None:
     for path in paths:
         try:
@@ -544,6 +588,25 @@ def _run_synthetic_if_requested(sim: Simulation, mongo: MongoRepository) -> bool
     log.info("sim %s → Synthetic Data (exp=%s)", sim.get("_id"), exp_id)
     run_synthetic_simulation(sim, mongo, bench=bench, noise_std=noise_std)
     return True
+
+
+def _resume_in_background(runner: SimulationRunner) -> Callable:
+    """Follow an adopted run on its own thread.
+
+    Reconciliation must not block on a simulation that may have hours left to
+    go, and each adopted run needs its own follower for the same reason a
+    freshly placed one does.
+    """
+
+    def on_adopt(sim, host, resource, attempt_id: str, pid: int) -> None:
+        Thread(
+            target=runner.resume,
+            args=(sim, host, resource, attempt_id, pid),
+            daemon=True,
+            name=f"resume-{str(sim.get('_id'))[:8]}",
+        ).start()
+
+    return on_adopt
 
 
 def build_liveness_probe(opener: SecretOpener) -> Callable:
@@ -638,12 +701,34 @@ def main() -> None:
             ports=SET.ports,
             remote_dir=SET.remote_dir,
         )
-        # Containers claimed by a process that is gone would stay claimed,
-        # and the pool would shrink by that many on every restart. The probe
-        # is what keeps this from also destroying runs that outlived the
-        # master-node, which detached execution makes possible.
-        reconcile_occupied_resources(mongo, build_liveness_probe(opener))
         dispatcher = build_dispatcher(mongo, keystore, opener)
+        monitor = HealthMonitor(
+            mongo,
+            opener=opener,
+            interval_sec=SET.infra_check_interval_sec,
+            failure_threshold=SET.infra_failure_threshold,
+            reservation_ttl_sec=SET.reservation_ttl_sec,
+            on_capacity=dispatcher.notify_capacity,
+        )
+
+        # Containers claimed by a process that is gone would stay claimed, and
+        # the pool would shrink by that many on every restart. The probe keeps
+        # this from also destroying runs that outlived the master-node, and the
+        # handler picks up following them so their results are collected
+        # instead of being abandoned to the timeout.
+        reconcile_occupied_resources(
+            mongo,
+            probe=build_liveness_probe(opener),
+            on_adopt=_resume_in_background(dispatcher.runner),
+        )
+
+        # Synchronously, before anything is placed: the first placement
+        # decision then reads measured statuses instead of assumptions. This is
+        # what replaced seeding hosts and containers as already usable.
+        log.info("Running the first health cycle before placing any work...")
+        monitor.cycle()
+
+        Thread(target=monitor.run, daemon=True, name="health").start()
         Thread(target=dispatcher.run, daemon=True, name="dispatcher").start()
         submit = dispatcher.submit
 

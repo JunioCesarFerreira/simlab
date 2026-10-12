@@ -18,6 +18,10 @@ from lib.transport import TransportError, build_transport
 log = logging.getLogger(__name__)
 
 
+class _PrepareFailed(Exception):
+    """Internal: the inputs could not be assembled, so nothing was started."""
+
+
 class SimulationRunner:
     """Runs placed simulations. One instance, shared by every runner thread.
 
@@ -59,43 +63,90 @@ class SimulationRunner:
         is that the container goes back to the pool either way.
         """
         sim_oid = _oid(sim["_id"])
-        resource_id = resource["_id"]
-        where = f"{host.get('name')}/{resource.get('name')}"
         local_files: list[str] = []
 
-        try:
+        def body(transport) -> None:
+            nonlocal local_files
             success, local_files, remote_files = self._prepare(sim, self._mongo)
             if not success:
-                log.warning("[%s] Skipping simulation %s (prepare failed)", where, sim_oid)
-                self._fail(sim, sim_oid, "Failed to prepare simulation files")
-                return
+                raise _PrepareFailed()
+            # Defensive: clear artifacts left behind if a previous run crashed
+            # before its own cleanup could execute.
+            transport.cleanup()
+            transport.put_files(local_files, remote_files)
+            self._execute(
+                sim, transport, self._mongo, remote_files,
+                on_started=self._started(resource["_id"], sim_oid, attempt_id),
+            )
 
+        self._on_container(sim, host, resource, attempt_id, body,
+                           cleanup=lambda: local_files)
+
+    def resume(
+        self,
+        sim: dict,
+        host: dict,
+        resource: dict,
+        attempt_id: str,
+        pid: int,
+    ) -> None:
+        """Pick up a simulation that outlived a master-node restart.
+
+        Nothing is prepared and nothing is uploaded: the inputs are already in
+        the container and the JVM is already running. Only the following
+        resumes, so the result is collected when it finishes instead of the
+        run being abandoned to its timeout.
+        """
+        sim_oid = _oid(sim["_id"])
+
+        def body(transport) -> None:
+            self._execute(
+                sim, transport, self._mongo, None,
+                on_started=None, adopt_pid=int(pid),
+            )
+
+        self._on_container(sim, host, resource, attempt_id, body)
+
+    def _on_container(
+        self,
+        sim: dict,
+        host: dict,
+        resource: dict,
+        attempt_id: str,
+        body: Callable[[Any], None],
+        cleanup: Optional[Callable[[], list[str]]] = None,
+    ) -> None:
+        """Open the container, run ``body``, and always give it back.
+
+        Shared by starting and resuming so the release — the contract with the
+        dispatcher — exists once and cannot drift between the two paths.
+        """
+        sim_oid = _oid(sim["_id"])
+        resource_id = resource["_id"]
+        where = f"{host.get('name')}/{resource.get('name')}"
+
+        try:
             transport = build_transport(
                 host, resource, self._opener,
                 on_learn_host_key=self._host_key_sink(host),
             )
             with transport:
-                # Defensive: clear artifacts left behind if a previous run
-                # crashed before its own cleanup could execute.
-                transport.cleanup()
-                transport.put_files(local_files, remote_files)
-                self._execute(
-                    sim, transport, self._mongo, remote_files,
-                    on_started=self._started(resource_id, sim_oid, attempt_id),
-                )
-
+                body(transport)
+        except _PrepareFailed:
+            log.warning("[%s] Skipping simulation %s (prepare failed)", where, sim_oid)
+            self._fail(sim, sim_oid, "Failed to prepare simulation files")
         except TransportError as e:
             # Reaching the container failed. The simulation never started, so
             # it is a plain failure — distinct from losing contact with a run
-            # already in progress, which the reconciliation layer handles.
+            # already in progress, which the follower handles by reconnecting.
             log.warning("[%s] Could not reach the container for %s: %s", where, sim_oid, e)
             self._fail(sim, sim_oid, f"Could not reach {where}: {e}")
         except Exception as e:
             log.exception("[%s] General ERROR on %s: %s", where, sim_oid, e)
             self._fail(sim, sim_oid, str(e))
         finally:
-            if self._cleanup_local is not None:
-                self._cleanup_local(local_files)
+            if self._cleanup_local is not None and cleanup is not None:
+                self._cleanup_local(cleanup())
             self._release(resource_id, sim_oid, attempt_id, where)
 
     def _started(

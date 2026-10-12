@@ -253,6 +253,18 @@ class DetachedRun:
         log.info("Started detached run, pid=%s in %s", pid, self._remote_dir)
         return self._handle
 
+    def attach(self, pid: int) -> RunHandle:
+        """Take over following a run that is already going.
+
+        Used after a restart, to pick up a simulation that outlived the
+        master-node. Nothing is started and nothing is reset: the run is
+        simply followed from where it is, which is the whole point of having
+        recorded its PID.
+        """
+        self._handle = RunHandle(pid=int(pid), remote_dir=self._remote_dir)
+        log.info("Attached to running pid %s in %s", pid, self._remote_dir)
+        return self._handle
+
     def _read_pid(self, attempts: int = 10, delay: float = 0.3) -> int:
         """Wait briefly for the inner shell to record its PID.
 

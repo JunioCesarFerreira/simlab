@@ -54,16 +54,14 @@ def local_host_document(
         "name": LOCAL_HOST_NAME,
         "type": EnumHostType.LOCAL.value,
         "enabled": True,
-        # ONLINE, not OFFLINE. The bootstrap is an assertion by the
-        # environment — the same one that makes the seeded resources
-        # `available` — and the pre-feature master-node trusted it, finding
-        # out otherwise by failing a run. Starting the host OFFLINE while its
-        # resources are AVAILABLE deadlocks the pool: nothing is schedulable,
-        # and the health cycle that would promote it does not exist yet.
+        # Unknown until measured. The health cycle runs once, synchronously,
+        # before the dispatcher places anything, so this is replaced by an
+        # observation within the first second of startup.
         #
-        # A *registered* remote host is different and does start OFFLINE:
-        # nothing asserts that it works until a probe says so.
-        "status": EnumHostStatus.ONLINE.value,
+        # It was briefly ONLINE here, as a stand-in for the measurement that
+        # did not exist yet. That is the kind of assumption this phase exists
+        # to remove.
+        "status": EnumHostStatus.OFFLINE.value,
         "access": None,
         "container_access": {
             "transport": "ssh",
@@ -109,10 +107,9 @@ def local_resource_documents(
     start — before any discovery has run, or with no Docker socket mounted —
     still has somewhere to send work, exactly as the master-node did before.
 
-    Each resource starts ``available``, which is the pre-feature behaviour:
-    the environment asserted these containers exist and the worker found out
-    otherwise by failing. Discovery and the probe take over that judgement as
-    soon as they run.
+    Each resource starts ``offline``, and the health cycle promotes it once
+    Docker confirms the container is running and the SSH probe finds a usable
+    Cooja build. Nothing enters the pool on an assertion — including this one.
     """
     now = datetime.now()
     documents: list[dict[str, Any]] = []
@@ -133,7 +130,7 @@ def local_resource_documents(
             "endpoint": {"address": hostname, "port": port},
             "remote_dir": remote_dir,
             "enabled": True,
-            "status": EnumResourceStatus.AVAILABLE.value,
+            "status": EnumResourceStatus.OFFLINE.value,
             "current_simulation_id": None,
             "attempt_id": None,
             "remote_pid": None,
@@ -169,27 +166,16 @@ def ensure_local_host(
 
     Returns the host's id.
     """
-    document = local_host_document(is_docker=is_docker)
-    host_id = mongo.host_repo.upsert_bootstrap(document)
-    # upsert_bootstrap is insert-only, so an existing host keeps whatever
-    # status it was created with. This corrects one written by an earlier
-    # version as OFFLINE — and does nothing once a real check has run.
-    mongo.host_repo.set_status_if_unchecked(host_id, EnumHostStatus.ONLINE)
+    host_id = mongo.host_repo.upsert_bootstrap(local_host_document(is_docker=is_docker))
 
     seeded = local_resource_documents(
         hostnames=hostnames, ports=ports, remote_dir=remote_dir, host_id=host_id)
     created = sum(
         1 for document in seeded if mongo.resource_repo.insert_seeded(document))
 
-    # Until the health cycle exists, `offline` is a one-way door: nothing
-    # promotes a container back. Any of this host's containers sitting there
-    # with no observation behind it never actually failed, so it is returned
-    # to the pool.
-    restored = mongo.resource_repo.restore_unobserved(host_id)
-
     log.info(
-        "Local host %s ready: %d of %d resource(s) seeded, %d restored to the pool",
-        host_id, created, len(seeded), restored,
+        "Local host %s ready: %d of %d resource(s) seeded",
+        host_id, created, len(seeded),
     )
     return host_id
 

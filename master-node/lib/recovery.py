@@ -31,12 +31,10 @@ non-terminal                 container unreachable       leave it be, fail nothi
 The last row is the specification's requirement that losing contact is not the
 same as the run failing. The fourth is why the probe exists at all.
 
-Adoption here means "do not disturb", and no more than that: nothing resumes
-*following* an adopted run, so its result is not collected when it finishes
-and it resolves through ``SIM_TIMEOUT_SEC`` instead. That is a deliberate
-limit of this step, not an oversight — resuming the follow needs the health
-cycle and belongs with it. It is still strictly better than the alternative,
-which was to throw the run away on sight.
+Adoption hands the run to ``on_adopt``, which resumes *following* it — so a
+simulation that outlived a restart has its result collected when it finishes
+rather than being abandoned to its timeout. Without that callback adoption
+still means "do not disturb", which is correct but wastes the run.
 """
 import logging
 from dataclasses import dataclass, field
@@ -56,6 +54,8 @@ TERMINAL_STATUSES = (EnumStatus.DONE, EnumStatus.ERROR, EnumStatus.CANCELLED)
 
 # A probe answers True (running), False (gone) or None (could not be reached).
 LivenessProbe = Callable[[dict, dict, Optional[int]], Optional[bool]]
+# Called with everything needed to resume following an adopted run.
+AdoptionHandler = Callable[[dict, dict, dict, str, int], None]
 
 
 @dataclass
@@ -80,6 +80,7 @@ class ReconcileReport:
 def reconcile_occupied_resources(
     mongo: Any,
     probe: Optional[LivenessProbe] = None,
+    on_adopt: Optional[AdoptionHandler] = None,
 ) -> ReconcileReport:
     """Decide what to do with every container still held from a previous run.
 
@@ -98,7 +99,7 @@ def reconcile_occupied_resources(
     )
     for resource in occupied:
         try:
-            _reconcile_one(mongo, resource, probe, report)
+            _reconcile_one(mongo, resource, probe, on_adopt, report)
         except Exception:
             log.exception(
                 "Failed to reconcile container %s", resource.get("name", "?"))
@@ -110,6 +111,7 @@ def _reconcile_one(
     mongo: Any,
     resource: dict,
     probe: Optional[LivenessProbe],
+    on_adopt: Optional[AdoptionHandler],
     report: ReconcileReport,
 ) -> None:
     name = str(resource.get("name", "?"))
@@ -126,16 +128,33 @@ def _reconcile_one(
     alive = _ask_probe(probe, mongo, resource, simulation, name)
 
     if alive is True:
-        # Still going. Leaving it alone is the only safe answer: releasing
-        # would invite a second simulation onto a busy container.
+        # Still going. Releasing would invite a second simulation onto a busy
+        # container, so the run is adopted and followed from where it is.
         log.warning(
-            "Container %s is still running simulation %s (pid %s); adopting it "
-            "rather than destroying it. Nothing is following it yet, so its "
-            "result is not collected until the health cycle resumes the follow; "
-            "until then it resolves through SIM_TIMEOUT_SEC.",
+            "Container %s is still running simulation %s (pid %s); adopting it",
             name, sim_oid, simulation.get("remote_pid"),
         )
         report.adopted.append(name)
+        if on_adopt is None:
+            log.warning(
+                "Nothing is following %s, so its result will not be collected; "
+                "it resolves through SIM_TIMEOUT_SEC", sim_oid,
+            )
+            return
+        host = mongo.host_repo.get(resource.get("host_id"))
+        attempt_id = resource.get("attempt_id") or simulation.get("attempt_id")
+        if host is None or not attempt_id:
+            # Cannot resume without both. Still better to leave the run alone
+            # than to free a container something is using.
+            log.warning(
+                "Cannot resume following %s: %s", sim_oid,
+                "its host is gone" if host is None else "no attempt id was recorded",
+            )
+            return
+        try:
+            on_adopt(simulation, host, resource, str(attempt_id), int(simulation["remote_pid"]))
+        except Exception:
+            log.exception("Failed to resume following simulation %s", sim_oid)
         return
 
     if alive is None:

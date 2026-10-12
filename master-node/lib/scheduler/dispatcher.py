@@ -87,6 +87,15 @@ class Dispatcher:
     def pending(self) -> int:
         return self._queue.qsize() + (1 if self._held is not None else 0)
 
+    @property
+    def runner(self):
+        """The runner this dispatcher hands work to.
+
+        Exposed so an adopted run can be resumed through the same object, and
+        therefore released through the same contract.
+        """
+        return self._runner
+
     # ── the loop ───────────────────────────────────────────────────────────
 
     def run(self) -> None:

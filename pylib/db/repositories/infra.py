@@ -233,28 +233,6 @@ class HostRepository:
             )
             return doc["_id"]
 
-    def set_status_if_unchecked(self, host_id: Any, status: EnumHostStatus) -> bool:
-        """Set the status only while nothing has actually checked this host.
-
-        The filter carries the precondition: ``last_check is None`` is exactly
-        the state a freshly bootstrapped host is in. Once a real check has run,
-        this is a no-op forever and cannot overwrite an observation.
-
-        It exists so a database written by an earlier version — where the
-        bootstrapped local host was persisted OFFLINE and therefore never
-        schedulable — corrects itself on the next start instead of needing a
-        manual edit.
-        """
-        oid = _oid(host_id)
-        if oid is None:
-            return False
-        with self.connection.connect() as db:
-            res = db[HOSTS_COLLECTION].update_one(
-                {"_id": oid, "last_check": None},
-                {"$set": {"status": status.value, "updated_time": datetime.now()}},
-            )
-            return res.modified_count > 0
-
     # ── health bookkeeping (master-node only) ──────────────────────────────
 
     def mark_check_result(
@@ -686,47 +664,6 @@ class CoojaResourceRepository:
                 }},
             )
             return res.modified_count > 0
-
-    def restore_unobserved(self, host_id: Any) -> int:
-        """Return this host's never-observed containers to the pool.
-
-        An ``offline`` resource that carries no observation — no
-        ``container.checked_at``, no ``probe.checked_at`` — was never actually
-        found to be broken. It reached that state through something other than
-        a measurement, and nothing would bring it back: the health cycle is
-        what promotes a container, and until it exists ``offline`` is a
-        one-way door.
-
-        Scoped to one host on purpose. It is meant for a bootstrapped host,
-        whose containers the environment asserts exist. A *discovered* host's
-        resources start ``offline`` legitimately, and must wait for a probe.
-
-        Occupied resources are untouched, and so is anything an operator
-        disabled. Returns how many were restored.
-        """
-        oid = _oid(host_id)
-        if oid is None:
-            return 0
-        now = datetime.now()
-        with self.connection.connect() as db:
-            result = db[RESOURCES_COLLECTION].update_many(
-                {
-                    "host_id": oid,
-                    "enabled": True,
-                    "status": EnumResourceStatus.OFFLINE.value,
-                    "$or": [
-                        {"container.checked_at": None},
-                        {"container.checked_at": {"$exists": False}},
-                    ],
-                    "probe.checked_at": None,
-                },
-                {"$set": {
-                    "status": EnumResourceStatus.AVAILABLE.value,
-                    "last_check_message": "restored: never observed as failing",
-                    "updated_time": now,
-                }},
-            )
-            return result.modified_count
 
     def set_enabled(self, resource_id: Any, enabled: bool) -> bool:
         """Administrative override. Survives every discovery pass.
