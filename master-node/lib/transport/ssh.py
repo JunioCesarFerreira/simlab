@@ -120,9 +120,22 @@ class SSHTransport:
                 src_addr=("127.0.0.1", 0),
             )
         except SSHException as e:
+            # "Administratively prohibited" is sshd refusing to open a TCP
+            # forward, and it is the one failure here an operator cannot
+            # diagnose from the message alone: the second hop is a
+            # direct-tcpip channel, so the host's sshd must allow forwarding.
+            # Upstream OpenSSH defaults to yes; several distributions ship it
+            # as no, Alpine among them.
+            hint = ""
+            if "administratively prohibited" in str(e).lower():
+                hint = (
+                    " — the host's sshd is refusing to forward. Set "
+                    "`AllowTcpForwarding yes` in its sshd_config and reload "
+                    "it; the second hop into the container needs it."
+                )
             raise TransportUnreachable(
                 f"host {self.plan.jump} could not reach container "
-                f"{self.plan.target}: {e}"
+                f"{self.plan.target}: {e}{hint}"
             ) from None
 
     def _connect_target(self, sock) -> SSHClient:

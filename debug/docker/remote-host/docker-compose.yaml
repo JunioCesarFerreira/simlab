@@ -26,7 +26,10 @@ services:
       # How the "host" answers `docker ps`: the developer machine's daemon.
       - /var/run/docker.sock:/var/run/docker.sock
       # Generate with: ssh-keygen -t ed25519 -N '' -f ./keys/simlab_remote
-      - ./keys/simlab_remote.pub:/root/.ssh/authorized_keys:ro
+      # Mounted at /keys and copied into place by the entrypoint: a bind mount
+      # keeps the host's ownership, and sshd's StrictModes refuses an
+      # authorized_keys file it does not own.
+      - ./keys/simlab_remote.pub:/keys/authorized_keys:ro
     networks:
       # Reachable by the master-node, standing in for the LAN.
       - cooja-net

@@ -33,6 +33,10 @@
         <span class="nav-icon">⊟</span>
         Compare
       </RouterLink>
+      <RouterLink to="/infrastructure" class="nav-link">
+        <span class="nav-icon">▤</span>
+        Infrastructure
+      </RouterLink>
     </div>
 
     <div class="sidebar-footer">
