@@ -1,0 +1,14 @@
+services:
+  cooja-worker1:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja-worker1
+    restart: unless-stopped
+    ports:
+      - "2222:22"
+
+  cooja-worker2:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja-worker2
+    restart: unless-stopped
+    ports:
+      - "2223:22"
