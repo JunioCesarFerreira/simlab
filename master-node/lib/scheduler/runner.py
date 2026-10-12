@@ -79,8 +79,10 @@ class SimulationRunner:
                 # crashed before its own cleanup could execute.
                 transport.cleanup()
                 transport.put_files(local_files, remote_files)
-                self._mongo.resource_repo.mark_busy(resource_id, sim_oid, attempt_id)
-                self._execute(sim, transport, self._mongo, remote_files)
+                self._execute(
+                    sim, transport, self._mongo, remote_files,
+                    on_started=self._started(resource_id, sim_oid, attempt_id),
+                )
 
         except TransportError as e:
             # Reaching the container failed. The simulation never started, so
@@ -95,6 +97,33 @@ class SimulationRunner:
             if self._cleanup_local is not None:
                 self._cleanup_local(local_files)
             self._release(resource_id, sim_oid, attempt_id, where)
+
+    def _started(
+        self, resource_id: Any, sim_oid: ObjectId, attempt_id: str
+    ) -> Callable[[int], None]:
+        """Record the moment the simulation actually began running.
+
+        ``reserved`` becomes ``busy`` here rather than before the execution,
+        so the state means what it says — a container is busy once something
+        is running on it — and so the transition carries the remote PID in a
+        single atomic write.
+
+        The PID is what lets a later liveness probe ask whether the run is
+        still going instead of assuming a dropped connection killed it.
+        """
+
+        def on_started(pid: int) -> None:
+            try:
+                self._mongo.resource_repo.mark_busy(
+                    resource_id, sim_oid, attempt_id, pid)
+                self._mongo.simulation_repo.set_remote_pid(sim_oid, attempt_id, pid)
+            except Exception:
+                # Bookkeeping only: the simulation is already running, and
+                # failing it over a lost write would waste the whole run.
+                log.exception(
+                    "Failed to record pid %s for simulation %s", pid, sim_oid)
+
+        return on_started
 
     # ── helpers ────────────────────────────────────────────────────────────
 

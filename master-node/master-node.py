@@ -24,7 +24,8 @@ from lib.bootstrap import (
     publish_public_key,
 )
 from lib.credentials import SecretOpener
-from lib.recovery import release_orphaned_reservations
+from lib.detached import RUN_ARTIFACTS, DetachedRun, is_running
+from lib.recovery import reconcile_occupied_resources
 from lib.scheduler import Dispatcher, SimulationRunner, build_policy
 from lib.synthetic_data import run_synthetic_simulation, resolve_synthetic_settings
 from lib.transport import SSHTransport, TransportError, build_transport
@@ -64,6 +65,7 @@ class Settings:
     infra_mode: str
     sched_policy: str
     infra_key_path: str
+    run_poll_interval_sec: float
 
     @staticmethod
     def from_env() -> "Settings":
@@ -100,6 +102,10 @@ class Settings:
         infra_mode = os.getenv("INFRA_MODE", "managed").strip().lower()
         sched_policy = os.getenv("SCHED_POLICY", "least_loaded_host")
         infra_key_path = os.getenv("INFRA_KEY_PATH", DEFAULT_KEY_PATH)
+        # How often a running simulation is checked on. One cheap round trip
+        # each time (~40ms measured), so this is about log latency rather than
+        # load; it also bounds how long a finished run holds its container.
+        run_poll_interval_sec = float(os.getenv("RUN_POLL_INTERVAL_SEC", "5"))
 
         return Settings(
             is_docker=is_docker,
@@ -116,6 +122,7 @@ class Settings:
             infra_mode=infra_mode,
             sched_policy=sched_policy,
             infra_key_path=infra_key_path,
+            run_poll_interval_sec=run_poll_interval_sec,
         )
 
 
@@ -243,6 +250,7 @@ def run_cooja_simulation(
     transport: SSHTransport,
     mongo: MongoRepository,
     remote_files: list[str] | None = None,
+    on_started: Callable[[int], None] | None = None,
 ) -> None:
     """
     Executes the simulation in the container, monitors logs, and stores results in GridFS.
@@ -261,19 +269,40 @@ def run_cooja_simulation(
         log.info("[%s] Starting simulation %s", where, sim_oid)
         mongo.simulation_repo.mark_running(sim_oid)
 
+        # No `cd` and no channel: the run is launched in its own session with
+        # its output going to a file, so the JVM outlives a dropped
+        # connection instead of being killed by SIGHUP.
         command = (
-            f"cd {transport.plan.remote_dir} && "
-            f"/opt/java/openjdk/bin/java --enable-preview -Xms{SET.jvm_xms} -Xmx{SET.jvm_xmx} "
+            f"/opt/java/openjdk/bin/java --enable-preview "
+            f"-Xms{SET.jvm_xms} -Xmx{SET.jvm_xmx} "
             f"-jar build/libs/cooja.jar --no-gui simulation.csc"
         )
 
-        for channel, text in transport.stream_command(
-            command, timeout=SET.sim_timeout_sec or None
-        ):
-            if channel == "stderr":
-                log.error("[ssh][%s][stderr] %s", where, text)
-            else:
-                log.info("[ssh][%s][stdout] %s", where, text)
+        runner = DetachedRun(transport, poll_interval_sec=SET.run_poll_interval_sec)
+        handle = runner.launch(command)
+        if on_started is not None:
+            on_started(handle.pid)
+
+        outcome = runner.wait(
+            timeout_sec=SET.sim_timeout_sec or None,
+            on_output=lambda text: log.info("[cooja][%s] %s", where, text.rstrip()),
+        )
+        if not outcome.completed:
+            # Timed out, killed from outside, or contact never came back. The
+            # distinction is already in the outcome; what matters here is that
+            # no result is fabricated from an incomplete run.
+            raise RuntimeError(
+                outcome.message or "the simulation did not complete"
+            )
+        if outcome.exit_code not in (0, None):
+            # Recorded rather than fatal: Cooja has exited non-zero while
+            # still producing a usable testlog, and the previous
+            # implementation ignored the status entirely. The CSV check below
+            # remains the arbiter of success.
+            log.warning(
+                "[%s] Cooja exited with status %s after %.0fs",
+                where, outcome.exit_code, outcome.elapsed_sec,
+            )
 
         log.info("[%s] Copying log to %s", where, log_path)
         transport.get_file("COOJA.testlog", log_path)
@@ -325,7 +354,9 @@ def run_cooja_simulation(
         if sim.get("generation_id"):
             _check_and_close_generation(sim["generation_id"], mongo)
     finally:
-        transport.cleanup(remote_files)
+        # The detached run's bookkeeping files are the caller's to declare:
+        # the transport's cleanup stays generic and knows nothing about them.
+        transport.cleanup(list(remote_files or []) + list(RUN_ARTIFACTS))
         for path in (log_path, csv_path):
             try:
                 Path(path).unlink(missing_ok=True)
@@ -515,10 +546,30 @@ def _run_synthetic_if_requested(sim: Simulation, mongo: MongoRepository) -> bool
     return True
 
 
-def build_dispatcher(mongo: MongoRepository, keystore: Keystore) -> Dispatcher:
-    """Assemble the managed scheduling path."""
-    opener = SecretOpener(keystore)
+def build_liveness_probe(opener: SecretOpener) -> Callable:
+    """A probe that answers whether a recorded run is still going.
 
+    Returns None when the container cannot be reached, which the caller must
+    keep distinct from "not running": conflating them is what would let a
+    network blip destroy a simulation.
+    """
+
+    def probe(host: dict, resource: dict, pid: int | None) -> bool | None:
+        transport = build_transport(host, resource, opener)
+        try:
+            with transport:
+                return is_running(
+                    transport, pid, remote_dir=transport.plan.remote_dir)
+        except TransportError:
+            return None
+
+    return probe
+
+
+def build_dispatcher(
+    mongo: MongoRepository, keystore: Keystore, opener: SecretOpener
+) -> Dispatcher:
+    """Assemble the managed scheduling path."""
     def learn_host_key(host_id, fingerprint: str) -> None:
         mongo.host_repo.update(host_id, {"access.host_key_fingerprint": fingerprint})
 
@@ -578,6 +629,7 @@ def main() -> None:
         submit = sim_queue.put
     else:
         keystore = Keystore.load_or_create(SET.infra_key_path)
+        opener = SecretOpener(keystore)
         publish_public_key(mongo, keystore)
         ensure_local_host(
             mongo,
@@ -586,10 +638,12 @@ def main() -> None:
             ports=SET.ports,
             remote_dir=SET.remote_dir,
         )
-        # Containers claimed by a process that is gone would stay claimed, and
-        # the pool would shrink by that many on every restart.
-        release_orphaned_reservations(mongo)
-        dispatcher = build_dispatcher(mongo, keystore)
+        # Containers claimed by a process that is gone would stay claimed,
+        # and the pool would shrink by that many on every restart. The probe
+        # is what keeps this from also destroying runs that outlived the
+        # master-node, which detached execution makes possible.
+        reconcile_occupied_resources(mongo, build_liveness_probe(opener))
+        dispatcher = build_dispatcher(mongo, keystore, opener)
         Thread(target=dispatcher.run, daemon=True, name="dispatcher").start()
         submit = dispatcher.submit
 

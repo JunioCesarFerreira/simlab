@@ -45,6 +45,7 @@ def build_runner(
 ) -> SimulationRunner:
     return SimulationRunner(
         mongo,
+        # MagicMock tolerates the on_started keyword the real executor takes.
         execute=execute or MagicMock(),
         prepare=prepare or (lambda sim, repo: (True, ["tmp/a.c"], ["a.c"])),
         on_release=on_release,
@@ -78,15 +79,49 @@ class TestSuccessfulRun:
         execute.assert_called_once()
         assert execute.call_args.args[0] is SIM
 
-    def test_marks_the_container_busy_before_executing(self, transport):
-        mongo = FakeMongo()
-        order: list[str] = []
-        mongo.resource_repo.mark_busy.side_effect = lambda *a: order.append("busy")
-        build_runner(mongo, execute=lambda *a: order.append("run")).run(
-            SIM, HOST, RESOURCE, ATTEMPT)
+    def test_the_container_becomes_busy_when_the_run_actually_starts(self, transport):
+        """`reserved` -> `busy` is driven by the execution, not by the plan.
 
-        assert order == ["busy", "run"]
-        mongo.resource_repo.mark_busy.assert_called_once_with(RES_ID, SIM_OID, ATTEMPT)
+        The state then means what it says, and the transition carries the
+        remote PID in one atomic write — which is what a later liveness probe
+        needs in order to ask whether the run is still going.
+        """
+        mongo = FakeMongo()
+
+        def execute(sim, tr, repo, remote_files, on_started=None):
+            mongo.resource_repo.mark_busy.assert_not_called()
+            on_started(4242)
+
+        build_runner(mongo, execute=execute).run(SIM, HOST, RESOURCE, ATTEMPT)
+
+        mongo.resource_repo.mark_busy.assert_called_once_with(
+            RES_ID, SIM_OID, ATTEMPT, 4242)
+        mongo.simulation_repo.set_remote_pid.assert_called_once_with(
+            SIM_OID, ATTEMPT, 4242)
+
+    def test_a_run_that_never_starts_leaves_it_reserved(self, transport):
+        # The release guard matches on simulation + attempt, which are set at
+        # reservation time, so a container never promoted to busy is still
+        # given back.
+        mongo = FakeMongo()
+        build_runner(mongo, execute=lambda *a, **k: None).run(
+            SIM, HOST, RESOURCE, ATTEMPT)
+        mongo.resource_repo.mark_busy.assert_not_called()
+        mongo.resource_repo.release.assert_called_once_with(RES_ID, SIM_OID, ATTEMPT)
+
+    def test_a_lost_pid_write_does_not_fail_the_simulation(self, transport):
+        # Bookkeeping only: the run is already going, and failing it over a
+        # lost write would waste the whole simulation.
+        mongo = FakeMongo()
+        mongo.resource_repo.mark_busy.side_effect = RuntimeError("mongo down")
+
+        build_runner(
+            mongo,
+            execute=lambda sim, tr, repo, rf, on_started=None: on_started(99),
+        ).run(SIM, HOST, RESOURCE, ATTEMPT)
+
+        mongo.simulation_repo.mark_error.assert_not_called()
+        mongo.resource_repo.release.assert_called_once()
 
     def test_releases_the_container_afterwards(self, transport):
         mongo = FakeMongo()
@@ -195,8 +230,15 @@ class TestReleaseGuard:
 
     def test_the_attempt_identifier_is_carried_through(self, transport):
         mongo = FakeMongo()
-        build_runner(mongo).run(SIM, HOST, RESOURCE, "other-attempt")
+        build_runner(
+            mongo,
+            execute=lambda sim, tr, repo, rf, on_started=None: on_started(7),
+        ).run(SIM, HOST, RESOURCE, "other-attempt")
+
+        # Both ends of the lifecycle are guarded by the same attempt, so a
+        # thread from an earlier one cannot report a start or free a container.
         assert mongo.resource_repo.mark_busy.call_args.args[2] == "other-attempt"
+        assert mongo.simulation_repo.set_remote_pid.call_args.args[1] == "other-attempt"
         assert mongo.resource_repo.release.call_args.args[2] == "other-attempt"
 
 
