@@ -54,7 +54,16 @@ def local_host_document(
         "name": LOCAL_HOST_NAME,
         "type": EnumHostType.LOCAL.value,
         "enabled": True,
-        "status": EnumHostStatus.OFFLINE.value,
+        # ONLINE, not OFFLINE. The bootstrap is an assertion by the
+        # environment — the same one that makes the seeded resources
+        # `available` — and the pre-feature master-node trusted it, finding
+        # out otherwise by failing a run. Starting the host OFFLINE while its
+        # resources are AVAILABLE deadlocks the pool: nothing is schedulable,
+        # and the health cycle that would promote it does not exist yet.
+        #
+        # A *registered* remote host is different and does start OFFLINE:
+        # nothing asserts that it works until a probe says so.
+        "status": EnumHostStatus.ONLINE.value,
         "access": None,
         "container_access": {
             "transport": "ssh",
@@ -160,16 +169,27 @@ def ensure_local_host(
 
     Returns the host's id.
     """
-    host_id = mongo.host_repo.upsert_bootstrap(local_host_document(is_docker=is_docker))
+    document = local_host_document(is_docker=is_docker)
+    host_id = mongo.host_repo.upsert_bootstrap(document)
+    # upsert_bootstrap is insert-only, so an existing host keeps whatever
+    # status it was created with. This corrects one written by an earlier
+    # version as OFFLINE — and does nothing once a real check has run.
+    mongo.host_repo.set_status_if_unchecked(host_id, EnumHostStatus.ONLINE)
 
     seeded = local_resource_documents(
         hostnames=hostnames, ports=ports, remote_dir=remote_dir, host_id=host_id)
     created = sum(
         1 for document in seeded if mongo.resource_repo.insert_seeded(document))
 
+    # Until the health cycle exists, `offline` is a one-way door: nothing
+    # promotes a container back. Any of this host's containers sitting there
+    # with no observation behind it never actually failed, so it is returned
+    # to the pool.
+    restored = mongo.resource_repo.restore_unobserved(host_id)
+
     log.info(
-        "Local host %s ready: %d of %d resource(s) seeded (the rest already existed)",
-        host_id, created, len(seeded),
+        "Local host %s ready: %d of %d resource(s) seeded, %d restored to the pool",
+        host_id, created, len(seeded), restored,
     )
     return host_id
 

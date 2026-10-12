@@ -31,6 +31,7 @@ from pylib.db.repositories.infra import (
     CoojaResourceRepository,
     HostRepository,
     InfraCryptoRepository,
+    released_status_expression,
 )
 
 HOST_ID = ObjectId("507f1f77bcf86cd799430001")
@@ -195,25 +196,56 @@ class TestRelease:
                       "reserved_at", "started_at"):
             assert sets[field] is None
 
-    def test_landing_status_is_conditional_not_assumed(self, resources):
-        repo, coll = resources
+    def _release_switch(self, repo, coll) -> dict:
         coll.find_one_and_update.return_value = {"_id": RES_ID}
-
         repo.release(RES_ID, SIM_ID, ATTEMPT)
-
-        # An aggregation pipeline, so the three outcomes are decided inside the
-        # same atomic update rather than by a follow-up write that could race:
-        #   disabled -> drains out of the pool
-        #   container running and probe OK -> back in the pool
-        #   otherwise -> offline, so the dispatcher is not handed a dead container
         pipeline = coll.find_one_and_update.call_args.args[1]
+        # An aggregation pipeline, so the outcome is decided inside the same
+        # atomic update rather than by a follow-up write that could race.
         assert isinstance(pipeline, list)
-        status = pipeline[0]["$set"]["status"]
-        rendered = repr(status)
-        assert EnumResourceStatus.DISABLED.value in rendered
-        assert EnumResourceStatus.AVAILABLE.value in rendered
-        assert EnumResourceStatus.OFFLINE.value in rendered
-        assert EnumContainerState.RUNNING.value in rendered
+        return pipeline[0]["$set"]["status"]["$switch"]
+
+    def test_default_is_back_in_the_pool(self, resources):
+        """Regression: requiring positive evidence drained the pool.
+
+        A seeded container has no container.checked_at and no probe.checked_at,
+        because discovery has not described it yet. When the release demanded
+        `state == running AND ssh_ok`, every completed simulation sent its
+        container to `offline` — one container lost per run, until nothing was
+        left. Observed in deployment: four of eight offline within a minute.
+        """
+        repo, coll = resources
+        switch = self._release_switch(repo, coll)
+        assert switch["default"] == EnumResourceStatus.AVAILABLE.value
+
+    def test_only_a_negative_observation_removes_it_from_the_pool(self, resources):
+        repo, coll = resources
+        branches = self._release_switch(repo, coll)["branches"]
+
+        outcomes = [b["then"] for b in branches]
+        assert outcomes == [
+            EnumResourceStatus.DISABLED.value,   # administrative
+            EnumResourceStatus.OFFLINE.value,    # Docker looked, not running
+            EnumResourceStatus.OFFLINE.value,    # the probe ran, and failed
+        ]
+        # Each offline branch is guarded by "something actually looked",
+        # never by the mere absence of an observation.
+        for branch in branches[1:]:
+            guard = repr(branch["case"])
+            assert "checked_at" in guard
+            assert "$ne" in guard
+
+    def test_a_disabled_container_drains_instead_of_returning(self, resources):
+        repo, coll = resources
+        first = self._release_switch(repo, coll)["branches"][0]
+        assert first["case"] == {"$ne": ["$enabled", True]}
+        assert first["then"] == EnumResourceStatus.DISABLED.value
+
+    def test_a_stopped_container_does_not_return_to_the_pool(self, resources):
+        repo, coll = resources
+        branch = self._release_switch(repo, coll)["branches"][1]
+        # The dispatcher must not be handed a container Docker says is dead.
+        assert EnumContainerState.RUNNING.value in repr(branch["case"])
 
 
 class TestForceRelease:
@@ -223,10 +255,42 @@ class TestForceRelease:
 
         assert repo.force_release(RES_ID, "recovered on startup") is True
 
-        flt, update = coll.update_one.call_args.args[:2]
+        flt = coll.update_one.call_args.args[0]
         assert flt == {"_id": RES_ID}           # no attempt_id: it is known gone
-        assert update["$set"]["status"] == EnumResourceStatus.OFFLINE.value
-        assert update["$set"]["current_simulation_id"] is None
+        sets = coll.update_one.call_args.args[1][0]["$set"]
+        assert sets["current_simulation_id"] is None
+        assert sets["attempt_id"] is None
+
+    def test_recovery_returns_the_container_to_the_pool(self, resources):
+        """Regression: recovery handed back a pool of zero.
+
+        force_release used to force `offline`. On a restart the container is
+        fine — it is the process that died — so every recovered container left
+        the pool and the dispatcher had nowhere to place work. Observed in
+        deployment as `local[0a/0f]` right after a successful recovery of all
+        eight containers.
+        """
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        repo.force_release(RES_ID, "recovered on master-node restart")
+
+        status = coll.update_one.call_args.args[1][0]["$set"]["status"]
+        assert status == released_status_expression()
+
+    def test_both_release_paths_land_a_container_the_same_way(self, resources):
+        # One expression, so there is a single place to revisit when the health
+        # cycle starts supplying real observations.
+        repo, coll = resources
+        coll.find_one_and_update.return_value = {"_id": RES_ID}
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        repo.release(RES_ID, SIM_ID, ATTEMPT)
+        guarded = coll.find_one_and_update.call_args.args[1][0]["$set"]["status"]
+        repo.force_release(RES_ID)
+        forced = coll.update_one.call_args.args[1][0]["$set"]["status"]
+
+        assert guarded == forced == released_status_expression()
 
 
 # ── Health checks must never evict a simulation ──────────────────────────────
@@ -486,6 +550,23 @@ class TestHosts:
         repo.set_enabled(HOST_ID, True)
         # Claiming "online" without probing would show a state nobody measured.
         assert "status" not in coll.update_one.call_args.args[1]["$set"]
+
+    def test_status_is_only_assumed_while_unchecked(self, hosts):
+        repo, coll = hosts
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        repo.set_status_if_unchecked(HOST_ID, EnumHostStatus.ONLINE)
+
+        flt, update = coll.update_one.call_args.args[:2]
+        # The precondition lives in the filter: once a real check has run,
+        # this cannot overwrite what was measured.
+        assert flt == {"_id": HOST_ID, "last_check": None}
+        assert update["$set"]["status"] == EnumHostStatus.ONLINE.value
+
+    def test_assumed_status_reports_whether_it_applied(self, hosts):
+        repo, coll = hosts
+        coll.update_one.return_value = MagicMock(modified_count=0)
+        assert repo.set_status_if_unchecked(HOST_ID, EnumHostStatus.ONLINE) is False
 
     def test_check_result_skips_a_disabled_host(self, hosts):
         repo, coll = hosts

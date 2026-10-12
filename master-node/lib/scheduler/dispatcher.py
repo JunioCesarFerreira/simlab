@@ -19,6 +19,7 @@ periodic tick that makes a lost signal cost a few seconds instead of a stall.
 import logging
 import queue
 import threading
+import time
 import uuid
 from typing import Any, Callable, Optional
 
@@ -34,6 +35,10 @@ log = logging.getLogger(__name__)
 # wake-up — releases and inventory changes are — but the backstop that keeps a
 # missed signal from stalling the queue indefinitely.
 IDLE_TICK_SEC = 5.0
+
+# How often to repeat the "nothing can take this" warning. The loop retries
+# every few seconds; saying so every time would bury everything else.
+STARVATION_LOG_INTERVAL_SEC = 60.0
 
 
 class Dispatcher:
@@ -61,6 +66,7 @@ class Dispatcher:
         self._held: Optional[str] = None
         self._rr_cursor = 0
         self._stop = threading.Event()
+        self._last_starved_log = 0.0
 
     # ── inbound ────────────────────────────────────────────────────────────
 
@@ -159,7 +165,7 @@ class Dispatcher:
         loads = snapshot_loads(self._mongo.host_repo)
         chosen = self._policy.select(loads, self._rr_cursor)
         if chosen is None:
-            log.debug("No host can take %s right now: %s", sim_id, describe_loads(loads))
+            self._log_starvation(sim_id, loads)
             return _NO_CAPACITY
 
         placement = self._claim(chosen, sim_oid)
@@ -185,6 +191,30 @@ class Dispatcher:
             name=f"sim-{sim_id[:8]}",
         )
         return True
+
+    def _log_starvation(self, sim_id: str, loads: list) -> None:
+        """Say why nothing is being placed, visibly but without flooding.
+
+        A queue that fills while nothing runs is the symptom an operator sees;
+        this is the line that explains it. At DEBUG it was invisible, and the
+        only diagnosis left was reading the database by hand — so it is a
+        warning, rate-limited because the loop retries every few seconds.
+        """
+        now = time.monotonic()
+        if now - self._last_starved_log < STARVATION_LOG_INTERVAL_SEC:
+            return
+        self._last_starved_log = now
+        if not loads:
+            log.warning(
+                "Holding %s: no hosts are registered. The local host is created "
+                "at startup — check for an earlier error.", sim_id,
+            )
+            return
+        log.warning(
+            "Holding %s: no host can take it. %s "
+            "(a host needs enabled=true, a schedulable status, and a free container)",
+            sim_id, describe_loads(loads),
+        )
 
     def _still_wants_placement(self, sim: dict, sim_oid: ObjectId, sim_id: str) -> bool:
         if sim.get("status") != EnumStatus.WAITING:

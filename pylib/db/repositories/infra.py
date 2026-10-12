@@ -56,6 +56,54 @@ _REASSIGNABLE = [
 ]
 
 
+def released_status_expression() -> dict[str, Any]:
+    """Where a released container lands, as an aggregation expression.
+
+    Only a *negative observation* takes a container out of the pool:
+
+    * disabled → ``disabled``, so it drains out;
+    * Docker looked and it is not running → ``offline``;
+    * the probe ran and failed → ``offline``;
+    * otherwise, including nothing observed yet → ``available``.
+
+    That last clause is load-bearing. Requiring positive evidence instead sent
+    every freshly seeded container to ``offline`` on its first release, because
+    discovery has not described it yet — draining the pool by one container per
+    completed simulation. The same mistake made restart recovery hand back a
+    pool of zero.
+
+    Shared by the normal release and the recovery release so there is one
+    place to revisit once the health cycle supplies real observations.
+    """
+    return {
+        "$switch": {
+            "branches": [
+                {
+                    "case": {"$ne": ["$enabled", True]},
+                    "then": EnumResourceStatus.DISABLED.value,
+                },
+                {
+                    # Docker looked, and it is not running.
+                    "case": {"$and": [
+                        {"$ne": [{"$ifNull": ["$container.checked_at", None]}, None]},
+                        {"$ne": ["$container.state", EnumContainerState.RUNNING.value]},
+                    ]},
+                    "then": EnumResourceStatus.OFFLINE.value,
+                },
+                {
+                    # The probe ran, and it failed.
+                    "case": {"$and": [
+                        {"$ne": [{"$ifNull": ["$probe.checked_at", None]}, None]},
+                        {"$ne": ["$probe.ssh_ok", True]},
+                    ]},
+                    "then": EnumResourceStatus.OFFLINE.value,
+                },
+            ],
+            "default": EnumResourceStatus.AVAILABLE.value,
+        }
+    }
+
+
 def _oid(value: Any) -> Optional[ObjectId]:
     if isinstance(value, ObjectId):
         return value
@@ -184,6 +232,28 @@ class HostRepository:
                 return_document=ReturnDocument.AFTER,
             )
             return doc["_id"]
+
+    def set_status_if_unchecked(self, host_id: Any, status: EnumHostStatus) -> bool:
+        """Set the status only while nothing has actually checked this host.
+
+        The filter carries the precondition: ``last_check is None`` is exactly
+        the state a freshly bootstrapped host is in. Once a real check has run,
+        this is a no-op forever and cannot overwrite an observation.
+
+        It exists so a database written by an earlier version — where the
+        bootstrapped local host was persisted OFFLINE and therefore never
+        schedulable — corrects itself on the next start instead of needing a
+        manual edit.
+        """
+        oid = _oid(host_id)
+        if oid is None:
+            return False
+        with self.connection.connect() as db:
+            res = db[HOSTS_COLLECTION].update_one(
+                {"_id": oid, "last_check": None},
+                {"$set": {"status": status.value, "updated_time": datetime.now()}},
+            )
+            return res.modified_count > 0
 
     # ── health bookkeeping (master-node only) ──────────────────────────────
 
@@ -517,30 +587,25 @@ class CoojaResourceRepository:
         recovered and re-placed must not free a container that is now running
         something else.
 
-        Where it lands is derived from what was last observed, not assumed:
-        disabled while busy means it drains out of the pool, and a container
-        that went missing or failed its probe returns as ``offline`` rather
-        than inviting the dispatcher to place work on something dead.
+        Where it lands is derived from what was actually *observed*, and only a
+        negative observation takes a container out of the pool:
+
+        * disabled while busy → ``disabled``, so it drains out;
+        * Docker looked and the container is not running → ``offline``;
+        * the probe ran and failed → ``offline``;
+        * otherwise, including nothing observed yet → ``available``.
+
+        The last clause is the important one. Requiring positive evidence
+        instead would send every freshly seeded container to ``offline`` on its
+        first release, because discovery has not described it yet — draining
+        the pool by one container per completed simulation.
         """
         oid = _oid(resource_id)
         if oid is None:
             return None
         now = datetime.now()
         pipeline = [{"$set": {
-            "status": {
-                "$cond": [
-                    {"$ne": ["$enabled", True]},
-                    EnumResourceStatus.DISABLED.value,
-                    {"$cond": [
-                        {"$and": [
-                            {"$eq": ["$container.state", EnumContainerState.RUNNING.value]},
-                            {"$eq": ["$probe.ssh_ok", True]},
-                        ]},
-                        EnumResourceStatus.AVAILABLE.value,
-                        EnumResourceStatus.OFFLINE.value,
-                    ]},
-                ]
-            },
+            "status": released_status_expression(),
             "current_simulation_id": None,
             "attempt_id": None,
             "remote_pid": None,
@@ -562,28 +627,31 @@ class CoojaResourceRepository:
     def force_release(self, resource_id: Any, message: str = "") -> bool:
         """Free a container without the attempt guard — recovery paths only.
 
-        Used by startup reconciliation and the stale-reservation sweep, where
-        the attempt that held it is known to be gone. Normal completion goes
+        Used by startup recovery and the stale-reservation sweep, where the
+        attempt that held it is known to be gone. Normal completion goes
         through :meth:`release`.
+
+        Lands the container by the same rule as a normal release, not at
+        ``offline``: when a master-node restarts, the container is fine and it
+        is the process that died. Forcing ``offline`` here handed recovery a
+        pool of zero and left the dispatcher with nowhere to place work.
         """
         oid = _oid(resource_id)
         if oid is None:
             return False
         now = datetime.now()
+        pipeline = [{"$set": {
+            "status": released_status_expression(),
+            "current_simulation_id": None,
+            "attempt_id": None,
+            "remote_pid": None,
+            "reserved_at": None,
+            "started_at": None,
+            "last_check_message": message,
+            "updated_time": now,
+        }}]
         with self.connection.connect() as db:
-            res = db[RESOURCES_COLLECTION].update_one(
-                {"_id": oid},
-                {"$set": {
-                    "status": EnumResourceStatus.OFFLINE.value,
-                    "current_simulation_id": None,
-                    "attempt_id": None,
-                    "remote_pid": None,
-                    "reserved_at": None,
-                    "started_at": None,
-                    "last_check_message": message,
-                    "updated_time": now,
-                }},
-            )
+            res = db[RESOURCES_COLLECTION].update_one({"_id": oid}, pipeline)
             return res.modified_count > 0
 
     # ── health and discovery (never touching an occupied resource) ─────────
@@ -618,6 +686,47 @@ class CoojaResourceRepository:
                 }},
             )
             return res.modified_count > 0
+
+    def restore_unobserved(self, host_id: Any) -> int:
+        """Return this host's never-observed containers to the pool.
+
+        An ``offline`` resource that carries no observation — no
+        ``container.checked_at``, no ``probe.checked_at`` — was never actually
+        found to be broken. It reached that state through something other than
+        a measurement, and nothing would bring it back: the health cycle is
+        what promotes a container, and until it exists ``offline`` is a
+        one-way door.
+
+        Scoped to one host on purpose. It is meant for a bootstrapped host,
+        whose containers the environment asserts exist. A *discovered* host's
+        resources start ``offline`` legitimately, and must wait for a probe.
+
+        Occupied resources are untouched, and so is anything an operator
+        disabled. Returns how many were restored.
+        """
+        oid = _oid(host_id)
+        if oid is None:
+            return 0
+        now = datetime.now()
+        with self.connection.connect() as db:
+            result = db[RESOURCES_COLLECTION].update_many(
+                {
+                    "host_id": oid,
+                    "enabled": True,
+                    "status": EnumResourceStatus.OFFLINE.value,
+                    "$or": [
+                        {"container.checked_at": None},
+                        {"container.checked_at": {"$exists": False}},
+                    ],
+                    "probe.checked_at": None,
+                },
+                {"$set": {
+                    "status": EnumResourceStatus.AVAILABLE.value,
+                    "last_check_message": "restored: never observed as failing",
+                    "updated_time": now,
+                }},
+            )
+            return result.modified_count
 
     def set_enabled(self, resource_id: Any, enabled: bool) -> bool:
         """Administrative override. Survives every discovery pass.

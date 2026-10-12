@@ -24,6 +24,7 @@ from lib.bootstrap import (
     publish_public_key,
 )
 from lib.credentials import SecretOpener
+from lib.recovery import release_orphaned_reservations
 from lib.scheduler import Dispatcher, SimulationRunner, build_policy
 from lib.synthetic_data import run_synthetic_simulation, resolve_synthetic_settings
 from lib.transport import SSHTransport, TransportError, build_transport
@@ -585,6 +586,9 @@ def main() -> None:
             ports=SET.ports,
             remote_dir=SET.remote_dir,
         )
+        # Containers claimed by a process that is gone would stay claimed, and
+        # the pool would shrink by that many on every restart.
+        release_orphaned_reservations(mongo)
         dispatcher = build_dispatcher(mongo, keystore)
         Thread(target=dispatcher.run, daemon=True, name="dispatcher").start()
         submit = dispatcher.submit

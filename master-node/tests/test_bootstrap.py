@@ -72,12 +72,23 @@ class TestLocalHost:
         assert discovery["label_filter"] == DEFAULT_COOJA_LABEL
         assert discovery["endpoint"] == "socket"
 
-    def test_starts_offline_until_something_checks(self):
+    def test_starts_schedulable(self):
+        """Regression: an OFFLINE bootstrap host deadlocks the whole pool.
+
+        The resources are seeded AVAILABLE because the environment asserts
+        they exist. Persisting the host OFFLINE at the same time made nothing
+        schedulable, and the health cycle that would promote it does not
+        exist yet — so the dispatcher held every simulation forever while the
+        queue filled. Observed in deployment: 60 simulations Waiting, 8
+        containers available, nothing running.
+        """
+        from pylib.db.models.infra import SCHEDULABLE_HOST_STATUSES
+
         host = local_host_document(is_docker=True)
-        # Claiming "online" before any probe would show a state nobody measured.
-        assert host["status"] == "offline"
-        assert host["last_check"] is None
         assert host["enabled"] is True
+        assert host["status"] in [s.value for s in SCHEDULABLE_HOST_STATUSES]
+        # Still unchecked: the first real probe replaces this assumption.
+        assert host["last_check"] is None
 
     def test_marked_as_bootstrapped(self):
         host = local_host_document(is_docker=True)
@@ -199,6 +210,20 @@ class TestEnsureLocalHost:
         mongo.resource_repo.find_by_host.assert_not_called()
         # Still offered, even though the repository reports nothing inserted.
         assert mongo.resource_repo.insert_seeded.call_count == 2
+
+    def test_an_existing_unchecked_host_is_corrected(self):
+        # A database written before the fix holds the local host as OFFLINE,
+        # and upsert_bootstrap is insert-only, so it would stay that way and
+        # keep the pool deadlocked. This is what repairs it on the next start.
+        from pylib.db.models.infra import EnumHostStatus
+
+        mongo = FakeMongo()
+        ensure_local_host(
+            mongo, is_docker=True, hostnames=["cooja1"], ports=[22],
+            remote_dir=REMOTE_DIR)
+
+        mongo.host_repo.set_status_if_unchecked.assert_called_once_with(
+            "HOST_ID", EnumHostStatus.ONLINE)
 
     def test_no_containers_configured_is_not_an_error(self):
         mongo = FakeMongo()
