@@ -56,10 +56,23 @@ class EnumAuthMethod(str, Enum):
 
 
 class EnumAddressMode(str, Enum):
-    """How the second SSH hop's address is derived from Docker inspection."""
-    CONTAINER_IP = "container_ip"      # bridge IP; the default on a remote host
-    PUBLISHED_PORT = "published_port"  # a port published on the host's loopback
+    """How a container's address is obtained for the second SSH hop.
+
+    The first three are derived from Docker inspection. ``EXPLICIT`` means the
+    operator stated it per worker, which is the only option that works on a
+    host where the SSH user cannot reach the Docker socket — a shared machine,
+    typically — and the clearest one wherever the ports are already known.
+    """
+    CONTAINER_IP = "container_ip"      # bridge IP; derived
+    PUBLISHED_PORT = "published_port"  # a port published on the host; derived
     CONTAINER_NAME = "container_name"  # Docker DNS; only on the local host
+    EXPLICIT = "explicit"              # stated per worker, not derived
+
+
+class EnumDiscoveryMode(str, Enum):
+    """Where a host's list of workers comes from."""
+    DOCKER = "docker"    # enumerated by querying Docker on the host
+    MANUAL = "manual"    # registered one by one, with their own parameters
 
 
 class EnumContainerState(str, Enum):
@@ -112,12 +125,14 @@ class ContainerAccess(TypedDict, total=False):
 
 
 class DiscoveryConfig(TypedDict, total=False):
-    """How this host's resources are enumerated.
+    """Where this host's workers come from.
 
-    Resources are discovered, never hand-enrolled: Docker is the authority on
-    which containers exist, and the inspection also resolves the hop-2 address.
+    ``docker`` enumerates them by querying the host's Docker daemon, which
+    also resolves each one's address. ``manual`` means they are registered
+    individually — necessary when the SSH user cannot reach the Docker socket,
+    and simpler whenever the addresses are already known.
     """
-    mode: str                      # "docker"
+    mode: str                      # EnumDiscoveryMode
     label_filter: str              # e.g. "simlab.type=cooja"
     name_prefix: Optional[str]
     endpoint: str                  # "socket" (local) | "ssh-cli" (remote)
@@ -158,9 +173,32 @@ class ContainerInfo(TypedDict, total=False):
 
 
 class ResourceEndpoint(TypedDict, total=False):
-    """Hop-2 target, resolved by discovery rather than registered."""
+    """Hop-2 target: where this worker's sshd answers.
+
+    Filled by discovery on a Docker-managed host, and stated by the operator
+    on a manually registered one.
+    """
     address: str
     port: int
+
+
+class ResourceConnection(TypedDict, total=False):
+    """One worker's own SSH parameters, overriding the host's defaults.
+
+    Present only on the fields that differ: anything absent falls back to the
+    host's ``container_access``, which keeps the common case to a single
+    configuration while still letting one worker out of eight use a different
+    user, port or credential.
+
+    This is the ``connection_config`` the specification asks for in §3.2. It
+    exists because deriving every address from Docker, as discovery does,
+    assumes an access to the daemon that a shared host will not grant.
+    """
+    transport: str                 # "ssh"
+    username: str
+    port: int
+    auth_method: str               # EnumAuthMethod
+    secret: Optional[SecretEnvelope]
 
 
 class ResourceProbe(TypedDict, total=False):
@@ -182,6 +220,8 @@ class CoojaResource(TypedDict, total=False):
     name: str
     container: ContainerInfo
     endpoint: ResourceEndpoint
+    # Per-worker overrides. Absent fields fall back to host.container_access.
+    connection: ResourceConnection
     remote_dir: str
     enabled: bool                  # administrative override; survives discovery
     status: str                    # EnumResourceStatus

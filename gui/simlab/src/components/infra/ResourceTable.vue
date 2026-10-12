@@ -10,6 +10,7 @@
           <th>Reached at</th>
           <th>Running</th>
           <th class="right">In pool</th>
+          <th class="right"></th>
         </tr>
       </thead>
       <tbody>
@@ -44,7 +45,12 @@
             </div>
           </td>
 
-          <td class="mono sub">{{ endpoint(resource) }}</td>
+          <td class="sub">
+            <span class="mono">{{ endpoint(resource) }}</span>
+            <div v-if="overrideSummary(resource)" class="sub">
+              {{ overrideSummary(resource) }}
+            </div>
+          </td>
 
           <td>
             <RouterLink
@@ -67,6 +73,25 @@
               />
               <span class="toggle-track"><span class="toggle-knob" /></span>
             </label>
+          </td>
+
+          <td class="right nowrap">
+            <button
+              class="mini"
+              :disabled="busyIds.has(resource.id)"
+              title="Edit this worker's address and SSH parameters"
+              @click="emit('edit', resource)"
+            >
+              Edit
+            </button>
+            <button
+              v-if="resource.origin === 'manual'"
+              class="mini mini--danger"
+              :disabled="busyIds.has(resource.id)"
+              @click="emit('remove', resource)"
+            >
+              Remove
+            </button>
           </td>
         </tr>
       </tbody>
@@ -92,6 +117,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: "toggle", resource: ResourceDto, enabled: boolean): void;
+  (event: "edit", resource: ResourceDto): void;
+  (event: "remove", resource: ResourceDto): void;
 }>();
 
 const busyIds = props.busyIds ?? new Set<string>();
@@ -124,6 +151,17 @@ function endpoint(resource: ResourceDto): string {
   const address = resource.endpoint?.address;
   const port = resource.endpoint?.port;
   return address ? `${String(address)}:${String(port ?? "")}` : "—";
+}
+
+function overrideSummary(resource: ResourceDto): string {
+  // Only what this worker sets for itself; the rest comes from its host, and
+  // repeating the host's values per row would bury the difference.
+  const connection = resource.connection ?? {};
+  const parts: string[] = [];
+  if (connection.username) parts.push(`user ${connection.username}`);
+  if (connection.secret?.has_secret) parts.push("own credential");
+  if (resource.origin === "manual") parts.push("configured");
+  return parts.join(" · ");
 }
 
 function shortBuild(resource: ResourceDto): string {
@@ -188,6 +226,23 @@ tbody tr:last-child td {
 }
 
 .right { text-align: right; }
+.nowrap { white-space: nowrap; }
+
+.mini {
+  padding: 3px 8px;
+  margin-left: 4px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mini:hover:not(:disabled) { background: var(--color-surface-hover); }
+.mini:disabled { opacity: 0.5; cursor: default; }
+.mini--danger { color: var(--status-error); border-color: rgba(239, 68, 68, 0.35); }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 .name { font-weight: 600; }

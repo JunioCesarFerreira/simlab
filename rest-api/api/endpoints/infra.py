@@ -18,9 +18,12 @@ from bson import errors as bson_errors
 
 from pylib.crypto import MalformedEnvelope
 from pylib.db import MongoRepository
-from pylib.db.models.infra import OCCUPIED_STATUSES
+from pylib.db.models.infra import OCCUPIED_STATUSES, EnumAuthMethod
 
 from api.dependencies import get_factory
+
+# Where Cooja lives inside the stock image; a worker may override it.
+DEFAULT_REMOTE_DIR = "/opt/contiki-ng/tools/cooja"
 # The write DTOs (HostCreateDto, HostUpdateDto, ResourceEnabledDto) stay in
 # api.domain.infra as the documented shape of each body, and are referenced by
 # name in the Body() descriptions. They are deliberately not used as
@@ -41,6 +44,7 @@ from api.mappers.infra import (
     overview_from_snapshot,
     public_key_from_mongo,
     resource_from_mongo,
+    resource_to_mongo,
 )
 
 router = APIRouter()
@@ -130,6 +134,7 @@ def create_host(
 
     if not doc.get("name"):
         raise HTTPException(status_code=422, detail="name is required")
+    _require_credential(doc.get("access") or {})
     if factory.host_repo.get_by_name(doc["name"]) is not None:
         raise HTTPException(
             status_code=409, detail=f"a host named {doc['name']!r} already exists")
@@ -188,6 +193,13 @@ def update_host(
         if clash is not None:
             raise HTTPException(
                 status_code=409, detail=f"a host named {new_name!r} already exists")
+
+    if "access" in payload:
+        # Validate the merged result, not the patch: an update that only
+        # changes the port must not be judged as if it had dropped the
+        # credential.
+        merged = {**(host.get("access") or {}), **payload["access"]}
+        _require_credential(merged)
 
     factory.host_repo.update(host["_id"], payload)
     return host_from_mongo(_require_host(factory, host_id))
@@ -369,7 +381,132 @@ def get_resource_simulation(
     }
 
 
+# ── Workers configured one by one ────────────────────────────────────────────
+
+@router.post(
+    "/hosts/{host_id}/resources",
+    response_model=ResourceDto,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_resource(
+    host_id: str,
+    body: dict = Body(..., description="See ResourceCreateDto"),
+    factory: MongoRepository = Depends(get_factory),
+) -> ResourceDto:
+    """Register one Cooja worker on this host, with its own SSH parameters.
+
+    The counterpart to Docker discovery, and the only way that works on a host
+    whose SSH user cannot reach its Docker daemon. ``endpoint.address`` says
+    where this worker's sshd answers; anything left out of ``connection``
+    falls back to the host's ``container_access``.
+    """
+    host = _require_host(factory, host_id)
+    try:
+        doc = resource_to_mongo(dict(body))
+    except (PlaintextRefused, MalformedEnvelope) as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    if factory.resource_repo.find_by_host_and_name(host["_id"], doc["name"]):
+        raise HTTPException(
+            status_code=409,
+            detail=f"host {host.get('name')!r} already has a worker named "
+                   f"{doc['name']!r}",
+        )
+    doc["host_id"] = host["_id"]
+    doc.setdefault("remote_dir", DEFAULT_REMOTE_DIR)
+    resource_id = factory.resource_repo.insert_manual(doc)
+    created = factory.resource_repo.get(resource_id)
+    return resource_from_mongo(created, host_name=host.get("name", ""))
+
+
+@router.put("/resources/{resource_id}/connection", response_model=ResourceDto)
+def update_resource_connection(
+    resource_id: str,
+    body: dict = Body(..., description="See ResourceUpdateDto"),
+    factory: MongoRepository = Depends(get_factory),
+) -> ResourceDto:
+    """Change a worker's address or SSH parameters.
+
+    Only what is sent is touched, so a stored credential survives an edit that
+    changes the port.
+    """
+    resource = _require_resource(factory, resource_id)
+    try:
+        payload = resource_to_mongo(dict(body), for_update=True)
+    except (PlaintextRefused, MalformedEnvelope) as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if not payload:
+        raise HTTPException(status_code=422, detail="nothing to update")
+
+    if "connection" in payload:
+        merged = {**(resource.get("connection") or {}), **payload["connection"]}
+        payload["connection"] = merged
+
+    new_name = payload.get("name")
+    if new_name and new_name != resource.get("name"):
+        clash = factory.resource_repo.find_by_host_and_name(
+            resource["host_id"], new_name)
+        if clash is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"this host already has a worker named {new_name!r}")
+
+    factory.resource_repo.update_manual(resource["_id"], payload)
+    updated = _require_resource(factory, resource_id)
+    host = factory.host_repo.get(updated.get("host_id")) or {}
+    return resource_from_mongo(updated, host_name=host.get("name", ""))
+
+
+@router.delete("/resources/{resource_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_resource(
+    resource_id: str,
+    factory: MongoRepository = Depends(get_factory),
+) -> Response:
+    """Remove one worker.
+
+    Refused with 409 while a simulation is on it: removing the record would
+    orphan a live run and lose the trail of where it executed.
+
+    A discovered worker can be removed too, but discovery will bring it back
+    on the next pass — disabling it is what keeps it out of the pool.
+    """
+    resource = _require_resource(factory, resource_id)
+    if resource.get("status") in _OCCUPIED:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"worker {resource.get('name')!r} is running a simulation. "
+                "Disable it and let the simulation finish first."
+            ),
+        )
+    factory.resource_repo.delete(resource["_id"])
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
+
+def _require_credential(access: dict) -> None:
+    """Refuse a host whose authentication needs a credential it does not have.
+
+    Without this the registration succeeds and every later operation fails
+    with "no credential is stored" — which is what happened in practice, and
+    the error arrives far from its cause.
+    """
+    if not access:
+        return
+    if access.get("secret"):
+        return
+    method = access.get("auth_method")
+    if method in (EnumAuthMethod.KEY.value, EnumAuthMethod.PASSWORD.value):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"auth_method is {method!r} but no credential was sent. Seal "
+                "one against the master-node's public key "
+                "(GET /infra/crypto/public-key) and send it as "
+                "`access.secret: {key_id, ciphertext}`."
+            ),
+        )
 
 def _require_host(factory: MongoRepository, host_id: str) -> dict:
     try:

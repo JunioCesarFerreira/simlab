@@ -151,22 +151,40 @@
             </div>
           </section>
 
-          <!-- Discovery -->
+          <!-- Where the workers come from -->
           <section>
-            <h3>Discovery</h3>
-            <p class="hint">
-              Containers are found by label; nothing is registered by hand.
-            </p>
+            <h3>Workers</h3>
             <div class="grid">
               <label class="field">
-                <span>Label filter</span>
-                <input v-model.trim="form.labelFilter" :disabled="saving" />
-              </label>
-              <label class="field">
-                <span>Name prefix <em>(optional)</em></span>
-                <input v-model.trim="form.namePrefix" placeholder="cooja" :disabled="saving" />
+                <span>How to list them</span>
+                <select v-model="form.discoveryMode" :disabled="saving">
+                  <option value="docker">Ask Docker on the host</option>
+                  <option value="manual">Configure each one by hand</option>
+                </select>
               </label>
             </div>
+            <p v-if="form.discoveryMode === 'manual'" class="hint hint--aside">
+              You add each worker yourself, with its own address and port. The
+              only option that works when the SSH user above cannot reach the
+              host's Docker socket — a shared machine, typically.
+            </p>
+            <template v-else>
+              <p class="hint">
+                The master-node runs <span class="mono">docker ps</span> on the
+                host and finds the containers carrying this label. Requires the
+                SSH user to be able to use the Docker socket there.
+              </p>
+              <div class="grid">
+                <label class="field">
+                  <span>Label filter</span>
+                  <input v-model.trim="form.labelFilter" :disabled="saving" />
+                </label>
+                <label class="field">
+                  <span>Name prefix <em>(optional)</em></span>
+                  <input v-model.trim="form.namePrefix" placeholder="cooja" :disabled="saving" />
+                </label>
+              </div>
+            </template>
           </section>
         </div>
 
@@ -228,6 +246,7 @@ const form = reactive({
   containerUser: props.host?.container_access?.username ?? "root",
   containerPort: props.host?.container_access?.port ?? 22,
   addressMode: props.host?.container_access?.address_mode ?? "container_ip",
+  discoveryMode: props.host?.discovery?.mode ?? ("docker" as "docker" | "manual"),
   labelFilter: props.host?.discovery?.label_filter ?? "simlab.type=cooja",
   namePrefix: props.host?.discovery?.name_prefix ?? "",
   enabled: props.host?.enabled ?? true,
@@ -326,6 +345,7 @@ async function saveNew(sealed: SealedSecret): Promise<string> {
       address_mode: form.addressMode,
     },
     discovery: {
+      mode: form.discoveryMode,
       label_filter: form.labelFilter,
       name_prefix: form.namePrefix || null,
     },
@@ -352,6 +372,7 @@ async function saveEdit(sealed?: SealedSecret): Promise<string> {
       address_mode: form.addressMode,
     },
     discovery: {
+      mode: form.discoveryMode,
       label_filter: form.labelFilter,
       name_prefix: form.namePrefix || null,
     },
@@ -429,6 +450,12 @@ section { display: flex; flex-direction: column; gap: 8px; }
   font-size: 12px;
   color: var(--color-text-muted);
   line-height: 1.5;
+}
+
+.hint--aside {
+  padding: 8px 10px;
+  background: var(--color-surface-hover);
+  border-radius: var(--radius-md);
 }
 
 .grid {

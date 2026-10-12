@@ -162,33 +162,46 @@ def resolve_container_credential(
     opener: Optional[SecretOpener] = None,
     *,
     host_name: str = "?",
+    resource_connection: Optional[dict[str, Any]] = None,
+    resource_name: str = "?",
 ) -> SSHCredential:
-    """Hop 2 — authenticate to a Cooja container.
+    """Hop 2 — authenticate to a Cooja worker.
 
-    Falls back to the image's built-in root password when nothing is stored,
-    which is the behaviour the master-node has always had for the local
-    containers. The fallback is deliberate and narrow: it applies only when no
-    envelope exists, so configuring a key on a host silently disables it.
+    Resolved in order of precedence: the worker's own settings, then the
+    host's defaults, then the image's built-in root password. One
+    configuration per host therefore covers the common case, while a single
+    worker can still use a different user or credential.
+
+    The final fallback is deliberate and narrow — it applies only when no
+    envelope exists anywhere, so storing one silently disables it.
     """
-    username = container_access.get("username") or DEFAULT_CONTAINER_USER
-    envelope = container_access.get("secret")
+    connection = resource_connection or {}
+    username = (
+        connection.get("username")
+        or container_access.get("username")
+        or DEFAULT_CONTAINER_USER
+    )
+    # A worker's own envelope wins outright; it is not merged with the host's.
+    envelope = connection.get("secret") or container_access.get("secret")
+    auth_source = connection if connection.get("secret") else container_access
 
     if not envelope:
         password = os.getenv(CONTAINER_PASSWORD_ENV, "root")
         log.debug(
-            "Host %s has no stored container credential; using the image default "
-            "for user %s", host_name, username,
+            "Worker %s on host %s has no stored credential; using the image "
+            "default for user %s", resource_name, host_name, username,
         )
         return SSHCredential(username=username, password=password)
 
     if opener is None:  # pragma: no cover - defensive
         raise CredentialUnavailable(
-            f"host {host_name} has a stored container credential but no keystore "
-            "was provided to open it"
+            f"worker {resource_name} on host {host_name} has a stored "
+            "credential but no keystore was provided to open it"
         )
 
-    plaintext = opener.open(envelope, what=f"host {host_name} container SSH")
-    auth_method = container_access.get("auth_method") or EnumAuthMethod.PASSWORD.value
+    plaintext = opener.open(
+        envelope, what=f"host {host_name} worker {resource_name} SSH")
+    auth_method = auth_source.get("auth_method") or EnumAuthMethod.PASSWORD.value
     if auth_method == EnumAuthMethod.KEY.value:
         return SSHCredential(username=username, pkey=load_private_key(plaintext))
     return SSHCredential(username=username, password=plaintext)

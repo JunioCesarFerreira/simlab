@@ -20,6 +20,7 @@ from typing import Any, Optional
 from pylib.crypto import MalformedEnvelope, redact, validate_envelope
 from pylib.db.models.infra import (
     SCHEDULABLE_HOST_STATUSES,
+    EnumDiscoveryMode,
     EnumHostStatus,
     EnumHostType,
 )
@@ -43,8 +44,11 @@ _OBSERVED_HOST_FIELDS = frozenset({
     "consecutive_failures", "check_requested_at", "discovery_requested_at",
     "created_time", "updated_time", "_id", "id",
 })
+# `mode` is absent on purpose: where a host's workers come from is an
+# operator's decision, not an observation. The rest is produced by a
+# discovery pass.
 _OBSERVED_DISCOVERY_FIELDS = frozenset({
-    "mode", "endpoint", "last_discovery", "discovered_count",
+    "endpoint", "last_discovery", "discovered_count",
     "last_discovery_message",
 })
 # Anything resembling a credential in the clear. Named explicitly so the
@@ -130,6 +134,7 @@ def resource_from_mongo(doc: dict, host_name: str = "") -> ResourceDto:
     id_str, d = pop_id(doc)
     container = d.get("container") or {}
     probe = d.get("probe") or {}
+    connection = d.get("connection") or {}
     out: ResourceDto = {
         "id": id_str,
         "host_id": oid_to_str(d.get("host_id")),
@@ -144,6 +149,16 @@ def resource_from_mongo(doc: dict, host_name: str = "") -> ResourceDto:
             "checked_at": container.get("checked_at"),
         },
         "endpoint": dict(d.get("endpoint") or {}),
+        # The worker's own overrides, with the credential described rather
+        # than returned — same rule as the host's.
+        "connection": {
+            k: v for k, v in {
+                "username": connection.get("username"),
+                "port": connection.get("port"),
+                "auth_method": connection.get("auth_method"),
+                "secret": redact(connection.get("secret")),
+            }.items() if v is not None
+        },
         "remote_dir": d.get("remote_dir", ""),
         "probe": {
             "ssh_ok": bool(probe.get("ssh_ok", False)),
@@ -224,6 +239,84 @@ def public_key_from_mongo(doc: dict) -> PublicKeyDto:
 
 
 # ── Writes ───────────────────────────────────────────────────────────────────
+
+_OBSERVED_RESOURCE_FIELDS = frozenset({
+    "status", "container", "probe", "origin", "current_simulation_id",
+    "attempt_id", "remote_pid", "reserved_at", "started_at", "last_check",
+    "last_check_message", "created_time", "updated_time", "_id", "id",
+    "host_id",
+})
+
+
+def resource_to_mongo(dto: dict, *, for_update: bool = False) -> dict:
+    """Build the fields of a manually registered worker.
+
+    The point of this mapper: a worker states where its sshd answers and, if
+    it differs from its host's default, how to authenticate to it. Everything
+    else about a worker is measured.
+    """
+    d = deepcopy(dict(dto))
+    _refuse_plaintext(d, where="worker")
+
+    rejected = sorted(set(d) & _OBSERVED_RESOURCE_FIELDS)
+    if rejected:
+        raise PlaintextRefused(
+            "these fields are measured by the master-node and cannot be set: "
+            + ", ".join(rejected)
+        )
+
+    doc: dict[str, Any] = {}
+    if "name" in d:
+        name = str(d["name"]).strip()
+        if not name:
+            raise PlaintextRefused("name cannot be empty")
+        doc["name"] = name
+    if "enabled" in d:
+        doc["enabled"] = bool(d["enabled"])
+    if "remote_dir" in d and d["remote_dir"]:
+        doc["remote_dir"] = str(d["remote_dir"])
+
+    if "endpoint" in d:
+        endpoint = d.get("endpoint") or {}
+        address = str(endpoint.get("address") or "").strip()
+        if not address:
+            raise PlaintextRefused(
+                "endpoint.address is required: it is where this worker's sshd "
+                "answers, and the master-node will not guess it"
+            )
+        doc["endpoint"] = {"address": address}
+        if endpoint.get("port"):
+            doc["endpoint"]["port"] = int(endpoint["port"])
+
+    if "connection" in d:
+        doc["connection"] = _connection_to_mongo(d.get("connection") or {})
+
+    if not for_update:
+        if not doc.get("name"):
+            raise PlaintextRefused("name is required")
+        if not doc.get("endpoint"):
+            raise PlaintextRefused("endpoint.address is required")
+    return doc
+
+
+def _connection_to_mongo(connection: dict) -> dict:
+    """A worker's own SSH parameters. Only what is stated is recorded.
+
+    Absent fields fall back to the host's ``container_access`` at connect
+    time, so one host's configuration still covers the common case.
+    """
+    _refuse_plaintext(connection, where="worker connection")
+    out: dict[str, Any] = {"transport": "ssh"}
+    if "username" in connection and connection["username"]:
+        out["username"] = str(connection["username"]).strip()
+    if connection.get("port"):
+        out["port"] = int(connection["port"])
+    if "auth_method" in connection and connection["auth_method"]:
+        out["auth_method"] = str(connection["auth_method"])
+    if "secret" in connection:
+        out["secret"] = _secret_to_mongo(connection.get("secret"))
+    return out
+
 
 def host_to_mongo(dto: dict, *, for_update: bool = False) -> dict:
     """Build the document fields a client is allowed to set.
@@ -315,10 +408,18 @@ def _discovery_to_mongo(discovery: dict) -> dict:
             "these discovery fields are produced by the master-node and cannot "
             "be set: " + ", ".join(rejected)
         )
+    mode = str(discovery.get("mode") or EnumDiscoveryMode.DOCKER.value)
+    if mode not in [m.value for m in EnumDiscoveryMode]:
+        raise PlaintextRefused(
+            f"discovery.mode must be one of "
+            f"{', '.join(m.value for m in EnumDiscoveryMode)}, got {mode!r}"
+        )
     return {
-        "mode": "docker",
+        "mode": mode,
         "label_filter": str(discovery.get("label_filter") or "simlab.type=cooja"),
         "name_prefix": discovery.get("name_prefix") or None,
+        # Server-derived: how the daemon is reached follows from the host type,
+        # and is meaningless when the workers are listed by hand.
         "endpoint": "ssh-cli",
         "last_discovery": None,
     }
@@ -364,6 +465,7 @@ __all__ = [
     "host_from_mongo",
     "host_to_mongo",
     "resource_from_mongo",
+    "resource_to_mongo",
     "occupancy_from_snapshot",
     "overview_from_snapshot",
     "public_key_from_mongo",

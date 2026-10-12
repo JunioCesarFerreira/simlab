@@ -20,8 +20,10 @@ import type {
   HostUpdateInput,
   OverviewDto,
   PublicKeyDto,
+  ResourceCreateInput,
   ResourceDto,
   ResourceSimulationDto,
+  ResourceUpdateInput,
 } from "../types/infra";
 
 // ── Crypto ───────────────────────────────────────────────────────────────────
@@ -119,6 +121,40 @@ export async function setResourceEnabled(
     enabled,
   });
   return data;
+}
+
+/**
+ * Register one worker on a host, with its own SSH parameters.
+ *
+ * The counterpart to Docker discovery, and the only way that works on a host
+ * whose SSH user cannot reach its Docker daemon.
+ */
+export async function createResource(
+  hostId: string,
+  resource: ResourceCreateInput,
+): Promise<ResourceDto> {
+  const { data } = await client.post<ResourceDto>(
+    `/infra/hosts/${hostId}/resources`,
+    resource,
+  );
+  return data;
+}
+
+/** Change a worker's address or SSH parameters. Only what is sent is touched. */
+export async function updateResourceConnection(
+  id: string,
+  updates: ResourceUpdateInput,
+): Promise<ResourceDto> {
+  const { data } = await client.put<ResourceDto>(
+    `/infra/resources/${id}/connection`,
+    updates,
+  );
+  return data;
+}
+
+/** Remove one worker. Rejected with 409 while a simulation is on it. */
+export async function deleteResource(id: string): Promise<void> {
+  await client.delete(`/infra/resources/${id}`);
 }
 
 /** What is running on a container, if anything. */

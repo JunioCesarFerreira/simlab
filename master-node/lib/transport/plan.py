@@ -1,10 +1,18 @@
 """Where a simulation runs, resolved from the host and resource records.
 
-A ``ConnectionPlan`` is the composition the design calls for: the host supplies
-how to reach *it*, the resource supplies the container's own address as Docker
-reported it, and neither is part of the resource's identity. Changing a host's
-address or credential is an edit to one record, not a re-enrollment of every
-container on it.
+A ``ConnectionPlan`` is a composition, resolved in a fixed order of
+precedence so that one host's worth of configuration covers the common case
+while any single worker can still differ:
+
+1. the worker's own ``connection`` and ``endpoint``, if stated;
+2. the host's ``container_access``, as the default for everything absent;
+3. built-in defaults.
+
+That order is what makes both deployments work. On a host whose Docker socket
+the SSH user can reach, discovery fills in each worker's endpoint and nothing
+has to be typed. On a shared host where it cannot — a university machine, say
+— each worker is registered with its own address and port, and no Docker
+access is needed at all.
 
 The local host produces a plan with no jump — the master-node sits on
 ``cooja-net`` and resolves container names through Docker's DNS — so the local
@@ -56,23 +64,32 @@ class ConnectionPlan:
 def build_plan(host: dict[str, Any], resource: dict[str, Any]) -> ConnectionPlan:
     """Compose the plan for one placement.
 
-    Raises ``PlanError`` rather than guessing: a resource with no endpoint has
-    not been through a successful discovery pass, and inventing an address
-    would send a simulation somewhere nobody verified.
+    Raises ``PlanError`` rather than guessing: a worker with no address has
+    neither been discovered nor configured, and inventing one would send a
+    simulation somewhere nobody verified.
     """
     endpoint = resource.get("endpoint") or {}
     address = endpoint.get("address")
     if not address:
         raise PlanError(
-            f"resource {resource.get('name')!r} has no resolved endpoint; "
-            "it has not completed a discovery pass"
+            f"worker {resource.get('name')!r} has no address. Either run a "
+            "discovery on its host, or give it one in its own connection "
+            "settings."
         )
 
     container_access = host.get("container_access") or {}
+    connection = resource.get("connection") or {}
     target = SSHEndpoint(
         address=address,
-        port=int(endpoint.get("port") or container_access.get("port")
-                 or DEFAULT_CONTAINER_SSH_PORT),
+        # The worker's own port wins, then its endpoint's, then the host
+        # default. A worker reached through a published port differs from its
+        # neighbours in exactly this field.
+        port=int(
+            connection.get("port")
+            or endpoint.get("port")
+            or container_access.get("port")
+            or DEFAULT_CONTAINER_SSH_PORT
+        ),
     )
 
     jump: Optional[SSHEndpoint] = None

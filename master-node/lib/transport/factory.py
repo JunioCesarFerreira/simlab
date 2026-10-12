@@ -36,7 +36,12 @@ def build_transport(
     host_name = plan.host_name
 
     container_credential = resolve_container_credential(
-        host.get("container_access") or {}, opener, host_name=host_name)
+        host.get("container_access") or {},
+        opener,
+        host_name=host_name,
+        resource_connection=resource.get("connection"),
+        resource_name=plan.resource_name,
+    )
 
     jump_credential = None
     pinned = None

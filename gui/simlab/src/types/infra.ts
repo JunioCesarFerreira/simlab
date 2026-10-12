@@ -49,7 +49,15 @@ export type ResourceStatus =
   | "error"
   | "disabled";
 
-export type AddressMode = "container_ip" | "published_port" | "container_name";
+export type AddressMode =
+  | "container_ip"
+  | "published_port"
+  | "container_name"
+  /** Stated per worker, not derived from Docker. */
+  | "explicit";
+
+/** Where a host's list of workers comes from. */
+export type DiscoveryMode = "docker" | "manual";
 
 export type AuthMethod = "key" | "password";
 
@@ -74,7 +82,7 @@ export interface ContainerAccessDto {
 }
 
 export interface DiscoveryDto {
-  mode: string;
+  mode: DiscoveryMode;
   label_filter: string;
   name_prefix: string | null;
   endpoint: string;
@@ -107,6 +115,45 @@ export interface ProbeDto {
   message?: string;
 }
 
+/**
+ * A worker's own SSH parameters, where they differ from its host's.
+ *
+ * Anything absent falls back to the host's `container_access` at connect
+ * time, so one configuration per host covers the common case while a single
+ * worker can still use a different user, port or credential.
+ */
+export interface ResourceConnectionDto {
+  username?: string;
+  port?: number;
+  auth_method?: AuthMethod;
+  secret?: SecretInfo;
+}
+
+export interface ResourceConnectionInput {
+  username?: string;
+  port?: number;
+  auth_method?: AuthMethod;
+  secret?: SealedSecret | null;
+}
+
+/** One worker, registered by hand rather than discovered. */
+export interface ResourceCreateInput {
+  name: string;
+  /** Where this worker's sshd answers. Required: it is never guessed. */
+  endpoint: { address: string; port?: number };
+  connection?: ResourceConnectionInput;
+  remote_dir?: string;
+  enabled?: boolean;
+}
+
+export interface ResourceUpdateInput {
+  name?: string;
+  endpoint?: { address: string; port?: number };
+  connection?: ResourceConnectionInput;
+  remote_dir?: string;
+  enabled?: boolean;
+}
+
 export interface ResourceDto {
   id: string;
   host_id: string;
@@ -116,6 +163,7 @@ export interface ResourceDto {
   enabled: boolean;
   container: ContainerDto;
   endpoint: Record<string, unknown>;
+  connection: ResourceConnectionDto;
   remote_dir: string;
   probe: ProbeDto;
   current_simulation_id: string | null;
@@ -230,6 +278,7 @@ export interface ContainerAccessInput {
 }
 
 export interface DiscoveryInput {
+  mode?: DiscoveryMode;
   label_filter?: string;
   name_prefix?: string | null;
 }

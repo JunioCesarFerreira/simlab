@@ -59,7 +59,7 @@ def sample_host(**overrides) -> dict:
     return doc
 
 
-def sample_resource(status="available", **overrides) -> dict:
+def sample_resource(status="available", connection=None, **overrides) -> dict:
     doc = {
         "_id": ObjectId(RES_ID),
         "host_id": ObjectId(HOST_ID),
@@ -71,6 +71,7 @@ def sample_resource(status="available", **overrides) -> dict:
             "state": "running", "checked_at": None,
         },
         "endpoint": {"address": "172.18.0.5", "port": 22},
+        "connection": connection or {},
         "remote_dir": "/opt/contiki-ng/tools/cooja",
         "probe": {
             "ssh_ok": True, "java_version": "21", "cooja_jar_sha256": "a" * 64,
@@ -230,6 +231,29 @@ class TestObservationsAreNotWritable:
         })
         assert response.status_code == 422
         assert field in response.json()["detail"]
+
+    def test_the_discovery_mode_is_an_operator_choice(self, client, infra):
+        # Where a host's workers come from is a decision, not an observation.
+        # A shared host whose SSH user cannot reach Docker needs `manual`.
+        infra.host_repo.insert.return_value = ObjectId(HOST_ID)
+        response = client.post("/api/v1/infra/hosts", json={
+            "name": "vm7",
+            "access": {"address": "10.0.0.9", "username": "jcf",
+                       "auth_method": "password", "secret": ENVELOPE},
+            "discovery": {"mode": "manual"},
+        })
+        assert response.status_code == 201
+        assert infra.host_repo.insert.call_args.args[0]["discovery"]["mode"] == "manual"
+
+    def test_an_unknown_discovery_mode_is_refused(self, client, infra):
+        response = client.post("/api/v1/infra/hosts", json={
+            "name": "vm7",
+            "access": {"address": "10.0.0.9", "username": "jcf",
+                       "auth_method": "password", "secret": ENVELOPE},
+            "discovery": {"mode": "telepathy"},
+        })
+        assert response.status_code == 422
+        assert "discovery.mode must be one of" in response.json()["detail"]
 
     def test_discovery_results_are_refused(self, client, infra):
         response = client.post("/api/v1/infra/hosts", json={
@@ -435,6 +459,160 @@ class TestUpdates:
                        "secret": ENVELOPE},
         })
         assert response.status_code == 409
+
+
+# ── Workers configured one by one ────────────────────────────────────────────
+
+class TestManualWorkers:
+    """Registering a worker by hand, with its own SSH parameters.
+
+    The case this exists for: a shared host where the SSH user cannot reach
+    the Docker daemon, so nothing can be discovered, and whose workers sit
+    behind published ports the operator already knows.
+    """
+
+    def test_a_worker_is_registered_with_its_address(self, client, infra):
+        infra.resource_repo.find_by_host_and_name.return_value = None
+        infra.resource_repo.insert_manual.return_value = ObjectId(RES_ID)
+
+        response = client.post(f"/api/v1/infra/hosts/{HOST_ID}/resources", json={
+            "name": "vm7-cooja1",
+            "endpoint": {"address": "127.0.0.1", "port": 2222},
+        })
+
+        assert response.status_code == 201
+        stored = infra.resource_repo.insert_manual.call_args.args[0]
+        assert stored["name"] == "vm7-cooja1"
+        assert stored["endpoint"] == {"address": "127.0.0.1", "port": 2222}
+        assert stored["host_id"] == ObjectId(HOST_ID)
+
+    def test_its_own_ssh_parameters_are_stored(self, client, infra):
+        infra.resource_repo.find_by_host_and_name.return_value = None
+        infra.resource_repo.insert_manual.return_value = ObjectId(RES_ID)
+
+        client.post(f"/api/v1/infra/hosts/{HOST_ID}/resources", json={
+            "name": "vm7-cooja1",
+            "endpoint": {"address": "127.0.0.1", "port": 2222},
+            "connection": {"username": "cooja", "port": 2222,
+                           "auth_method": "password", "secret": ENVELOPE},
+        })
+
+        connection = infra.resource_repo.insert_manual.call_args.args[0]["connection"]
+        assert connection["username"] == "cooja"
+        assert connection["auth_method"] == "password"
+        assert connection["secret"]["ciphertext"] == SEALED
+
+    def test_an_address_is_required(self, client, infra):
+        # The master-node will not guess where a worker's sshd answers.
+        response = client.post(f"/api/v1/infra/hosts/{HOST_ID}/resources", json={
+            "name": "vm7-cooja1",
+        })
+        assert response.status_code == 422
+        assert "endpoint.address is required" in response.json()["detail"]
+
+    def test_a_plaintext_credential_is_refused(self, client, infra):
+        response = client.post(f"/api/v1/infra/hosts/{HOST_ID}/resources", json={
+            "name": "vm7-cooja1",
+            "endpoint": {"address": "127.0.0.1"},
+            "connection": {"username": "root", "password": "hunter2"},
+        })
+        assert response.status_code == 422
+        assert "password" in response.json()["detail"]
+        infra.resource_repo.insert_manual.assert_not_called()
+
+    def test_measured_fields_are_refused(self, client, infra):
+        response = client.post(f"/api/v1/infra/hosts/{HOST_ID}/resources", json={
+            "name": "vm7-cooja1",
+            "endpoint": {"address": "127.0.0.1"},
+            "status": "available",
+            "probe": {"ssh_ok": True},
+        })
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert "status" in detail and "probe" in detail
+
+    def test_a_duplicate_name_on_the_same_host_is_refused(self, client, infra):
+        infra.resource_repo.find_by_host_and_name.return_value = sample_resource()
+        response = client.post(f"/api/v1/infra/hosts/{HOST_ID}/resources", json={
+            "name": "cooja1", "endpoint": {"address": "127.0.0.1"},
+        })
+        assert response.status_code == 409
+
+    def test_editing_only_the_port_keeps_the_credential(self, client, infra):
+        # Otherwise changing a port would silently drop the stored secret.
+        infra.resource_repo.get.return_value = sample_resource(
+            connection={"transport": "ssh", "username": "cooja",
+                        "auth_method": "password", "secret": dict(ENVELOPE)})
+
+        client.put(f"/api/v1/infra/resources/{RES_ID}/connection",
+                   json={"connection": {"port": 2299}})
+
+        merged = infra.resource_repo.update_manual.call_args.args[1]["connection"]
+        assert merged["port"] == 2299
+        assert merged["username"] == "cooja"
+        assert merged["secret"]["ciphertext"] == SEALED
+
+    def test_a_busy_worker_cannot_be_removed(self, client, infra):
+        infra.resource_repo.get.return_value = sample_resource(status="busy")
+        response = client.delete(f"/api/v1/infra/resources/{RES_ID}")
+        assert response.status_code == 409
+        assert "running a simulation" in response.json()["detail"]
+        infra.resource_repo.delete.assert_not_called()
+
+    def test_an_idle_worker_is_removed(self, client, infra):
+        response = client.delete(f"/api/v1/infra/resources/{RES_ID}")
+        assert response.status_code == 204
+        infra.resource_repo.delete.assert_called_once()
+
+    def test_a_workers_credential_is_described_not_returned(self, client, infra):
+        infra.resource_repo.get.return_value = sample_resource(
+            connection={"username": "cooja", "secret": dict(ENVELOPE)})
+
+        body = client.get(f"/api/v1/infra/resources/{RES_ID}").json()
+
+        assert body["connection"]["secret"]["has_secret"] is True
+        assert "ciphertext" not in body["connection"]["secret"]
+        assert SEALED not in client.get(f"/api/v1/infra/resources/{RES_ID}").text
+
+
+# ── A host that cannot authenticate is refused at registration ───────────────
+
+class TestCredentialIsRequired:
+    """Observed in practice: a host registered with no credential.
+
+    Every later operation then failed with "no credential is stored", far from
+    the cause. The registration is where that belongs.
+    """
+
+    @pytest.mark.parametrize("method", ["key", "password"])
+    def test_registering_without_one_is_refused(self, client, infra, method):
+        response = client.post("/api/v1/infra/hosts", json={
+            "name": "vm7",
+            "access": {"address": "10.0.0.9", "username": "jcf",
+                       "auth_method": method},
+        })
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert "no credential was sent" in detail
+        assert "public-key" in detail          # says how to produce one
+        infra.host_repo.insert.assert_not_called()
+
+    def test_an_update_is_judged_on_the_merged_result(self, client, infra):
+        # Changing only the port must not read as dropping the credential.
+        response = client.put(f"/api/v1/infra/hosts/{HOST_ID}", json={
+            "access": {"port": 2297},
+        })
+        assert response.status_code == 200
+        infra.host_repo.update.assert_called_once()
+
+    def test_an_update_that_really_drops_it_is_refused(self, client, infra):
+        infra.host_repo.get.return_value = sample_host(
+            access={"address": "10.0.0.9", "username": "jcf",
+                    "auth_method": "key", "secret": None})
+        response = client.put(f"/api/v1/infra/hosts/{HOST_ID}", json={
+            "access": {"auth_method": "password"},
+        })
+        assert response.status_code == 422
 
 
 # ── The API stays outside the trust boundary ─────────────────────────────────

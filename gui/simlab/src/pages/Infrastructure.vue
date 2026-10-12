@@ -79,6 +79,7 @@
         @discover="onDiscover"
         @toggle="onToggleHost"
         @edit="openEdit"
+        @add-worker="openWorkerForm"
         @remove="onRemove"
       />
       <details class="containers" :open="expanded.has(host.id)" @toggle="onToggleDetails(host.id, $event)">
@@ -88,8 +89,10 @@
         <ResourceTable
           :resources="resourcesFor(host.id)"
           :busy-ids="pendingResources"
-          :can-discover="host.type !== 'local'"
+          :can-discover="host.discovery?.mode !== 'manual'"
           @toggle="onToggleResource"
+          @edit="(worker) => openWorkerForm(host, worker)"
+          @remove="onRemoveWorker"
         />
       </details>
     </section>
@@ -100,6 +103,14 @@
       @close="closeForm"
       @saved="onSaved"
     />
+
+    <WorkerFormModal
+      v-if="workerHost"
+      :host="workerHost"
+      :worker="editingWorker"
+      @close="closeWorkerForm"
+      @saved="onWorkerSaved"
+    />
   </div>
 </template>
 
@@ -108,9 +119,11 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import HostCard from "../components/infra/HostCard.vue";
 import HostFormModal from "../components/infra/HostFormModal.vue";
 import ResourceTable from "../components/infra/ResourceTable.vue";
+import WorkerFormModal from "../components/infra/WorkerFormModal.vue";
 import { confirmDialog } from "../composables/useConfirm";
 import {
   deleteHost,
+  deleteResource,
   getOverview,
   listHosts,
   listResources,
@@ -162,6 +175,8 @@ const autoRefresh = ref(true);
 
 const formOpen = ref(false);
 const editing = ref<HostDto | null>(null);
+const workerHost = ref<HostDto | null>(null);
+const editingWorker = ref<ResourceDto | null>(null);
 const pendingHosts = reactive(new Set<string>());
 const pendingResources = reactive(new Set<string>());
 const expanded = reactive(new Set<string>());
@@ -206,8 +221,9 @@ async function load(showSpinner = true) {
 onMounted(async () => {
   await load();
   poll = setInterval(() => {
-    // Not while a form is open: a refresh would replace the host being edited.
-    if (autoRefresh.value && !formOpen.value) load(false);
+    // Not while a form is open: a refresh would replace the record being
+    // edited under the operator's cursor.
+    if (autoRefresh.value && !formOpen.value && !workerHost.value) load(false);
   }, POLL_MS);
 });
 
@@ -312,6 +328,55 @@ async function onSaved(id: string) {
     "containers on its next cycle.";
   expanded.add(id);
   await load(false);
+}
+
+// ── Workers ──────────────────────────────────────────────────────────────────
+
+function openWorkerForm(host: HostDto, worker?: ResourceDto) {
+  workerHost.value = host;
+  editingWorker.value = worker ?? null;
+}
+
+function closeWorkerForm() {
+  workerHost.value = null;
+  editingWorker.value = null;
+}
+
+async function onWorkerSaved(id: string) {
+  const hostId = workerHost.value?.id;
+  closeWorkerForm();
+  notice.value =
+    "Worker saved. The master-node probes it on the next cycle; it joins the " +
+    "pool once its sshd answers and a Cooja build is found.";
+  if (hostId) expanded.add(hostId);
+  void id;
+  await load(false);
+}
+
+async function onRemoveWorker(worker: ResourceDto) {
+  const ok = await confirmDialog({
+    title: `Remove ${worker.name}?`,
+    message:
+      "Simulations that ran on it keep the names they recorded, so the trail " +
+      "is not lost.",
+    confirmLabel: "Remove",
+    danger: true,
+  });
+  if (!ok) return;
+
+  await withPending(pendingResources, worker.id, async () => {
+    try {
+      await deleteResource(worker.id);
+    } catch (e) {
+      const message = describe(e);
+      // 409 means a simulation is on it: a normal outcome to explain.
+      error.value = message.includes("409")
+        ? `${worker.name} is running a simulation. Take it out of the pool ` +
+          `and let the simulation finish first.`
+        : message;
+      throw new Error(message);
+    }
+  });
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────

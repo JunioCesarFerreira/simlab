@@ -1,17 +1,24 @@
-"""Finding out which Cooja containers a host actually has.
+"""Finding out which Cooja containers a host has, by asking Docker.
 
-Resources are discovered, never enrolled by hand: Docker is the authority on
-which containers exist, and inspecting them also resolves *where* the second
-SSH hop should connect — an address nobody has to maintain.
+One of the two ways a host's workers get into the inventory. This one queries
+the host's Docker daemon, which answers both what exists and *where* each
+container is reachable — an address nobody then has to maintain. The other way
+is registering each worker with its own parameters, which is what a host whose
+SSH user cannot reach the daemon requires; a host set to ``manual`` is skipped
+here entirely.
 
-This is the first of the two availability levels. It answers "does the
+This is also the first of the two availability levels. It answers "does the
 container exist, and is it running", which is necessary but not sufficient: a
 container can be running with no usable Cooja build in it. The SSH probe in
-``lib.health`` answers the rest, and only a resource that passes both enters
-the pool.
+``lib.health`` answers the rest, and only a worker that passes both enters the
+pool. A manually registered worker has no Docker answer at all, so the probe
+is the whole of its evidence.
 
 Deliberate limits
 -----------------
+* A manually registered worker is never touched. It is invisible to Docker by
+  definition, so treating its absence as "vanished" would take a working
+  worker out of the pool on every pass.
 * A container that has vanished is marked, never deleted. The resource is what
   ties a finished simulation to the container it ran on, and that record
   outlives the container by design.
@@ -41,7 +48,7 @@ from lib.dockerctl import (
 from lib.transport.base import TransportError
 from lib.transport.plan import DEFAULT_CONTAINER_SSH_PORT, DEFAULT_REMOTE_DIR, SSHEndpoint
 from lib.transport.session import HostSession
-from pylib.db.models.infra import EnumAddressMode, EnumHostType
+from pylib.db.models.infra import EnumAddressMode, EnumDiscoveryMode, EnumHostType
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +65,8 @@ class DiscoveryReport:
     missing_occupied: list[str] = field(default_factory=list)
     unresolved: list[str] = field(default_factory=list)
     unavailable_reason: Optional[str] = None
+    #: The host lists its workers by hand, so nothing was queried.
+    skipped_manual: bool = False
 
     @property
     def available(self) -> bool:
@@ -68,6 +77,8 @@ class DiscoveryReport:
         return len(self.created) + len(self.updated)
 
     def describe(self) -> str:
+        if self.skipped_manual:
+            return "workers are listed manually on this host"
         if not self.available:
             return f"unavailable: {self.unavailable_reason}"
         parts = [f"{self.seen} container(s)"]
@@ -131,6 +142,19 @@ def discover_host(
     """
     report = DiscoveryReport(host_name=str(host.get("name", "?")))
     discovery = host.get("discovery") or {}
+
+    if (discovery.get("mode") or EnumDiscoveryMode.DOCKER.value) == \
+            EnumDiscoveryMode.MANUAL.value:
+        # Its workers are registered individually, so there is nothing to
+        # enumerate — and on a host whose SSH user cannot reach the Docker
+        # socket, trying would only produce a failure that means nothing.
+        report.skipped_manual = True
+        log.debug(
+            "Host %s lists its workers manually; skipping discovery",
+            report.host_name,
+        )
+        return report
+
     label_filter = discovery.get("label_filter") or DEFAULT_LABEL_FILTER
     name_prefix = discovery.get("name_prefix")
 

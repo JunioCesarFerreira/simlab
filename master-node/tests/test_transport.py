@@ -89,11 +89,25 @@ class TestBuildPlan:
         host = {**REMOTE_HOST, "container_access": {"username": "root", "port": 2022}}
         assert build_plan(host, resource).target.port == 2022
 
-    def test_resource_without_endpoint_is_refused(self):
-        # Never guess an address: discovery resolves it, and a simulation must
-        # not be sent somewhere nobody verified.
-        with pytest.raises(PlanError, match="discovery pass"):
+    def test_a_workers_own_port_wins_over_everything(self):
+        # The case this exists for: eight workers behind published ports on
+        # one host, each on a different one.
+        resource = {
+            **RESOURCE,
+            "endpoint": {"address": "10.0.0.5", "port": 22},
+            "connection": {"port": 2223},
+        }
+        host = {**REMOTE_HOST, "container_access": {"username": "root", "port": 22}}
+        assert build_plan(host, resource).target.port == 2223
+
+    def test_worker_without_an_address_is_refused(self):
+        # Never guess: a worker is either discovered or configured, and a
+        # simulation must not be sent somewhere nobody verified. The message
+        # names both ways of fixing it.
+        with pytest.raises(PlanError) as exc:
             build_plan(LOCAL_HOST, {"name": "cooja1"})
+        assert "discovery" in str(exc.value)
+        assert "connection settings" in str(exc.value)
 
     def test_remote_host_without_address_is_refused(self):
         host = {"name": "lab-01", "type": "remote", "access": {}}
@@ -156,6 +170,46 @@ class TestCredentials:
         monkeypatch.setenv("COOJA_SSH_PASSWORD", "changed")
         cred = resolve_container_credential({}, None, host_name="local")
         assert cred.password == "changed" and cred.username == "root"
+
+    def test_a_workers_own_credential_wins_over_the_hosts(self, monkeypatch):
+        # One worker out of eight using a different login must not require a
+        # second host registration.
+        monkeypatch.setenv("COOJA_SSH_PASSWORD", "image-default")
+        host_access = {
+            "username": "root", "auth_method": "password",
+            "secret": {"alg": "crypto_box_seal", "key_id": "0" * 16, "ciphertext": "host"},
+        }
+        worker = {
+            "username": "cooja", "auth_method": "password",
+            "secret": {"alg": "crypto_box_seal", "key_id": "0" * 16, "ciphertext": "worker"},
+        }
+        opened: list = []
+
+        class Recording(FakeKeystore):
+            def open(self, envelope):
+                opened.append(envelope["ciphertext"])
+                return "from-worker"
+
+        cred = resolve_container_credential(
+            host_access, SecretOpener(Recording()),
+            host_name="lab-01", resource_connection=worker, resource_name="cooja3")
+
+        assert cred.username == "cooja"
+        assert cred.password == "from-worker"
+        # The worker's envelope, not the host's: they are not merged.
+        assert opened == ["worker"]
+
+    def test_a_worker_falls_back_to_the_host_for_what_it_omits(self):
+        host_access = {
+            "username": "root", "auth_method": "password",
+            "secret": {"alg": "crypto_box_seal", "key_id": "0" * 16, "ciphertext": "host"},
+        }
+        cred = resolve_container_credential(
+            host_access, SecretOpener(FakeKeystore("from-host")),
+            host_name="lab-01", resource_connection={"port": 2223},
+            resource_name="cooja3")
+        # Only the port differed, so the credential and user come from the host.
+        assert cred.username == "root" and cred.password == "from-host"
 
     def test_stored_container_credential_wins_over_the_fallback(self, monkeypatch):
         monkeypatch.setenv("COOJA_SSH_PASSWORD", "image-default")

@@ -48,7 +48,8 @@
 
     <footer>
       <div class="facts">
-        <span v-if="host.discovery?.discovered_count !== undefined">
+        <span v-if="!usesDocker">workers listed manually</span>
+        <span v-else-if="host.discovery?.discovered_count !== undefined">
           {{ host.discovery.discovered_count }} discovered
         </span>
         <span v-if="host.consecutive_failures > 0" class="failing">
@@ -69,6 +70,7 @@
           {{ host.check_pending ? "Checking…" : "Test" }}
         </button>
         <button
+          v-if="usesDocker"
           class="ghost"
           :disabled="pending"
           title="Ask the master-node to look for Cooja containers on this host"
@@ -78,6 +80,14 @@
         </button>
         <button class="ghost" :disabled="pending" @click="emit('toggle', host, !host.enabled)">
           {{ host.enabled ? "Disable" : "Enable" }}
+        </button>
+        <button
+          class="ghost"
+          :disabled="pending"
+          title="Register a Cooja worker on this host with its own SSH parameters"
+          @click="emit('add-worker', host)"
+        >
+          Add worker
         </button>
         <button v-if="editable" class="ghost" :disabled="pending" @click="emit('edit', host)">
           Edit
@@ -118,10 +128,14 @@ const emit = defineEmits<{
   (event: "discover", host: HostDto): void;
   (event: "toggle", host: HostDto, enabled: boolean): void;
   (event: "edit", host: HostDto): void;
+  (event: "add-worker", host: HostDto): void;
   (event: "remove", host: HostDto): void;
 }>();
 
 const editable = computed(() => props.host.type !== "local");
+// Nothing to rediscover on a host whose workers are listed by hand — and on a
+// shared machine the SSH user may have no access to the daemon at all.
+const usesDocker = computed(() => props.host.discovery?.mode !== "manual");
 const schedulable = computed(() => props.occupancy?.schedulable ?? false);
 const hasCapacity = computed(() => (props.occupancy?.free ?? 0) > 0);
 const inPool = computed(() => props.host.enabled && schedulable.value);

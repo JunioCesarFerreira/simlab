@@ -156,6 +156,43 @@ class ProbeDto(TypedDict, total=False):
     message: NotRequired[str]
 
 
+class ResourceConnectionDto(TypedDict, total=False):
+    """A worker's own SSH parameters, where they differ from its host's."""
+    username: str
+    port: int
+    auth_method: str
+    secret: SecretInfoDto
+
+
+class ResourceConnectionInput(TypedDict, total=False):
+    username: str
+    port: int
+    auth_method: str
+    secret: Optional[SealedSecretDto]
+
+
+class ResourceCreateDto(TypedDict, total=False):
+    """One worker, registered by hand rather than discovered.
+
+    ``endpoint.address`` is required: it is where this worker's sshd answers,
+    and the master-node will not guess it. Everything in ``connection`` is
+    optional and falls back to the host's ``container_access``.
+    """
+    name: str
+    endpoint: dict[str, Any]
+    connection: NotRequired[ResourceConnectionInput]
+    remote_dir: NotRequired[str]
+    enabled: NotRequired[bool]
+
+
+class ResourceUpdateDto(TypedDict, total=False):
+    name: NotRequired[str]
+    endpoint: NotRequired[dict[str, Any]]
+    connection: NotRequired[ResourceConnectionInput]
+    remote_dir: NotRequired[str]
+    enabled: NotRequired[bool]
+
+
 class ResourceDto(TypedDict, total=False):
     id: str
     host_id: str
@@ -165,6 +202,7 @@ class ResourceDto(TypedDict, total=False):
     enabled: bool
     container: ContainerDto
     endpoint: dict[str, Any]
+    connection: ResourceConnectionDto
     remote_dir: str
     probe: ProbeDto
     current_simulation_id: Optional[str]

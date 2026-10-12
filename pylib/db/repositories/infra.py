@@ -770,14 +770,23 @@ class CoojaResourceRepository:
                 )
                 (created if result.upserted_id else updated).append(name)
 
-            gone = list(coll.find({"host_id": host_id, "name": {"$nin": seen}}))
+            # A manually registered worker is invisible to Docker by
+            # definition: its host may not even expose a daemon. Treating it
+            # as vanished would take a working worker out of the pool on every
+            # discovery pass.
+            gone = list(coll.find({
+                "host_id": host_id,
+                "name": {"$nin": seen},
+                "origin": {"$ne": "manual"},
+            }))
             missing = [d["name"] for d in gone]
             missing_occupied = [
                 d["name"] for d in gone if d.get("status") in _OCCUPIED
             ]
             if missing:
                 coll.update_many(
-                    {"host_id": host_id, "name": {"$in": missing}},
+                    {"host_id": host_id, "name": {"$in": missing},
+                     "origin": {"$ne": "manual"}},
                     {"$set": {
                         "container.state": EnumContainerState.MISSING.value,
                         "container.checked_at": now,
@@ -803,6 +812,79 @@ class CoojaResourceRepository:
             "missing": missing,
             "missing_occupied": missing_occupied,
         }
+
+    def insert_manual(self, resource: CoojaResource) -> ObjectId:
+        """Register one worker with its own connection parameters.
+
+        The counterpart to discovery, for a host whose SSH user cannot reach
+        its Docker daemon — a shared machine — or wherever stating the
+        addresses is simply clearer than deriving them.
+
+        Starts ``offline`` like a discovered one: being registered is not
+        evidence that it works, and the SSH probe is what puts it in the pool.
+        """
+        now = datetime.now()
+        doc = {
+            **resource,
+            "origin": "manual",
+            "status": EnumResourceStatus.OFFLINE.value,
+            "current_simulation_id": None,
+            "attempt_id": None,
+            "remote_pid": None,
+            "created_time": now,
+            "updated_time": now,
+        }
+        doc.setdefault("enabled", True)
+        doc.setdefault("probe", {"ssh_ok": False, "checked_at": None})
+        # No Docker answer exists for a manual worker, and claiming one would
+        # make the health cycle short-circuit the probe it depends on.
+        doc.setdefault("container", {
+            "id": "", "name": doc.get("name", ""), "image": "",
+            "state": EnumContainerState.MISSING.value, "labels": {},
+            "checked_at": None,
+        })
+        with self.connection.connect() as db:
+            return db[RESOURCES_COLLECTION].insert_one(doc).inserted_id
+
+    def update_manual(self, resource_id: Any, updates: dict) -> bool:
+        """Change a worker's own settings.
+
+        Refuses the fields that are measured or owned by the scheduler, for
+        the same reason the host update does: they are observations, and a
+        client writing them would make the GUI show a state nobody measured.
+        """
+        oid = _oid(resource_id)
+        if oid is None:
+            return False
+        protected = {
+            "_id", "host_id", "status", "container", "probe", "origin",
+            "current_simulation_id", "attempt_id", "remote_pid",
+            "reserved_at", "started_at", "last_check", "last_check_message",
+            "created_time",
+        }
+        payload = {k: v for k, v in updates.items() if k not in protected}
+        if not payload:
+            return False
+        payload["updated_time"] = datetime.now()
+        with self.connection.connect() as db:
+            res = db[RESOURCES_COLLECTION].update_one({"_id": oid}, {"$set": payload})
+            return res.matched_count > 0
+
+    def delete(self, resource_id: Any) -> bool:
+        """Remove one worker. Callers must check it is not holding anything."""
+        oid = _oid(resource_id)
+        if oid is None:
+            return False
+        with self.connection.connect() as db:
+            res = db[RESOURCES_COLLECTION].delete_one({"_id": oid})
+            return res.deleted_count > 0
+
+    def find_by_host_and_name(self, host_id: Any, name: str) -> Optional[CoojaResource]:
+        oid = _oid(host_id)
+        if oid is None:
+            return None
+        with self.connection.connect() as db:
+            return db[RESOURCES_COLLECTION].find_one({"host_id": oid, "name": name})
 
     def insert_seeded(self, resource: CoojaResource) -> bool:
         """Insert a seeded resource, or leave the existing one untouched.
