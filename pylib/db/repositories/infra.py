@@ -836,12 +836,13 @@ class CoojaResourceRepository:
         }
         doc.setdefault("enabled", True)
         doc.setdefault("probe", {"ssh_ok": False, "checked_at": None})
-        # No Docker answer exists for a manual worker, and claiming one would
-        # make the health cycle short-circuit the probe it depends on.
+        # No Docker answer exists for a manual worker, and none is expected:
+        # its host may not even expose a daemon this user can reach. The state
+        # is left empty rather than "missing", which would claim it was looked
+        # for and not found — and reads as a failure in the interface.
         doc.setdefault("container", {
             "id": "", "name": doc.get("name", ""), "image": "",
-            "state": EnumContainerState.MISSING.value, "labels": {},
-            "checked_at": None,
+            "state": "", "labels": {}, "checked_at": None,
         })
         with self.connection.connect() as db:
             return db[RESOURCES_COLLECTION].insert_one(doc).inserted_id

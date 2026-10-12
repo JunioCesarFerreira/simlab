@@ -32,13 +32,19 @@
                container is stopped" and "it is up but has no Cooja" need
                different fixes, and one combined badge would hide which. -->
           <td>
-            <span :class="['level', dockerClass(resource)]">
-              {{ resource.container.state || "unknown" }}
+            <span
+              :class="['level', `level--${dockerLevel(resource).tone}`]"
+              :title="dockerLevel(resource).title"
+            >
+              {{ dockerLevel(resource).label }}
             </span>
           </td>
           <td>
-            <span :class="['level', probeClass(resource)]">
-              {{ probeLabel(resource) }}
+            <span
+              :class="['level', `level--${probeLevel(resource).tone}`]"
+              :title="probeLevel(resource).title"
+            >
+              {{ probeLevel(resource).label }}
             </span>
             <div v-if="probeDetail(resource)" class="sub">
               {{ probeDetail(resource) }}
@@ -46,7 +52,7 @@
           </td>
 
           <td class="sub">
-            <span class="mono">{{ endpoint(resource) }}</span>
+            <span class="mono">{{ endpointLabel(resource) }}</span>
             <div v-if="overrideSummary(resource)" class="sub">
               {{ overrideSummary(resource) }}
             </div>
@@ -106,11 +112,24 @@
 
 <script setup lang="ts">
 import { RouterLink } from "vue-router";
+import {
+  dockerLevel,
+  endpointLabel,
+  overrideSummary,
+  probeLevel,
+} from "../../services/resourceLevels";
 import type { ResourceDto } from "../../types/infra";
 
+/**
+ * One host's workers, with both availability levels side by side.
+ *
+ * How each level is read lives in `services/resourceLevels`, not here: it is
+ * domain logic mirroring a decision the master-node makes, and keeping it in
+ * a pure module is what lets it be tested against that decision.
+ */
 const props = defineProps<{
   resources: ResourceDto[];
-  /** Ids with a request in flight, so their toggle is held. */
+  /** Ids with a request in flight, so their controls are held. */
   busyIds?: Set<string>;
   canDiscover?: boolean;
 }>();
@@ -123,55 +142,20 @@ const emit = defineEmits<{
 
 const busyIds = props.busyIds ?? new Set<string>();
 
-function dockerClass(resource: ResourceDto): string {
-  if (!resource.container.checked_at) return "level--unknown";
-  return resource.container.state === "running" ? "level--ok" : "level--bad";
-}
-
-function probeClass(resource: ResourceDto): string {
-  if (!resource.probe.checked_at) return "level--unknown";
-  return resource.probe.ssh_ok && resource.probe.cooja_jar_sha256
-    ? "level--ok"
-    : "level--bad";
-}
-
-function probeLabel(resource: ResourceDto): string {
-  if (!resource.probe.checked_at) return "not probed";
-  if (!resource.probe.ssh_ok) return "unreachable";
-  return resource.probe.cooja_jar_sha256 ? "ready" : "no Cooja build";
-}
-
 function probeDetail(resource: ResourceDto): string {
-  const message = resource.probe.message ?? "";
+  const message = resource.probe?.message ?? "";
   // "ready" is already the label; repeating it below adds nothing.
   return message && message !== "ready" ? message : "";
 }
 
-function endpoint(resource: ResourceDto): string {
-  const address = resource.endpoint?.address;
-  const port = resource.endpoint?.port;
-  return address ? `${String(address)}:${String(port ?? "")}` : "—";
-}
-
-function overrideSummary(resource: ResourceDto): string {
-  // Only what this worker sets for itself; the rest comes from its host, and
-  // repeating the host's values per row would bury the difference.
-  const connection = resource.connection ?? {};
-  const parts: string[] = [];
-  if (connection.username) parts.push(`user ${connection.username}`);
-  if (connection.secret?.has_secret) parts.push("own credential");
-  if (resource.origin === "manual") parts.push("configured");
-  return parts.join(" · ");
-}
-
 function shortBuild(resource: ResourceDto): string {
-  const sha = resource.probe.cooja_jar_sha256;
+  const sha = resource.probe?.cooja_jar_sha256;
   return sha ? `cooja ${sha.slice(0, 8)}` : "";
 }
 
 function buildTitle(resource: ResourceDto): string {
-  const parts = [resource.probe.java_version, resource.container.image].filter(Boolean);
-  if (resource.probe.cooja_jar_sha256) {
+  const parts = [resource.probe?.java_version, resource.container?.image].filter(Boolean);
+  if (resource.probe?.cooja_jar_sha256) {
     parts.push(`cooja.jar ${resource.probe.cooja_jar_sha256}`);
   }
   return parts.join("\n");
@@ -184,11 +168,11 @@ function simulationLink(resource: ResourceDto): string {
 }
 
 function toggleTitle(resource: ResourceDto): string {
-  if (!resource.enabled) return "Put this container back in the pool";
+  if (!resource.enabled) return "Put this worker back in the pool";
   if (resource.status === "busy" || resource.status === "reserved") {
     return "Take it out of the pool; the simulation on it finishes first";
   }
-  return "Take this container out of the pool";
+  return "Take this worker out of the pool";
 }
 </script>
 

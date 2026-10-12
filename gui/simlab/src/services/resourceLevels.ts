@@ -1,0 +1,128 @@
+/**
+ * Reading a worker's two availability levels.
+ *
+ * Availability is decided twice: Docker says whether the container exists and
+ * runs, and the SSH probe says whether a simulation can actually be launched
+ * in it. Keeping the two apart is what lets the page say *which* one failed —
+ * "the container is stopped" and "it is up but has no Cooja" need different
+ * fixes.
+ *
+ * The subtlety this module exists for: **where the operator stated the
+ * address, Docker's view is not used at all.** On a shared host the SSH user
+ * often cannot reach the daemon, so discovery reports nothing and the stored
+ * container state says `missing` — while the worker answers perfectly well and
+ * is running simulations. Presenting that as a failure reports, in red, a fact
+ * the system deliberately ignores.
+ */
+import type { ResourceDto } from "../types/infra";
+
+export type LevelTone = "ok" | "bad" | "unknown";
+
+export interface LevelView {
+  label: string;
+  tone: LevelTone;
+  title: string;
+}
+
+/**
+ * Whether a person, rather than Docker, decided how this worker is reached.
+ *
+ * Mirrors `operator_configured` in `master-node/lib/health.py`, which is what
+ * makes the master-node probe such a worker regardless of Docker's silence.
+ * The two must agree, or the page would explain a decision the master-node
+ * did not make.
+ */
+export function operatorConfigured(resource: ResourceDto): boolean {
+  if (resource.origin === "manual") return true;
+  return Object.keys(resource.connection ?? {}).length > 0;
+}
+
+/** How to present level 1 — what Docker reported. */
+export function dockerLevel(resource: ResourceDto): LevelView {
+  const state = resource.container?.state ?? "";
+  const checked = Boolean(resource.container?.checked_at);
+
+  if (state === "running") {
+    return { label: state, tone: "ok", title: "Docker reports it running" };
+  }
+  if (operatorConfigured(resource)) {
+    return {
+      label: "not used",
+      tone: "unknown",
+      title:
+        "This worker's address was configured by hand, so Docker's view of " +
+        "it is not used. Whether it can run a simulation is decided by the " +
+        "SSH probe alone.",
+    };
+  }
+  if (!checked) {
+    return {
+      label: state || "unknown",
+      tone: "unknown",
+      title: "Docker has not been asked about this container yet",
+    };
+  }
+  return {
+    label: state || "unknown",
+    tone: "bad",
+    title: `Docker reports the container ${state || "in an unknown state"}`,
+  };
+}
+
+/** How to present level 2 — what the SSH probe found. */
+export function probeLevel(resource: ResourceDto): LevelView {
+  const probe = resource.probe ?? {};
+  if (!probe.checked_at) {
+    return {
+      label: "not probed",
+      tone: "unknown",
+      title: "No connection has been attempted yet",
+    };
+  }
+  if (!probe.ssh_ok) {
+    return {
+      label: "unreachable",
+      tone: "bad",
+      title: probe.message || "The worker did not answer",
+    };
+  }
+  if (!probe.cooja_jar_sha256) {
+    return {
+      label: "no Cooja build",
+      tone: "bad",
+      title:
+        probe.message ||
+        "It answers, but no cooja.jar was found where it is expected",
+    };
+  }
+  return {
+    label: "ready",
+    tone: "ok",
+    title: [probe.java_version, `cooja.jar ${probe.cooja_jar_sha256}`]
+      .filter(Boolean)
+      .join("\n"),
+  };
+}
+
+/** A worker's address, as `host:port`. */
+export function endpointLabel(resource: ResourceDto): string {
+  const address = resource.endpoint?.address;
+  const port = resource.endpoint?.port;
+  if (!address) return "—";
+  return port ? `${String(address)}:${String(port)}` : String(address);
+}
+
+/**
+ * What this worker overrides for itself.
+ *
+ * Only its own settings: repeating the values it inherits from its host would
+ * bury the difference, which is the one thing worth seeing per row.
+ */
+export function overrideSummary(resource: ResourceDto): string {
+  const connection = resource.connection ?? {};
+  const parts: string[] = [];
+  if (connection.username) parts.push(`user ${connection.username}`);
+  if (connection.secret?.has_secret) parts.push("own credential");
+  if (resource.origin === "manual") parts.push("configured");
+  return parts.join(" · ");
+}

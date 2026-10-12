@@ -49,6 +49,12 @@
     <footer>
       <div class="facts">
         <span v-if="!usesDocker">workers listed manually</span>
+        <!-- "0 discovered" next to "2 containers ready" reads as a
+             contradiction; it only means Docker had nothing to say. -->
+        <span v-else-if="discoveredNothing" class="hint-fact">
+          Docker found nothing here — switch this host to listing workers
+          manually to stop asking
+        </span>
         <span v-else-if="host.discovery?.discovered_count !== undefined">
           {{ host.discovery.discovered_count }} discovered
         </span>
@@ -136,6 +142,9 @@ const editable = computed(() => props.host.type !== "local");
 // Nothing to rediscover on a host whose workers are listed by hand — and on a
 // shared machine the SSH user may have no access to the daemon at all.
 const usesDocker = computed(() => props.host.discovery?.mode !== "manual");
+const discoveredNothing = computed(
+  () => usesDocker.value && (props.host.discovery?.discovered_count ?? 0) === 0,
+);
 const schedulable = computed(() => props.occupancy?.schedulable ?? false);
 const hasCapacity = computed(() => (props.occupancy?.free ?? 0) > 0);
 const inPool = computed(() => props.host.enabled && schedulable.value);
@@ -283,6 +292,7 @@ footer {
 }
 
 .failing { color: var(--status-error); font-weight: 600; }
+.hint-fact { color: var(--status-waiting); }
 
 .actions { display: flex; gap: 6px; flex-wrap: wrap; }
 
