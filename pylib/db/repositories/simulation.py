@@ -53,9 +53,27 @@ class SimulationRepository:
                 parent: object_id
             }))
 
-    def find_by_individual(self, individual_id: str) -> list[Simulation]:
+    def find_by_individual(
+        self, individual_id: str, experiment_id: Optional[ObjectId] = None
+    ) -> list[Simulation]:
+        """Simulations of one individual, scoped to an experiment.
+
+        ``individual_id`` is a chromosome hash, not an identity: the same
+        chromosome recurs across experiments, and its simulations accumulate
+        under the same hash. Without the experiment, this returns every run of
+        that chromosome ever made — observed in practice as an individual's
+        panel listing nine simulations when two belonged to the experiment
+        being looked at.
+
+        The pair (experiment, individual) is the identity that means something,
+        so ``experiment_id`` should always be supplied. It stays optional only
+        so an existing caller cannot break silently.
+        """
+        query: dict = {"individual_id": individual_id}
+        if experiment_id is not None:
+            query["experiment_id"] = experiment_id
         with self.connection.connect() as db:
-            return list(db["simulations"].find({"individual_id": individual_id}))
+            return list(db["simulations"].find(query))
 
     def find_ids_grouped_by_individual(
         self, experiment_id: ObjectId

@@ -875,6 +875,12 @@ class CoojaResourceRepository:
             # next discovery pass marks a hand-configured worker as missing
             # and the probe never runs.
             payload["origin"] = "manual"
+            # The stored probe measured the *old* address, so it no longer
+            # says anything about this worker: keeping it would show a result
+            # for a path that no longer exists, and let the health cycle skip
+            # the one container that most needs measuring. Cleared rather than
+            # falsified — the next cycle fills it in, within one interval.
+            payload["probe"] = {}
         with self.connection.connect() as db:
             res = db[RESOURCES_COLLECTION].update_one({"_id": oid}, {"$set": payload})
             return res.matched_count > 0

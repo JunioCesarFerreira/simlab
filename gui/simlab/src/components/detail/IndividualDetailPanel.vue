@@ -200,6 +200,14 @@ import { fetchBlobUrl, downloadFile } from "../../api/files";
 
 const props = defineProps<{
   individual: IndividualDto;
+  /**
+   * The experiment being looked at.
+   *
+   * Required to list this individual's simulations: `individual_id` is a
+   * chromosome hash and the same chromosome reappears in later experiments,
+   * so the simulations of all of them pile up under one id.
+   */
+  experimentId: string;
   objectiveNames: string[];
   metricColumns: string[]; // columns used in objective computation (data_conversion_config.metrics[].column)
   isSynthetic?: boolean;
@@ -303,7 +311,10 @@ onMounted(async () => {
   loadingSims.value = true;
   simError.value = null;
   try {
-    simulations.value = await getSimulationsByIndividual(props.individual.individual_id);
+    simulations.value = await getSimulationsByIndividual(
+      props.individual.individual_id,
+      props.experimentId,
+    );
   } catch (e: unknown) {
     simError.value = e instanceof Error ? e.message : String(e);
   } finally {

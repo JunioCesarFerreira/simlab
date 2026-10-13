@@ -92,16 +92,30 @@ class DiscoveryReport:
 
 
 @contextmanager
-def open_inspector(host: dict, opener: Optional[SecretOpener] = None) -> Iterator[Any]:
+def open_inspector(
+    host: dict,
+    opener: Optional[SecretOpener] = None,
+    *,
+    session: Optional[HostSession] = None,
+) -> Iterator[Any]:
     """Yield the right Docker inspector for this host, and close what it used.
 
     Local hosts go through the mounted socket; remote ones run the Docker CLI
     inside the SSH session that hop 1 already authenticated — no extra port,
     no daemon exposed over TCP, no second credential.
+
+    ``session`` offers an already-open session on the host. Given one, this
+    borrows it and leaves it open: the health cycle is about to probe that
+    host's containers over the same connection, and the inventory does not
+    need a handshake of its own.
     """
     host_type = host.get("type") or EnumHostType.REMOTE.value
     if host_type == EnumHostType.LOCAL.value:
         yield SocketDockerInspector()
+        return
+
+    if session is not None:
+        yield SSHDockerInspector(session)
         return
 
     access = host.get("access") or {}
@@ -128,17 +142,34 @@ def open_inspector(host: dict, opener: Optional[SecretOpener] = None) -> Iterato
         session.close()
 
 
+def unavailable_report(mongo: Any, host: dict, reason: str) -> DiscoveryReport:
+    """Record that Docker could not be consulted, and say why.
+
+    Level 1 having no answer is not the host failing — see the module
+    docstring — but it has to be written down, or the GUI would keep showing
+    the inventory from the last pass as though it had just been confirmed.
+    """
+    report = DiscoveryReport(host_name=str(host.get("name", "?")))
+    report.unavailable_reason = reason
+    log.warning("Discovery unavailable for host %s: %s", report.host_name, reason)
+    mongo.host_repo.record_discovery(
+        host["_id"], count=0, message=f"unavailable: {reason}")
+    return report
+
+
 def discover_host(
     mongo: Any,
     host: dict,
     *,
     opener: Optional[SecretOpener] = None,
     inspector: Optional[Any] = None,
+    session: Optional[HostSession] = None,
 ) -> DiscoveryReport:
     """Reconcile one host's resources with what Docker reports.
 
     ``inspector`` is injectable so this can be driven without a daemon or a
-    network; left out, the right one is opened for the host.
+    network; left out, the right one is opened for the host — over ``session``
+    if the caller already has one open on that host.
     """
     report = DiscoveryReport(host_name=str(host.get("name", "?")))
     discovery = host.get("discovery") or {}
@@ -162,15 +193,11 @@ def discover_host(
         if inspector is not None:
             raw_containers = inspector.list_containers(label_filter, name_prefix)
         else:
-            with open_inspector(host, opener) as opened:
+            with open_inspector(host, opener, session=session) as opened:
                 raw_containers = opened.list_containers(label_filter, name_prefix)
     except (DockerUnavailable, DockerError) as error:
         # Not a host failure: see the module docstring.
-        report.unavailable_reason = str(error)
-        log.warning("Discovery unavailable for host %s: %s", report.host_name, error)
-        mongo.host_repo.record_discovery(
-            host["_id"], count=0, message=f"unavailable: {error}")
-        return report
+        return unavailable_report(mongo, host, str(error))
     except Exception as error:
         report.unavailable_reason = f"{type(error).__name__}: {error}"
         log.exception("Discovery failed for host %s", report.host_name)

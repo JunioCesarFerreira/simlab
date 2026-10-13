@@ -64,17 +64,22 @@ class SSHTransport:
         target_credential: SSHCredential,
         jump_credential: Optional[SSHCredential] = None,
         *,
+        jump_client: Optional[SSHClient] = None,
         pinned_host_key: Optional[str] = None,
         on_learn_host_key: Optional[callable] = None,
         connect_timeout: float = CONNECT_TIMEOUT,
     ):
-        if plan.is_tunnelled and jump_credential is None:
+        if plan.is_tunnelled and jump_credential is None and jump_client is None:
             raise TransportError(
                 f"{plan.describe()} needs a host credential for the first hop"
             )
         self.plan = plan
         self._target_credential = target_credential
         self._jump_credential = jump_credential
+        # A hop 1 someone else owns: its host key was pinned and its handshake
+        # paid when it was opened, and closing this transport must leave it
+        # running, because the next container on the same host rides it too.
+        self._borrowed_jump = jump_client
         self._pinned_host_key = pinned_host_key
         self._on_learn_host_key = on_learn_host_key
         self._connect_timeout = connect_timeout
@@ -89,15 +94,22 @@ class SSHTransport:
         sock = None
         try:
             if self.plan.is_tunnelled:
-                self._jump = self._connect_jump()
-                sock = self._open_tunnel(self._jump)
+                jump = self._borrowed_jump
+                if jump is None:
+                    self._jump = self._connect_jump()
+                    jump = self._jump
+                sock = self._open_tunnel(jump)
             self._client = self._connect_target(sock)
         except BaseException:
             # A half-open pair would leak a file descriptor and, worse, leave a
             # reservation looking live while nothing is connected.
             self.close()
             raise
-        log.info("Transport open: %s", self.plan.describe())
+        log.info(
+            "Transport open: %s%s",
+            self.plan.describe(),
+            " (on the host's shared session)" if self._borrowed_jump else "",
+        )
 
     def _connect_jump(self) -> SSHClient:
         assert self.plan.jump is not None
@@ -167,6 +179,8 @@ class SSHTransport:
         return client
 
     def close(self) -> None:
+        # ``_borrowed_jump`` is deliberately absent: it belongs to whoever
+        # lent it, and other containers on that host are still using it.
         for attr in ("_client", "_jump"):
             client = getattr(self, attr, None)
             if client is not None:

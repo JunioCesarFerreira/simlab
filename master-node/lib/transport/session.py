@@ -107,6 +107,19 @@ class HostSession:
                 log.debug("Error closing session to %s", self.endpoint)
             self._client = None
 
+    @property
+    def client(self) -> SSHClient:
+        """The underlying client, for a caller that needs to open a channel.
+
+        Hop 2 is a ``direct-tcpip`` channel on this connection, so a transport
+        reusing this session needs the client itself rather than a command
+        interface. It is exposed read-only and never closed by the borrower —
+        the session owns it.
+        """
+        if self._client is None:
+            raise TransportError(f"session to {self.endpoint} is not open")
+        return self._client
+
     def __enter__(self) -> "HostSession":
         self.open()
         return self

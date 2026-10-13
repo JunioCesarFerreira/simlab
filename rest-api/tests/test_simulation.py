@@ -47,6 +47,63 @@ class TestCreateSimulation:
         assert resp.status_code == 500
 
 
+# ── GET /by-individual/{individual_id} ───────────────────────────────────────
+class TestGetSimulationsByIndividual:
+    """The individual id is a chromosome hash, so the experiment scopes it.
+
+    The same chromosome recurs across experiments and all of its runs share
+    that id; without the scope the panel lists other experiments' simulations.
+    """
+
+    def test_passes_experiment_as_objectid(self, client, mock_factory):
+        mock_factory.simulation_repo.find_by_individual.return_value = []
+        resp = client.get(
+            f"{BASE}/by-individual/abc123hash", params={"experiment_id": EXP_ID}
+        )
+        assert resp.status_code == 200
+        args = mock_factory.simulation_repo.find_by_individual.call_args.args
+        assert args[0] == "abc123hash"
+        assert args[1] == ObjectId(EXP_ID)
+
+    def test_returns_list(self, client, mock_factory):
+        mock_factory.simulation_repo.find_by_individual.return_value = [
+            sample_simulation()
+        ]
+        resp = client.get(
+            f"{BASE}/by-individual/abc123hash", params={"experiment_id": EXP_ID}
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["id"] == SIM_ID
+        assert data[0]["individual_id"] == "abc123hash"
+
+    def test_without_experiment_queries_unscoped(self, client, mock_factory):
+        """Still answered, so an older client keeps working."""
+        mock_factory.simulation_repo.find_by_individual.return_value = []
+        resp = client.get(f"{BASE}/by-individual/abc123hash")
+        assert resp.status_code == 200
+        assert mock_factory.simulation_repo.find_by_individual.call_args.args == (
+            "abc123hash",
+            None,
+        )
+
+    def test_malformed_experiment_is_rejected(self, client, mock_factory):
+        """A bad id must not fall through to an unscoped query."""
+        resp = client.get(
+            f"{BASE}/by-individual/abc123hash", params={"experiment_id": "not-an-id"}
+        )
+        assert resp.status_code == 422
+        mock_factory.simulation_repo.find_by_individual.assert_not_called()
+
+    def test_repo_error_returns_500(self, client, mock_factory):
+        mock_factory.simulation_repo.find_by_individual.side_effect = RuntimeError("db")
+        resp = client.get(
+            f"{BASE}/by-individual/abc123hash", params={"experiment_id": EXP_ID}
+        )
+        assert resp.status_code == 500
+
+
 # ── GET /by-status/{status} ───────────────────────────────────────────────────
 class TestGetSimulationsByStatus:
     def test_returns_list(self, client, mock_factory):

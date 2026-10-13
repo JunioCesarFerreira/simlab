@@ -7,20 +7,28 @@ here rather than left to reading:
   * a host leaves the pool only after repeated failure, and returns on the
     first success;
   * Docker being unavailable does not take a working host out of the pool;
-  * a container enters the pool only when *both* levels pass.
+  * a container enters the pool only when *both* levels pass;
+  * a container already in the pool is not re-probed every cycle, and nothing
+    but good news earns that silence.
 
 The deadlock this phase removed is guarded by
 ``TestFirstCycle.test_an_unmeasured_pool_becomes_usable``: the protection used
 to be an optimistic default, and is now a measurement.
 """
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 from bson import ObjectId
 
 from lib.credentials import CredentialUnavailable
-from lib.health import STALE_RESERVATION_MESSAGE, HealthMonitor
+from lib.health import (
+    DEFAULT_PROBE_TTL_SEC,
+    STALE_RESERVATION_MESSAGE,
+    HealthMonitor,
+    probe_is_fresh,
+)
 from lib.transport.base import ProbeResult, TransportUnreachable
 from pylib.db.models.infra import EnumHostStatus, EnumResourceStatus
 
@@ -40,16 +48,34 @@ NO_COOJA = ProbeResult(reachable=True, cooja_present=False,
 
 def resource(name="cooja1", status="offline", enabled=True,
              container_state="running", checked=True, _id=RES_ID,
-             connection=None, origin="discovered") -> dict:
+             connection=None, origin="discovered", probe=None) -> dict:
     return {
         "_id": _id, "name": name, "status": status, "enabled": enabled,
         "origin": origin,
         "connection": connection or {},
+        "probe": probe or {},
         "container": {
             "state": container_state,
             "checked_at": datetime.now() if checked else None,
         },
     }
+
+
+def ready_probe(age_sec: float = 0.0) -> dict:
+    """A stored probe that found the worker ready, ``age_sec`` ago."""
+    return {
+        "ssh_ok": True,
+        "cooja_jar_sha256": "a" * 64,
+        "java_version": "21",
+        "message": "ready",
+        "checked_at": datetime.now() - timedelta(seconds=age_sec),
+    }
+
+
+def in_pool(probe=None, **kwargs) -> dict:
+    """A worker the last cycle left in the pool."""
+    return resource(status=EnumResourceStatus.AVAILABLE.value,
+                    probe=probe if probe is not None else ready_probe(), **kwargs)
 
 
 def build_monitor(mongo, *, probe=None, discover=None, **kwargs) -> HealthMonitor:
@@ -464,6 +490,303 @@ class TestStaleReservations:
             .sweep_stale_reservations()
 
         assert woken == [1]
+
+
+# ── Not asking a question already answered ───────────────────────────────────
+
+class TestProbeFreshness:
+    """A probe is a two-hop SSH connection; repeating it is not free.
+
+    A pilot measured 3078 transport opens for 344 simulations and 41 opens in
+    three minutes while idle, until the host's sshd began refusing them. What
+    makes it safe to skip is the asymmetry: only a worker *in the pool* whose
+    last probe found it *ready* is taken at its word.
+    """
+
+    def test_a_worker_that_just_answered_is_not_asked_again(self):
+        mongo = fake_mongo(resources=[in_pool()])
+        probed: list[dict] = []
+
+        result = build_monitor(
+            mongo, probe=lambda h, r: probed.append(r) or READY).check_host(HOST)
+
+        assert probed == []
+        assert result.ready == ["cooja1"] and result.fresh == ["cooja1"]
+        assert result.status == EnumHostStatus.ONLINE
+
+    def test_skipping_writes_nothing(self):
+        """Rewriting the probe would make its timestamp fresh forever."""
+        mongo = fake_mongo(resources=[in_pool()])
+
+        build_monitor(mongo, probe=lambda h, r: READY).check_host(HOST)
+
+        mongo.resource_repo.update_probe.assert_not_called()
+        mongo.resource_repo.mark_available.assert_not_called()
+
+    def test_an_old_answer_is_measured_again(self):
+        mongo = fake_mongo(
+            resources=[in_pool(probe=ready_probe(DEFAULT_PROBE_TTL_SEC + 1))])
+        probed: list[dict] = []
+
+        build_monitor(
+            mongo, probe=lambda h, r: probed.append(r) or READY).check_host(HOST)
+
+        assert [r["name"] for r in probed] == ["cooja1"]
+
+    def test_a_failed_answer_is_never_inherited(self):
+        # Recovery must keep happening at the cycle interval.
+        failed = {"ssh_ok": False, "message": "no route", "checked_at": datetime.now()}
+        mongo = fake_mongo(resources=[in_pool(probe=failed)])
+        probed: list[dict] = []
+
+        build_monitor(
+            mongo, probe=lambda h, r: probed.append(r) or READY).check_host(HOST)
+
+        assert [r["name"] for r in probed] == ["cooja1"]
+
+    def test_a_worker_outside_the_pool_is_measured(self):
+        # Offline with a recent good probe: something took it out, and only a
+        # measurement may put it back.
+        mongo = fake_mongo(resources=[resource(status="offline", probe=ready_probe())])
+        probed: list[dict] = []
+
+        build_monitor(
+            mongo, probe=lambda h, r: probed.append(r) or READY).check_host(HOST)
+
+        assert [r["name"] for r in probed] == ["cooja1"]
+
+    def test_a_stopped_container_still_leaves_the_pool(self):
+        """Level 1 is read before freshness, so a negative observation wins."""
+        mongo = fake_mongo(resources=[in_pool(container_state="exited")])
+        probed: list[dict] = []
+
+        result = build_monitor(
+            mongo, probe=lambda h, r: probed.append(r) or READY).check_host(HOST)
+
+        assert probed == []
+        assert result.unhealthy == ["cooja1"] and result.fresh == []
+        mongo.resource_repo.mark_offline.assert_called_once()
+
+    def test_an_operator_asking_for_a_check_gets_a_real_one(self):
+        mongo = fake_mongo(resources=[in_pool()])
+        probed: list[dict] = []
+
+        build_monitor(mongo, probe=lambda h, r: probed.append(r) or READY) \
+            .check_host(HOST, force=True)
+
+        assert [r["name"] for r in probed] == ["cooja1"]
+
+    def test_the_check_button_forces(self):
+        host = {**HOST, "check_requested_at": datetime.now()}
+        mongo = fake_mongo(hosts=[host], resources=[in_pool()])
+        mongo.host_repo.get.side_effect = lambda _id: host
+        probed: list[dict] = []
+
+        build_monitor(mongo, probe=lambda h, r: probed.append(r) or READY).cycle()
+
+        assert [r["name"] for r in probed] == ["cooja1"]
+
+    def test_the_first_cycle_of_a_process_measures(self):
+        """A predecessor's probe describes a pool this process has not seen."""
+        mongo = fake_mongo(resources=[in_pool()])
+        probed: list[dict] = []
+
+        build_monitor(mongo, probe=lambda h, r: probed.append(r) or READY) \
+            .cycle(force=True)
+
+        assert [r["name"] for r in probed] == ["cooja1"]
+
+    def test_later_cycles_do_not(self):
+        mongo = fake_mongo(resources=[in_pool()])
+        probed: list[dict] = []
+
+        build_monitor(mongo, probe=lambda h, r: probed.append(r) or READY).cycle()
+
+        assert probed == []
+
+    def test_a_zero_ttl_restores_probing_every_cycle(self):
+        mongo = fake_mongo(resources=[in_pool()])
+        probed: list[dict] = []
+
+        build_monitor(mongo, probe=lambda h, r: probed.append(r) or READY,
+                      probe_ttl_sec=0).check_host(HOST)
+
+        assert [r["name"] for r in probed] == ["cooja1"]
+
+    def test_the_log_line_says_what_was_measured(self):
+        mongo = fake_mongo(resources=[in_pool(), resource(name="cooja2", _id=ObjectId())])
+
+        result = build_monitor(mongo).check_host(HOST)
+
+        assert result.ready == ["cooja1", "cooja2"]
+        assert "1 unchanged" in result.describe()
+
+    def test_an_all_fresh_host_still_signals_capacity(self):
+        # Nothing was measured, but the capacity is real and the dispatcher
+        # must not be left waiting for a probe that will not happen.
+        mongo = fake_mongo(resources=[in_pool()])
+        woken: list[int] = []
+
+        build_monitor(mongo, on_capacity=lambda: woken.append(1)).cycle()
+
+        assert woken == [1]
+
+
+class TestProbeIsFresh:
+    """The predicate on its own, where the asymmetry is easiest to read."""
+
+    def test_ready_and_recent(self):
+        assert probe_is_fresh(in_pool(probe=ready_probe(10)), 300) is True
+
+    def test_too_old(self):
+        assert probe_is_fresh(in_pool(probe=ready_probe(301)), 300) is False
+
+    def test_reachable_without_a_cooja_build_is_not_ready(self):
+        probe = {**ready_probe(), "cooja_jar_sha256": None}
+        assert probe_is_fresh(in_pool(probe=probe), 300) is False
+
+    def test_never_probed(self):
+        assert probe_is_fresh(in_pool(probe={}), 300) is False
+
+    def test_a_cleared_probe_is_not_fresh(self):
+        """What reconfiguring a worker leaves behind, so it gets measured."""
+        assert probe_is_fresh(in_pool(probe={"checked_at": None}), 300) is False
+
+    def test_a_timestamp_in_the_future_is_not_trusted(self):
+        # A clock that moved would otherwise grant indefinite silence.
+        assert probe_is_fresh(in_pool(probe=ready_probe(-600)), 300) is False
+
+    def test_busy_is_not_the_same_as_available(self):
+        busy = in_pool()
+        busy["status"] = EnumResourceStatus.BUSY.value
+        assert probe_is_fresh(busy, 300) is False
+
+
+# ── One handshake per host per turn ──────────────────────────────────────────
+
+class FakePool:
+    """Stands in for ``JumpPool``, recording who asked for what."""
+
+    def __init__(self, error=None):
+        self.asked: list[str] = []
+        self.closed: list[str] = []
+        self.closed_all = 0
+        self._error = error
+        self.session_obj = MagicMock()
+
+    def session(self, host):
+        self.asked.append(str(host.get("name")))
+        if self._error is not None:
+            raise self._error
+        return self.session_obj
+
+    def close_host(self, host):
+        self.closed.append(str(host.get("name")))
+
+    def close(self):
+        self.closed_all += 1
+
+
+REMOTE = {**HOST, "_id": ObjectId("507f1f77bcf86cd799430012"), "name": "lab-01",
+          "type": "remote",
+          "access": {"address": "192.168.0.42", "port": 2222, "username": "simlab"}}
+
+
+class TestSharedHostSession:
+    def test_every_probe_on_a_host_rides_one_session(self):
+        workers = [resource(name=f"cooja{i}", _id=ObjectId()) for i in range(1, 5)]
+        mongo = fake_mongo(hosts=[REMOTE], resources=workers)
+        pool = FakePool()
+        opened: list[Any] = []
+
+        monitor = HealthMonitor(
+            mongo, jumps=pool, discover=lambda m, h: None,
+            probe=lambda h, r: READY)
+        with patch("lib.health.build_transport") as build:
+            build.return_value.__enter__.return_value.probe.return_value = READY
+            monitor._probe = monitor._default_probe
+            monitor.check_host(REMOTE)
+            opened = [c.kwargs["jump_client"] for c in build.call_args_list]
+
+        assert len(opened) == 4
+        assert all(client is pool.session_obj.client for client in opened)
+
+    def test_the_session_is_closed_when_the_hosts_turn_ends(self):
+        mongo = fake_mongo(hosts=[REMOTE], resources=[resource()])
+        pool = FakePool()
+
+        HealthMonitor(mongo, jumps=pool, discover=lambda m, h: None,
+                      probe=lambda h, r: READY).check_host(REMOTE)
+
+        assert pool.closed == ["lab-01"]
+
+    def test_the_session_is_closed_even_when_the_check_blows_up(self):
+        mongo = fake_mongo(hosts=[REMOTE], resources=[resource()])
+        mongo.resource_repo.find_by_host.side_effect = RuntimeError("db gone")
+        pool = FakePool()
+
+        with pytest.raises(RuntimeError):
+            HealthMonitor(mongo, jumps=pool, discover=lambda m, h: None,
+                          probe=lambda h, r: READY).check_host(REMOTE)
+
+        assert pool.closed == ["lab-01"]
+
+    def test_discovery_uses_the_same_session(self):
+        mongo = fake_mongo(hosts=[REMOTE], resources=[resource()])
+        pool = FakePool()
+        monitor = HealthMonitor(mongo, jumps=pool, probe=lambda h, r: READY)
+
+        with patch("lib.health.discover_host") as discover:
+            discover.return_value = None
+            monitor.check_host(REMOTE)
+
+        assert discover.call_args.kwargs["session"] is pool.session_obj
+
+    def test_an_unreachable_host_is_not_attempted_once_per_worker(self):
+        """The pool caches the failure; the cycle must not work around it."""
+        workers = [resource(name=f"cooja{i}", _id=ObjectId()) for i in range(1, 4)]
+        mongo = fake_mongo(hosts=[REMOTE], resources=workers)
+        pool = FakePool(error=TransportUnreachable("no route to host"))
+        monitor = HealthMonitor(mongo, jumps=pool)
+        monitor._probe = monitor._default_probe
+
+        result = monitor.check_host(REMOTE)
+
+        # Docker's record says why it could not look, and each worker reports
+        # the same error — all from one cached failure.
+        assert result.unhealthy == ["cooja1", "cooja2", "cooja3"]
+        assert mongo.host_repo.record_discovery.call_args.kwargs["count"] == 0
+        assert "no route to host" in \
+            mongo.host_repo.record_discovery.call_args.kwargs["message"]
+
+    def test_a_local_host_needs_no_session(self):
+        mongo = fake_mongo(resources=[resource()])
+        pool = FakePool()
+        pool.session_obj = None
+        monitor = HealthMonitor(mongo, jumps=pool, discover=lambda m, h: None)
+        monitor._probe = monitor._default_probe
+
+        with patch("lib.health.build_transport") as build:
+            build.return_value.__enter__.return_value.probe.return_value = READY
+            monitor.check_host(HOST)
+
+        assert build.call_args.kwargs["jump_client"] is None
+
+    def test_an_on_demand_discovery_closes_what_it_opened(self):
+        """The one path that opens a session outside ``check_host``."""
+        host = {**REMOTE, "discovery_requested_at": datetime.now()}
+        mongo = fake_mongo(hosts=[host], resources=[resource()])
+        pool = FakePool()
+
+        HealthMonitor(mongo, jumps=pool, probe=lambda h, r: READY,
+                      discover=lambda m, h: None)._serve_requests()
+
+        assert pool.closed == ["lab-01"]
+
+    def test_stopping_releases_everything(self):
+        pool = FakePool()
+        HealthMonitor(fake_mongo(), jumps=pool).stop()
+        assert pool.closed_all == 1
 
 
 # ── The cycle as a whole ─────────────────────────────────────────────────────

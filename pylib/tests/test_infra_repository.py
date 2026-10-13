@@ -497,6 +497,65 @@ class TestQueries:
         }
 
 
+# ── Workers configured by hand ───────────────────────────────────────────────
+
+class TestUpdateManual:
+    def test_configuring_a_connection_takes_ownership(self, resources):
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(matched_count=1)
+
+        repo.update_manual(RES_ID, {"connection": {"port": 2223}})
+
+        payload = coll.update_one.call_args.args[1]["$set"]
+        # Without this the next discovery pass marks a hand-configured worker
+        # as missing and it is never probed.
+        assert payload["origin"] == "manual"
+
+    def test_changing_the_address_clears_the_probe(self, resources):
+        """The stored probe measured the old address.
+
+        Keeping it would show a result for a path that no longer exists, and
+        would let the health cycle skip the one worker that most needs
+        measuring — it trusts a recent *ready* probe.
+        """
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(matched_count=1)
+
+        repo.update_manual(RES_ID, {"endpoint": {"address": "10.0.0.9"}})
+
+        assert coll.update_one.call_args.args[1]["$set"]["probe"] == {}
+
+    def test_an_unrelated_change_leaves_the_probe_alone(self, resources):
+        # Renaming or re-enabling a worker says nothing about reaching it.
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(matched_count=1)
+
+        repo.update_manual(RES_ID, {"enabled": True})
+
+        payload = coll.update_one.call_args.args[1]["$set"]
+        assert "probe" not in payload and "origin" not in payload
+
+    def test_measured_fields_are_refused(self, resources):
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(matched_count=1)
+
+        repo.update_manual(RES_ID, {
+            "status": "available", "container": {"state": "running"},
+            "probe": {"ssh_ok": True}, "connection": {"port": 2223},
+        })
+
+        payload = coll.update_one.call_args.args[1]["$set"]
+        assert "status" not in payload and "container" not in payload
+        # The probe *is* in the payload — cleared by this repository because
+        # the address changed, not written from the client's value.
+        assert payload["probe"] == {}
+
+    def test_nothing_to_change_is_not_a_write(self, resources):
+        repo, coll = resources
+        assert repo.update_manual(RES_ID, {"status": "available"}) is False
+        coll.update_one.assert_not_called()
+
+
 # ── Hosts ────────────────────────────────────────────────────────────────────
 
 class TestHosts:

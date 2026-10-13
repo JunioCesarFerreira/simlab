@@ -12,6 +12,7 @@
     <IndividualDetailPanel
       v-if="selectedIndividual"
       :individual="selectedIndividual"
+      :experiment-id="props.id"
       :objective-names="store.objectiveNames"
       :metric-columns="metricColumns"
       :is-synthetic="isSynthetic"

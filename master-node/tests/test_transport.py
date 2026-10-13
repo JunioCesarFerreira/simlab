@@ -38,6 +38,7 @@ from lib.transport.plan import (
     SSHEndpoint,
     build_plan,
 )
+from lib.transport.factory import build_transport
 from lib.transport.ssh import GENERATED_ARTIFACTS, SSHTransport, build_cleanup_command
 
 SECRET_PEM = "-----BEGIN OPENSSH PRIVATE KEY-----\nnotarealkey\n-----END OPENSSH PRIVATE KEY-----"
@@ -393,6 +394,100 @@ class TestOpenRemote:
         assert ssh_clients[0].close.called
         with pytest.raises(TransportError, match="not open"):
             transport.exec_command("true")
+
+
+# ── A hop 1 someone else owns ────────────────────────────────────────────────
+
+class TestBorrowedJump:
+    """Hop 1 lent by the pool: used for the tunnel, never closed here.
+
+    A health cycle probes every container on a host in turn. Each probe
+    opening its own hop 1 is what the pool exists to stop, so a transport has
+    to be able to tunnel over a connection it does not own.
+    """
+
+    def _borrowed(self, jump) -> SSHTransport:
+        return SSHTransport(
+            build_plan(REMOTE_HOST, RESOURCE),
+            target_credential=SSHCredential(username="root", password="root"),
+            jump_client=jump,
+        )
+
+    def test_a_lent_client_replaces_the_first_hop(self, ssh_clients):
+        jump = MagicMock()
+
+        self._borrowed(jump).open()
+
+        # Only the container's client was built: no second handshake to the
+        # host, which is the whole point.
+        assert len(ssh_clients) == 1
+        jump.connect.assert_not_called()
+        channel = jump.get_transport.return_value.open_channel
+        assert channel.call_args.kwargs["dest_addr"] == ("172.18.0.5", 22)
+        assert ssh_clients[0].connect.call_args.kwargs["sock"] is channel.return_value
+
+    def test_a_lent_client_is_enough_without_a_host_credential(self):
+        # That connection is already authenticated and its key already pinned,
+        # so requiring the secret again would only decrypt it per container.
+        self._borrowed(MagicMock())              # does not raise
+
+    def test_closing_leaves_the_lent_client_open(self, ssh_clients):
+        jump = MagicMock()
+        transport = self._borrowed(jump)
+        transport.open()
+
+        transport.close()
+
+        assert ssh_clients[0].close.called       # the container's own client
+        jump.close.assert_not_called()           # not ours to close
+
+    def test_a_failed_open_still_leaves_the_lent_client_open(self, ssh_clients):
+        jump = MagicMock()
+        transport = self._borrowed(jump)
+        with patch.object(SSHTransport, "_connect_target",
+                          side_effect=RuntimeError("boom")):
+            with pytest.raises(RuntimeError):
+                transport.open()
+
+        # The next container on this host is about to use it.
+        jump.close.assert_not_called()
+
+    def test_a_local_host_ignores_a_lent_client(self, ssh_clients):
+        jump = MagicMock()
+        SSHTransport(
+            build_plan(LOCAL_HOST, RESOURCE),
+            target_credential=SSHCredential(username="root", password="root"),
+            jump_client=jump,
+        ).open()
+
+        # Nothing is tunnelled: a local container is reached directly.
+        jump.get_transport.assert_not_called()
+        assert len(ssh_clients) == 1
+
+
+class TestFactoryWithBorrowedJump:
+    def test_the_host_secret_is_not_opened_again(self):
+        """One decryption per host per turn, instead of one per container."""
+        opened: list[str] = []
+
+        class Recording:
+            def open(self, envelope):
+                opened.append(envelope.get("ciphertext", "?"))
+                return "hunter2"
+
+        host = {**REMOTE_HOST,
+                "container_access": {"username": "root", "port": 22,
+                                     "auth_method": "password",
+                                     "secret": {"alg": "crypto_box_seal",
+                                                "key_id": "0" * 16,
+                                                "ciphertext": "container"}}}
+        jump = MagicMock()
+
+        transport = build_transport(
+            host, RESOURCE, SecretOpener(Recording()), jump_client=jump)
+
+        assert opened == ["container"]
+        assert transport._borrowed_jump is jump
 
 
 # ── Cleanup: unchanged guarantees, now on the transport ──────────────────────

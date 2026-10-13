@@ -725,8 +725,11 @@ def main() -> None:
         # Synchronously, before anything is placed: the first placement
         # decision then reads measured statuses instead of assumptions. This is
         # what replaced seeding hosts and containers as already usable.
+        # Forced, so it does not inherit the probes of the process that just
+        # ended — later cycles may trust a recent measurement, but the pool
+        # the dispatcher starts from is measured by this process.
         log.info("Running the first health cycle before placing any work...")
-        monitor.cycle()
+        monitor.cycle(force=True)
 
         Thread(target=monitor.run, daemon=True, name="health").start()
         Thread(target=dispatcher.run, daemon=True, name="dispatcher").start()

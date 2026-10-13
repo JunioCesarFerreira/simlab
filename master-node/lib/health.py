@@ -23,6 +23,19 @@ Rules this cycle obeys
 * **Docker being unavailable is not the host failing.** A host that already
   has resources is still checked over SSH, which is all the master-node ever
   did before this feature.
+* **A container that answered recently is not asked again.** A probe is a
+  two-hop SSH connection, and repeating it every thirty seconds for a worker
+  that answered thirty seconds ago buys nothing. A pilot measured 3078
+  transport opens for 344 simulations, and 41 in three minutes with nothing
+  running, until the host's sshd began refusing connections. A worker that is
+  in the pool and was last found *ready* within ``probe_ttl_sec`` is taken at
+  its word; everything else is measured, so a failure is still noticed within
+  one interval and recovery is unaffected. An operator pressing "check" gets
+  a real measurement regardless.
+* **The connections a cycle does need are shared.** Docker's inventory and
+  every probe on one host ride a single hop-1 session (``lib.transport.pool``),
+  which costs a host one handshake per cycle instead of one per worker plus
+  one. Hop 2 stays per container: that is the connection a simulation runs on.
 * **It replaces the optimistic defaults** that existed while nothing measured
   anything. A host now reaches ``online`` because a probe said so.
 """
@@ -33,8 +46,8 @@ from datetime import datetime, timedelta
 from typing import Any, Callable, Optional
 
 from lib.credentials import CredentialError, SecretOpener
-from lib.discovery import discover_host
-from lib.transport import PlanError, TransportError, build_transport
+from lib.discovery import discover_host, unavailable_report
+from lib.transport import JumpPool, PlanError, TransportError, build_transport
 from pylib.db.models.infra import (
     EnumAddressMode,
     EnumDiscoveryMode,
@@ -54,6 +67,11 @@ DEFAULT_FAILURE_THRESHOLD = 3
 # only the window between claiming a container and the JVM reporting its PID,
 # so it is minutes — unrelated to how long a simulation may legitimately run.
 DEFAULT_RESERVATION_TTL_SEC = 600.0
+# How long a successful probe speaks for the worker it measured. Ten intervals
+# at the default: a healthy container is re-verified twice in ten minutes
+# instead of twenty times, and a container that stops answering is still found
+# within one interval, because only a *ready* result earns the silence.
+DEFAULT_PROBE_TTL_SEC = 300.0
 
 STALE_RESERVATION_MESSAGE = (
     "Recovered: the container was reserved but the simulation never started"
@@ -69,12 +87,19 @@ class HostHealth:
     ready: list[str] = field(default_factory=list)
     unhealthy: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    #: Ready, on the strength of a recent probe rather than a new one. A
+    #: subset of ``ready``, kept apart so the log says what was measured.
+    fresh: list[str] = field(default_factory=list)
 
     def describe(self) -> str:
-        return (
-            f"{self.status.value}: {len(self.ready)} ready, "
-            f"{len(self.unhealthy)} unhealthy, {len(self.skipped)} busy"
-        )
+        parts = [
+            f"{len(self.ready)} ready",
+            f"{len(self.unhealthy)} unhealthy",
+            f"{len(self.skipped)} busy",
+        ]
+        if self.fresh:
+            parts.append(f"{len(self.fresh)} unchanged")
+        return f"{self.status.value}: " + ", ".join(parts)
 
 
 class HealthMonitor:
@@ -93,8 +118,10 @@ class HealthMonitor:
         interval_sec: float = DEFAULT_INTERVAL_SEC,
         failure_threshold: int = DEFAULT_FAILURE_THRESHOLD,
         reservation_ttl_sec: float = DEFAULT_RESERVATION_TTL_SEC,
+        probe_ttl_sec: float = DEFAULT_PROBE_TTL_SEC,
         discover: Optional[Callable[[Any, dict], Any]] = None,
         probe: Optional[Callable[[dict, dict], Any]] = None,
+        jumps: Optional[JumpPool] = None,
         on_capacity: Optional[Callable[[], None]] = None,
     ):
         self._mongo = mongo
@@ -102,8 +129,11 @@ class HealthMonitor:
         self._interval = interval_sec
         self._threshold = max(1, failure_threshold)
         self._reservation_ttl = reservation_ttl_sec
-        self._discover = discover or (
-            lambda mongo, host: discover_host(mongo, host, opener=self._opener))
+        self._probe_ttl = probe_ttl_sec
+        # Hop 1, opened at most once per host per turn. Owned here because the
+        # monitor is the only thing that knows when a host's turn is over.
+        self._jumps = jumps or JumpPool(opener)
+        self._discover = discover or self._default_discover
         self._probe = probe or self._default_probe
         self._on_capacity = on_capacity
         self._stop = threading.Event()
@@ -112,8 +142,9 @@ class HealthMonitor:
 
     def run(self) -> None:
         log.info(
-            "Health monitor started (every %ss, offline after %d consecutive failures)",
-            self._interval, self._threshold,
+            "Health monitor started (every %ss, offline after %d consecutive "
+            "failures, a ready probe trusted for %ss)",
+            self._interval, self._threshold, self._probe_ttl,
         )
         while not self._stop.wait(self._interval):
             try:
@@ -125,11 +156,21 @@ class HealthMonitor:
 
     def stop(self) -> None:
         self._stop.set()
+        self._jumps.close()
 
-    def cycle(self) -> list[HostHealth]:
-        """One full pass: requests first, then every host, then housekeeping."""
+    def cycle(self, *, force: bool = False) -> list[HostHealth]:
+        """One full pass: requests first, then every host, then housekeeping.
+
+        ``force`` measures every container instead of trusting a recent probe.
+        The first cycle of a process uses it: a probe left behind by the
+        process that just died describes a pool this one has not seen, and it
+        is the cycle before the first placement that the dispatcher relies on.
+        """
         self._serve_requests()
-        results = [self.check_host(host) for host in self._mongo.host_repo.find_enabled()]
+        results = [
+            self.check_host(host, force=force)
+            for host in self._mongo.host_repo.find_enabled()
+        ]
         self.sweep_stale_reservations()
         if any(result.ready for result in results) and self._on_capacity is not None:
             self._on_capacity()
@@ -137,8 +178,23 @@ class HealthMonitor:
 
     # ── one host ───────────────────────────────────────────────────────────
 
-    def check_host(self, host: dict, *, discover: bool = True) -> HostHealth:
-        """Check one host at both levels and record what was observed."""
+    def check_host(
+        self, host: dict, *, discover: bool = True, force: bool = False
+    ) -> HostHealth:
+        """Check one host at both levels and record what was observed.
+
+        ``force`` measures every container even if it answered a moment ago —
+        what an operator asking for a check means by it.
+        """
+        try:
+            return self._check_host(host, discover=discover, force=force)
+        finally:
+            # Hop 1 lives exactly as long as this host's turn: holding it open
+            # between cycles would be a connection per host sitting idle, and
+            # reopening it per container is what this avoids.
+            self._jumps.close_host(host)
+
+    def _check_host(self, host: dict, *, discover: bool, force: bool) -> HostHealth:
         name = str(host.get("name", "?"))
         discovery_message = ""
 
@@ -160,7 +216,7 @@ class HealthMonitor:
 
         health = HostHealth(host_name=name, status=EnumHostStatus.OFFLINE, message="")
         for resource in resources:
-            self._check_resource(host, resource, health)
+            self._check_resource(host, resource, health, force=force)
 
         status, message = self._conclude(health, discovery_message)
         return self._record(
@@ -169,7 +225,9 @@ class HealthMonitor:
             health=health,
         )
 
-    def _check_resource(self, host: dict, resource: dict, health: HostHealth) -> None:
+    def _check_resource(
+        self, host: dict, resource: dict, health: HostHealth, *, force: bool = False
+    ) -> None:
         name = str(resource.get("name", "?"))
 
         if resource.get("status") in (
@@ -204,6 +262,16 @@ class HealthMonitor:
             self._mongo.resource_repo.mark_offline(
                 resource["_id"], f"container is {container_state}")
             health.unhealthy.append(name)
+            return
+
+        if not force and probe_is_fresh(resource, self._probe_ttl):
+            # It is in the pool and the last measurement found it ready, so
+            # there is nothing a new connection could tell us. Anything that
+            # did change — a stopped container, a failed placement, an edited
+            # address — either took it out of the pool or cleared the probe,
+            # and both put it back on this path.
+            health.ready.append(name)
+            health.fresh.append(name)
             return
 
         try:
@@ -291,9 +359,27 @@ class HealthMonitor:
         return result
 
     def _default_probe(self, host: dict, resource: dict) -> Any:
-        transport = build_transport(host, resource, self._opener)
+        transport = build_transport(
+            host, resource, self._opener, jump_client=self._jump_client(host))
         with transport:
             return transport.probe()
+
+    def _default_discover(self, mongo: Any, host: dict) -> Any:
+        """Level 1, over the session this host's turn already has."""
+        try:
+            session = self._jumps.session(host)
+        except (CredentialError, PlanError, TransportError) as error:
+            # Hop 1 is not available, so Docker cannot be consulted either.
+            # The probes that follow will raise the same cached error and
+            # report it per container; here it only has to be written down,
+            # and not attempted a second time.
+            return unavailable_report(mongo, host, str(error))
+        return discover_host(mongo, host, opener=self._opener, session=session)
+
+    def _jump_client(self, host: dict) -> Optional[Any]:
+        """The host session to use as hop 1, or ``None`` for a local host."""
+        session = self._jumps.session(host)
+        return session.client if session is not None else None
 
     # ── requests from the API ──────────────────────────────────────────────
 
@@ -322,12 +408,22 @@ class HealthMonitor:
                         host["_id"], field_name, requested_at)
 
     def _serve_discovery(self, host: dict) -> None:
-        self._discover(self._mongo, host)
+        try:
+            self._discover(self._mongo, host)
+        finally:
+            # This is the one path that opens a host session outside
+            # ``check_host``, so it has to end the turn it started: a host
+            # that is disabled, or that has no containers, would otherwise
+            # leave a connection open until the monitor stops.
+            self._jumps.close_host(host)
 
     def _serve_check(self, host: dict) -> None:
         # Re-read: discovery may have just changed this host's resources.
         fresh = self._mongo.host_repo.get(host["_id"]) or host
-        self.check_host(fresh, discover=False)
+        # Forced: being asked to check and answering from a cached probe would
+        # make the button a no-op exactly when someone is trying to find out
+        # whether their change worked.
+        self.check_host(fresh, discover=False, force=True)
 
     # ── housekeeping ───────────────────────────────────────────────────────
 
@@ -363,6 +459,31 @@ class HealthMonitor:
         if swept and self._on_capacity is not None:
             self._on_capacity()
         return swept
+
+
+def probe_is_fresh(resource: dict, ttl_sec: float) -> bool:
+    """Whether this worker's last probe still speaks for it.
+
+    Only a worker *in the pool* whose last probe found it *ready* qualifies:
+    it answered and a Cooja build was there. A failure, a worker that was
+    never probed, one the scheduler took offline, one whose probe was cleared
+    because its address changed — all are measured again. That asymmetry is
+    the point: silence is only inherited from good news, so nothing is slower
+    to recover than before, and only the no-news case is skipped.
+    """
+    if ttl_sec <= 0:
+        return False
+    if resource.get("status") != EnumResourceStatus.AVAILABLE.value:
+        return False
+    probe = resource.get("probe") or {}
+    if not probe.get("ssh_ok") or not probe.get("cooja_jar_sha256"):
+        return False
+    checked_at = probe.get("checked_at")
+    if not isinstance(checked_at, datetime):
+        return False
+    # Mongo may hand back either, depending on how the driver was configured.
+    now = datetime.now(checked_at.tzinfo) if checked_at.tzinfo else datetime.now()
+    return timedelta(0) <= (now - checked_at) <= timedelta(seconds=ttl_sec)
 
 
 def operator_configured(host: dict, resource: dict) -> bool:
