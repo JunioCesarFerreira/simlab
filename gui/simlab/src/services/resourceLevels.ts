@@ -27,12 +27,19 @@ export interface LevelView {
 /**
  * Whether a person, rather than Docker, decided how this worker is reached.
  *
- * Mirrors `operator_configured` in `master-node/lib/health.py`, which is what
- * makes the master-node probe such a worker regardless of Docker's silence.
- * The two must agree, or the page would explain a decision the master-node
- * did not make.
+ * The answer comes from the API, which computes it from the worker *and* its
+ * host with the same function the master-node acts on
+ * (`operator_configured`, in `pylib/db/models/infra.py`). It used to be
+ * re-derived here from `origin` and `connection` alone, which left out the
+ * host's discovery and address modes: a worker under a host converted to
+ * manual was shown as a Docker failure although the backend had already
+ * decided to ignore that observation.
+ *
+ * The local reading survives only as a fallback for an older API that does
+ * not send the field, and is deliberately the conservative half of the rule.
  */
 export function operatorConfigured(resource: ResourceDto): boolean {
+  if (resource.docker_applies !== undefined) return !resource.docker_applies;
   if (resource.origin === "manual") return true;
   return Object.keys(resource.connection ?? {}).length > 0;
 }

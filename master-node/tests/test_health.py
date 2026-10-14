@@ -479,6 +479,37 @@ class TestStaleReservations:
         assert build_monitor(mongo, reservation_ttl_sec=0).sweep_stale_reservations() == []
         mongo.resource_repo.find_stale_reservations.assert_not_called()
 
+    def test_a_manual_worker_is_freed_without_dockers_veto(self):
+        """The sweep reads the host so the release applies the same rule.
+
+        Without it a hand-configured worker would be freed straight back to
+        `offline` on a stale `missing`, which is the defect the release path
+        carried on the live installation.
+        """
+        host = {**HOST, "discovery": {"mode": "manual"}}
+        mongo = fake_mongo(hosts=[host])
+        mongo.host_repo.get.side_effect = lambda _id: host
+        mongo.resource_repo.find_stale_reservations.return_value = [
+            {"_id": RES_ID, "name": "cooja1", "host_id": HOST_ID,
+             "current_simulation_id": None, "reserved_at": datetime.now()}]
+
+        build_monitor(mongo).sweep_stale_reservations()
+
+        kwargs = mongo.resource_repo.force_release.call_args.kwargs
+        assert kwargs["container_state_counts"] is False
+
+    def test_a_discovered_worker_keeps_dockers_veto(self):
+        mongo = fake_mongo()
+        mongo.resource_repo.find_stale_reservations.return_value = [
+            {"_id": RES_ID, "name": "cooja1", "host_id": HOST_ID,
+             "origin": "discovered", "current_simulation_id": None,
+             "reserved_at": datetime.now()}]
+
+        build_monitor(mongo).sweep_stale_reservations()
+
+        assert mongo.resource_repo.force_release.call_args.kwargs[
+            "container_state_counts"] is True
+
     def test_freeing_capacity_wakes_the_dispatcher(self):
         mongo = fake_mongo()
         mongo.resource_repo.find_stale_reservations.return_value = [

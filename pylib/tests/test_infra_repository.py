@@ -171,7 +171,7 @@ class TestRelease:
         repo, coll = resources
         coll.find_one_and_update.return_value = {"_id": RES_ID}
 
-        repo.release(RES_ID, SIM_ID, ATTEMPT)
+        repo.release(RES_ID, SIM_ID, ATTEMPT, container_state_counts=True)
 
         flt = coll.find_one_and_update.call_args.args[0]
         assert flt == {
@@ -185,12 +185,13 @@ class TestRelease:
         # The simulation was recovered and re-placed; this thread must not free
         # a container that is now running something else.
         coll.find_one_and_update.return_value = None
-        assert repo.release(RES_ID, OTHER_SIM_ID, OTHER_ATTEMPT) is None
+        assert repo.release(RES_ID, OTHER_SIM_ID, OTHER_ATTEMPT,
+                           container_state_counts=True) is None
 
     def test_clears_the_whole_placement(self, resources):
         repo, coll = resources
         coll.find_one_and_update.return_value = {"_id": RES_ID}
-        repo.release(RES_ID, SIM_ID, ATTEMPT)
+        repo.release(RES_ID, SIM_ID, ATTEMPT, container_state_counts=True)
         sets = coll.find_one_and_update.call_args.args[1][0]["$set"]
         for field in ("current_simulation_id", "attempt_id", "remote_pid",
                       "reserved_at", "started_at"):
@@ -198,7 +199,7 @@ class TestRelease:
 
     def _release_switch(self, repo, coll) -> dict:
         coll.find_one_and_update.return_value = {"_id": RES_ID}
-        repo.release(RES_ID, SIM_ID, ATTEMPT)
+        repo.release(RES_ID, SIM_ID, ATTEMPT, container_state_counts=True)
         pipeline = coll.find_one_and_update.call_args.args[1]
         # An aggregation pipeline, so the outcome is decided inside the same
         # atomic update rather than by a follow-up write that could race.
@@ -253,7 +254,8 @@ class TestForceRelease:
         repo, coll = resources
         coll.update_one.return_value = MagicMock(modified_count=1)
 
-        assert repo.force_release(RES_ID, "recovered on startup") is True
+        assert repo.force_release(RES_ID, "recovered on startup",
+                              container_state_counts=True) is True
 
         flt = coll.update_one.call_args.args[0]
         assert flt == {"_id": RES_ID}           # no attempt_id: it is known gone
@@ -273,10 +275,11 @@ class TestForceRelease:
         repo, coll = resources
         coll.update_one.return_value = MagicMock(modified_count=1)
 
-        repo.force_release(RES_ID, "recovered on master-node restart")
+        repo.force_release(RES_ID, "recovered on master-node restart",
+                           container_state_counts=True)
 
         status = coll.update_one.call_args.args[1][0]["$set"]["status"]
-        assert status == released_status_expression()
+        assert status == released_status_expression(container_state_counts=True)
 
     def test_both_release_paths_land_a_container_the_same_way(self, resources):
         # One expression, so there is a single place to revisit when the health
@@ -285,12 +288,76 @@ class TestForceRelease:
         coll.find_one_and_update.return_value = {"_id": RES_ID}
         coll.update_one.return_value = MagicMock(modified_count=1)
 
-        repo.release(RES_ID, SIM_ID, ATTEMPT)
+        repo.release(RES_ID, SIM_ID, ATTEMPT, container_state_counts=True)
         guarded = coll.find_one_and_update.call_args.args[1][0]["$set"]["status"]
-        repo.force_release(RES_ID)
+        repo.force_release(RES_ID, container_state_counts=True)
         forced = coll.update_one.call_args.args[1][0]["$set"]["status"]
 
-        assert guarded == forced == released_status_expression()
+        assert guarded == forced == released_status_expression(
+            container_state_counts=True)
+
+
+class TestDockerEvidenceIsOptionalOnRelease:
+    """Where the operator stated the address, Docker's view does not apply.
+
+    The health cycle already made that exception; the release path had not,
+    and the two documents it reads are on different collections, so the
+    aggregation cannot work it out for itself. The cost of that disagreement
+    was measured on a live installation: `vm7-cooja1` and `vm7-cooja2` carried
+    `container.state = "missing"` from a host whose SSH user cannot reach the
+    Docker daemon, so **every completed simulation sent them out of the pool**,
+    and they only returned at the next health cycle. Across one pilot's 54
+    remote simulations that is up to 27 minutes of remote capacity lost.
+
+    The parameter is required precisely because the silent default is what
+    produced the defect.
+    """
+
+    def _switch(self, repo, coll, *, counts: bool) -> dict:
+        coll.find_one_and_update.return_value = {"_id": RES_ID}
+        repo.release(RES_ID, SIM_ID, ATTEMPT, container_state_counts=counts)
+        pipeline = coll.find_one_and_update.call_args.args[1]
+        return pipeline[0]["$set"]["status"]["$switch"]
+
+    def test_the_docker_branch_is_dropped_when_it_does_not_apply(self, resources):
+        repo, coll = resources
+        branches = self._switch(repo, coll, counts=False)["branches"]
+
+        guards = repr(branches)
+        assert "container.state" not in guards
+        assert "probe.ssh_ok" in guards          # the probe still decides
+
+    def test_the_probe_still_removes_it_from_the_pool(self, resources):
+        repo, coll = resources
+        branches = self._switch(repo, coll, counts=False)["branches"]
+
+        assert [b["then"] for b in branches] == [
+            EnumResourceStatus.DISABLED.value,   # administrative
+            EnumResourceStatus.OFFLINE.value,    # the probe ran, and failed
+        ]
+
+    def test_a_manual_worker_with_a_stale_missing_stays_in_the_pool(self, resources):
+        repo, coll = resources
+        assert self._switch(repo, coll, counts=False)["default"] \
+            == EnumResourceStatus.AVAILABLE.value
+
+    def test_docker_still_counts_for_a_discovered_worker(self, resources):
+        repo, coll = resources
+        branches = self._switch(repo, coll, counts=True)["branches"]
+
+        assert EnumContainerState.RUNNING.value in repr(branches[1]["case"])
+
+    def test_both_paths_agree_under_the_same_answer(self, resources):
+        repo, coll = resources
+        coll.find_one_and_update.return_value = {"_id": RES_ID}
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        repo.release(RES_ID, SIM_ID, ATTEMPT, container_state_counts=False)
+        guarded = coll.find_one_and_update.call_args.args[1][0]["$set"]["status"]
+        repo.force_release(RES_ID, container_state_counts=False)
+        forced = coll.update_one.call_args.args[1][0]["$set"]["status"]
+
+        assert guarded == forced
 
 
 # ── Health checks must never evict a simulation ──────────────────────────────
@@ -367,19 +434,61 @@ class TestSyncDiscovered:
         assert "status" not in set_fields
         assert set_fields["container"]["name"] == "cooja2"
 
-    def test_endpoint_is_applied_when_resolved(self, resources):
-        repo, coll = resources
-        coll.update_one.return_value = MagicMock(upserted_id=None)
+    def _sync_with_endpoint(self, repo, coll, *, upserted):
+        coll.update_one.return_value = MagicMock(upserted_id=upserted)
         coll.find.return_value = []
-
         repo.sync_discovered(
             HOST_ID, self._containers()[:1], remote_dir="/opt/cooja",
             endpoints={"cooja1": {"address": "172.18.0.5", "port": 22}},
         )
+        return coll.update_one.call_args_list
 
-        assert coll.update_one.call_args.args[1]["$set"]["endpoint"] == {
+    def test_endpoint_is_applied_when_resolved(self, resources):
+        repo, coll = resources
+        calls = self._sync_with_endpoint(repo, coll, upserted=None)
+
+        last = calls[-1]
+        assert last.args[1]["$set"]["endpoint"] == {
             "address": "172.18.0.5", "port": 22,
         }
+
+    def test_the_address_of_a_hand_configured_worker_is_left_alone(self, resources):
+        """Who owns the address is who typed it.
+
+        Discovery excludes manual workers from the vanished list, but used to
+        refresh the endpoint of *any* record matching `(host_id, name)`. A
+        port or address a person set was replaced on the next inspection,
+        silently undoing the configuration — and on a host whose daemon the
+        SSH user cannot reach, replaced with whatever Docker guessed.
+        """
+        repo, coll = resources
+        calls = self._sync_with_endpoint(repo, coll, upserted=None)
+
+        guarded = calls[-1]
+        assert guarded.args[0] == {
+            "host_id": HOST_ID, "name": "cooja1", "origin": {"$ne": "manual"},
+        }
+        assert set(guarded.args[1]["$set"]) == {"endpoint"}
+
+    def test_a_new_worker_gets_its_address_at_creation(self, resources):
+        """One write, not two: nothing owns it yet."""
+        repo, coll = resources
+        calls = self._sync_with_endpoint(repo, coll, upserted=ObjectId())
+
+        assert len(calls) == 1
+        assert calls[0].args[1]["$setOnInsert"]["endpoint"] == {
+            "address": "172.18.0.5", "port": 22,
+        }
+
+    def test_container_facts_are_refreshed_for_everyone(self, resources):
+        # Only the *address* is the operator's; what Docker saw is still an
+        # observation worth recording against a manual worker.
+        repo, coll = resources
+        calls = self._sync_with_endpoint(repo, coll, upserted=None)
+
+        upsert = calls[0]
+        assert upsert.args[0] == {"host_id": HOST_ID, "name": "cooja1"}
+        assert "container" in upsert.args[1]["$set"]
 
     def test_vanished_container_is_marked_not_deleted(self, resources):
         repo, coll = resources

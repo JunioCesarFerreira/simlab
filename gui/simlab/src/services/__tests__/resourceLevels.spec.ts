@@ -6,9 +6,11 @@
  * probe said "ready" and it was placing simulations. The column reported, as
  * a failure, a fact the system deliberately ignores for that worker.
  *
- * These assertions mirror `operator_configured` in
- * `master-node/lib/health.py`. If the two ever disagree, the page explains a
- * decision the master-node did not make.
+ * The decision itself now arrives from the API as `docker_applies`, computed
+ * with the same `operator_configured` the master-node acts on
+ * (`pylib/db/models/infra.py`). Re-deriving it here left out the host-level
+ * signals, so these assertions cover both the field and the fallback used
+ * against an older API.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -154,5 +156,45 @@ describe("what a row shows about a worker", () => {
     expect(summary).toBe("user cooja · own credential · configured");
     // A worker that differs in nothing says nothing.
     expect(overrideSummary(worker())).toBe("");
+  });
+});
+
+describe("the decision comes from the API", () => {
+  it("trusts docker_applies over the local reading", () => {
+    // A discovered worker with no overrides, under a host the operator
+    // converted to manual: the backend already ignores Docker's view, and the
+    // page must say the same thing instead of reporting a failure in red.
+    const resource = {
+      origin: "discovered",
+      connection: {},
+      docker_applies: false,
+      container: { state: "missing", checked_at: "2026-10-13T00:00:00" },
+    } as unknown as ResourceDto;
+
+    expect(operatorConfigured(resource)).toBe(true);
+    expect(dockerLevel(resource).label).toBe("not used");
+    expect(dockerLevel(resource).tone).toBe("unknown");
+  });
+
+  it("keeps Docker's verdict when the API says it applies", () => {
+    const resource = {
+      origin: "manual",
+      connection: { port: 2223 },
+      docker_applies: true,
+      container: { state: "exited", checked_at: "2026-10-13T00:00:00" },
+    } as unknown as ResourceDto;
+
+    expect(operatorConfigured(resource)).toBe(false);
+    expect(dockerLevel(resource).tone).toBe("bad");
+  });
+
+  it("falls back to the local reading when the field is absent", () => {
+    const resource = {
+      origin: "manual",
+      connection: {},
+      container: { state: "missing", checked_at: "2026-10-13T00:00:00" },
+    } as unknown as ResourceDto;
+
+    expect(operatorConfigured(resource)).toBe(true);
   });
 });

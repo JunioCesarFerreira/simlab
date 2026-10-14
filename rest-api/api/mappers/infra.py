@@ -23,6 +23,7 @@ from pylib.db.models.infra import (
     EnumDiscoveryMode,
     EnumHostStatus,
     EnumHostType,
+    operator_configured,
 )
 
 from api.domain.infra import (
@@ -130,7 +131,16 @@ def _discovery_from_mongo(discovery: Optional[dict]) -> DiscoveryDto:
     }
 
 
-def resource_from_mongo(doc: dict, host_name: str = "") -> ResourceDto:
+def resource_from_mongo(
+    doc: dict, host_name: str = "", host: Optional[dict] = None
+) -> ResourceDto:
+    """Describe one worker, including whose observation decides about it.
+
+    ``host`` is needed for ``docker_applies``: two of the three signals in
+    that rule live on the host record. Passing ``None`` is honest but partial
+    — the worker's own settings still count, the host's do not — so callers
+    that have the host should supply it.
+    """
     id_str, d = pop_id(doc)
     container = d.get("container") or {}
     probe = d.get("probe") or {}
@@ -174,6 +184,7 @@ def resource_from_mongo(doc: dict, host_name: str = "") -> ResourceDto:
         "origin": d.get("origin", ""),
         "last_check": d.get("last_check"),
         "last_check_message": d.get("last_check_message", ""),
+        "docker_applies": not operator_configured(host or {}, d),
     }
     if host_name:
         out["host_name"] = host_name
@@ -318,6 +329,33 @@ def _connection_to_mongo(connection: dict) -> dict:
     return out
 
 
+#: The host's nested configuration blocks. Updating one of these must touch
+#: only the fields that were sent, which is what ``dotted_update`` is for.
+NESTED_HOST_BLOCKS = ("access", "container_access", "discovery")
+
+
+def dotted_update(payload: dict) -> dict:
+    """Turn a nested patch into the dotted paths a partial ``$set`` needs.
+
+    ``{"access": {"port": 2222}}`` becomes ``{"access.port": 2222}``.
+
+    Without this, ``$set`` replaces the whole ``access`` subdocument with the
+    two or three fields the client happened to send: a request that only
+    changed the port removed the address, the username, the sealed credential
+    and the pinned host key, and the host stopped authenticating. One level is
+    flattened and no more — ``secret`` is a document that must be written
+    whole, not field by field.
+    """
+    out: dict = {}
+    for key, value in payload.items():
+        if key in NESTED_HOST_BLOCKS and isinstance(value, dict):
+            for inner, inner_value in value.items():
+                out[f"{key}.{inner}"] = inner_value
+        else:
+            out[key] = value
+    return out
+
+
 def host_to_mongo(dto: dict, *, for_update: bool = False) -> dict:
     """Build the document fields a client is allowed to set.
 
@@ -346,12 +384,14 @@ def host_to_mongo(dto: dict, *, for_update: bool = False) -> dict:
         doc["enabled"] = bool(d["enabled"])
 
     if "access" in d:
-        doc["access"] = _access_to_mongo(d.get("access") or {})
+        doc["access"] = _access_to_mongo(
+            d.get("access") or {}, for_update=for_update)
     if "container_access" in d:
         doc["container_access"] = _container_access_to_mongo(
-            d.get("container_access") or {})
+            d.get("container_access") or {}, for_update=for_update)
     if "discovery" in d:
-        doc["discovery"] = _discovery_to_mongo(d.get("discovery") or {})
+        doc["discovery"] = _discovery_to_mongo(
+            d.get("discovery") or {}, for_update=for_update)
 
     if not for_update:
         # Set once, at creation: only remote hosts are registered through the
@@ -370,9 +410,9 @@ def host_to_mongo(dto: dict, *, for_update: bool = False) -> dict:
     return doc
 
 
-def _access_to_mongo(access: dict) -> dict:
+def _access_to_mongo(access: dict, *, for_update: bool = False) -> dict:
     _refuse_plaintext(access, where="access")
-    out: dict[str, Any] = {"transport": "ssh"}
+    out: dict[str, Any] = {} if for_update else {"transport": "ssh"}
     if "address" in access:
         out["address"] = str(access["address"]).strip()
     if "port" in access:
@@ -386,9 +426,32 @@ def _access_to_mongo(access: dict) -> dict:
     return out
 
 
-def _container_access_to_mongo(access: dict) -> dict:
+def _container_access_to_mongo(access: dict, *, for_update: bool = False) -> dict:
+    """Hop 2's settings.
+
+    On an update only the fields that were sent are described. The defaults
+    below belong to creation: applying them to a patch is what replaced a
+    worker credential with ``None`` and reset the address mode, because a
+    client changing the port sends nothing else.
+    """
     _refuse_plaintext(access, where="container_access")
-    out: dict[str, Any] = {
+    if for_update:
+        out: dict[str, Any] = {}
+        if "username" in access:
+            out["username"] = str(access["username"]).strip()
+        if "port" in access:
+            out["port"] = int(access["port"])
+        if "address_mode" in access:
+            out["address_mode"] = str(access["address_mode"])
+        if "auth_method" in access:
+            out["auth_method"] = str(access["auth_method"])
+        if "secret" in access:
+            # Present and null means "remove it"; absent means "leave it".
+            out["secret"] = _secret_to_mongo(access.get("secret"))
+        if "remote_dir" in access:
+            out["remote_dir"] = str(access["remote_dir"] or "")
+        return out
+    out = {
         "transport": "ssh",
         "username": str(access.get("username") or "root"),
         "port": int(access.get("port") or 22),
@@ -401,21 +464,42 @@ def _container_access_to_mongo(access: dict) -> dict:
     return out
 
 
-def _discovery_to_mongo(discovery: dict) -> dict:
+def _discovery_to_mongo(discovery: dict, *, for_update: bool = False) -> dict:
+    """How this host's workers are enumerated.
+
+    As with the access blocks, an update describes only what was sent. The
+    creation defaults include ``last_discovery: None``, which on a patch would
+    erase the result of the last inspection along with its count and message.
+    """
     rejected = sorted(set(discovery) & _OBSERVED_DISCOVERY_FIELDS)
     if rejected:
         raise PlaintextRefused(
             "these discovery fields are produced by the master-node and cannot "
             "be set: " + ", ".join(rejected)
         )
-    mode = str(discovery.get("mode") or EnumDiscoveryMode.DOCKER.value)
-    if mode not in [m.value for m in EnumDiscoveryMode]:
-        raise PlaintextRefused(
-            f"discovery.mode must be one of "
-            f"{', '.join(m.value for m in EnumDiscoveryMode)}, got {mode!r}"
-        )
+
+    def _mode(raw: Any) -> str:
+        mode = str(raw or EnumDiscoveryMode.DOCKER.value)
+        if mode not in [m.value for m in EnumDiscoveryMode]:
+            raise PlaintextRefused(
+                f"discovery.mode must be one of "
+                f"{', '.join(m.value for m in EnumDiscoveryMode)}, got {mode!r}"
+            )
+        return mode
+
+    if for_update:
+        out: dict[str, Any] = {}
+        if "mode" in discovery:
+            out["mode"] = _mode(discovery["mode"])
+        if "label_filter" in discovery:
+            out["label_filter"] = str(
+                discovery["label_filter"] or "simlab.type=cooja")
+        if "name_prefix" in discovery:
+            out["name_prefix"] = discovery["name_prefix"] or None
+        return out
+
     return {
-        "mode": mode,
+        "mode": _mode(discovery.get("mode")),
         "label_filter": str(discovery.get("label_filter") or "simlab.type=cooja"),
         "name_prefix": discovery.get("name_prefix") or None,
         # Server-derived: how the daemon is reached follows from the host type,

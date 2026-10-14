@@ -14,6 +14,7 @@ from typing import Any, Callable, Optional
 from bson import ObjectId
 
 from lib.transport import TransportError, build_transport
+from pylib.db.models.infra import operator_configured
 
 log = logging.getLogger(__name__)
 
@@ -147,7 +148,12 @@ class SimulationRunner:
         finally:
             if self._cleanup_local is not None and cleanup is not None:
                 self._cleanup_local(cleanup())
-            self._release(resource_id, sim_oid, attempt_id, where)
+            self._release(
+                resource_id, sim_oid, attempt_id, where,
+                # Where Docker's view of this worker does not apply, a stale
+                # `missing` must not take it out of the pool on the way back.
+                container_state_counts=not operator_configured(host, resource),
+            )
 
     def _started(
         self, resource_id: Any, sim_oid: ObjectId, attempt_id: str
@@ -178,9 +184,19 @@ class SimulationRunner:
 
     # ── helpers ────────────────────────────────────────────────────────────
 
-    def _release(self, resource_id: Any, sim_oid: ObjectId, attempt_id: str, where: str) -> None:
+    def _release(
+        self,
+        resource_id: Any,
+        sim_oid: ObjectId,
+        attempt_id: str,
+        where: str,
+        *,
+        container_state_counts: bool,
+    ) -> None:
         try:
-            released = self._mongo.resource_repo.release(resource_id, sim_oid, attempt_id)
+            released = self._mongo.resource_repo.release(
+                resource_id, sim_oid, attempt_id,
+                container_state_counts=container_state_counts)
             if released is None:
                 # Someone else already took it over — a recovery path decided
                 # this attempt was gone. Releasing again would free a container

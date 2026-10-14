@@ -1,0 +1,27 @@
+# Dependencies the pylib test suite needs.
+#
+# Declared here rather than borrowed from a service, because what pylib's
+# tests require and what any one container installs are different sets. The
+# job that reused mo-engine's list could not even collect the suite: the
+# sealed-secret tests import `nacl`, which only the master-node image
+# installs, and the API image deliberately does not have it at all.
+#
+# Pins follow the services that own each library, so a version only ever
+# changes in one place:
+#   pymongo, numpy, pandas, matplotlib, zstandard  → mo-engine
+#   moocore                                        → rest-api, pareto-analysis
+#   pynacl                                         → master-node
+#   pytest                                         → rest-api/requirements-test.txt
+pymongo==4.17.0
+numpy==2.4.4
+pandas==3.0.2
+matplotlib==3.10.9
+zstandard==0.25.0
+moocore==0.3.1
+pynacl==1.6.2
+pytest==9.1.1
+
+# Optional: test_telemetry skips its Parquet case without it, so the suite
+# passes either way. Installed here so CI exercises the case rather than
+# skipping it silently.
+pyarrow==22.0.0

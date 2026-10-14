@@ -261,3 +261,43 @@ class InfraCrypto(TypedDict, total=False):
     created_at: datetime
     updated_at: datetime
     retired_keys: list[dict[str, Any]]
+
+
+# ── Elegibilidade: de quem é a palavra final ─────────────────────────────────
+
+def operator_configured(host: dict[str, Any], resource: dict[str, Any]) -> bool:
+    """Whether a person, not Docker, decided how this worker is reached.
+
+    When they did, the SSH probe is the whole of the evidence. Docker's
+    silence about a worker says nothing about whether it answers, and on a
+    shared host the daemon may be unreachable by design — the SSH user often
+    has no access to it, so discovery reports nothing and the stored container
+    state says ``missing`` while the worker runs simulations perfectly well.
+
+    Three signals, any of which is enough:
+
+    * the worker carries its own ``connection`` settings;
+    * it was registered by hand (``origin`` is ``manual``);
+    * its host lists workers manually, or states addresses explicitly.
+
+    This lives here, in the shared library, because three different decisions
+    depend on it and they must agree: the health cycle, which probes such a
+    worker regardless of Docker; the release, which must not evict it on a
+    stale ``missing``; and the API, which tells the page why a column is not
+    being used. They disagreed once, and the cost was measurable — two remote
+    workers left the pool on *every* completed simulation and only came back
+    at the next health cycle, because the release path alone had not been
+    given the exception.
+    """
+    connection = resource.get("connection") or {}
+    # `transport` alone is a default the mapper always writes, so it does not
+    # count as the operator having configured anything.
+    if any(key != "transport" for key in connection):
+        return True
+    if resource.get("origin") == "manual":
+        return True
+    discovery_mode = (host.get("discovery") or {}).get("mode")
+    if discovery_mode == EnumDiscoveryMode.MANUAL.value:
+        return True
+    address_mode = (host.get("container_access") or {}).get("address_mode")
+    return address_mode == EnumAddressMode.EXPLICIT.value

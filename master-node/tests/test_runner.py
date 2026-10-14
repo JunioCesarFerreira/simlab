@@ -107,7 +107,8 @@ class TestSuccessfulRun:
         build_runner(mongo, execute=lambda *a, **k: None).run(
             SIM, HOST, RESOURCE, ATTEMPT)
         mongo.resource_repo.mark_busy.assert_not_called()
-        mongo.resource_repo.release.assert_called_once_with(RES_ID, SIM_OID, ATTEMPT)
+        mongo.resource_repo.release.assert_called_once_with(
+            RES_ID, SIM_OID, ATTEMPT, container_state_counts=True)
 
     def test_a_lost_pid_write_does_not_fail_the_simulation(self, transport):
         # Bookkeeping only: the run is already going, and failing it over a
@@ -126,7 +127,8 @@ class TestSuccessfulRun:
     def test_releases_the_container_afterwards(self, transport):
         mongo = FakeMongo()
         build_runner(mongo).run(SIM, HOST, RESOURCE, ATTEMPT)
-        mongo.resource_repo.release.assert_called_once_with(RES_ID, SIM_OID, ATTEMPT)
+        mongo.resource_repo.release.assert_called_once_with(
+            RES_ID, SIM_OID, ATTEMPT, container_state_counts=True)
 
     def test_signals_capacity_after_releasing(self, transport):
         mongo = FakeMongo()
@@ -154,8 +156,29 @@ class TestReleaseOnEveryPath:
 
         mongo.simulation_repo.mark_error.assert_called_once()
         assert "prepare" in mongo.simulation_repo.mark_error.call_args.args[1].lower()
-        mongo.resource_repo.release.assert_called_once_with(RES_ID, SIM_OID, ATTEMPT)
+        mongo.resource_repo.release.assert_called_once_with(
+            RES_ID, SIM_OID, ATTEMPT, container_state_counts=True)
         transport.put_files.assert_not_called()
+
+    def test_a_manual_worker_is_released_without_dockers_veto(self, transport):
+        """The worker's own settings decide, exactly as in the health cycle.
+
+        A stale `missing` from a host whose Docker daemon the SSH user cannot
+        reach must not take the worker out of the pool on the way back.
+        """
+        mongo = FakeMongo()
+        resource = {**RESOURCE, "connection": {"port": 2223}}
+
+        build_runner(mongo).run(SIM, HOST, resource, ATTEMPT)
+
+        assert mongo.resource_repo.release.call_args.kwargs[
+            "container_state_counts"] is False
+
+    def test_a_discovered_worker_keeps_dockers_veto(self, transport):
+        mongo = FakeMongo()
+        build_runner(mongo).run(SIM, HOST, RESOURCE, ATTEMPT)
+        assert mongo.resource_repo.release.call_args.kwargs[
+            "container_state_counts"] is True
 
     def test_an_unreachable_container_is_a_plain_failure(self, transport):
         # The simulation never started, so this is not the "lost contact with a
@@ -165,7 +188,8 @@ class TestReleaseOnEveryPath:
         build_runner(mongo).run(SIM, HOST, RESOURCE, ATTEMPT)
 
         mongo.simulation_repo.mark_error.assert_called_once()
-        mongo.resource_repo.release.assert_called_once_with(RES_ID, SIM_OID, ATTEMPT)
+        mongo.resource_repo.release.assert_called_once_with(
+            RES_ID, SIM_OID, ATTEMPT, container_state_counts=True)
 
     def test_a_transport_error_releases(self, transport):
         mongo = FakeMongo()

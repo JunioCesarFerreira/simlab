@@ -28,6 +28,7 @@ from bson import ObjectId
 from lib.scheduler.inventory import describe_loads, snapshot_loads
 from lib.scheduler.policy import Policy, build_policy
 from pylib.db.models.enums import EnumStatus
+from pylib.db.models.infra import operator_configured
 
 log = logging.getLogger(__name__)
 
@@ -269,7 +270,9 @@ class Dispatcher:
 
             # The reservation stands but the simulation does not know about it,
             # which would strand the container. Give it back and stop.
-            self._mongo.resource_repo.release(reserved["_id"], sim_oid, attempt_id)
+            self._mongo.resource_repo.release(
+                reserved["_id"], sim_oid, attempt_id,
+                container_state_counts=not operator_configured(host, reserved))
             return None
         return None
 

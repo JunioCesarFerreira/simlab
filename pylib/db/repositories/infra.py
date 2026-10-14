@@ -56,7 +56,7 @@ _REASSIGNABLE = [
 ]
 
 
-def released_status_expression() -> dict[str, Any]:
+def released_status_expression(*, container_state_counts: bool) -> dict[str, Any]:
     """Where a released container lands, as an aggregation expression.
 
     Only a *negative observation* takes a container out of the pool:
@@ -72,33 +72,42 @@ def released_status_expression() -> dict[str, Any]:
     completed simulation. The same mistake made restart recovery hand back a
     pool of zero.
 
-    Shared by the normal release and the recovery release so there is one
-    place to revisit once the health cycle supplies real observations.
+    ``container_state_counts`` says whether Docker's observation applies to
+    this worker at all, and is **required**: the caller holds the host record,
+    which this collection cannot see, and the one path that silently assumed
+    "yes" is what sent two hand-configured remote workers out of the pool on
+    every completed simulation. Pass
+    ``not operator_configured(host, resource)``.
+
+    Shared by the normal release and the recovery release so the rule exists
+    once.
     """
+    branches: list[dict[str, Any]] = [
+        {
+            "case": {"$ne": ["$enabled", True]},
+            "then": EnumResourceStatus.DISABLED.value,
+        },
+    ]
+    if container_state_counts:
+        branches.append({
+            # Docker looked, and it is not running.
+            "case": {"$and": [
+                {"$ne": [{"$ifNull": ["$container.checked_at", None]}, None]},
+                {"$ne": ["$container.state", EnumContainerState.RUNNING.value]},
+            ]},
+            "then": EnumResourceStatus.OFFLINE.value,
+        })
+    branches.append({
+        # The probe ran, and it failed.
+        "case": {"$and": [
+            {"$ne": [{"$ifNull": ["$probe.checked_at", None]}, None]},
+            {"$ne": ["$probe.ssh_ok", True]},
+        ]},
+        "then": EnumResourceStatus.OFFLINE.value,
+    })
     return {
         "$switch": {
-            "branches": [
-                {
-                    "case": {"$ne": ["$enabled", True]},
-                    "then": EnumResourceStatus.DISABLED.value,
-                },
-                {
-                    # Docker looked, and it is not running.
-                    "case": {"$and": [
-                        {"$ne": [{"$ifNull": ["$container.checked_at", None]}, None]},
-                        {"$ne": ["$container.state", EnumContainerState.RUNNING.value]},
-                    ]},
-                    "then": EnumResourceStatus.OFFLINE.value,
-                },
-                {
-                    # The probe ran, and it failed.
-                    "case": {"$and": [
-                        {"$ne": [{"$ifNull": ["$probe.checked_at", None]}, None]},
-                        {"$ne": ["$probe.ssh_ok", True]},
-                    ]},
-                    "then": EnumResourceStatus.OFFLINE.value,
-                },
-            ],
+            "branches": branches,
             "default": EnumResourceStatus.AVAILABLE.value,
         }
     }
@@ -557,7 +566,12 @@ class CoojaResourceRepository:
             return res.modified_count > 0
 
     def release(
-        self, resource_id: Any, simulation_id: ObjectId, attempt_id: str
+        self,
+        resource_id: Any,
+        simulation_id: ObjectId,
+        attempt_id: str,
+        *,
+        container_state_counts: bool,
     ) -> Optional[CoojaResource]:
         """Hand a container back, if this attempt is still the one holding it.
 
@@ -577,13 +591,17 @@ class CoojaResourceRepository:
         instead would send every freshly seeded container to ``offline`` on its
         first release, because discovery has not described it yet — draining
         the pool by one container per completed simulation.
+
+        ``container_state_counts`` is ``not operator_configured(host,
+        resource)`` — see :func:`released_status_expression`.
         """
         oid = _oid(resource_id)
         if oid is None:
             return None
         now = datetime.now()
         pipeline = [{"$set": {
-            "status": released_status_expression(),
+            "status": released_status_expression(
+                container_state_counts=container_state_counts),
             "current_simulation_id": None,
             "attempt_id": None,
             "remote_pid": None,
@@ -602,7 +620,13 @@ class CoojaResourceRepository:
                 return_document=ReturnDocument.AFTER,
             )
 
-    def force_release(self, resource_id: Any, message: str = "") -> bool:
+    def force_release(
+        self,
+        resource_id: Any,
+        message: str = "",
+        *,
+        container_state_counts: bool,
+    ) -> bool:
         """Free a container without the attempt guard — recovery paths only.
 
         Used by startup recovery and the stale-reservation sweep, where the
@@ -619,7 +643,8 @@ class CoojaResourceRepository:
             return False
         now = datetime.now()
         pipeline = [{"$set": {
-            "status": released_status_expression(),
+            "status": released_status_expression(
+                container_state_counts=container_state_counts),
             "current_simulation_id": None,
             "attempt_id": None,
             "remote_pid": None,
@@ -748,26 +773,37 @@ class CoojaResourceRepository:
                     "updated_time": now,
                 }
                 endpoint = endpoints.get(name)
+                set_on_insert: dict[str, Any] = {
+                    "enabled": True,
+                    # Discovered, not yet proven: the probe decides.
+                    "status": EnumResourceStatus.OFFLINE.value,
+                    "remote_dir": remote_dir,
+                    "current_simulation_id": None,
+                    "attempt_id": None,
+                    "remote_pid": None,
+                    "origin": "discovered",
+                    "created_time": now,
+                }
                 if endpoint:
-                    set_fields["endpoint"] = endpoint
+                    set_on_insert["endpoint"] = endpoint
                 result = coll.update_one(
                     {"host_id": host_id, "name": name},
-                    {
-                        "$set": set_fields,
-                        "$setOnInsert": {
-                            "enabled": True,
-                            # Discovered, not yet proven: the probe decides.
-                            "status": EnumResourceStatus.OFFLINE.value,
-                            "remote_dir": remote_dir,
-                            "current_simulation_id": None,
-                            "attempt_id": None,
-                            "remote_pid": None,
-                            "origin": "discovered",
-                            "created_time": now,
-                        },
-                    },
+                    {"$set": set_fields, "$setOnInsert": set_on_insert},
                     upsert=True,
                 )
+                if endpoint and result.upserted_id is None:
+                    # Refreshing the address of a worker that already exists
+                    # is only discovery's business where discovery owns it. A
+                    # worker whose address a person typed keeps it: the
+                    # operator is the authority on how it is reached, and
+                    # replacing that on the next inspection would silently
+                    # undo a deliberate setting — the same division of
+                    # authority the health cycle and the release apply.
+                    coll.update_one(
+                        {"host_id": host_id, "name": name,
+                         "origin": {"$ne": "manual"}},
+                        {"$set": {"endpoint": endpoint}},
+                    )
                 (created if result.upserted_id else updated).append(name)
 
             # A manually registered worker is invisible to Docker by

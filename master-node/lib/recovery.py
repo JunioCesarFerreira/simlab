@@ -43,6 +43,7 @@ from typing import Any, Callable, Optional
 from bson import ObjectId
 
 from pylib.db.models.enums import EnumStatus
+from pylib.db.models.infra import operator_configured
 
 log = logging.getLogger(__name__)
 
@@ -116,16 +117,20 @@ def _reconcile_one(
 ) -> None:
     name = str(resource.get("name", "?"))
     simulation = _load_simulation(mongo, resource.get("current_simulation_id"))
+    # Read once: both the eligibility rule and the adoption need it.
+    host = mongo.host_repo.get(resource.get("host_id"))
 
     # Nothing is running: the result was already recorded and only the release
     # was lost. Freeing the container cannot destroy anything.
     if simulation is None or simulation.get("status") in TERMINAL_STATUSES:
-        if _release(mongo, resource, "recovered: no simulation was still running"):
+        if _release(
+            mongo, resource, "recovered: no simulation was still running", host
+        ):
             report.released.append(name)
         return
 
     sim_oid = _as_oid(simulation["_id"])
-    alive = _ask_probe(probe, mongo, resource, simulation, name)
+    alive = _ask_probe(probe, resource, simulation, name, host)
 
     if alive is True:
         # Still going. Releasing would invite a second simulation onto a busy
@@ -141,7 +146,6 @@ def _reconcile_one(
                 "it resolves through SIM_TIMEOUT_SEC", sim_oid,
             )
             return
-        host = mongo.host_repo.get(resource.get("host_id"))
         attempt_id = resource.get("attempt_id") or simulation.get("attempt_id")
         if host is None or not attempt_id:
             # Cannot resume without both. Still better to leave the run alone
@@ -172,16 +176,16 @@ def _reconcile_one(
         "Simulation %s is no longer running on %s; marking it failed", sim_oid, name)
     _fail_simulation(mongo, simulation, sim_oid)
     report.failed_simulations.append(str(sim_oid))
-    if _release(mongo, resource, "recovered on master-node restart"):
+    if _release(mongo, resource, "recovered on master-node restart", host):
         report.released.append(name)
 
 
 def _ask_probe(
     probe: Optional[LivenessProbe],
-    mongo: Any,
     resource: dict,
     simulation: dict,
     name: str,
+    host: Optional[dict],
 ) -> Optional[bool]:
     """Ask whether the recorded run is still going.
 
@@ -195,7 +199,6 @@ def _ask_probe(
     if probe is None:
         return False
 
-    host = mongo.host_repo.get(resource.get("host_id"))
     if host is None:
         log.warning("Host of container %s no longer exists", name)
         return False
@@ -214,8 +217,17 @@ def _load_simulation(mongo: Any, simulation_id: Any) -> Optional[dict]:
     return mongo.simulation_repo.get(str(simulation_id))
 
 
-def _release(mongo: Any, resource: dict, message: str) -> bool:
-    return bool(mongo.resource_repo.force_release(resource["_id"], message))
+def _release(mongo: Any, resource: dict, message: str, host: Optional[dict]) -> bool:
+    """Hand the container back, by the same eligibility rule as everywhere.
+
+    ``host`` may be ``None`` when its registration is gone; the rule then sees
+    an empty host, which only means the host-level signals do not apply — the
+    worker's own settings still do.
+    """
+    return bool(mongo.resource_repo.force_release(
+        resource["_id"], message,
+        container_state_counts=not operator_configured(host or {}, resource),
+    ))
 
 
 def _fail_simulation(mongo: Any, simulation: dict, sim_oid: ObjectId) -> None:

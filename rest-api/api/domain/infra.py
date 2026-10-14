@@ -212,6 +212,13 @@ class ResourceDto(TypedDict, total=False):
     origin: str
     last_check: Optional[datetime]
     last_check_message: str
+    #: Whether Docker's view of this worker is used at all. False when the
+    #: operator stated how it is reached — on a shared host the SSH user often
+    #: cannot see the daemon, so the stored container state says `missing`
+    #: while the worker runs simulations. The page needs the *same* answer the
+    #: master-node acts on, which is why it is computed here instead of being
+    #: guessed at from `origin` in TypeScript.
+    docker_applies: bool
 
 
 class HostDto(TypedDict, total=False):

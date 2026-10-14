@@ -49,11 +49,14 @@ from lib.credentials import CredentialError, SecretOpener
 from lib.discovery import discover_host, unavailable_report
 from lib.transport import JumpPool, PlanError, TransportError, build_transport
 from pylib.db.models.infra import (
-    EnumAddressMode,
-    EnumDiscoveryMode,
     EnumHostStatus,
     EnumHostType,
     EnumResourceStatus,
+    # The eligibility rule lives in the shared library because the release
+    # path and the API depend on the same answer. Re-exported here, where it
+    # used to be defined, so this module stays the one place the health cycle
+    # reads it from.
+    operator_configured,
 )
 
 log = logging.getLogger(__name__)
@@ -452,8 +455,11 @@ class HealthMonitor:
                         simulation_id, STALE_RESERVATION_MESSAGE)
                 except Exception:
                     log.exception("Failed to fail simulation %s", simulation_id)
+            host = self._mongo.host_repo.get(resource.get("host_id"))
             if self._mongo.resource_repo.force_release(
-                resource["_id"], STALE_RESERVATION_MESSAGE
+                resource["_id"], STALE_RESERVATION_MESSAGE,
+                container_state_counts=not operator_configured(
+                    host or {}, resource),
             ):
                 swept.append(name)
         if swept and self._on_capacity is not None:
@@ -484,33 +490,6 @@ def probe_is_fresh(resource: dict, ttl_sec: float) -> bool:
     # Mongo may hand back either, depending on how the driver was configured.
     now = datetime.now(checked_at.tzinfo) if checked_at.tzinfo else datetime.now()
     return timedelta(0) <= (now - checked_at) <= timedelta(seconds=ttl_sec)
-
-
-def operator_configured(host: dict, resource: dict) -> bool:
-    """Whether a person, not Docker, decided how this worker is reached.
-
-    When they did, the SSH probe is the whole of the evidence: Docker's
-    silence about a worker says nothing about whether it answers, and on a
-    shared host the daemon may be unreachable by design.
-
-    Three signals, any of which is enough:
-
-    * the worker carries its own ``connection`` settings;
-    * it was registered by hand (``origin`` is ``manual``);
-    * its host lists workers manually, or states addresses explicitly.
-    """
-    connection = resource.get("connection") or {}
-    # `transport` alone is a default the mapper always writes, so it does not
-    # count as the operator having configured anything.
-    if any(key != "transport" for key in connection):
-        return True
-    if resource.get("origin") == "manual":
-        return True
-    discovery_mode = (host.get("discovery") or {}).get("mode")
-    if discovery_mode == EnumDiscoveryMode.MANUAL.value:
-        return True
-    address_mode = (host.get("container_access") or {}).get("address_mode")
-    return address_mode == EnumAddressMode.EXPLICIT.value
 
 
 def local_host_only(hosts: list[dict]) -> list[dict]:

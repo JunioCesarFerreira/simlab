@@ -173,6 +173,14 @@ export interface ResourceDto {
   origin: string;
   last_check: string | null;
   last_check_message: string;
+  /**
+   * Whether Docker's view of this worker is used at all.
+   *
+   * Computed by the API from the worker *and* its host, because two of the
+   * three signals live on the host record. Optional only so a page served
+   * against an older API does not break.
+   */
+  docker_applies?: boolean;
 }
 
 export interface HostDto {

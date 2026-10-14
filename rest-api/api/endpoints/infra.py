@@ -38,6 +38,7 @@ from api.domain.infra import (
 )
 from api.mappers.infra import (
     PlaintextRefused,
+    dotted_update,
     host_from_mongo,
     host_to_mongo,
     occupancy_from_snapshot,
@@ -161,7 +162,8 @@ def get_host(
     return {
         "host": host_from_mongo(host),
         "resources": [
-            resource_from_mongo(r, host_name=host.get("name", "")) for r in resources
+            resource_from_mongo(r, host_name=host.get("name", ""), host=host)
+            for r in resources
         ],
         "occupancy": occupancy,
     }
@@ -201,7 +203,10 @@ def update_host(
         merged = {**(host.get("access") or {}), **payload["access"]}
         _require_credential(merged)
 
-    factory.host_repo.update(host["_id"], payload)
+    # Written by path, so the fields the client did not send survive. Writing
+    # `payload` directly replaced each nested block with just those fields,
+    # which is how editing a port removed the credential and the pinned key.
+    factory.host_repo.update(host["_id"], dotted_update(payload))
     return host_from_mongo(_require_host(factory, host_id))
 
 
@@ -316,9 +321,15 @@ def list_resources(
 ) -> list[ResourceDto]:
     """Every container in the pool, with the host it belongs to."""
     try:
-        names = {h["_id"]: h.get("name", "") for h in factory.host_repo.find_all()}
+        # Keyed by the whole record, not just the name: `docker_applies`
+        # depends on the host's discovery and address modes too.
+        hosts = {h["_id"]: h for h in factory.host_repo.find_all()}
         return [
-            resource_from_mongo(r, host_name=names.get(r.get("host_id"), ""))
+            resource_from_mongo(
+                r,
+                host_name=hosts.get(r.get("host_id"), {}).get("name", ""),
+                host=hosts.get(r.get("host_id")),
+            )
             for r in factory.resource_repo.find_all()
         ]
     except Exception as e:
@@ -332,7 +343,7 @@ def get_resource(
 ) -> ResourceDto:
     resource = _require_resource(factory, resource_id)
     host = factory.host_repo.get(resource.get("host_id")) or {}
-    return resource_from_mongo(resource, host_name=host.get("name", ""))
+    return resource_from_mongo(resource, host_name=host.get("name", ""), host=host)
 
 
 @router.put("/resources/{resource_id}", response_model=ResourceDto)
@@ -351,7 +362,10 @@ def set_resource_enabled(
     if "enabled" not in body:
         raise HTTPException(status_code=422, detail="enabled is required")
     factory.resource_repo.set_enabled(resource["_id"], bool(body["enabled"]))
-    return resource_from_mongo(_require_resource(factory, resource_id))
+    host = factory.host_repo.get(resource.get("host_id")) or {}
+    return resource_from_mongo(
+        _require_resource(factory, resource_id),
+        host_name=host.get("name", ""), host=host)
 
 
 @router.get("/resources/{resource_id}/simulation")
@@ -416,7 +430,7 @@ def create_resource(
     doc.setdefault("remote_dir", DEFAULT_REMOTE_DIR)
     resource_id = factory.resource_repo.insert_manual(doc)
     created = factory.resource_repo.get(resource_id)
-    return resource_from_mongo(created, host_name=host.get("name", ""))
+    return resource_from_mongo(created, host_name=host.get("name", ""), host=host)
 
 
 @router.put("/resources/{resource_id}/connection", response_model=ResourceDto)
@@ -454,7 +468,7 @@ def update_resource_connection(
     factory.resource_repo.update_manual(resource["_id"], payload)
     updated = _require_resource(factory, resource_id)
     host = factory.host_repo.get(updated.get("host_id")) or {}
-    return resource_from_mongo(updated, host_name=host.get("name", ""))
+    return resource_from_mongo(updated, host_name=host.get("name", ""), host=host)
 
 
 @router.delete("/resources/{resource_id}", status_code=status.HTTP_204_NO_CONTENT)
