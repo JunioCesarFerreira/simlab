@@ -104,6 +104,23 @@ class RunOutcome:
     message: str = ""
 
 
+# How many consecutive polls must report the process gone *and* no exit code
+# before the run is called failed, and how long to wait between those looks.
+#
+# There is a real gap between the two facts. `kill -0` succeeds for a zombie,
+# so the pid stops existing at the exact moment the supervising shell reaps it
+# in `wait $!` — and `echo $? > run.exit` runs microseconds to milliseconds
+# later, longer when the machine is loaded. A poll landing in that gap sees
+# "gone, with no exit code" for a run that has just finished perfectly well.
+#
+# Measured on a real container: 4 of 25 one-second runs passed through that
+# state when polled every ~45ms, which puts the window around 5–10ms. At the
+# production interval that is roughly one simulation in seven hundred — and it
+# cost generation 0 of pilot 6acf822dbe51fa7df2345a83 a completed simulation.
+VANISHED_CONFIRMATIONS = 3
+VANISHED_RECHECK_SEC = 1.0
+
+
 @dataclass
 class _Follow:
     """Mutable state of one following loop, kept out of the class surface."""
@@ -112,6 +129,8 @@ class _Follow:
     backoff: float = RECONNECT_MIN_SEC
     reconnects: int = 0
     warned: set = field(default_factory=set)
+    #: Consecutive polls that found the process gone without an exit code.
+    vanished: int = 0
 
 
 def build_launch_command(
@@ -213,6 +232,8 @@ class DetachedRun:
         remote_dir: Optional[str] = None,
         poll_interval_sec: float = DEFAULT_POLL_INTERVAL_SEC,
         exec_timeout_sec: float = 60.0,
+        vanished_confirmations: int = VANISHED_CONFIRMATIONS,
+        vanished_recheck_sec: float = VANISHED_RECHECK_SEC,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
     ):
@@ -221,6 +242,8 @@ class DetachedRun:
             getattr(transport, "plan", None), "remote_dir", ".")
         self._poll_interval = poll_interval_sec
         self._exec_timeout = exec_timeout_sec
+        self._vanished_confirmations = max(1, vanished_confirmations)
+        self._vanished_recheck_sec = vanished_recheck_sec
         self._sleep = sleep
         self._clock = clock
         self._handle: Optional[RunHandle] = None
@@ -342,6 +365,14 @@ class DetachedRun:
                     on_output(progress.output)
 
             if progress.finished:
+                if state.vanished:
+                    # It had not died; the exit code was simply a moment behind
+                    # the pid. Worth a line, because this is the race that used
+                    # to be reported as a failed simulation.
+                    log.info(
+                        "The exit code for this run arrived %d look(s) after "
+                        "the process was reaped", state.vanished,
+                    )
                 log.info(
                     "Detached run finished with exit code %s after %.0fs",
                     progress.exit_code, elapsed,
@@ -350,13 +381,30 @@ class DetachedRun:
                     completed=True, exit_code=progress.exit_code, elapsed_sec=elapsed)
 
             if not progress.alive:
-                # The process is gone but no exit file was written: it was
-                # killed from outside, or the container was restarted.
-                return RunOutcome(
-                    completed=False, elapsed_sec=elapsed,
-                    message="the run process disappeared without recording an exit code",
+                # Gone, with no exit code — but not necessarily dead. The pid
+                # stops existing the moment the supervising shell reaps it,
+                # and the exit file is written just after, so this is also
+                # what a *successful* finish looks like for a few
+                # milliseconds. Look again before throwing the run away.
+                state.vanished += 1
+                if state.vanished >= self._vanished_confirmations:
+                    return RunOutcome(
+                        completed=False, elapsed_sec=elapsed,
+                        message=(
+                            "the run process disappeared without recording an "
+                            f"exit code (confirmed over {state.vanished} looks)"
+                        ),
+                    )
+                log.warning(
+                    "The run process is gone with no exit code yet "
+                    "(look %d of %d); checking again in %.0fs",
+                    state.vanished, self._vanished_confirmations,
+                    self._vanished_recheck_sec,
                 )
+                self._sleep(self._vanished_recheck_sec)
+                continue
 
+            state.vanished = 0
             self._sleep(self._poll_interval)
 
     def _handle_disconnect(self, error: Exception, state: _Follow, elapsed: float) -> bool:

@@ -260,10 +260,83 @@ class TestWait:
         assert "tail -c +6 " in polls[1]
 
     def test_a_disappeared_process_is_not_a_success(self):
-        run, _ = self._started([ExecResult(0, status(exit_code="-", alive=0), "")])
+        """Still a failure — but only once it has been confirmed."""
+        gone = ExecResult(0, status(exit_code="-", alive=0), "")
+        run, transport = self._started([gone, gone, gone])
+
         outcome = run.wait(timeout_sec=1000)
+
         assert outcome.completed is False
         assert "disappeared" in outcome.message
+        assert "3 looks" in outcome.message
+
+    def test_an_exit_code_arriving_late_is_not_a_failure(self):
+        """The race that cost a completed simulation.
+
+        ``kill -0`` succeeds for a zombie, so the pid stops existing exactly
+        when the supervising shell reaps it in ``wait $!`` — and the exit file
+        is written just after. For a few milliseconds a *successful* finish is
+        indistinguishable from a process that vanished, and the first look was
+        taken as final. Measured on a real container: 4 of 25 one-second runs
+        passed through that state.
+        """
+        run, _ = self._started([
+            ExecResult(0, status(exit_code="-", alive=0), ""),   # reaped
+            ExecResult(0, status(exit_code="0", alive=0), ""),   # exit code lands
+        ])
+
+        outcome = run.wait(timeout_sec=1000)
+
+        assert outcome.completed is True
+        assert outcome.exit_code == 0
+
+    def test_a_late_non_zero_exit_code_is_still_reported(self):
+        run, _ = self._started([
+            ExecResult(0, status(exit_code="-", alive=0), ""),
+            ExecResult(0, status(exit_code="137", alive=0), ""),
+        ])
+
+        outcome = run.wait(timeout_sec=1000)
+
+        assert outcome.completed is True and outcome.exit_code == 137
+
+    def test_output_written_just_before_the_end_is_not_lost(self):
+        run, _ = self._started([
+            ExecResult(0, status(exit_code="-", alive=0, log="12345"), ""),
+            ExecResult(0, status(exit_code="0", alive=0), ""),
+        ])
+        seen: list[str] = []
+
+        run.wait(timeout_sec=1000, on_output=seen.append)
+
+        assert seen == ["12345"]
+
+    def test_a_process_that_recovers_resets_the_count(self):
+        # Only *consecutive* sightings count: anything else would accumulate
+        # across a long run and fail it for no reason.
+        run, _ = self._started([
+            ExecResult(0, status(exit_code="-", alive=0), ""),
+            ExecResult(0, status(alive=1), ""),
+            ExecResult(0, status(exit_code="-", alive=0), ""),
+            ExecResult(0, status(alive=1), ""),
+            ExecResult(0, status(exit_code="0", alive=0), ""),
+        ])
+
+        outcome = run.wait(timeout_sec=1000)
+
+        assert outcome.completed is True
+
+    def test_one_look_is_allowed_for_a_caller_that_wants_it(self):
+        transport = FakeTransport([
+            ExecResult(0, "launched", ""), ExecResult(0, "100\n", ""),
+            ExecResult(0, status(exit_code="-", alive=0), ""),
+        ])
+        run = build_run(transport, vanished_confirmations=1)
+        run.launch(JAVA)
+
+        outcome = run.wait(timeout_sec=1000)
+
+        assert outcome.completed is False
 
     def test_waiting_before_launching_is_refused(self):
         with pytest.raises(DetachedRunError, match="nothing has been launched"):
