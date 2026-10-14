@@ -27,9 +27,11 @@ from lib.health import (
     DEFAULT_PROBE_TTL_SEC,
     STALE_RESERVATION_MESSAGE,
     HealthMonitor,
+    HostHealth,
     probe_is_fresh,
 )
-from lib.transport.base import ProbeResult, TransportUnreachable
+from lib.transport.base import ProbeResult, TransportError, TransportUnreachable
+from lib.transport.hostkey import HostKeyMismatch
 from pylib.db.models.infra import EnumHostStatus, EnumResourceStatus
 
 HOST_ID = ObjectId("507f1f77bcf86cd799430011")
@@ -818,6 +820,114 @@ class TestSharedHostSession:
         pool = FakePool()
         HealthMonitor(fake_mongo(), jumps=pool).stop()
         assert pool.closed_all == 1
+
+
+# ── One bad host must not stop the others ────────────────────────────────────
+
+class TestFailureIsolation:
+    """The pool is decided here, so a single host cannot be allowed to end it.
+
+    `HostKeyMismatch` used to derive from `Exception` alone and nothing on
+    this path expected it. Raised while checking the first host, it escaped
+    the comprehension that checks them all: the remaining hosts were never
+    measured, the reservation sweep never ran, and the failing host's own
+    diagnosis was never written down. On the synchronous first pass it could
+    stop the master-node before the dispatcher started — one rebuilt remote
+    host would have taken the local pool with it.
+    """
+
+    def test_a_mismatch_is_a_configuration_fault_not_unreachability(self):
+        # Waiting does not fix it, and the container is not offline: an
+        # operator has to decide the host was legitimately rebuilt.
+        mongo = fake_mongo(resources=[resource()])
+        mismatch = HostKeyMismatch("192.168.0.42", "SHA256:old", "SHA256:new")
+
+        result = build_monitor(
+            mongo, probe=lambda h, r: (_ for _ in ()).throw(mismatch),
+        ).check_host(HOST)
+
+        assert result.unhealthy == ["cooja1"]
+        mongo.resource_repo.mark_error.assert_called_once()
+        mongo.resource_repo.mark_offline.assert_not_called()
+        assert "pinned" in mongo.resource_repo.mark_error.call_args.args[1]
+
+    def test_it_is_catchable_as_a_transport_error(self):
+        """So no caller outside this module can leak it by accident."""
+        assert issubclass(HostKeyMismatch, TransportError)
+
+    def test_the_hosts_after_a_failing_one_are_still_checked(self):
+        other = {**HOST, "_id": ObjectId(), "name": "lab-02"}
+        mongo = fake_mongo(hosts=[HOST, other], resources=[resource()])
+        monitor = build_monitor(mongo)
+        calls: list[str] = []
+
+        def check(host, *, discover=True, force=False):
+            calls.append(str(host.get("name")))
+            if host["name"] == "local":
+                raise RuntimeError("something nobody expected")
+            return HostHealth(host_name="lab-02", status=EnumHostStatus.ONLINE,
+                              message="", ready=["cooja1"])
+
+        monitor.check_host = check
+        results = monitor.cycle()
+
+        assert calls == ["local", "lab-02"]
+        assert [r.host_name for r in results] == ["local", "lab-02"]
+
+    def test_the_failure_is_recorded_against_its_host(self):
+        mongo = fake_mongo(resources=[resource()])
+        monitor = build_monitor(mongo)
+        monitor.check_host = lambda host, **k: (_ for _ in ()).throw(
+            RuntimeError("boom"))
+
+        results = monitor.cycle()
+
+        assert results[0].status == EnumHostStatus.OFFLINE
+        assert "RuntimeError: boom" in results[0].message
+        # An unexplained host is worse than an offline one.
+        assert mongo.host_repo.mark_check_result.called
+
+    def test_housekeeping_still_runs_after_a_host_fails(self):
+        mongo = fake_mongo(resources=[resource()])
+        monitor = build_monitor(mongo)
+        monitor.check_host = lambda host, **k: (_ for _ in ()).throw(
+            RuntimeError("boom"))
+
+        monitor.cycle()
+
+        # The sweep is what frees containers claimed by a dead attempt; it
+        # must not be skipped because an unrelated host misbehaved.
+        mongo.resource_repo.find_stale_reservations.assert_called_once()
+
+    def test_a_failing_request_does_not_stop_the_pass(self):
+        mongo = fake_mongo(resources=[resource()])
+        mongo.host_repo.find_all.side_effect = RuntimeError("mongo blinked")
+
+        results = build_monitor(mongo).cycle()
+
+        assert [r.host_name for r in results] == ["local"]
+
+    def test_a_failing_sweep_does_not_hide_the_results(self):
+        mongo = fake_mongo(resources=[resource()])
+        mongo.resource_repo.find_stale_reservations.side_effect = \
+            RuntimeError("mongo blinked")
+
+        results = build_monitor(mongo).cycle()
+
+        assert results[0].ready == ["cooja1"]
+
+    def test_even_a_failed_recording_returns_a_result(self):
+        """The first cycle runs before the dispatcher; it must return."""
+        mongo = fake_mongo(resources=[resource()])
+        monitor = build_monitor(mongo)
+        monitor.check_host = lambda host, **k: (_ for _ in ()).throw(
+            RuntimeError("boom"))
+        mongo.host_repo.mark_check_result.side_effect = RuntimeError("mongo gone")
+
+        results = monitor.cycle(force=True)
+
+        assert results[0].status == EnumHostStatus.OFFLINE
+        assert results[0].ready == []
 
 
 # ── The cycle as a whole ─────────────────────────────────────────────────────

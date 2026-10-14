@@ -21,11 +21,27 @@ from typing import Callable, Optional
 
 from paramiko import MissingHostKeyPolicy, PKey, SSHClient
 
+from lib.transport.base import TransportError
+
 log = logging.getLogger(__name__)
 
 
-class HostKeyMismatch(Exception):
-    """The host presented a key other than the pinned one."""
+class HostKeyMismatch(TransportError):
+    """The host presented a key other than the pinned one.
+
+    A ``TransportError`` so that no caller can leak it by accident. It used
+    to descend from ``Exception`` alone, and nothing on the health path
+    expected it: raised while checking the first host, it escaped the list
+    comprehension that checks them all, so the remaining hosts were never
+    checked, the housekeeping never ran, and the failing host's own diagnosis
+    was never written down. On the synchronous first pass it could stop the
+    master-node before the dispatcher started — one rebuilt remote host would
+    have taken the local pool with it.
+
+    Callers that need to tell it apart catch it *before* ``TransportError``:
+    it is an invalid configuration, not an unreachable host, and the fix is
+    administrative rather than waiting for the network.
+    """
 
     def __init__(self, hostname: str, expected: str, actual: str):
         super().__init__(

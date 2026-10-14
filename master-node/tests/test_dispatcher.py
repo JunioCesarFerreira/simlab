@@ -299,6 +299,24 @@ class TestReservationIsNeverStranded:
         assert attempt == mongo.resource_repo.reserve.call_args.args[2]
         assert started == []
 
+    def test_an_assignment_that_matched_nothing_is_not_a_success(self):
+        """The write can succeed and still have changed nothing.
+
+        ``set_assignment`` returns false when no simulation matched — it was
+        deleted, or the experiment was removed. The return value was ignored,
+        so the run started anyway, with its result having nowhere to land and
+        the container held by an attempt no document knows about.
+        """
+        mongo = FakeMongo()
+        mongo.simulation_repo.set_assignment.return_value = False
+        dispatcher, started = make_dispatcher(mongo)
+        dispatcher.submit(SIM_ID)
+
+        assert dispatcher.step() is False
+
+        mongo.resource_repo.release.assert_called_once()
+        assert started == []
+
     def test_each_attempt_gets_its_own_identifier(self):
         mongo = FakeMongo(
             free=[{"_id": RES_1, "name": "cooja1"}, {"_id": RES_2, "name": "cooja2"}])
@@ -314,6 +332,136 @@ class TestReservationIsNeverStranded:
 
 # ── The loop itself ──────────────────────────────────────────────────────────
 
+class TestTheJobIsNeverDropped:
+    """A transient failure must not cost a simulation.
+
+    ``_next_job`` takes the id off the queue and calls ``task_done``. Until it
+    is held, nothing owns it — so an exception while placing left the
+    simulation Waiting in the database with an empty queue and nothing that
+    would ever look at it again. The capacity tick only retries work it
+    already knows about, so the experiment stalled until someone restarted the
+    master-node. Reproduced in review: one failing ``simulation_repo.get()``
+    and ``pending`` went to zero after a single ``submit``.
+    """
+
+    def test_a_transient_failure_keeps_the_job(self):
+        mongo = FakeMongo()
+        mongo.simulation_repo.get.side_effect = RuntimeError("mongo blinked")
+        dispatcher, _ = make_dispatcher(mongo)
+        dispatcher.submit(SIM_ID)
+
+        assert dispatcher.step() is False
+
+        assert dispatcher.pending == 1
+
+    def test_the_same_job_is_tried_again(self):
+        mongo = FakeMongo()
+        mongo.simulation_repo.get.side_effect = [
+            RuntimeError("mongo blinked"), waiting_sim()]
+        dispatcher, started = make_dispatcher(mongo)
+        dispatcher.submit(SIM_ID)
+
+        assert dispatcher.step() is False      # failed, held
+        assert dispatcher.step() is True       # same id, now placed
+
+        assert [entry["args"][0]["_id"] for entry in started] == [SIM_OID]
+
+    def test_a_job_that_keeps_failing_stops_blocking_the_others(self):
+        """Held is not the same as held for ever."""
+        mongo = FakeMongo()
+        mongo.simulation_repo.get.side_effect = RuntimeError("always")
+        dispatcher, _ = make_dispatcher(mongo, placement_attempts=2)
+        dispatcher.submit(SIM_ID)
+
+        dispatcher.step()
+        assert dispatcher._held == SIM_ID
+        dispatcher.step()
+
+        # Still ours — at the back of the queue, not ahead of work that might
+        # succeed, and not thrown away.
+        assert dispatcher._held is None
+        assert dispatcher.pending == 1
+
+    def test_a_successful_placement_resets_the_count(self):
+        mongo = FakeMongo()
+        mongo.simulation_repo.get.side_effect = [
+            RuntimeError("blink"), waiting_sim()]
+        dispatcher, _ = make_dispatcher(mongo, placement_attempts=2)
+        dispatcher.submit(SIM_ID)
+
+        dispatcher.step()
+        dispatcher.step()
+
+        assert dispatcher._held_failures == 0
+
+    def test_no_capacity_still_holds_the_job(self):
+        # The behaviour that already existed, kept intact by the change.
+        mongo = FakeMongo(inventory=snapshot((HOST_A, "host-a", 0, 0)))
+        dispatcher, _ = make_dispatcher(mongo)
+        dispatcher.submit(SIM_ID)
+
+        assert dispatcher.step() is False
+        assert dispatcher._held == SIM_ID
+        assert dispatcher.pending == 1
+
+
+class TestRescanningWhatTheQueueLost:
+    """The database is the truth; the change stream is an optimisation."""
+
+    def test_an_idle_step_re_offers_waiting_simulations(self):
+        mongo = FakeMongo()
+        mongo.simulation_repo.find_pending.return_value = [
+            {"_id": SIM_OID}, {"_id": ObjectId("507f1f77bcf86cd799430004")}]
+        dispatcher, _ = make_dispatcher(mongo)
+
+        assert dispatcher.step() is False      # nothing queued
+
+        assert dispatcher.pending == 2
+
+    def test_it_does_not_re_read_on_every_idle_step(self):
+        mongo = FakeMongo()
+        mongo.simulation_repo.find_pending.return_value = []
+        dispatcher, _ = make_dispatcher(mongo, rescan_interval_sec=3600)
+
+        for _ in range(5):
+            dispatcher.step()
+
+        assert mongo.simulation_repo.find_pending.call_count == 1
+
+    def test_it_does_not_run_while_a_job_is_held(self):
+        # Holding means there is no capacity; re-reading would only add
+        # duplicates behind a job that cannot be placed yet.
+        mongo = FakeMongo(inventory=snapshot((HOST_A, "host-a", 0, 0)))
+        mongo.simulation_repo.find_pending.return_value = [{"_id": SIM_OID}]
+        dispatcher, _ = make_dispatcher(mongo)
+        dispatcher.submit(SIM_ID)
+
+        dispatcher.step()
+        dispatcher.step()
+
+        mongo.simulation_repo.find_pending.assert_not_called()
+
+    def test_a_failing_rescan_is_not_fatal(self):
+        mongo = FakeMongo()
+        mongo.simulation_repo.find_pending.side_effect = RuntimeError("mongo gone")
+        dispatcher, _ = make_dispatcher(mongo)
+
+        assert dispatcher.step() is False
+
+    def test_a_re_offered_simulation_that_no_longer_wants_placement_is_dropped(self):
+        # The idempotency guard already covers a redelivery, so re-offering is
+        # safe: it costs one read and one log line.
+        mongo = FakeMongo()
+        mongo.simulation_repo.get.return_value = waiting_sim(status="Running")
+        mongo.simulation_repo.find_pending.return_value = [{"_id": SIM_OID}]
+        dispatcher, started = make_dispatcher(mongo)
+
+        dispatcher.step()                      # re-offers it
+        assert dispatcher.step() is False      # and declines to place it
+
+        assert started == []
+
+
 class TestLoopRobustness:
     def test_a_failing_step_does_not_kill_the_loop(self):
         mongo = FakeMongo()
@@ -321,13 +469,16 @@ class TestLoopRobustness:
         dispatcher, _ = make_dispatcher(mongo)
         dispatcher.submit(SIM_ID)
 
-        # run() swallows the failure; if it did not, nothing would ever be
-        # placed again after one bad document.
+        # run() keeps going; if it did not, nothing would ever be placed again
+        # after one bad document.
         dispatcher._stop.set()
         dispatcher.run()
 
-        with pytest.raises(RuntimeError):
-            dispatcher.step()
+        # The step absorbs the failure rather than propagating it, because
+        # propagating is what used to lose the job: the id had already left
+        # the queue and nothing held it.
+        assert dispatcher.step() is False
+        assert dispatcher.pending == 1
 
     def test_notify_capacity_is_safe_with_nobody_waiting(self):
         dispatcher, _ = make_dispatcher(FakeMongo())

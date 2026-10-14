@@ -39,7 +39,14 @@ from lib.transport.plan import (
     build_plan,
 )
 from lib.transport.factory import build_transport
-from lib.transport.ssh import GENERATED_ARTIFACTS, SSHTransport, build_cleanup_command
+from lib.transport.ssh import (
+    GENERATED_ARTIFACTS,
+    SCP_SOCKET_TIMEOUT,
+    TRANSFER_ATTEMPTS,
+    SSHTransport,
+    build_cleanup_command,
+)
+from scp import SCPException
 
 SECRET_PEM = "-----BEGIN OPENSSH PRIVATE KEY-----\nnotarealkey\n-----END OPENSSH PRIVATE KEY-----"
 
@@ -488,6 +495,147 @@ class TestFactoryWithBorrowedJump:
 
         assert opened == ["container"]
         assert transport._borrowed_jump is jump
+
+
+# ── Moving files over a link that stalls ─────────────────────────────────────
+
+class TestTransfers:
+    """A stalled link must not throw away a simulation that already ran.
+
+    From a three-host pilot: two simulations on the same remote host finished
+    normally and then failed to download their ~780 KiB testlog, one of them
+    exactly 10.5s after starting — the SCP library's default `socket_timeout`
+    is 10 seconds, and it bounds a single receive, not the transfer. Nothing
+    retried, and the next run on that worker wiped the file, so both results
+    were lost for good.
+
+    What is pinned here: a timeout sized for a tunnel, a retry for a stall,
+    and no retry when the file simply is not there.
+    """
+
+    @pytest.fixture
+    def scp(self, monkeypatch):
+        """Patch SCPClient, recording each construction and attempt."""
+        calls: dict = {"timeouts": [], "gets": [], "puts": []}
+        failures: list = []
+
+        class FakeSCP:
+            def __init__(self, transport, socket_timeout=None, **kwargs):
+                calls["timeouts"].append(socket_timeout)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def get(self, remote, local):
+                calls["gets"].append(remote)
+                if failures:
+                    raise failures.pop(0)
+
+            def put(self, local, remote):
+                calls["puts"].append((local, remote))
+                if failures:
+                    raise failures.pop(0)
+
+        monkeypatch.setattr("lib.transport.ssh.SCPClient", FakeSCP)
+        monkeypatch.setattr("lib.transport.ssh.time.sleep", lambda _s: None)
+        calls["fail_with"] = failures
+        return calls
+
+    def _open(self, ssh_clients) -> SSHTransport:
+        transport = local_transport()
+        transport.open()
+        return transport
+
+    def test_the_socket_timeout_is_not_the_library_default(self, scp, ssh_clients):
+        self._open(ssh_clients).get_file("COOJA.testlog", "/tmp/out.log")
+
+        # 10s is the default, and it is what lost the two simulations.
+        assert scp["timeouts"] == [SCP_SOCKET_TIMEOUT]
+        assert SCP_SOCKET_TIMEOUT > 10.0
+
+    def test_a_stalled_fetch_is_retried(self, scp, ssh_clients):
+        scp["fail_with"].append(SCPException("Error receiving, socket.timeout"))
+
+        self._open(ssh_clients).get_file("COOJA.testlog", "/tmp/out.log")
+
+        # Two attempts, and no error: the run's result survives a hiccup.
+        assert len(scp["gets"]) == 2
+
+    def test_a_bare_timeout_is_also_a_stall(self, scp, ssh_clients):
+        """Depending on where it stalls, scp raises this instead."""
+        scp["fail_with"].append(TimeoutError())
+
+        self._open(ssh_clients).get_file("COOJA.testlog", "/tmp/out.log")
+
+        assert len(scp["gets"]) == 2
+
+    def test_a_timeout_without_a_message_is_still_named(self, scp, ssh_clients):
+        """`str(TimeoutError())` is empty, and the report said nothing."""
+        for _ in range(TRANSFER_ATTEMPTS):
+            scp["fail_with"].append(TimeoutError())
+
+        with pytest.raises(TransportError) as exc:
+            self._open(ssh_clients).get_file("COOJA.testlog", "/tmp/out.log")
+
+        assert "TimeoutError" in str(exc.value)
+        assert f"{TRANSFER_ATTEMPTS} attempt" in str(exc.value)
+
+    def test_a_fetch_that_keeps_stalling_eventually_fails(self, scp, ssh_clients):
+        for _ in range(TRANSFER_ATTEMPTS):
+            scp["fail_with"].append(SCPException("Error receiving, socket.timeout"))
+
+        with pytest.raises(TransportError, match="fetching"):
+            self._open(ssh_clients).get_file("COOJA.testlog", "/tmp/out.log")
+
+        assert len(scp["gets"]) == TRANSFER_ATTEMPTS
+
+    def test_a_missing_file_is_not_retried(self, scp, ssh_clients):
+        """Nothing to wait for: retrying would only delay the failure."""
+        scp["fail_with"].append(
+            SCPException("scp: /opt/cooja/COOJA.testlog: No such file or directory"))
+
+        with pytest.raises(TransportError, match="No such file"):
+            self._open(ssh_clients).get_file("COOJA.testlog", "/tmp/out.log")
+
+        assert len(scp["gets"]) == 1
+
+    def test_each_attempt_gets_a_fresh_channel(self, scp, ssh_clients):
+        # A timed-out channel is in an unknown state; reusing it would fail
+        # for the wrong reason and hide the real one.
+        scp["fail_with"].append(SCPException("Error receiving, socket.timeout"))
+
+        self._open(ssh_clients).get_file("COOJA.testlog", "/tmp/out.log")
+
+        assert len(scp["timeouts"]) == 2
+
+    def test_an_absolute_remote_path_is_used_as_given(self, scp, ssh_clients):
+        self._open(ssh_clients).get_file("/var/log/other.log", "/tmp/out.log")
+        assert scp["gets"] == ["/var/log/other.log"]
+
+    def test_a_relative_name_is_resolved_against_the_remote_dir(self, scp, ssh_clients):
+        self._open(ssh_clients).get_file("COOJA.testlog", "/tmp/out.log")
+        assert scp["gets"] == [f"{DEFAULT_REMOTE_DIR}/COOJA.testlog"]
+
+    def test_uploads_retry_only_the_file_that_failed(self, scp, ssh_clients):
+        scp["fail_with"].append(SCPException("Error sending, socket.timeout"))
+
+        self._open(ssh_clients).put_files(
+            ["/tmp/a", "/tmp/b"], ["a.csc", "b.dat"])
+
+        # a.csc failed once and was resent; b.dat was sent once. Retrying the
+        # batch instead would have resent a.csc's predecessors too.
+        assert [name for _, name in scp["puts"]] == [
+            f"{DEFAULT_REMOTE_DIR}/a.csc",
+            f"{DEFAULT_REMOTE_DIR}/a.csc",
+            f"{DEFAULT_REMOTE_DIR}/b.dat",
+        ]
+
+    def test_mismatched_upload_lists_are_refused(self, scp, ssh_clients):
+        with pytest.raises(TransportError, match="local files"):
+            self._open(ssh_clients).put_files(["/tmp/a"], ["a.csc", "b.dat"])
 
 
 # ── Cleanup: unchanged guarantees, now on the transport ──────────────────────

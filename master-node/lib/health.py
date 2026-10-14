@@ -47,7 +47,13 @@ from typing import Any, Callable, Optional
 
 from lib.credentials import CredentialError, SecretOpener
 from lib.discovery import discover_host, unavailable_report
-from lib.transport import JumpPool, PlanError, TransportError, build_transport
+from lib.transport import (
+    HostKeyMismatch,
+    JumpPool,
+    PlanError,
+    TransportError,
+    build_transport,
+)
 from pylib.db.models.infra import (
     EnumHostStatus,
     EnumHostType,
@@ -169,15 +175,50 @@ class HealthMonitor:
         process that just died describes a pool this one has not seen, and it
         is the cycle before the first placement that the dispatcher relies on.
         """
-        self._serve_requests()
+        try:
+            self._serve_requests()
+        except Exception:
+            log.exception("Serving check/discovery requests failed; continuing")
+
         results = [
-            self.check_host(host, force=force)
+            self._check_host_isolated(host, force=force)
             for host in self._mongo.host_repo.find_enabled()
         ]
-        self.sweep_stale_reservations()
+
+        try:
+            self.sweep_stale_reservations()
+        except Exception:
+            log.exception("Sweeping stale reservations failed; continuing")
+
         if any(result.ready for result in results) and self._on_capacity is not None:
             self._on_capacity()
         return results
+
+    def _check_host_isolated(self, host: dict, *, force: bool) -> HostHealth:
+        """Check one host, absorbing whatever it throws.
+
+        The pool is decided here, so one host must not be able to stop the
+        others from being measured. A pinned-key mismatch on the first host
+        used to end the whole pass: the hosts after it were never checked, the
+        reservation sweep never ran, and the pool froze as it was. The
+        failure is recorded against the host that caused it — an unexplained
+        host is worse than an offline one.
+        """
+        name = str(host.get("name", "?"))
+        try:
+            return self.check_host(host, force=force)
+        except Exception as error:
+            log.exception("Checking host %s failed", name)
+            message = f"health check failed: {type(error).__name__}: {error}"
+            try:
+                return self._record(
+                    host, name, EnumHostStatus.OFFLINE, message, healthy=False)
+            except Exception:
+                # Even the bookkeeping failed — Mongo is probably gone. The
+                # next cycle will try again; what matters is not dying here.
+                log.exception("Could not record the failure of host %s", name)
+                return HostHealth(
+                    host_name=name, status=EnumHostStatus.OFFLINE, message=message)
 
     # ── one host ───────────────────────────────────────────────────────────
 
@@ -279,8 +320,12 @@ class HealthMonitor:
 
         try:
             probe = self._probe(host, resource)
-        except (CredentialError, PlanError) as error:
-            # A configuration problem, not a reachability one.
+        except (CredentialError, PlanError, HostKeyMismatch) as error:
+            # A configuration problem, not a reachability one. The host key
+            # mismatch belongs here rather than with the network failures:
+            # waiting will not fix it, and it is cleared by an operator
+            # deciding the host was legitimately rebuilt. It must be caught
+            # before TransportError, which it now derives from.
             self._mongo.resource_repo.mark_error(resource["_id"], str(error))
             health.unhealthy.append(name)
             return

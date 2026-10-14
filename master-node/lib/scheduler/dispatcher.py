@@ -41,6 +41,16 @@ IDLE_TICK_SEC = 5.0
 # every few seconds; saying so every time would bury everything else.
 STARVATION_LOG_INTERVAL_SEC = 60.0
 
+# How many times a placement may fail in a row before the job goes to the back
+# of the queue. Keeping it forever would let one unplaceable simulation block
+# everything behind it; dropping it is what this exists to prevent.
+PLACEMENT_ATTEMPTS = 3
+
+# How often to re-read the simulations still marked Waiting. The queue is fed
+# by change streams, so a missed event leaves a simulation that nothing will
+# ever look at again.
+RESCAN_INTERVAL_SEC = 60.0
+
 
 class Dispatcher:
     """Serializes placement; parallelizes execution."""
@@ -53,6 +63,8 @@ class Dispatcher:
         policy: Optional[Policy] = None,
         intercept: Optional[Callable[[dict], bool]] = None,
         idle_tick_sec: float = IDLE_TICK_SEC,
+        rescan_interval_sec: float = RESCAN_INTERVAL_SEC,
+        placement_attempts: int = PLACEMENT_ATTEMPTS,
         thread_factory: Optional[Callable[..., Any]] = None,
     ):
         self._mongo = mongo
@@ -60,14 +72,18 @@ class Dispatcher:
         self._policy = policy or build_policy()
         self._intercept = intercept
         self._idle_tick = idle_tick_sec
+        self._rescan_interval = rescan_interval_sec
+        self._placement_attempts = max(1, placement_attempts)
         self._thread_factory = thread_factory or _daemon_thread
 
         self._queue: queue.Queue = queue.Queue()
         self._capacity = threading.Condition()
         self._held: Optional[str] = None
+        self._held_failures = 0
         self._rr_cursor = 0
         self._stop = threading.Event()
         self._last_starved_log = 0.0
+        self._last_rescan = 0.0
 
     # ── inbound ────────────────────────────────────────────────────────────
 
@@ -121,17 +137,82 @@ class Dispatcher:
         """
         sim_id = self._next_job()
         if sim_id is None:
+            self._rescan_pending()
             return False
 
-        outcome = self._place(sim_id)
+        # Owned from the moment it leaves the queue. ``_next_job`` has already
+        # called ``task_done``, so until this is set nothing holds the id: a
+        # momentary MongoDB failure below used to leave the simulation Waiting
+        # for ever, with the queue empty and nothing to bring it back. The
+        # capacity tick only retries work it already knows about.
+        self._held = sim_id
+        try:
+            outcome = self._place(sim_id)
+        except Exception:
+            self._hold_after_failure(sim_id)
+            self._wait_for_capacity()
+            return False
+
+        self._held_failures = 0
         if outcome is _NO_CAPACITY:
             # Held, not dropped: the next wake-up tries the same job again.
-            self._held = sim_id
             self._wait_for_capacity()
             return False
 
         self._held = None
         return bool(outcome)
+
+    def _hold_after_failure(self, sim_id: str) -> None:
+        """Keep a job whose placement raised, without blocking the rest.
+
+        Retried in place a few times, because the usual cause is momentary —
+        the database, or a host that answered a second ago. After that it goes
+        to the back of the queue: still ours, but no longer ahead of work that
+        might succeed.
+        """
+        self._held_failures += 1
+        log.exception(
+            "Placing %s failed (attempt %d of %d); it is still queued",
+            sim_id, self._held_failures, self._placement_attempts,
+        )
+        if self._held_failures < self._placement_attempts:
+            return
+        log.error(
+            "Placing %s has failed %d times; moving it to the back of the "
+            "queue so it stops holding up the others",
+            sim_id, self._held_failures,
+        )
+        self._held = None
+        self._held_failures = 0
+        self._queue.put(sim_id)
+
+    def _rescan_pending(self) -> None:
+        """Re-offer simulations the queue never heard about.
+
+        Only runs when there is nothing queued and nothing held, so it costs
+        one read per interval while idle. It exists because the queue is fed
+        by change streams: a missed event, or a job lost some other way,
+        leaves a simulation Waiting with nothing ever looking at it again, and
+        the experiment only moves on when someone restarts the master-node.
+        The database is the truth; the stream is an optimisation.
+        """
+        now = time.monotonic()
+        if now - self._last_rescan < self._rescan_interval:
+            return
+        self._last_rescan = now
+        try:
+            pending = self._mongo.simulation_repo.find_pending()
+        except Exception:
+            log.exception("Could not re-read the simulations still waiting")
+            return
+        if not pending:
+            return
+        log.info(
+            "Re-offering %d simulation(s) still waiting that the queue had "
+            "lost track of", len(pending),
+        )
+        for sim in pending:
+            self._queue.put(str(sim["_id"]))
 
     def _next_job(self) -> Optional[str]:
         if self._held is not None:
@@ -285,7 +366,10 @@ class Dispatcher:
         can find its way back to the container instead of guessing.
         """
         try:
-            self._mongo.simulation_repo.set_assignment(
+            # The return value matters: it is false when the write matched no
+            # document, which means the simulation is gone. Treating that as
+            # recorded would start a run whose result has nowhere to land.
+            recorded = self._mongo.simulation_repo.set_assignment(
                 sim_oid,
                 host_id=host["_id"],
                 host_name=str(host.get("name") or "?"),
@@ -294,7 +378,12 @@ class Dispatcher:
                 attempt_id=attempt_id,
                 container_id=(resource.get("container") or {}).get("id"),
             )
-            return True
+            if not recorded:
+                log.warning(
+                    "Assignment of %s on %s matched no simulation; not starting it",
+                    sim_oid, resource.get("name"),
+                )
+            return bool(recorded)
         except Exception:
             log.exception(
                 "Failed to record the assignment of %s on %s", sim_oid, resource.get("name"))

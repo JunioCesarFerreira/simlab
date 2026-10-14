@@ -11,7 +11,7 @@ as before.
 import logging
 import shlex
 import time
-from typing import Iterator, Optional
+from typing import Callable, Iterator, Optional
 
 import paramiko
 from paramiko import SSHClient
@@ -37,6 +37,48 @@ log = logging.getLogger(__name__)
 GENERATED_ARTIFACTS = ("build/cooja", "COOJA.testlog", "COOJA.log")
 
 CONNECT_TIMEOUT = 20.0
+
+# How long a single SCP receive may stall before the transfer is abandoned.
+# The library's default is 10 seconds, and it is not a budget for the whole
+# file: it is how long one chunk may fail to arrive. Over a tunnel to another
+# machine that is far too tight. Measured on a three-host pilot, a ~780 KiB
+# testlog took a median of 3s from a remote host but up to 79s when the link
+# was busy — and the 79s transfer *succeeded*, because no single gap reached
+# ten. Two concurrent downloads through the same host did hit a ten-second
+# gap, and two completed simulations lost their results.
+SCP_SOCKET_TIMEOUT = 45.0
+# Attempts per file. A stalled link is the one failure here worth retrying:
+# the simulation has already run and the file is sitting on the worker, so
+# giving up on the first timeout throws away minutes of work for seconds of
+# network trouble.
+TRANSFER_ATTEMPTS = 3
+TRANSFER_BACKOFF_SEC = 2.0
+
+
+def _is_missing_file(error: BaseException) -> bool:
+    """Whether this failure means the file is not there.
+
+    The one case not worth retrying. Established against a live container:
+    a missing path comes back as ``SCPException: scp: <path>: No such file or
+    directory``, while a stall surfaces either as ``SCPException: Error
+    receiving, socket.timeout`` or as a bare ``TimeoutError``, depending on
+    where in the transfer it happened. So the rule is to retry everything
+    except an explicit "not there" — erring toward retrying, because the cost
+    of a needless attempt is seconds and the cost of not retrying is a lost
+    simulation.
+    """
+    return "no such file" in str(error).lower()
+
+
+def _describe_error(error: BaseException) -> str:
+    """Name the failure even when it carries no message.
+
+    A bare ``TimeoutError`` stringifies to nothing, so the log line for the
+    one failure this code exists to handle read ``failed:`` and said nothing
+    at all.
+    """
+    text = str(error).strip()
+    return text or type(error).__name__
 
 
 def build_cleanup_command(remote_dir: str, remote_files: Optional[list[str]] = None) -> str:
@@ -68,6 +110,8 @@ class SSHTransport:
         pinned_host_key: Optional[str] = None,
         on_learn_host_key: Optional[callable] = None,
         connect_timeout: float = CONNECT_TIMEOUT,
+        scp_timeout: float = SCP_SOCKET_TIMEOUT,
+        transfer_attempts: int = TRANSFER_ATTEMPTS,
     ):
         if plan.is_tunnelled and jump_credential is None and jump_client is None:
             raise TransportError(
@@ -83,6 +127,8 @@ class SSHTransport:
         self._pinned_host_key = pinned_host_key
         self._on_learn_host_key = on_learn_host_key
         self._connect_timeout = connect_timeout
+        self._scp_timeout = scp_timeout
+        self._transfer_attempts = max(1, transfer_attempts)
         self._jump: Optional[SSHClient] = None
         self._client: Optional[SSHClient] = None
 
@@ -205,30 +251,63 @@ class SSHTransport:
 
     # ── files ──────────────────────────────────────────────────────────────
 
+    def _scp(self) -> SCPClient:
+        return SCPClient(
+            self._active.get_transport(), socket_timeout=self._scp_timeout)
+
+    def _transfer(self, describe: str, move: Callable[[SCPClient], None]) -> None:
+        """Run one transfer, retrying a stalled link.
+
+        Each attempt gets a fresh SCP channel: a timed-out one is in an
+        unknown state, and reusing it would fail for the wrong reason.
+        """
+        last: BaseException | None = None
+        for attempt in range(1, self._transfer_attempts + 1):
+            try:
+                with self._scp() as scp:
+                    move(scp)
+                if attempt > 1:
+                    log.info("%s succeeded on attempt %d", describe, attempt)
+                return
+            except (SCPException, SSHException, OSError, TimeoutError) as error:
+                last = error
+                if _is_missing_file(error) or attempt == self._transfer_attempts:
+                    break
+                log.warning(
+                    "%s failed (attempt %d of %d): %s; retrying in %.0fs",
+                    describe, attempt, self._transfer_attempts,
+                    _describe_error(error), TRANSFER_BACKOFF_SEC,
+                )
+                time.sleep(TRANSFER_BACKOFF_SEC)
+        raise TransportError(
+            f"{describe} failed after {attempt} attempt(s): "
+            f"{_describe_error(last) if last else 'unknown'}"
+        ) from None
+
     def put_files(self, local_paths: list[str], remote_names: list[str]) -> None:
         if len(local_paths) != len(remote_names):
             raise TransportError(
                 f"{len(local_paths)} local files for {len(remote_names)} remote names"
             )
-        try:
-            with SCPClient(self._active.get_transport()) as scp:
-                for local, name in zip(local_paths, remote_names):
-                    remote = f"{self.plan.remote_dir}/{name}"
-                    log.info("Sending %s to %s", local, remote)
-                    scp.put(local, remote)
-        except (SCPException, SSHException, OSError) as e:
-            raise TransportError(f"file transfer to {self.plan.target} failed: {e}") from None
+        for local, name in zip(local_paths, remote_names):
+            remote = f"{self.plan.remote_dir}/{name}"
+            log.info("Sending %s to %s", local, remote)
+            # Per file, not per batch: a retry of the whole batch would resend
+            # everything that already arrived.
+            self._transfer(
+                f"sending {local} to {self.plan.target}:{remote}",
+                lambda scp, local=local, remote=remote: scp.put(local, remote),
+            )
 
     def get_file(self, remote_name: str, local_path: str) -> None:
         remote = (
             remote_name if remote_name.startswith("/")
             else f"{self.plan.remote_dir}/{remote_name}"
         )
-        try:
-            with SCPClient(self._active.get_transport()) as scp:
-                scp.get(remote, local_path)
-        except (SCPException, SSHException, OSError) as e:
-            raise TransportError(f"could not fetch {remote}: {e}") from None
+        self._transfer(
+            f"fetching {remote}",
+            lambda scp: scp.get(remote, local_path),
+        )
 
     # ── commands ───────────────────────────────────────────────────────────
 
