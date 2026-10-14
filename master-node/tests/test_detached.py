@@ -15,6 +15,7 @@ import pytest
 from lib.detached import (
     EXIT_FILE,
     OUT_FILE,
+    PGID_FILE,
     PID_FILE,
     STATUS_PREFIX,
     DetachedRun,
@@ -99,10 +100,24 @@ class TestLaunchCommand:
 
     def test_records_the_work_pid_not_the_shell(self):
         command = build_launch_command(JAVA, remote_dir=REMOTE_DIR)
-        # `$$` is inherited from the parent under dash, so it named a process
-        # that had already exited. `$!` is the backgrounded work itself.
+        # The pid is `$!`, the backgrounded work itself — what a liveness
+        # check asks about. An earlier version recorded `$$` here, which
+        # under dash is inherited from the parent inside a subshell and so
+        # named a process that had already exited.
         assert f"echo $! > {PID_FILE}" in command
-        assert "$$" not in command
+
+    def test_records_the_process_group_separately(self):
+        """The group is what a signal has to reach, and it is not the pid.
+
+        `setsid` makes the supervising shell the leader of a new session and
+        group, and the JVM's children belong to it. Verified on a container:
+        the recorded pid is *not* the group leader, and `kill -TERM -<pid>`
+        answers "No such process" while every child survives.
+        """
+        command = build_launch_command(JAVA, remote_dir=REMOTE_DIR)
+        assert f"echo $$ > {PGID_FILE}" in command
+        # Written before the work starts, so it is there for the first signal.
+        assert command.index(PGID_FILE) < command.index(JAVA)
 
     def test_captures_the_exit_code(self):
         command = build_launch_command(JAVA, remote_dir=REMOTE_DIR)
@@ -424,20 +439,52 @@ class TestTimeout:
         assert run.wait(timeout_sec=None).completed is True
 
 
+GONE = f"{STATUS_PREFIX}-gone"
+STILL_ALIVE = f"{STATUS_PREFIX}-alive"
+
+
 class TestTerminate:
-    def test_signals_the_group_then_insists(self):
+    def _launched(self, *after) -> tuple:
         transport = FakeTransport([
-            ExecResult(0, "launched", ""), ExecResult(0, "4242\n", "")])
+            ExecResult(0, "launched", ""), ExecResult(0, "4242\n", ""), *after])
         run = build_run(transport)
         run.launch(JAVA)
+        return run, transport
+
+    def test_signals_the_recorded_group_then_insists(self):
+        run, transport = self._launched(ExecResult(0, GONE, ""))
 
         assert run.terminate(grace_sec=1) is True
 
         command = transport.commands[-1]
-        # The group, because the JVM may have children that would otherwise
-        # keep holding the container's resources.
-        assert "kill -TERM -4242" in command
-        assert "kill -KILL -4242" in command
+        # The group read from the file, because the JVM's children belong to
+        # it. Signalling the pid as a group reaches nothing at all.
+        assert f"cat {PGID_FILE}" in command
+        assert 'kill -TERM -"$G"' in command
+        assert 'kill -KILL -"$G"' in command
+
+    def test_the_pid_is_the_fallback_for_an_older_run(self):
+        # A run launched before run.pgid existed, adopted after a restart.
+        run, transport = self._launched(ExecResult(0, GONE, ""))
+        run.terminate(grace_sec=1)
+
+        command = transport.commands[-1]
+        assert "G=4242" in command
+        assert "kill -TERM 4242" in command
+
+    def test_something_left_alive_is_not_a_success(self):
+        """The old version reported success whenever the command executed.
+
+        A caller could not tell "stopped" from "tried to stop", and the
+        container went back to the pool either way — with a JVM still on it.
+        """
+        run, _ = self._launched(ExecResult(0, STILL_ALIVE, ""))
+
+        assert run.terminate(grace_sec=1) is False
+
+    def test_an_unreadable_answer_is_not_a_success(self):
+        run, _ = self._launched(ExecResult(0, "", ""))
+        assert run.terminate(grace_sec=1) is False
 
     def test_terminating_nothing_is_a_no_op(self):
         assert build_run(FakeTransport()).terminate() is False

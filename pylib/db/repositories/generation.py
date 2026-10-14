@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from typing import Callable
+from typing import Callable, Optional
 from bson import ObjectId, errors
 
 from pylib.db.models.generation import Generation
@@ -80,6 +80,28 @@ class GenerationRepository:
             "status": EnumStatus.ERROR,
             "end_time": datetime.now()
         })
+
+    def close_if_finished(self, generation_id: ObjectId) -> Optional[str]:
+        """Close a generation once nothing in it is still running.
+
+        ``Done`` when every simulation finished well, ``Error`` when at least
+        one did not, and ``None`` when there is still work in progress.
+        Returns what it decided so a caller can log or act on it.
+
+        This exists as one method because the same five lines were written out
+        in four places — the entrypoint, the runner, the recovery pass and the
+        synthetic path — and **missing from a fifth**: the stale-reservation
+        sweep failed the last active simulation of a generation without ever
+        re-evaluating it, so the generation stayed pending for ever and the
+        experiment waited on a strategy event that would never come.
+        """
+        if self.any_simulation_active(generation_id):
+            return None
+        if self.all_simulations_done(generation_id):
+            self.mark_done(generation_id)
+            return EnumStatus.DONE
+        self.mark_error(generation_id)
+        return EnumStatus.ERROR
 
     def all_simulations_done(self, generation_id: ObjectId) -> bool:
         """Returns True if every simulation in this generation has status DONE."""

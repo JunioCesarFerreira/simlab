@@ -51,10 +51,15 @@ log = logging.getLogger(__name__)
 OUT_FILE = "run.out"
 PID_FILE = "run.pid"
 EXIT_FILE = "run.exit"
-RUN_ARTIFACTS = (OUT_FILE, PID_FILE, EXIT_FILE)
+# The process *group*, which is what a signal has to reach to take the JVM's
+# children with it. Recorded separately because it is not the pid: `$!` is the
+# command, and the group is led by the shell that supervises it.
+PGID_FILE = "run.pgid"
+RUN_ARTIFACTS = (OUT_FILE, PID_FILE, EXIT_FILE, PGID_FILE)
 
 __all__ = [
-    "OUT_FILE", "PID_FILE", "EXIT_FILE", "RUN_ARTIFACTS", "STATUS_PREFIX",
+    "OUT_FILE", "PID_FILE", "EXIT_FILE", "PGID_FILE", "RUN_ARTIFACTS",
+    "STATUS_PREFIX",
     "DetachedRun", "DetachedRunError", "RunHandle", "RunOutcome", "RunProgress",
     "build_launch_command", "build_poll_command", "build_liveness_command",
     "parse_poll_output", "is_running",
@@ -102,6 +107,11 @@ class RunOutcome:
     lost_contact: bool = False
     elapsed_sec: float = 0.0
     message: str = ""
+    #: Whether stopping the run was confirmed. ``None`` when no stop was
+    #: attempted. ``False`` is the case that matters: something may still be
+    #: running in the container, so handing it to the next simulation would
+    #: have two JVMs competing and silently corrupt the newcomer's timing.
+    stopped: Optional[bool] = None
 
 
 # How many consecutive polls must report the process gone *and* no exit code
@@ -140,13 +150,24 @@ def build_launch_command(
     out_file: str = OUT_FILE,
     pid_file: str = PID_FILE,
     exit_file: str = EXIT_FILE,
+    pgid_file: str = PGID_FILE,
 ) -> str:
     """Compose the shell that starts ``command`` detached and records it.
 
     ``rm -f`` first: a stale exit file from a previous run would make the very
     first poll report the new run as already finished.
+
+    Two identifiers are written, and the difference matters. ``run.pid`` is
+    ``$!``, the command itself — what a liveness check asks about. ``run.pgid``
+    is ``$$``, the supervising shell, which ``setsid`` has just made the
+    leader of a new session and process group; the JVM and everything it
+    spawns belong to that group. Signalling the pid as though it were a group
+    does nothing at all: verified on a container, ``kill -TERM -<pid>`` answers
+    "No such process" and every child survives, while the same signal to the
+    group takes them all.
     """
     inner = (
+        f"echo $$ > {pgid_file}; "
         f"{command} > {out_file} 2>&1 & "
         f"echo $! > {pid_file}; "
         f"wait $!; "
@@ -154,7 +175,7 @@ def build_launch_command(
     )
     return (
         f"cd {shlex.quote(remote_dir)} && "
-        f"rm -f {out_file} {pid_file} {exit_file} && "
+        f"rm -f {out_file} {pid_file} {exit_file} {pgid_file} && "
         # The subshell is what lets sshd close the channel: without it the
         # launch call blocks for the whole run.
         f"( setsid /bin/sh -c {shlex.quote(inner)} < /dev/null > /dev/null 2>&1 & ) & "
@@ -444,6 +465,7 @@ class DetachedRun:
             timed_out=True,
             lost_contact=state.disconnected_since is not None,
             elapsed_sec=elapsed,
+            stopped=stopped,
             message=(
                 "the simulation exceeded SIM_TIMEOUT_SEC"
                 if stopped else
@@ -454,28 +476,53 @@ class DetachedRun:
     # ── stopping ───────────────────────────────────────────────────────────
 
     def terminate(self, grace_sec: float = TERMINATE_GRACE_SEC) -> bool:
-        """Ask the run to stop, then insist. Best-effort.
+        """Stop the run and its children, and say whether they are gone.
 
-        Signals the process group, not just the process: the JVM may have
-        spawned children, and leaving them behind would hold the container's
-        resources after the simulation is over.
+        Signals the process *group*, read from ``run.pgid``, because the JVM
+        spawns children and leaving them behind would keep using the
+        container after the simulation is over. The group is led by the
+        supervising shell, not by the recorded pid — signalling the pid as a
+        group does nothing, which is what the previous version did.
+
+        Returns true only when nothing is left alive. The old version
+        returned true whenever the command *executed*, so a caller could not
+        tell "stopped" from "tried to stop", and the container was released
+        either way. A run launched before this file existed has no
+        ``run.pgid``; the pid is then used as a fallback, which is the old
+        behaviour and all that is available.
         """
         if self._handle is None:
             return False
         pid = self._handle.pid
+        quoted_dir = shlex.quote(self._remote_dir)
+        grace = max(1, int(grace_sec))
         command = (
-            f"kill -TERM -{pid} 2>/dev/null || kill -TERM {pid} 2>/dev/null; "
-            f"sleep {max(1, int(grace_sec))}; "
-            f"kill -KILL -{pid} 2>/dev/null || kill -KILL {pid} 2>/dev/null; "
-            "true"
+            f"cd {quoted_dir} 2>/dev/null; "
+            # The group if it was recorded, the pid if this run predates it.
+            f"G=$(cat {PGID_FILE} 2>/dev/null); "
+            f'[ -n "$G" ] || G={shlex.quote(str(pid))}; '
+            f'kill -TERM -"$G" 2>/dev/null || kill -TERM {pid} 2>/dev/null; '
+            f"sleep {grace}; "
+            f'kill -KILL -"$G" 2>/dev/null || kill -KILL {pid} 2>/dev/null; '
+            "sleep 1; "
+            # Report what survived, so the caller is not left guessing.
+            f'if kill -0 -"$G" 2>/dev/null || kill -0 {pid} 2>/dev/null; '
+            f"then echo {STATUS_PREFIX}-alive; else echo {STATUS_PREFIX}-gone; fi"
         )
         try:
-            self._transport.exec_command(
-                command, timeout=self._exec_timeout + grace_sec)
-            return True
+            result = self._transport.exec_command(
+                command, timeout=self._exec_timeout + grace_sec + 2)
         except Exception as error:
             log.warning("Could not stop the run (pid %s): %s", pid, error)
             return False
+
+        if f"{STATUS_PREFIX}-gone" in result.stdout:
+            return True
+        log.warning(
+            "Asked the run (pid %s) to stop, but something is still alive: %s",
+            pid, result.stdout.strip()[:120] or "no answer",
+        )
+        return False
 
 
 def build_liveness_command(pid: int, *, remote_dir: str) -> str:

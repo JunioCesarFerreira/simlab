@@ -16,9 +16,12 @@ from unittest.mock import MagicMock
 import pytest
 from bson import ObjectId
 
+from pylib.db.models.enums import EnumStatus
 from pylib.db.repositories.simulation import SimulationRepository
 
 EXP_ID = ObjectId("507f1f77bcf86cd799440001")
+SIM_OID = ObjectId("507f1f77bcf86cd799440002")
+ATTEMPT = "8f14e45fceea167a5a36dedd4bea2543"
 IND_HASH = "aa48834d584df6e66a035e491c5ad291136c25fc"
 
 
@@ -110,3 +113,104 @@ class TestFindByIndividual:
         found = repo.find_by_individual(IND_HASH, EXP_ID)
 
         assert [d["random_seed"] for d in found] == [123456, 336157]
+
+
+class TestAttemptGuards:
+    """Every write about a simulation says which attempt it belongs to.
+
+    An attempt can lose its container without knowing: a recovery pass or the
+    stale-reservation sweep may have handed it on. Only ``set_remote_pid`` was
+    guarded, so the thread that lost the race still marked the run started,
+    published its result over the newer attempt, or failed a simulation that
+    had already moved on. The keyword is required of every caller — ``None``
+    is how a recovery path says "unconditional, and I mean it".
+    """
+
+    def test_running_is_guarded(self, simulations):
+        repo, coll = simulations
+        coll.update_one.return_value = MagicMock(matched_count=1)
+
+        assert repo.mark_running(SIM_OID, attempt_id=ATTEMPT) is True
+
+        assert coll.update_one.call_args.args[0] == {
+            "_id": SIM_OID, "attempt_id": ATTEMPT}
+
+    def test_done_is_guarded(self, simulations):
+        repo, coll = simulations
+        coll.update_one.return_value = MagicMock(matched_count=1)
+
+        repo.mark_done(SIM_OID, None, None, {}, attempt_id=ATTEMPT)
+
+        assert coll.update_one.call_args.args[0]["attempt_id"] == ATTEMPT
+
+    def test_error_is_guarded(self, simulations):
+        repo, coll = simulations
+        coll.update_one.return_value = MagicMock(matched_count=1)
+
+        repo.mark_error(SIM_OID, "boom", attempt_id=ATTEMPT)
+
+        assert coll.update_one.call_args.args[0]["attempt_id"] == ATTEMPT
+
+    def test_a_refused_write_is_reported(self, simulations):
+        """False means "not yours any more", and the caller has to act on it."""
+        repo, coll = simulations
+        coll.update_one.return_value = MagicMock(matched_count=0)
+
+        assert repo.mark_done(SIM_OID, None, None, {}, attempt_id=ATTEMPT) is False
+        assert repo.mark_error(SIM_OID, "boom", attempt_id=ATTEMPT) is False
+        assert repo.mark_running(SIM_OID, attempt_id=ATTEMPT) is False
+
+    def test_none_is_unconditional_for_recovery(self, simulations):
+        # Recovery and the synthetic path pass None deliberately: there is no
+        # attempt, or the one that existed is known to be gone.
+        repo, coll = simulations
+        coll.update_one.return_value = MagicMock(matched_count=1)
+
+        repo.mark_error(SIM_OID, "recovered", attempt_id=None)
+
+        assert coll.update_one.call_args.args[0] == {"_id": SIM_OID}
+
+
+class TestRequeue:
+    """Losing the container is not the simulation's fault.
+
+    The work was sound, so the simulation goes back to Waiting and the
+    dispatcher places it again — rather than being marked in error for a race
+    it had no part in.
+    """
+
+    def test_it_returns_to_waiting_and_loses_its_placement(self, simulations):
+        repo, coll = simulations
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        assert repo.requeue(SIM_OID, ATTEMPT, "taken over") is True
+
+        sets = coll.update_one.call_args.args[1]["$set"]
+        assert sets["status"] == EnumStatus.WAITING
+        for field in ("attempt_id", "remote_pid", "assigned_resource_id",
+                      "assigned_host_id", "start_time", "end_time"):
+            assert sets[field] is None, field
+
+    def test_it_is_guarded_by_the_attempt(self, simulations):
+        repo, coll = simulations
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        repo.requeue(SIM_OID, ATTEMPT, "taken over")
+
+        assert coll.update_one.call_args.args[0] == {
+            "_id": SIM_OID, "attempt_id": ATTEMPT}
+
+    def test_a_simulation_a_newer_attempt_owns_is_not_dragged_back(self, simulations):
+        repo, coll = simulations
+        coll.update_one.return_value = MagicMock(modified_count=0)
+
+        assert repo.requeue(SIM_OID, ATTEMPT, "taken over") is False
+
+    def test_the_reason_is_kept_for_the_operator(self, simulations):
+        repo, coll = simulations
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        repo.requeue(SIM_OID, ATTEMPT, "the reservation is gone")
+
+        assert "reservation" in \
+            coll.update_one.call_args.args[1]["$set"]["system_message"]

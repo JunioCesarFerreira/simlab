@@ -626,12 +626,22 @@ class CoojaResourceRepository:
         message: str = "",
         *,
         container_state_counts: bool,
+        expect_attempt_id: Optional[str] = None,
+        reserved_before: Optional[datetime] = None,
     ) -> bool:
-        """Free a container without the attempt guard — recovery paths only.
+        """Free a container outside the normal completion path.
 
-        Used by startup recovery and the stale-reservation sweep, where the
-        attempt that held it is known to be gone. Normal completion goes
-        through :meth:`release`.
+        Used by startup recovery and the stale-reservation sweep. Normal
+        completion goes through :meth:`release`, which is guarded by the
+        attempt that holds the container.
+
+        ``expect_attempt_id`` and ``reserved_before`` let a caller that *read*
+        the reservation insist on releasing the same one it saw. The sweep
+        needs that: between its query and this write the runner may have
+        promoted the reservation to ``busy`` and started the JVM, and freeing
+        it then would hand a container that is running something to the next
+        placement. Startup recovery passes neither, because there the
+        attempt is known to be gone — the process that held it died.
 
         Lands the container by the same rule as a normal release, not at
         ``offline``: when a master-node restarts, the container is fine and it
@@ -653,8 +663,16 @@ class CoojaResourceRepository:
             "last_check_message": message,
             "updated_time": now,
         }}]
+        condition: dict[str, Any] = {"_id": oid}
+        if expect_attempt_id is not None:
+            condition["attempt_id"] = expect_attempt_id
+            # Still waiting to start. A reservation that got as far as `busy`
+            # is governed by the simulation timeout, not by this.
+            condition["status"] = EnumResourceStatus.RESERVED.value
+        if reserved_before is not None:
+            condition["reserved_at"] = {"$lt": reserved_before}
         with self.connection.connect() as db:
-            res = db[RESOURCES_COLLECTION].update_one({"_id": oid}, pipeline)
+            res = db[RESOURCES_COLLECTION].update_one(condition, pipeline)
             return res.modified_count > 0
 
     # ── health and discovery (never touching an occupied resource) ─────────

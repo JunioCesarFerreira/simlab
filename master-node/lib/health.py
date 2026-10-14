@@ -406,6 +406,9 @@ class HealthMonitor:
         log.info("Host %s — %s", name, result.describe())
         return result
 
+    def _close_generation(self, simulation_id: Any) -> None:
+        _close_generation_after_sweep(self._mongo, simulation_id)
+
     def _default_probe(self, host: dict, resource: dict) -> Any:
         transport = build_transport(
             host, resource, self._opener, jump_client=self._jump_client(host))
@@ -494,10 +497,15 @@ class HealthMonitor:
                 "starting; freeing it", name, resource.get("reserved_at"),
             )
             simulation_id = resource.get("current_simulation_id")
+            attempt_id = resource.get("attempt_id")
             if simulation_id:
                 try:
+                    # Guarded by the attempt this reservation was read with: if
+                    # the runner has meanwhile started a newer one, its result
+                    # must not be overwritten by this sweep.
                     self._mongo.simulation_repo.mark_error(
-                        simulation_id, STALE_RESERVATION_MESSAGE)
+                        simulation_id, STALE_RESERVATION_MESSAGE,
+                        attempt_id=attempt_id)
                 except Exception:
                     log.exception("Failed to fail simulation %s", simulation_id)
             host = self._mongo.host_repo.get(resource.get("host_id"))
@@ -505,11 +513,41 @@ class HealthMonitor:
                 resource["_id"], STALE_RESERVATION_MESSAGE,
                 container_state_counts=not operator_configured(
                     host or {}, resource),
+                # Only if it is still the reservation that was read. Between
+                # the query and this write the runner may have promoted it to
+                # busy and started the JVM, and freeing it then would hand a
+                # container that is running something to the next placement.
+                expect_attempt_id=attempt_id,
+                reserved_before=cutoff,
             ):
                 swept.append(name)
+                self._close_generation(simulation_id)
         if swept and self._on_capacity is not None:
             self._on_capacity()
         return swept
+
+
+def _close_generation_after_sweep(mongo: Any, simulation_id: Any) -> None:
+    """Re-evaluate the generation of a simulation the sweep just failed.
+
+    The sweep was the one place that failed a simulation without this. If it
+    failed the last one still active, the generation stayed pending for ever
+    and the experiment waited on a strategy event that would never come.
+    """
+    if not simulation_id:
+        return
+    try:
+        simulation = mongo.simulation_repo.get(str(simulation_id))
+    except Exception:
+        log.exception("Could not re-read simulation %s", simulation_id)
+        return
+    generation_id = (simulation or {}).get("generation_id")
+    if not generation_id:
+        return
+    try:
+        mongo.generation_repo.close_if_finished(generation_id)
+    except Exception:
+        log.exception("Failed to close generation %s", generation_id)
 
 
 def probe_is_fresh(resource: dict, ttl_sec: float) -> bool:

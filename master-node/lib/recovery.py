@@ -231,21 +231,17 @@ def _release(mongo: Any, resource: dict, message: str, host: Optional[dict]) -> 
 
 
 def _fail_simulation(mongo: Any, simulation: dict, sim_oid: ObjectId) -> None:
-    mongo.simulation_repo.mark_error(sim_oid, RECOVERY_MESSAGE)
+    # Unconditional: the probe said the process is gone, so no attempt owns
+    # this simulation any more.
+    mongo.simulation_repo.mark_error(sim_oid, RECOVERY_MESSAGE, attempt_id=None)
     generation_id = simulation.get("generation_id")
     if generation_id:
         _close_generation(mongo, generation_id)
 
 
 def _close_generation(mongo: Any, generation_id: Any) -> None:
-    gr = mongo.generation_repo
     try:
-        if gr.any_simulation_active(generation_id):
-            return
-        if gr.all_simulations_done(generation_id):
-            gr.mark_done(generation_id)
-        else:
-            gr.mark_error(generation_id)
+        mongo.generation_repo.close_if_finished(generation_id)
     except Exception:
         log.exception("Failed to close generation %s", generation_id)
 

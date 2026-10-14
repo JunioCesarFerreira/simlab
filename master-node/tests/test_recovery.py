@@ -78,7 +78,8 @@ class TestAdoption:
         report = reconcile_occupied_resources(mongo, probe=lambda h, r, pid: False)
 
         assert report.released == ["cooja1"]
-        mongo.simulation_repo.mark_error.assert_called_once_with(SIM_1, RECOVERY_MESSAGE)
+        mongo.simulation_repo.mark_error.assert_called_once_with(
+            SIM_1, RECOVERY_MESSAGE, attempt_id=None)
 
     def test_an_unreachable_container_is_left_alone(self):
         # The specification's rule: losing contact is not the run failing.
@@ -240,7 +241,8 @@ class TestInterruptedSimulations:
     def test_a_run_that_is_really_over_is_marked_failed(self):
         mongo = FakeMongo(occupied=[resource()], simulation=simulation("Running"))
         reconcile_occupied_resources(mongo, probe=lambda *a: False)
-        mongo.simulation_repo.mark_error.assert_called_once_with(SIM_1, RECOVERY_MESSAGE)
+        mongo.simulation_repo.mark_error.assert_called_once_with(
+            SIM_1, RECOVERY_MESSAGE, attempt_id=None)
 
     def test_a_finished_simulation_is_left_alone(self):
         # The run completed and only the release was lost; there is nothing to
@@ -274,14 +276,7 @@ class TestGenerationClosing:
     def test_the_generation_is_re_evaluated(self):
         mongo = FakeMongo(occupied=[resource()], simulation=simulation("Running"))
         reconcile_occupied_resources(mongo, probe=lambda *a: False)
-        mongo.generation_repo.mark_error.assert_called_once_with(GEN_1)
-
-    def test_a_generation_with_work_left_is_untouched(self):
-        mongo = FakeMongo(occupied=[resource()], simulation=simulation("Running"))
-        mongo.generation_repo.any_simulation_active.return_value = True
-        reconcile_occupied_resources(mongo, probe=lambda *a: False)
-        mongo.generation_repo.mark_error.assert_not_called()
-        mongo.generation_repo.mark_done.assert_not_called()
+        mongo.generation_repo.close_if_finished.assert_called_once_with(GEN_1)
 
     def test_an_adopted_run_does_not_close_its_generation(self):
         # It is still going; declaring the generation finished would be wrong.

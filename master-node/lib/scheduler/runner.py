@@ -23,6 +23,34 @@ class _PrepareFailed(Exception):
     """Internal: the inputs could not be assembled, so nothing was started."""
 
 
+class TerminationUnconfirmed(Exception):
+    """A run had to be stopped and the stop could not be confirmed.
+
+    Raised instead of a plain failure because the two call for different
+    things. A simulation that failed leaves a working container; a run that
+    may still be alive leaves a container nobody should be given. The worker
+    is taken out of the pool administratively — the sticky, operator-visible
+    mechanism — rather than released, because a health probe cannot tell a
+    leftover JVM from an idle container and would hand it straight back.
+    """
+
+
+class LostOwnership(Exception):
+    """This attempt no longer owns the container it is running on.
+
+    Raised when a write guarded by ``attempt_id`` matches nothing: a recovery
+    pass or the stale-reservation sweep handed the container to someone else
+    while this thread was working. It is deliberately *not* a failure of the
+    simulation — the work was sound — so the simulation goes back to the queue
+    instead of being marked in error.
+
+    The remote run is stopped on the way out. The pool already believes that
+    container is free, so leaving a JVM on it would invite a second simulation
+    onto the same worker, which is the one thing the reservation exists to
+    prevent.
+    """
+
+
 class SimulationRunner:
     """Runs placed simulations. One instance, shared by every runner thread.
 
@@ -78,6 +106,7 @@ class SimulationRunner:
             self._execute(
                 sim, transport, self._mongo, remote_files,
                 on_started=self._started(resource["_id"], sim_oid, attempt_id),
+                attempt_id=attempt_id,
             )
 
         self._on_container(sim, host, resource, attempt_id, body,
@@ -103,7 +132,7 @@ class SimulationRunner:
         def body(transport) -> None:
             self._execute(
                 sim, transport, self._mongo, None,
-                on_started=None, adopt_pid=int(pid),
+                on_started=None, adopt_pid=int(pid), attempt_id=attempt_id,
             )
 
         self._on_container(sim, host, resource, attempt_id, body)
@@ -135,16 +164,34 @@ class SimulationRunner:
                 body(transport)
         except _PrepareFailed:
             log.warning("[%s] Skipping simulation %s (prepare failed)", where, sim_oid)
-            self._fail(sim, sim_oid, "Failed to prepare simulation files")
+            self._fail(sim, sim_oid, "Failed to prepare simulation files", attempt_id)
+        except TerminationUnconfirmed as e:
+            log.error(
+                "[%s] Could not confirm that the run was stopped: %s. "
+                "Disabling %s so nothing else is placed on it until someone "
+                "has looked", where, e, resource.get("name"),
+            )
+            self._fail(sim, sim_oid, str(e), attempt_id)
+            self._quarantine(resource, str(e))
+        except LostOwnership as e:
+            # Not the simulation's fault, so it is not marked in error: it
+            # goes back to the queue and is placed again. The container is
+            # already someone else's, which is why the release below finds
+            # nothing of ours to give back.
+            log.warning(
+                "[%s] Attempt %s lost %s: %s; returning it to the queue",
+                where, attempt_id, sim_oid, e,
+            )
+            self._requeue(sim_oid, attempt_id, str(e))
         except TransportError as e:
             # Reaching the container failed. The simulation never started, so
             # it is a plain failure — distinct from losing contact with a run
             # already in progress, which the follower handles by reconnecting.
             log.warning("[%s] Could not reach the container for %s: %s", where, sim_oid, e)
-            self._fail(sim, sim_oid, f"Could not reach {where}: {e}")
+            self._fail(sim, sim_oid, f"Could not reach {where}: {e}", attempt_id)
         except Exception as e:
             log.exception("[%s] General ERROR on %s: %s", where, sim_oid, e)
-            self._fail(sim, sim_oid, str(e))
+            self._fail(sim, sim_oid, str(e), attempt_id)
         finally:
             if self._cleanup_local is not None and cleanup is not None:
                 self._cleanup_local(cleanup())
@@ -171,18 +218,68 @@ class SimulationRunner:
 
         def on_started(pid: int) -> None:
             try:
-                self._mongo.resource_repo.mark_busy(
+                promoted = self._mongo.resource_repo.mark_busy(
                     resource_id, sim_oid, attempt_id, pid)
+            except Exception:
+                # The write itself failed — Mongo blinked. Bookkeeping only:
+                # the simulation is already running, and failing it over a
+                # lost write would waste the whole run.
+                log.exception(
+                    "Failed to record pid %s for simulation %s", pid, sim_oid)
+                return
+
+            if not promoted:
+                # Not a lost write: a *refused* one. The reservation this
+                # attempt held is gone, so the pool already considers the
+                # container free and the run has to stop.
+                raise LostOwnership(
+                    f"the reservation for attempt {attempt_id} is gone")
+
+            try:
                 self._mongo.simulation_repo.set_remote_pid(sim_oid, attempt_id, pid)
             except Exception:
-                # Bookkeeping only: the simulation is already running, and
-                # failing it over a lost write would waste the whole run.
                 log.exception(
                     "Failed to record pid %s for simulation %s", pid, sim_oid)
 
         return on_started
 
     # ── helpers ────────────────────────────────────────────────────────────
+
+    def _quarantine(self, resource: dict, reason: str) -> None:
+        """Take a worker out of the pool until a person says otherwise.
+
+        ``enabled = False`` is the right lever: it is administrative, so a
+        successful probe cannot undo it, and the page already explains a
+        disabled worker as draining. The alternative — releasing it — gives
+        the next simulation a container that may still be running the last
+        one.
+        """
+        try:
+            self._mongo.resource_repo.set_enabled(resource["_id"], False)
+        except Exception:
+            log.exception(
+                "Could not disable %s after an unconfirmed stop",
+                resource.get("name"),
+            )
+
+    def _requeue(self, sim_oid: ObjectId, attempt_id: str, reason: str) -> None:
+        """Hand the simulation back to the queue, keeping no result.
+
+        If the guard refuses this too, a newer attempt already owns the
+        simulation and is doing the work — which is the outcome we wanted
+        anyway, so it is logged and left alone.
+        """
+        try:
+            requeued = self._mongo.simulation_repo.requeue(
+                sim_oid, attempt_id, f"Re-queued: {reason}")
+        except Exception:
+            log.exception("Failed to re-queue simulation %s", sim_oid)
+            return
+        if not requeued:
+            log.info(
+                "Simulation %s is already owned by a newer attempt; "
+                "leaving it alone", sim_oid,
+            )
 
     def _release(
         self,
@@ -213,9 +310,23 @@ class SimulationRunner:
             if self._on_release is not None:
                 self._on_release()
 
-    def _fail(self, sim: dict, sim_oid: ObjectId, message: str) -> None:
+    def _fail(
+        self, sim: dict, sim_oid: ObjectId, message: str, attempt_id: str
+    ) -> None:
+        """Record this attempt's failure, if it is still the owner.
+
+        Guarded like every other write about the simulation: a thread whose
+        container was handed on must not mark a failure against the placement
+        that took over.
+        """
         try:
-            self._mongo.simulation_repo.mark_error(sim_oid, message)
+            if not self._mongo.simulation_repo.mark_error(
+                    sim_oid, message, attempt_id=attempt_id):
+                log.info(
+                    "Simulation %s is owned by a newer attempt; not marking "
+                    "this failure against it", sim_oid,
+                )
+                return
         except Exception:
             log.exception("Failed to mark error on simulation %s", sim_oid)
         generation_id = sim.get("generation_id")
@@ -226,13 +337,7 @@ class SimulationRunner:
                 log.exception("Failed to close generation %s", generation_id)
 
     def _close_generation(self, generation_id: ObjectId) -> None:
-        gr = self._mongo.generation_repo
-        if gr.any_simulation_active(generation_id):
-            return
-        if gr.all_simulations_done(generation_id):
-            gr.mark_done(generation_id)
-        else:
-            gr.mark_error(generation_id)
+        self._mongo.generation_repo.close_if_finished(generation_id)
 
     def _host_key_sink(self, host: dict) -> Optional[Callable[[str], None]]:
         if self._on_learn_host_key is None:

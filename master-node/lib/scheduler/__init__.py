@@ -17,7 +17,11 @@ from lib.scheduler.inventory import (
     snapshot_loads,
     total_capacity,
 )
-from lib.scheduler.runner import SimulationRunner
+from lib.scheduler.runner import (
+    LostOwnership,
+    SimulationRunner,
+    TerminationUnconfirmed,
+)
 from lib.scheduler.dispatcher import IDLE_TICK_SEC, Dispatcher
 
 __all__ = [
@@ -30,7 +34,9 @@ __all__ = [
     "find_load",
     "snapshot_loads",
     "total_capacity",
+    "LostOwnership",
     "SimulationRunner",
+    "TerminationUnconfirmed",
     "Dispatcher",
     "IDLE_TICK_SEC",
 ]

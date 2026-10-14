@@ -466,7 +466,7 @@ class TestStaleReservations:
 
         assert swept == ["cooja1"]
         mongo.simulation_repo.mark_error.assert_called_once_with(
-            SIM_ID, STALE_RESERVATION_MESSAGE)
+            SIM_ID, STALE_RESERVATION_MESSAGE, attempt_id=None)
         mongo.resource_repo.force_release.assert_called_once()
 
     def test_the_cutoff_follows_the_configured_ttl(self):

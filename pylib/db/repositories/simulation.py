@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from typing import Optional, Callable
+from typing import Any, Callable, Optional
 from bson import ObjectId, errors
 
 from pylib.db.models.simulation import Simulation
@@ -108,15 +108,39 @@ class SimulationRepository:
                 {"$set": {"status": status}}
             )
 
-    def mark_running(self, sim_id: ObjectId):
+    def _attempt_filter(
+        self, sim_id: ObjectId, attempt_id: Optional[str]
+    ) -> dict[str, Any]:
+        """The filter for a write that belongs to one attempt.
+
+        ``attempt_id`` is required of every caller and may be ``None``, which
+        means "unconditional — there is no attempt, or the one that existed is
+        known to be gone". Recovery and the synthetic path pass ``None``
+        deliberately; everything that runs on a container passes the attempt
+        it holds.
+
+        The guard matters because an attempt can lose its container without
+        knowing: a recovery pass or the stale-reservation sweep may have given
+        it to someone else. Without the filter, the thread that lost it still
+        publishes its result over the one that took over — two attempts
+        writing the same document, last one wins, and nothing says so.
+        """
+        if attempt_id is None:
+            return {"_id": sim_id}
+        return {"_id": sim_id, "attempt_id": attempt_id}
+
+    def mark_running(
+        self, sim_id: ObjectId, *, attempt_id: Optional[str]
+    ) -> bool:
         with self.connection.connect() as db:
-            db["simulations"].update_one(
-                {"_id": sim_id},
+            res = db["simulations"].update_one(
+                self._attempt_filter(sim_id, attempt_id),
                 {"$set": {
                     "status": EnumStatus.RUNNING,
                     "start_time": datetime.now(),
                 }}
             )
+            return res.matched_count > 0
 
     def mark_done(
         self,
@@ -125,7 +149,15 @@ class SimulationRepository:
         csv_id: Optional[ObjectId],
         network_metrics: dict[str, float],
         dodag: Optional[dict] = None,
-    ):
+        *,
+        attempt_id: Optional[str],
+    ) -> bool:
+        """Publish a result, for the attempt that is still the owner.
+
+        Returns false when the write matched nothing, which means this attempt
+        no longer owns the simulation. The caller must not treat that as
+        success: the result belongs to a placement that was taken over.
+        """
         fields: dict = {
             "status": EnumStatus.DONE,
             "end_time": datetime.now(),
@@ -136,21 +168,56 @@ class SimulationRepository:
         if dodag is not None:
             fields["dodag"] = dodag
         with self.connection.connect() as db:
-            db["simulations"].update_one(
-                {"_id": sim_id},
+            res = db["simulations"].update_one(
+                self._attempt_filter(sim_id, attempt_id),
                 {"$set": fields}
             )
+            return res.matched_count > 0
 
-    def mark_error(self, sim_id: ObjectId, system_message: str):
+    def mark_error(
+        self, sim_id: ObjectId, system_message: str, *, attempt_id: Optional[str]
+    ) -> bool:
         with self.connection.connect() as db:
-            db["simulations"].update_one(
-                {"_id": sim_id},
+            res = db["simulations"].update_one(
+                self._attempt_filter(sim_id, attempt_id),
                 {"$set": {
                     "status": EnumStatus.ERROR,
                     "end_time": datetime.now(),
                     "system_message": system_message
                 }}
             )
+            return res.matched_count > 0
+
+    def requeue(self, sim_id: ObjectId, attempt_id: str, reason: str) -> bool:
+        """Put a simulation back in the queue, losing its placement.
+
+        For the one case where a failure is not the simulation's fault: the
+        attempt discovered mid-run that it no longer owns the container. The
+        work is sound and worth doing again, so the simulation returns to
+        ``Waiting`` and the dispatcher places it afresh — and the change
+        stream picks it up without anyone having to remember to resubmit.
+
+        Guarded by the attempt, so the thread that already lost the race
+        cannot drag a newer placement back into the queue.
+        """
+        with self.connection.connect() as db:
+            res = db["simulations"].update_one(
+                {"_id": sim_id, "attempt_id": attempt_id},
+                {"$set": {
+                    "status": EnumStatus.WAITING,
+                    "system_message": reason,
+                    "start_time": None,
+                    "end_time": None,
+                    "assigned_host_id": None,
+                    "assigned_host_name": None,
+                    "assigned_resource_id": None,
+                    "assigned_resource_name": None,
+                    "assigned_container_id": None,
+                    "attempt_id": None,
+                    "remote_pid": None,
+                }},
+            )
+            return res.modified_count > 0
 
     def set_assignment(
         self,

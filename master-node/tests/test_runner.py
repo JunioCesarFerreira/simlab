@@ -12,7 +12,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 from bson import ObjectId
 
-from lib.scheduler.runner import SimulationRunner
+from lib.scheduler.runner import (
+    LostOwnership,
+    SimulationRunner,
+    TerminationUnconfirmed,
+)
 from lib.transport import TransportError, TransportUnreachable
 
 SIM_OID = ObjectId("507f1f77bcf86cd799430003")
@@ -88,7 +92,7 @@ class TestSuccessfulRun:
         """
         mongo = FakeMongo()
 
-        def execute(sim, tr, repo, remote_files, on_started=None):
+        def execute(sim, tr, repo, remote_files, on_started=None, **kwargs):
             mongo.resource_repo.mark_busy.assert_not_called()
             on_started(4242)
 
@@ -118,7 +122,7 @@ class TestSuccessfulRun:
 
         build_runner(
             mongo,
-            execute=lambda sim, tr, repo, rf, on_started=None: on_started(99),
+            execute=lambda sim, tr, repo, rf, on_started=None, **kw: on_started(99),
         ).run(SIM, HOST, RESOURCE, ATTEMPT)
 
         mongo.simulation_repo.mark_error.assert_not_called()
@@ -256,7 +260,7 @@ class TestReleaseGuard:
         mongo = FakeMongo()
         build_runner(
             mongo,
-            execute=lambda sim, tr, repo, rf, on_started=None: on_started(7),
+            execute=lambda sim, tr, repo, rf, on_started=None, **kw: on_started(7),
         ).run(SIM, HOST, RESOURCE, "other-attempt")
 
         # Both ends of the lifecycle are guarded by the same attempt, so a
@@ -266,30 +270,208 @@ class TestReleaseGuard:
         assert mongo.resource_repo.release.call_args.args[2] == "other-attempt"
 
 
+class TestUnconfirmedStop:
+    """A worker that may still be running the last simulation is not idle.
+
+    `terminate()` used to report success whenever the command executed, so a
+    run that could not be stopped released its container anyway. The next
+    simulation then shared the worker with an orphaned JVM and its timing was
+    silently wrong — and the measurements are the point of the platform.
+    """
+
+    def test_the_worker_leaves_the_pool_administratively(self, transport):
+        mongo = FakeMongo()
+
+        def execute(sim, tr, repo, rf, on_started=None, **kw):
+            raise TerminationUnconfirmed("could not be stopped")
+
+        build_runner(mongo, execute=execute).run(SIM, HOST, RESOURCE, ATTEMPT)
+
+        # `enabled = False` rather than a status, because a successful probe
+        # cannot undo it: a health check cannot tell a leftover JVM from an
+        # idle container and would hand the worker straight back.
+        mongo.resource_repo.set_enabled.assert_called_once_with(RES_ID, False)
+
+    def test_the_simulation_is_still_marked_failed(self, transport):
+        mongo = FakeMongo()
+
+        def execute(sim, tr, repo, rf, on_started=None, **kw):
+            raise TerminationUnconfirmed("could not be stopped")
+
+        build_runner(mongo, execute=execute).run(SIM, HOST, RESOURCE, ATTEMPT)
+
+        mongo.simulation_repo.mark_error.assert_called_once()
+        assert "stopped" in mongo.simulation_repo.mark_error.call_args.args[1]
+
+    def test_a_plain_failure_leaves_the_worker_enabled(self, transport):
+        mongo = FakeMongo()
+
+        def execute(sim, tr, repo, rf, on_started=None, **kw):
+            raise RuntimeError("the simulation did not complete")
+
+        build_runner(mongo, execute=execute).run(SIM, HOST, RESOURCE, ATTEMPT)
+
+        mongo.resource_repo.set_enabled.assert_not_called()
+
+    def test_a_failure_to_disable_does_not_crash_the_thread(self, transport):
+        mongo = FakeMongo()
+        mongo.resource_repo.set_enabled.side_effect = RuntimeError("mongo gone")
+
+        def execute(sim, tr, repo, rf, on_started=None, **kw):
+            raise TerminationUnconfirmed("could not be stopped")
+
+        build_runner(mongo, execute=execute).run(SIM, HOST, RESOURCE, ATTEMPT)
+
+        mongo.resource_repo.release.assert_called_once()
+
+
+class TestLostOwnership:
+    """A thread that lost its container must not act as though it still has it.
+
+    A recovery pass or the stale-reservation sweep can hand a container on
+    while a runner thread is working. Until the writes were guarded, that
+    thread went on to promote the container, publish a result over the newer
+    attempt and release a reservation that was no longer its own — three ways
+    for two attempts to collide on one document and one worker.
+
+    The decision taken: stop the remote run and return the simulation to the
+    queue. The pool already believes the container is free, so a running JVM
+    on it would invite a second simulation onto the same worker.
+    """
+
+    def test_a_refused_promotion_stops_the_run(self, transport):
+        mongo = FakeMongo()
+        mongo.resource_repo.mark_busy.return_value = False
+        reached_the_end = []
+
+        def execute(sim, tr, repo, rf, on_started=None, **kw):
+            on_started(4242)
+            reached_the_end.append(True)
+
+        build_runner(mongo, execute=execute).run(SIM, HOST, RESOURCE, ATTEMPT)
+
+        assert reached_the_end == []
+
+    def test_it_goes_back_to_the_queue_not_to_an_error(self, transport):
+        mongo = FakeMongo()
+        mongo.resource_repo.mark_busy.return_value = False
+
+        build_runner(
+            mongo,
+            execute=lambda sim, tr, repo, rf, on_started=None, **kw: on_started(1),
+        ).run(SIM, HOST, RESOURCE, ATTEMPT)
+
+        # The work was sound; it simply is not ours any more.
+        mongo.simulation_repo.mark_error.assert_not_called()
+        mongo.simulation_repo.requeue.assert_called_once()
+        sim_oid, attempt, reason = mongo.simulation_repo.requeue.call_args.args
+        assert sim_oid == SIM_OID and attempt == ATTEMPT
+        assert "reservation" in reason
+
+    def test_a_lost_write_is_still_only_bookkeeping(self, transport):
+        """An exception is Mongo blinking, not a refusal.
+
+        The simulation is already running, and failing it over a write that
+        did not land would waste the whole run.
+        """
+        mongo = FakeMongo()
+        mongo.resource_repo.mark_busy.side_effect = RuntimeError("mongo blinked")
+        reached_the_end = []
+
+        def execute(sim, tr, repo, rf, on_started=None, **kw):
+            on_started(4242)
+            reached_the_end.append(True)
+
+        build_runner(mongo, execute=execute).run(SIM, HOST, RESOURCE, ATTEMPT)
+
+        assert reached_the_end == [True]
+        mongo.simulation_repo.requeue.assert_not_called()
+
+    def test_a_refused_publication_goes_back_to_the_queue(self, transport):
+        # What `mark_done` returning false means, raised by the execution.
+        mongo = FakeMongo()
+
+        def execute(sim, tr, repo, rf, on_started=None, **kw):
+            raise LostOwnership("the simulation was taken over")
+
+        build_runner(mongo, execute=execute).run(SIM, HOST, RESOURCE, ATTEMPT)
+
+        mongo.simulation_repo.requeue.assert_called_once()
+        mongo.simulation_repo.mark_error.assert_not_called()
+
+    def test_the_container_is_still_given_back(self, transport):
+        # The release is guarded by the attempt, so this frees nothing if the
+        # container is already someone else's — but it must still be tried,
+        # for the case where the simulation moved on and the container did not.
+        mongo = FakeMongo()
+        mongo.resource_repo.mark_busy.return_value = False
+
+        build_runner(
+            mongo,
+            execute=lambda sim, tr, repo, rf, on_started=None, **kw: on_started(1),
+        ).run(SIM, HOST, RESOURCE, ATTEMPT)
+
+        mongo.resource_repo.release.assert_called_once()
+
+    def test_a_newer_attempt_already_owning_it_is_left_alone(self, transport):
+        mongo = FakeMongo()
+        mongo.resource_repo.mark_busy.return_value = False
+        mongo.simulation_repo.requeue.return_value = False      # guard refused
+
+        build_runner(
+            mongo,
+            execute=lambda sim, tr, repo, rf, on_started=None, **kw: on_started(1),
+        ).run(SIM, HOST, RESOURCE, ATTEMPT)
+
+        # Nothing else to do: the newer attempt is doing the work.
+        mongo.simulation_repo.mark_error.assert_not_called()
+
+    def test_a_failed_requeue_does_not_crash_the_thread(self, transport):
+        mongo = FakeMongo()
+        mongo.resource_repo.mark_busy.return_value = False
+        mongo.simulation_repo.requeue.side_effect = RuntimeError("mongo gone")
+
+        build_runner(
+            mongo,
+            execute=lambda sim, tr, repo, rf, on_started=None, **kw: on_started(1),
+        ).run(SIM, HOST, RESOURCE, ATTEMPT)
+
+        mongo.resource_repo.release.assert_called_once()
+
+
 # ── Generation bookkeeping ───────────────────────────────────────────────────
 
 class TestGenerationClosing:
+    """The runner asks; the decision itself belongs to the repository.
+
+    It used to carry its own copy of the five lines that decide, as did three
+    other places — and a fifth, the stale-reservation sweep, carried none.
+    ``close_if_finished`` is tested on the repository, where it now lives.
+    """
+
     def test_a_failure_re_evaluates_the_generation(self, transport):
         mongo = FakeMongo()
-        mongo.generation_repo.all_simulations_done.return_value = False
         build_runner(mongo, prepare=lambda sim, repo: (False, [], [])).run(
             SIM, HOST, RESOURCE, ATTEMPT)
-        mongo.generation_repo.mark_error.assert_called_once_with(GEN_OID)
+        mongo.generation_repo.close_if_finished.assert_called_once_with(GEN_OID)
 
-    def test_a_generation_still_working_is_left_alone(self, transport):
+    def test_a_failure_from_a_lost_attempt_is_not_recorded(self):
+        # The newer attempt owns the simulation; this one's failure is its
+        # own business and must not land on the document.
         mongo = FakeMongo()
-        mongo.generation_repo.any_simulation_active.return_value = True
+        mongo.simulation_repo.mark_error.return_value = False
+
         build_runner(mongo, prepare=lambda sim, repo: (False, [], [])).run(
             SIM, HOST, RESOURCE, ATTEMPT)
-        mongo.generation_repo.mark_done.assert_not_called()
-        mongo.generation_repo.mark_error.assert_not_called()
+
+        mongo.generation_repo.close_if_finished.assert_not_called()
 
     def test_a_simulation_without_a_generation_is_fine(self, transport):
         mongo = FakeMongo()
         sim = {"_id": SIM_OID, "status": "Waiting"}
         build_runner(mongo, prepare=lambda s, r: (False, [], [])).run(
             sim, HOST, RESOURCE, ATTEMPT)
-        mongo.generation_repo.any_simulation_active.assert_not_called()
+        mongo.generation_repo.close_if_finished.assert_not_called()
         mongo.resource_repo.release.assert_called_once()
 
 

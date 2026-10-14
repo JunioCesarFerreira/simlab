@@ -263,6 +263,48 @@ class TestForceRelease:
         assert sets["current_simulation_id"] is None
         assert sets["attempt_id"] is None
 
+    def test_the_sweep_can_insist_on_the_reservation_it_read(self, resources):
+        """The race the sweep had: read, then free by `_id` alone.
+
+        Between the query and the write, the runner may have promoted the
+        reservation to ``busy`` and started the JVM. Freeing it then hands a
+        container that is running something to the next placement — two
+        simulations on one worker, which is the one thing the reservation
+        exists to prevent.
+        """
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(modified_count=1)
+        cutoff = datetime.now() - timedelta(minutes=10)
+
+        repo.force_release(
+            RES_ID, "stale", container_state_counts=True,
+            expect_attempt_id=ATTEMPT, reserved_before=cutoff)
+
+        flt = coll.update_one.call_args.args[0]
+        assert flt["_id"] == RES_ID
+        assert flt["attempt_id"] == ATTEMPT
+        # Still waiting to start: one that reached `busy` is governed by the
+        # simulation timeout, not by this.
+        assert flt["status"] == EnumResourceStatus.RESERVED.value
+        assert flt["reserved_at"] == {"$lt": cutoff}
+
+    def test_startup_recovery_still_frees_unconditionally(self, resources):
+        # There the attempt is known gone: the process that held it died.
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        repo.force_release(RES_ID, "recovered", container_state_counts=True)
+
+        assert coll.update_one.call_args.args[0] == {"_id": RES_ID}
+
+    def test_a_reservation_that_moved_on_is_not_freed(self, resources):
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(modified_count=0)
+
+        assert repo.force_release(
+            RES_ID, "stale", container_state_counts=True,
+            expect_attempt_id=ATTEMPT) is False
+
     def test_recovery_returns_the_container_to_the_pool(self, resources):
         """Regression: recovery handed back a pool of zero.
 

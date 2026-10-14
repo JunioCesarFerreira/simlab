@@ -27,7 +27,13 @@ from lib.credentials import SecretOpener
 from lib.detached import RUN_ARTIFACTS, DetachedRun, is_running
 from lib.health import HealthMonitor
 from lib.recovery import reconcile_occupied_resources
-from lib.scheduler import Dispatcher, SimulationRunner, build_policy
+from lib.scheduler import (
+    Dispatcher,
+    LostOwnership,
+    SimulationRunner,
+    TerminationUnconfirmed,
+    build_policy,
+)
 from lib.synthetic_data import run_synthetic_simulation, resolve_synthetic_settings
 from lib.transport import SSHTransport, TransportError, build_transport
 
@@ -147,20 +153,14 @@ def _assert_capacity(num_workers: int) -> None:
 
 
 def _check_and_close_generation(generation_id: ObjectId, mongo: MongoRepository) -> None:
+    """Close the generation if this was the last simulation still running.
+
+    The decision itself lives in ``GenerationRepository.close_if_finished``,
+    because four places used to carry their own copy of it and a fifth — the
+    stale-reservation sweep — had none at all.
     """
-    Called after every simulation status change.
-    If no simulation in this generation is still WAITING or RUNNING:
-      - DONE  : every simulation finished with DONE.
-      - ERROR : at least one simulation finished with ERROR.
-    """
-    gr = mongo.generation_repo
     try:
-        if gr.any_simulation_active(generation_id):
-            return  # still work in progress — do nothing
-        if gr.all_simulations_done(generation_id):
-            gr.mark_done(generation_id)
-        else:
-            gr.mark_error(generation_id)
+        mongo.generation_repo.close_if_finished(generation_id)
     except Exception:
         log.exception("Failed to close generation %s", generation_id)
 
@@ -182,7 +182,9 @@ def recover_stuck_simulations(mongo: MongoRepository) -> None:
         sim_id = ObjectId(sim["_id"])
         log.warning("Recovering stuck simulation %s (start_time=%s)", sim_id, sim.get("start_time"))
         try:
-            mongo.simulation_repo.mark_error(sim_id, "Recovered: stuck in RUNNING on master-node restart")
+            mongo.simulation_repo.mark_error(
+                sim_id, "Recovered: stuck in RUNNING on master-node restart",
+                attempt_id=None)
         except Exception:
             log.exception("Failed to recover simulation %s", sim_id)
         generation_id = sim.get("generation_id")
@@ -262,6 +264,7 @@ def run_cooja_simulation(
     remote_files: list[str] | None = None,
     on_started: Callable[[int], None] | None = None,
     adopt_pid: int | None = None,
+    attempt_id: str | None = None,
 ) -> None:
     """
     Executes the simulation in the container, monitors logs, and stores results in GridFS.
@@ -275,6 +278,12 @@ def run_cooja_simulation(
     a master-node restart — so it is followed from where it is instead of
     being started. Collecting the result is identical either way, which is why
     this is one function with one branch rather than two that drift apart.
+
+    ``attempt_id`` is the placement this run belongs to, and every write about
+    the simulation carries it. A run can lose its container without noticing —
+    a recovery pass or the stale-reservation sweep may have handed it on — and
+    the guard is what stops this thread from publishing over the attempt that
+    took over. ``None`` means the legacy worker path, which has no attempt.
     """
     sim_oid = ObjectId(sim["_id"]) if not isinstance(sim["_id"], ObjectId) else sim["_id"]
     where = transport.plan.describe()
@@ -290,14 +299,20 @@ def run_cooja_simulation(
             # now: a restart must not hand a simulation a fresh timeout.
             timeout_sec = _remaining_timeout(sim)
             if timeout_sec is not None and timeout_sec <= 0:
-                runner.terminate()
-                raise RuntimeError(
-                    "the simulation had already exceeded SIM_TIMEOUT_SEC when it "
-                    "was resumed"
+                message = (
+                    "the simulation had already exceeded SIM_TIMEOUT_SEC when "
+                    "it was resumed"
                 )
+                if not runner.terminate():
+                    raise TerminationUnconfirmed(
+                        f"{message}, and it could not be stopped")
+                raise RuntimeError(message)
         else:
             log.info("[%s] Starting simulation %s", where, sim_oid)
-            mongo.simulation_repo.mark_running(sim_oid)
+            if not mongo.simulation_repo.mark_running(
+                    sim_oid, attempt_id=attempt_id):
+                raise LostOwnership(
+                    "the simulation was taken over before this run started")
 
             # No `cd` and no channel: the run is launched in its own session
             # with its output going to a file, so the JVM outlives a dropped
@@ -309,7 +324,19 @@ def run_cooja_simulation(
             )
             handle = runner.launch(command)
             if on_started is not None:
-                on_started(handle.pid)
+                try:
+                    on_started(handle.pid)
+                except LostOwnership:
+                    # The container was handed to someone else while this run
+                    # was starting. The pool already believes it is free, so
+                    # the JVM has to go before a second simulation lands on
+                    # the same worker.
+                    log.warning(
+                        "[%s] Lost the container for %s during launch; "
+                        "stopping the run", where, sim_oid,
+                    )
+                    runner.terminate()
+                    raise
             timeout_sec = SET.sim_timeout_sec or None
 
         outcome = runner.wait(
@@ -320,6 +347,12 @@ def run_cooja_simulation(
             # Timed out, killed from outside, or contact never came back. The
             # distinction is already in the outcome; what matters here is that
             # no result is fabricated from an incomplete run.
+            if outcome.stopped is False:
+                # Something may still be running in there. Distinguished from
+                # a plain failure because the container must not go back to
+                # the pool as though it were idle.
+                raise TerminationUnconfirmed(
+                    outcome.message or "the run could not be stopped")
             raise RuntimeError(
                 outcome.message or "the simulation did not complete"
             )
@@ -366,10 +399,25 @@ def run_cooja_simulation(
             except Exception:
                 log.exception("[%s] DODAG analysis failed", where)
 
-            mongo.simulation_repo.mark_done(sim_oid, log_id, csv_id, net_meas, dodag)
+            if not mongo.simulation_repo.mark_done(
+                    sim_oid, log_id, csv_id, net_meas, dodag,
+                    attempt_id=attempt_id):
+                # The result is sound but it is not ours to publish any more:
+                # something else owns this simulation now. The blobs were
+                # already uploaded, so they are removed rather than left
+                # behind with nothing referencing them.
+                for orphan in (log_id, csv_id):
+                    try:
+                        mongo.fs_handler.delete_file(str(orphan))
+                    except Exception:
+                        log.exception("Could not remove orphaned file %s", orphan)
+                raise LostOwnership(
+                    "the simulation was taken over while it was running")
         else:
             log.warning("[%s] CSV file is missing or empty for simulation %s", where, sim_oid)
-            mongo.simulation_repo.mark_error(sim_oid, "CSV file is missing or empty after conversion")
+            mongo.simulation_repo.mark_error(
+                sim_oid, "CSV file is missing or empty after conversion",
+                attempt_id=attempt_id)
 
         if sim.get("generation_id"):
             _check_and_close_generation(sim["generation_id"], mongo)
@@ -377,7 +425,8 @@ def run_cooja_simulation(
     except Exception as e:
         log.exception("[%s] Simulation ERROR %s: %s", where, sim_oid, e)
         try:
-            mongo.simulation_repo.mark_error(sim_oid, str(e))
+            mongo.simulation_repo.mark_error(
+                sim_oid, str(e), attempt_id=attempt_id)
         except Exception:
             log.exception("Failed to mark error on simulation %s", sim_oid)
         if sim.get("generation_id"):
@@ -453,7 +502,9 @@ def simulation_worker(
             if not success:
                 log.warning("[%s] Skipping simulation %s (prepare failed)", where, sim_id)
                 try:
-                    mongo.simulation_repo.mark_error(ObjectId(sim["_id"]), "Failed to prepare simulation files")
+                    mongo.simulation_repo.mark_error(
+                        ObjectId(sim["_id"]),
+                        "Failed to prepare simulation files", attempt_id=None)
                 except Exception:
                     log.exception("Failed to mark error on simulation %s", sim_id)
                 if sim.get("generation_id"):
@@ -475,7 +526,8 @@ def simulation_worker(
             log.exception("[%s] General ERROR: %s", where, e)
             try:
                 if sim and "_id" in sim:
-                    mongo.simulation_repo.mark_error(ObjectId(sim["_id"]), str(e))
+                    mongo.simulation_repo.mark_error(
+                        ObjectId(sim["_id"]), str(e), attempt_id=None)
             except Exception:
                 log.exception("Failed to mark error on simulation after general exception")
             if sim and sim.get("generation_id"):
