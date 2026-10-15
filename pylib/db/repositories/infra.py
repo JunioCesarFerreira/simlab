@@ -189,6 +189,36 @@ class HostRepository:
             res = db[HOSTS_COLLECTION].update_one({"_id": oid}, {"$set": payload})
             return res.matched_count > 0
 
+    def pin_host_key(self, host_id: Any, fingerprint: str) -> bool:
+        """Record a host key learned on first contact, and only then.
+
+        Conditional on the field being unset, so a second first-contact —
+        from another code path, or a reconnection that built its policy
+        without the stored pin — cannot overwrite what was already trusted.
+        Trust on first use is only a guarantee if the *first* use is the one
+        that sticks.
+
+        Returns whether this call was the one that pinned it.
+        """
+        oid = _oid(host_id)
+        if oid is None or not fingerprint:
+            return False
+        with self.connection.connect() as db:
+            res = db[HOSTS_COLLECTION].update_one(
+                {
+                    "_id": oid,
+                    "$or": [
+                        {"access.host_key_fingerprint": None},
+                        {"access.host_key_fingerprint": {"$exists": False}},
+                    ],
+                },
+                {"$set": {
+                    "access.host_key_fingerprint": fingerprint,
+                    "updated_time": datetime.now(),
+                }},
+            )
+            return res.modified_count > 0
+
     def set_enabled(self, host_id: Any, enabled: bool) -> bool:
         """Take a host in or out of the pool.
 
@@ -391,18 +421,48 @@ class HostRepository:
                             {"$eq": ["$$r.status", available]},
                         ]
                     }),
+                    # The four below are a *partition* of resource_total, in
+                    # this precedence: doing work, administratively out,
+                    # measured unusable, free. They used to overlap — a
+                    # container that was busy and disabled for draining
+                    # counted in both, so one worker appeared twice and the
+                    # bar's denominator exceeded the inventory.
                     "active": count_where({"$in": ["$$r.status", _OCCUPIED]}),
-                    "unavailable": count_where({
-                        "$in": ["$$r.status", [
-                            EnumResourceStatus.OFFLINE.value,
-                            EnumResourceStatus.ERROR.value,
-                        ]]
-                    }),
                     "disabled": count_where({
-                        "$or": [
-                            {"$eq": ["$$r.enabled", False]},
-                            {"$eq": ["$$r.status", EnumResourceStatus.DISABLED.value]},
+                        "$and": [
+                            {"$not": {"$in": ["$$r.status", _OCCUPIED]}},
+                            {"$or": [
+                                {"$eq": ["$$r.enabled", False]},
+                                {"$eq": ["$$r.status",
+                                         EnumResourceStatus.DISABLED.value]},
+                            ]},
                         ]
+                    }),
+                    "unavailable": count_where({
+                        "$and": [
+                            {"$eq": ["$$r.enabled", True]},
+                            {"$in": ["$$r.status", [
+                                EnumResourceStatus.OFFLINE.value,
+                                EnumResourceStatus.ERROR.value,
+                            ]]},
+                        ]
+                    }),
+                    # Subsets, reported rather than summed. Draining is an
+                    # attribute of a worker that is *in use*, and a
+                    # reservation that has not started yet is not a running
+                    # simulation — a card labelled "Running" that counted both
+                    # was saying something untrue.
+                    "draining": count_where({
+                        "$and": [
+                            {"$in": ["$$r.status", _OCCUPIED]},
+                            {"$eq": ["$$r.enabled", False]},
+                        ]
+                    }),
+                    "running": count_where({
+                        "$eq": ["$$r.status", EnumResourceStatus.BUSY.value]
+                    }),
+                    "reserved": count_where({
+                        "$eq": ["$$r.status", EnumResourceStatus.RESERVED.value]
                     }),
                     "schedulable": {
                         "$and": [

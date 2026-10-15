@@ -38,6 +38,8 @@
       :active="occupancy.active"
       :unavailable="occupancy.unavailable"
       :disabled="occupancy.disabled"
+      :resource-total="occupancy.resource_total"
+      :draining="occupancy.draining"
     />
 
     <p v-if="!schedulable && hasCapacity" class="warn">

@@ -497,6 +497,61 @@ class TestFactoryWithBorrowedJump:
         assert transport._borrowed_jump is jump
 
 
+class TestFirstContactIsRemembered:
+    """What was learned must bind the next connection of the same transport.
+
+    The policy is built fresh for every connection, from the transport's
+    stored pin. Leaving it ``None`` after learning meant a reconnection — and
+    the follower reconnects; that is the whole point of it — started as a
+    first contact again and would accept *any* key.
+    """
+
+    def _transport(self, sink=None) -> SSHTransport:
+        return SSHTransport(
+            build_plan(REMOTE_HOST, RESOURCE),
+            target_credential=SSHCredential(username="root", password="root"),
+            jump_credential=SSHCredential(username="simlab", password="k"),
+            on_learn_host_key=sink,
+        )
+
+    def test_a_learned_key_becomes_this_transports_pin(self, ssh_clients):
+        transport = self._transport()
+        transport.open()
+
+        policy = ssh_clients[0].set_missing_host_key_policy.call_args.args[0]
+        assert policy.expected is None          # first contact
+        policy.missing_host_key(MagicMock(), "192.168.0.42", fake_key(b"k1"))
+
+        transport.close()
+        transport.open()
+        reconnect_policy = ssh_clients[-2].set_missing_host_key_policy.call_args.args[0]
+        # The second connection starts pinned, so a different key is refused.
+        assert reconnect_policy.expected == fingerprint(fake_key(b"k1"))
+
+    def test_a_different_key_on_reconnect_is_refused(self, ssh_clients):
+        transport = self._transport()
+        transport.open()
+        policy = ssh_clients[0].set_missing_host_key_policy.call_args.args[0]
+        policy.missing_host_key(MagicMock(), "192.168.0.42", fake_key(b"k1"))
+        transport.close()
+
+        transport.open()
+        reconnect_policy = ssh_clients[-2].set_missing_host_key_policy.call_args.args[0]
+        with pytest.raises(HostKeyMismatch):
+            reconnect_policy.missing_host_key(
+                MagicMock(), "192.168.0.42", fake_key(b"k2"))
+
+    def test_the_caller_is_still_told_so_it_can_persist_it(self, ssh_clients):
+        learned: list[str] = []
+        transport = self._transport(sink=learned.append)
+        transport.open()
+
+        policy = ssh_clients[0].set_missing_host_key_policy.call_args.args[0]
+        policy.missing_host_key(MagicMock(), "192.168.0.42", fake_key(b"k1"))
+
+        assert learned == [fingerprint(fake_key(b"k1"))]
+
+
 # ── Moving files over a link that stalls ─────────────────────────────────────
 
 class TestTransfers:

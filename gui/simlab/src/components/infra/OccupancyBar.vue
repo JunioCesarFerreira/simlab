@@ -34,10 +34,24 @@ const props = defineProps<{
   active: number;
   unavailable: number;
   disabled: number;
+  /** The inventory. The segments partition it, so it is the denominator. */
+  resourceTotal?: number;
+  /** In use *and* administratively out — an attribute of `active`. */
+  draining?: number;
 }>();
 
-const total = computed(
-  () => props.active + props.free + props.unavailable + props.disabled,
+/**
+ * The denominator.
+ *
+ * `resource_total` when the API sends it, because the four segments are a
+ * partition of exactly that. Summing them was the fallback and the bug: a
+ * container that was busy and disabled for draining counted in two
+ * categories, so one worker produced a total of two.
+ */
+const total = computed(() =>
+  props.resourceTotal !== undefined
+    ? props.resourceTotal
+    : props.active + props.free + props.unavailable + props.disabled,
 );
 
 type Segment = { kind: string; label: string; count: number; percent: number };
@@ -59,7 +73,11 @@ const segments = computed<Segment[]>(() => {
 
 const summary = computed(() => {
   if (total.value === 0) return "No containers on this host";
-  return segments.value.map((s) => `${s.count} ${s.label}`).join(", ");
+  const parts = segments.value.map((s) => `${s.count} ${s.label}`);
+  // Draining is not a category of its own: it says something extra about the
+  // workers already counted as in use.
+  if (props.draining) parts.push(`${props.draining} of them draining`);
+  return parts.join(", ");
 });
 </script>
 

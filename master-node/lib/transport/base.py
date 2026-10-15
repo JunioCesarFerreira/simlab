@@ -31,14 +31,19 @@ class ProbeResult:
     """
     reachable: bool
     cooja_present: bool = False
+    #: The first line of `java -version`, when the runtime answered at all.
+    #: Collected since the beginning and, until now, not part of the verdict.
     java_version: Optional[str] = None
+    #: Whether the JVM that launches Cooja actually ran. Separate from having
+    #: a version string, which is only what it printed.
+    java_ok: bool = False
     cooja_jar_sha256: Optional[str] = None
     message: str = ""
     extra: dict = field(default_factory=dict)
 
     @property
     def ready(self) -> bool:
-        return self.reachable and self.cooja_present
+        return self.reachable and self.cooja_present and self.java_ok
 
 
 class TransportError(RuntimeError):

@@ -142,7 +142,7 @@ class HealthMonitor:
         self._probe_ttl = probe_ttl_sec
         # Hop 1, opened at most once per host per turn. Owned here because the
         # monitor is the only thing that knows when a host's turn is over.
-        self._jumps = jumps or JumpPool(opener)
+        self._jumps = jumps or JumpPool(opener, on_learn=self._pin_host_key)
         self._discover = discover or self._default_discover
         self._probe = probe or self._default_probe
         self._on_capacity = on_capacity
@@ -367,6 +367,7 @@ class HealthMonitor:
         self._mongo.resource_repo.update_probe(resource["_id"], {
             "ssh_ok": probe.reachable,
             "java_version": probe.java_version,
+            "java_ok": probe.java_ok,
             "cooja_jar_sha256": probe.cooja_jar_sha256,
             "message": probe.message,
         })
@@ -454,6 +455,25 @@ class HealthMonitor:
             # and not attempted a second time.
             return unavailable_report(mongo, host, str(error))
         return discover_host(mongo, host, opener=self._opener, session=session)
+
+    def _pin_host_key(self, host: dict, fingerprint: str) -> None:
+        """Persist a host key accepted on first contact.
+
+        The health cycle is usually the first thing to reach a host — it runs
+        before anything is placed — and it had no way to write the key down,
+        so the pin that the next connection would be checked against was
+        never recorded. The write refuses to overwrite an existing pin: trust
+        on first use only means something if the first use is the one that
+        sticks.
+        """
+        try:
+            if self._mongo.host_repo.pin_host_key(host["_id"], fingerprint):
+                log.info(
+                    "Pinned the host key of %s on first contact: %s",
+                    host.get("name"), fingerprint,
+                )
+        except Exception:
+            log.exception("Could not pin the host key of %s", host.get("name"))
 
     def _jump_client(self, host: dict) -> Optional[Any]:
         """The host session to use as hop 1, or ``None`` for a local host."""
@@ -605,7 +625,13 @@ def probe_is_fresh(resource: dict, ttl_sec: float) -> bool:
     if resource.get("status") != EnumResourceStatus.AVAILABLE.value:
         return False
     probe = resource.get("probe") or {}
+    # The same three requirements readiness asks for. A probe written before
+    # the JVM became one of them has no `java_ok`, so it is simply measured
+    # again — which is the right answer for an observation that no longer
+    # means what it used to.
     if not probe.get("ssh_ok") or not probe.get("cooja_jar_sha256"):
+        return False
+    if not probe.get("java_ok"):
         return False
     checked_at = probe.get("checked_at")
     if not isinstance(checked_at, datetime):

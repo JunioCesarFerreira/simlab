@@ -102,6 +102,18 @@ export function probeLevel(resource: ResourceDto): LevelView {
         "It answers, but no cooja.jar was found where it is expected",
     };
   }
+  if (probe.java_ok === false) {
+    // A jar is a file; running it needs a runtime. Separate from the missing
+    // build because the fix is different, and the operator needs to know
+    // which one to go and look at.
+    return {
+      label: "no Java",
+      tone: "bad",
+      title:
+        probe.message ||
+        "The Cooja build is there, but the JVM that launches it did not run",
+    };
+  }
   return {
     label: "ready",
     tone: "ok",

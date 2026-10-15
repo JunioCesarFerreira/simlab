@@ -1064,3 +1064,96 @@ class TestInfraCrypto:
             alg="crypto_box_seal", key_id="k", public_key="cHVi", fingerprint="SHA256:x")
         written = db["infra_crypto"].update_one.call_args.args[1]
         assert "private_key" not in repr(written)
+
+
+class TestOccupancyIsAPartition:
+    """The four counters must add up to the inventory, not overlap it.
+
+    A container that was busy and disabled for draining counted in both
+    ``active`` and ``disabled``: one worker appeared twice, and the bar that
+    sums the categories for its denominator reported a total larger than the
+    inventory it was describing.
+
+    The expressions are checked rather than evaluated — this is where the
+    correctness of an aggregation lives — plus a truth table over every
+    status and both administrative states.
+    """
+
+    def _counters(self, hosts) -> dict:
+        repo, coll = hosts
+        coll.aggregate.return_value = []
+        repo.inventory_snapshot()
+        for stage in coll.aggregate.call_args.args[0]:
+            if "$set" in stage and "active" in stage["$set"]:
+                return stage["$set"]
+        raise AssertionError("no counter stage found")
+
+    def _count(self, expression: dict, resource: dict) -> int:
+        """Evaluate one `count_where` expression over a single resource."""
+        cond = expression["$size"]["$filter"]["cond"]
+        return 1 if _evaluate(cond, resource) else 0
+
+    @pytest.mark.parametrize("status", [s.value for s in EnumResourceStatus])
+    @pytest.mark.parametrize("enabled", [True, False])
+    def test_every_worker_lands_in_exactly_one_category(
+        self, hosts, status, enabled
+    ):
+        counters = self._counters(hosts)
+        resource = {"status": status, "enabled": enabled}
+
+        landed = sum(
+            self._count(counters[name], resource)
+            for name in ("active", "disabled", "unavailable", "free")
+        )
+
+        assert landed == 1, f"{status}/{enabled} landed in {landed} categories"
+
+    def test_a_draining_worker_is_in_use_not_disabled(self, hosts):
+        counters = self._counters(hosts)
+        draining = {"status": EnumResourceStatus.BUSY.value, "enabled": False}
+
+        assert self._count(counters["active"], draining) == 1
+        assert self._count(counters["disabled"], draining) == 0
+        # And it says so, as an attribute of a worker that is working.
+        assert self._count(counters["draining"], draining) == 1
+
+    def test_a_reservation_is_not_a_running_simulation(self, hosts):
+        counters = self._counters(hosts)
+        reserved = {"status": EnumResourceStatus.RESERVED.value, "enabled": True}
+
+        assert self._count(counters["active"], reserved) == 1
+        assert self._count(counters["running"], reserved) == 0
+        assert self._count(counters["reserved"], reserved) == 1
+
+    def test_running_and_reserved_split_active(self, hosts):
+        counters = self._counters(hosts)
+        busy = {"status": EnumResourceStatus.BUSY.value, "enabled": True}
+
+        assert self._count(counters["running"], busy) == 1
+        assert self._count(counters["reserved"], busy) == 0
+
+
+def _evaluate(expression, resource):
+    """A very small subset of the aggregation language, over one document."""
+    if isinstance(expression, str):
+        if expression.startswith("$$r."):
+            return resource.get(expression[4:])
+        if expression.startswith("$"):
+            return resource.get(expression[1:])
+        return expression
+    if not isinstance(expression, dict):
+        return expression
+    (operator, operand), = expression.items()
+    if operator == "$and":
+        return all(_evaluate(item, resource) for item in operand)
+    if operator == "$or":
+        return any(_evaluate(item, resource) for item in operand)
+    if operator == "$not":
+        return not _evaluate(operand, resource)
+    if operator == "$eq":
+        return _evaluate(operand[0], resource) == _evaluate(operand[1], resource)
+    if operator == "$ne":
+        return _evaluate(operand[0], resource) != _evaluate(operand[1], resource)
+    if operator == "$in":
+        return _evaluate(operand[0], resource) in operand[1]
+    raise AssertionError(f"unsupported operator in this test: {operator}")

@@ -1,8 +1,8 @@
 from copy import deepcopy
-from typing import Any
+from typing import Any, Optional
 
 from pylib.db.models import Simulation
-from api.domain.simulation import SimulationDto
+from api.domain.simulation import PlacementDto, SimulationDto
 from api.mappers.helpers import oid_to_str, str_to_oid, pop_id
 
 
@@ -27,6 +27,34 @@ def simulation_from_mongo(doc: dict) -> SimulationDto:
         "csv_log_id": oid_to_str(d.get("csv_log_id")),
         "network_metrics": d.get("network_metrics", {}),
         "dodag": d.get("dodag"),
+        "placement": _placement_from_mongo(d),
+    }
+
+
+def _placement_from_mongo(d: dict) -> Optional[PlacementDto]:
+    """Where this simulation ran, or ``None`` if it never got that far.
+
+    The fields are flat on the document — the master-node writes them in one
+    update at reservation time — and nested here, because they are one fact
+    about one run and a client reading them wants them together.
+
+    ``None`` rather than an object full of empties: a simulation that was
+    never placed, or one from before the master-node recorded this, must be
+    distinguishable from one that ran somewhere unknown.
+    """
+    host_name = str(d.get("assigned_host_name") or "")
+    resource_name = str(d.get("assigned_resource_name") or "")
+    if not (host_name or resource_name or d.get("assigned_resource_id")):
+        return None
+    return {
+        "host_id": oid_to_str(d.get("assigned_host_id")) or None,
+        "host_name": host_name,
+        "resource_id": oid_to_str(d.get("assigned_resource_id")) or None,
+        "resource_name": resource_name,
+        "container_id": d.get("assigned_container_id") or None,
+        "attempt_id": d.get("attempt_id") or None,
+        "assigned_at": d.get("assigned_at"),
+        "remote_pid": d.get("remote_pid"),
     }
 
 

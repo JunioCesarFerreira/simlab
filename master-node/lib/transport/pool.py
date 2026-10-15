@@ -55,9 +55,16 @@ class JumpPool:
         self,
         opener: Optional[SecretOpener] = None,
         *,
+        on_learn: Optional[Callable[[dict, str], None]] = None,
         session_factory: Optional[Callable[..., HostSession]] = None,
     ):
         self._opener = opener
+        # Called with (host, fingerprint) when a host's key is accepted on
+        # first contact. Without it, a host first reached by the health cycle
+        # — which is the usual case, since the cycle runs before anything is
+        # placed — was never pinned at all: trust on first use with nothing
+        # recording the first use.
+        self._on_learn = on_learn
         self._session_factory = session_factory or HostSession
         self._sessions: dict[str, HostSession] = {}
         self._failures: dict[str, Exception] = {}
@@ -98,10 +105,15 @@ class JumpPool:
             raise PlanError(f"host {name!r} has no SSH address configured")
 
         credential = resolve_host_credential(access, self._opener, host_name=name)
+        on_learn = None
+        if self._on_learn is not None:
+            def on_learn(fingerprint: str, host=host) -> None:
+                self._on_learn(host, fingerprint)
         session = self._session_factory(
             SSHEndpoint(str(address), int(access.get("port") or 22)),
             credential,
             pinned_host_key=access.get("host_key_fingerprint"),
+            on_learn_host_key=on_learn,
             host_name=name,
         )
         session.open()

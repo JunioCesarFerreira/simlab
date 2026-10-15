@@ -85,6 +85,19 @@
                 <span class="sim-seed mono">seed {{ sim.random_seed }}</span>
               </div>
 
+              <!--
+                Where it ran. Two simulations of the same individual differ by
+                seed *and* by machine, and until now the panel showed only the
+                seed — so a difference between replicas could not be told apart
+                from a difference between workers.
+              -->
+              <div v-if="sim.placement" class="sim-where">
+                <span class="sim-where-label">ran on</span>
+                <span class="mono" :title="placementTitle(sim)">
+                  {{ placementLabel(sim.placement) }}
+                </span>
+              </div>
+
               <div v-if="sim.system_message" class="sim-message">
                 {{ sim.system_message }}
               </div>
@@ -197,6 +210,7 @@ import SimulationDodagModal from "./SimulationDodagModal.vue";
 import type { DodagInfo, IndividualDto, SimulationDto } from "../../types/simlab";
 import { getSimulationsByIndividual } from "../../api/simulations";
 import { fetchBlobUrl, downloadFile } from "../../api/files";
+import { placementLabel } from "../../services/placement";
 
 const props = defineProps<{
   individual: IndividualDto;
@@ -233,6 +247,28 @@ const fileFields = [
   { key: "runtime_log_id", label: "Runtime Log", ext: "log" },
   { key: "csc_file_id", label: "CSC",        ext: "csc" },
 ];
+
+/**
+ * Everything known about where a run executed, for the hover.
+ *
+ * The card shows host and worker, which is what answers "did these two run in
+ * the same place?". The container id and the attempt belong here rather than
+ * on the card: they matter when something looks wrong, not while reading
+ * results.
+ */
+function placementTitle(sim: SimulationDto): string {
+  const placement = sim.placement;
+  if (!placement) return "";
+  const lines = [`host: ${placement.host_name || "?"}`,
+                 `worker: ${placement.resource_name || "?"}`];
+  if (placement.container_id) lines.push(`container: ${placement.container_id}`);
+  if (placement.attempt_id) lines.push(`attempt: ${placement.attempt_id}`);
+  if (placement.remote_pid) lines.push(`pid: ${placement.remote_pid}`);
+  if (placement.assigned_at) {
+    lines.push(`placed: ${formatDate(placement.assigned_at)}`);
+  }
+  return lines.join("\n");
+}
 
 function hasFiles(sim: SimulationDto): boolean {
   return fileFields.some((f) => !!sim[f.key as keyof SimulationDto]);
@@ -557,6 +593,24 @@ onBeforeUnmount(() => {
 .sim-seed {
   font-size: 11px;
   color: var(--color-text-muted);
+}
+
+.sim-where {
+  display: flex;
+  gap: 0.4rem;
+  align-items: baseline;
+  font-size: 0.78rem;
+  color: var(--text-muted, #6b7280);
+}
+
+.sim-where-label {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.66rem;
+}
+
+.sim-where-sep {
+  opacity: 0.5;
 }
 
 .sim-message {

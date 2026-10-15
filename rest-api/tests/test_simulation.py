@@ -47,6 +47,80 @@ class TestCreateSimulation:
         assert resp.status_code == 500
 
 
+# ── Where it ran ─────────────────────────────────────────────────────────────
+
+class TestPlacementIsPublished:
+    """The chain has to reach the machine.
+
+    `assigned_host_*`, `assigned_resource_*`, the container id, the attempt
+    and the pid were all persisted at reservation time and then never
+    published. An operator comparing two results could not tell whether they
+    had run on the same worker, and the distribution of work across hosts
+    could not be audited at all.
+    """
+
+    def _placed(self, **extra):
+        return {**sample_simulation(),
+                "assigned_host_id": ObjectId(EXP_ID),
+                "assigned_host_name": "vm8",
+                "assigned_resource_id": ObjectId(GEN_ID),
+                "assigned_resource_name": "vm8-cooja2",
+                "assigned_container_id": "abc123",
+                "attempt_id": "attempt-A",
+                "remote_pid": 4242,
+                **extra}
+
+    def _fetch(self, client, mock_factory, doc):
+        mock_factory.simulation_repo.find_by_status.return_value = [doc]
+        return client.get(f"{BASE}/by-status/Done").json()[0]
+
+    def test_it_says_which_host_and_which_worker(self, client, mock_factory):
+        body = self._fetch(client, mock_factory, self._placed())
+
+        placement = body["placement"]
+        assert placement["host_name"] == "vm8"
+        assert placement["resource_name"] == "vm8-cooja2"
+
+    def test_it_carries_the_container_and_the_attempt(self, client, mock_factory):
+        # The worker's name can be reused; the container id cannot. And two
+        # attempts of one simulation ran in different conditions.
+        body = self._fetch(client, mock_factory, self._placed())
+
+        placement = body["placement"]
+        assert placement["container_id"] == "abc123"
+        assert placement["attempt_id"] == "attempt-A"
+        assert placement["remote_pid"] == 4242
+
+    def test_a_simulation_that_never_ran_has_no_placement(self, client, mock_factory):
+        """Distinguishable from one that ran somewhere unknown."""
+        body = self._fetch(client, mock_factory, sample_simulation())
+
+        assert body["placement"] is None
+
+    def test_a_record_from_before_this_still_reads(self, client, mock_factory):
+        # Only the names were ever denormalised, so an older document may
+        # carry those and nothing else.
+        doc = {**sample_simulation(), "assigned_host_name": "local",
+               "assigned_resource_name": "cooja3"}
+
+        placement = self._fetch(client, mock_factory, doc)["placement"]
+
+        assert placement["host_name"] == "local"
+        assert placement["container_id"] is None
+
+    def test_it_is_published_by_individual_too(self, client, mock_factory):
+        """Which is where the GUI reads it from."""
+        mock_factory.simulation_repo.find_by_individual.return_value = [
+            self._placed()]
+
+        body = client.get(
+            f"{BASE}/by-individual/abc123hash",
+            params={"experiment_id": EXP_ID},
+        ).json()[0]
+
+        assert body["placement"]["resource_name"] == "vm8-cooja2"
+
+
 # ── GET /by-individual/{individual_id} ───────────────────────────────────────
 class TestGetSimulationsByIndividual:
     """The individual id is a chromosome hash, so the experiment scopes it.

@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from typing import Callable, Optional
+from typing import Callable, Optional, TypedDict
 from bson import ObjectId, errors
 
 from pylib.db.models.generation import Generation
@@ -8,6 +8,25 @@ from pylib.db.models.enums import EnumStatus
 from pylib.db.connection import MongoDBConnection
 
 log = logging.getLogger(__name__)
+
+
+class ReplicaCompleteness(TypedDict):
+    """What stands behind one individual's objectives.
+
+    ``expected`` counts the simulations this generation created for the
+    individual — one per configured seed — and ``observed`` how many of them
+    finished. They differ when a replica failed, and the difference used to be
+    invisible: the objective was the mean of what survived.
+    """
+    expected: int
+    observed: int
+    expected_seeds: list[int]
+    observed_seeds: list[int]
+    missing_seeds: list[int]
+    #: Per metric, because a run can finish without carrying every one of
+    #: them — two objectives of the same individual then rest on different
+    #: numbers of replicas.
+    per_metric: dict[str, int]
 
 
 class GenerationRepository:
@@ -175,6 +194,66 @@ class GenerationRepository:
             else:
                 result[ind_id] = {m: agg_fn(v, params) for m, v in metrics_vals.items() if v}
         return result
+
+    def replica_completeness(
+        self, generation_id: ObjectId | str, metrics: list[str]
+    ) -> dict[str, "ReplicaCompleteness"]:
+        """How much evidence stands behind each individual's objectives.
+
+        The aggregation above averages whatever finished and says nothing
+        about what did not. An individual evaluated from one replicate is
+        then indistinguishable from one evaluated from two — and that happened
+        in practice: a pilot lost one simulation of a two-seed individual, and
+        the objective published for it was a single run's, with no record of
+        the difference.
+
+        Reported rather than decided here. What to do about an incomplete
+        evaluation — accept it, repeat the replica, reject the individual — is
+        a question about the experiment, not about this collection.
+
+        ``per_metric`` is separate from ``observed`` because a run can finish
+        and still not carry every metric: two objectives of the *same*
+        individual can then rest on different numbers of replicas.
+        """
+        if isinstance(generation_id, str):
+            generation_id = ObjectId(generation_id)
+        with self.connection.connect() as db:
+            sims = list(db["simulations"].find(
+                {"generation_id": generation_id},
+                {"_id": 0, "individual_id": 1, "status": 1,
+                 "random_seed": 1, "network_metrics": 1},
+            ))
+
+        out: dict[str, ReplicaCompleteness] = {}
+        for sim in sims:
+            ind_id = str(sim.get("individual_id") or "")
+            if not ind_id:
+                continue
+            entry = out.setdefault(ind_id, {
+                "expected": 0, "observed": 0,
+                "expected_seeds": [], "observed_seeds": [], "missing_seeds": [],
+                "per_metric": {},
+            })
+            seed = sim.get("random_seed")
+            entry["expected"] += 1
+            if seed is not None:
+                entry["expected_seeds"].append(int(seed))
+            if sim.get("status") != EnumStatus.DONE:
+                continue
+            entry["observed"] += 1
+            if seed is not None:
+                entry["observed_seeds"].append(int(seed))
+            for metric in metrics:
+                if metric in (sim.get("network_metrics") or {}):
+                    entry["per_metric"][metric] = \
+                        entry["per_metric"].get(metric, 0) + 1
+
+        for entry in out.values():
+            entry["expected_seeds"].sort()
+            entry["observed_seeds"].sort()
+            entry["missing_seeds"] = sorted(
+                set(entry["expected_seeds"]) - set(entry["observed_seeds"]))
+        return out
 
     def watch_status_waiting(self, on_change: Callable[[dict], None]):
         log.info("[GenerationRepository] Watching for WAITING generations...")

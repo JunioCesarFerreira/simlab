@@ -112,3 +112,90 @@ class TestCloseIfFinished:
 
         assert repo.close_if_finished(GEN_ID) in (
             EnumStatus.DONE, EnumStatus.ERROR)
+
+
+class TestReplicaCompleteness:
+    """How much evidence stands behind each individual's objectives.
+
+    The aggregation averages whatever finished and said nothing about what did
+    not, so an individual evaluated from one replicate was indistinguishable
+    from one evaluated from two. That happened: a pilot lost one simulation of
+    a two-seed individual, and the objective published for it rested on a
+    single run with no record of the difference.
+    """
+
+    def _sims(self, repo_and_sims, docs):
+        repo, sims, _ = repo_and_sims
+        sims.find.return_value = docs
+        return repo.replica_completeness(GEN_ID, ["latency", "energy"])
+
+    def test_a_complete_individual_reports_both_replicas(self, repo_and_sims):
+        result = self._sims(repo_and_sims, [
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 1, "network_metrics": {"latency": 1.0, "energy": 2.0}},
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 2, "network_metrics": {"latency": 1.5, "energy": 2.5}},
+        ])
+
+        assert result["ind-a"]["expected"] == 2
+        assert result["ind-a"]["observed"] == 2
+        assert result["ind-a"]["missing_seeds"] == []
+
+    def test_a_failed_replica_is_named_by_its_seed(self, repo_and_sims):
+        """So the one to repeat is identifiable, not just countable."""
+        result = self._sims(repo_and_sims, [
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 123456, "network_metrics": {"latency": 1.0}},
+            {"individual_id": "ind-a", "status": EnumStatus.ERROR,
+             "random_seed": 5343, "network_metrics": {}},
+        ])
+
+        entry = result["ind-a"]
+        assert entry["expected"] == 2 and entry["observed"] == 1
+        assert entry["missing_seeds"] == [5343]
+        assert entry["observed_seeds"] == [123456]
+
+    def test_metrics_are_counted_separately(self, repo_and_sims):
+        """A run can finish and not carry every metric.
+
+        Two objectives of the *same* individual then rest on different
+        numbers of replicas, which a single count cannot express.
+        """
+        result = self._sims(repo_and_sims, [
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 1, "network_metrics": {"latency": 1.0, "energy": 2.0}},
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 2, "network_metrics": {"latency": 1.5}},
+        ])
+
+        assert result["ind-a"]["per_metric"] == {"latency": 2, "energy": 1}
+
+    def test_a_simulation_still_running_counts_as_expected_only(
+        self, repo_and_sims
+    ):
+        result = self._sims(repo_and_sims, [
+            {"individual_id": "ind-a", "status": EnumStatus.RUNNING,
+             "random_seed": 7, "network_metrics": {}},
+        ])
+
+        assert result["ind-a"]["expected"] == 1
+        assert result["ind-a"]["observed"] == 0
+        assert result["ind-a"]["missing_seeds"] == [7]
+
+    def test_individuals_are_kept_apart(self, repo_and_sims):
+        result = self._sims(repo_and_sims, [
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 1, "network_metrics": {"latency": 1.0}},
+            {"individual_id": "ind-b", "status": EnumStatus.ERROR,
+             "random_seed": 1, "network_metrics": {}},
+        ])
+
+        assert result["ind-a"]["observed"] == 1
+        assert result["ind-b"]["observed"] == 0
+
+    def test_a_simulation_without_an_individual_is_ignored(self, repo_and_sims):
+        result = self._sims(repo_and_sims, [
+            {"status": EnumStatus.DONE, "random_seed": 1, "network_metrics": {}},
+        ])
+
+        assert result == {}

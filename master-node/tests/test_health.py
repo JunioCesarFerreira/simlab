@@ -43,10 +43,15 @@ HOST = {"_id": HOST_ID, "name": "local", "type": "local",
         "status": "offline", "consecutive_failures": 0,
         "container_access": {"username": "root", "port": 22}}
 
-READY = ProbeResult(reachable=True, cooja_present=True, java_version="21",
-                    cooja_jar_sha256="a" * 64, message="ready")
+READY = ProbeResult(reachable=True, cooja_present=True, java_ok=True,
+                    java_version="21", cooja_jar_sha256="a" * 64,
+                    message="ready")
 NO_COOJA = ProbeResult(reachable=True, cooja_present=False,
                        message="cooja.jar not found")
+#: A jar and a runtime that will not start. Ready asks for all three.
+NO_JAVA = ProbeResult(reachable=True, cooja_present=True, java_ok=False,
+                      cooja_jar_sha256="a" * 64,
+                      message="cooja.jar is there but the JVM did not run")
 
 
 def resource(name="cooja1", status="offline", enabled=True,
@@ -65,11 +70,16 @@ def resource(name="cooja1", status="offline", enabled=True,
 
 
 def ready_probe(age_sec: float = 0.0) -> dict:
-    """A stored probe that found the worker ready, ``age_sec`` ago."""
+    """A stored probe that found the worker ready, ``age_sec`` ago.
+
+    All three requirements, because that is what *ready* means: it answered,
+    the jar is there, and the JVM ran.
+    """
     return {
         "ssh_ok": True,
         "cooja_jar_sha256": "a" * 64,
         "java_version": "21",
+        "java_ok": True,
         "message": "ready",
         "checked_at": datetime.now() - timedelta(seconds=age_sec),
     }
@@ -123,6 +133,33 @@ class TestFirstCycle:
         mongo.resource_repo.mark_available.assert_called_once()
         assert mongo.host_repo.mark_check_result.call_args.kwargs["status"] \
             == EnumHostStatus.ONLINE
+
+    def test_a_worker_whose_java_does_not_run_stays_out(self):
+        """A jar is a file; running it needs a runtime.
+
+        The version was collected and ignored, so a container with a jar and a
+        broken JVM entered the pool and the failure surfaced at launch — a
+        simulation marked in error for what was a configuration problem.
+        """
+        mongo = fake_mongo(resources=[resource()])
+
+        result = build_monitor(mongo, probe=lambda h, r: NO_JAVA).check_host(HOST)
+
+        assert result.ready == [] and result.unhealthy == ["cooja1"]
+        mongo.resource_repo.mark_available.assert_not_called()
+        # The message names the requirement that failed, so it is fixable.
+        assert "JVM" in mongo.resource_repo.mark_offline.call_args.args[1]
+
+    def test_the_probe_still_records_what_it_found(self):
+        # Both facts are written down even when the verdict is negative: the
+        # page says *which* requirement failed, not only that one did.
+        mongo = fake_mongo(resources=[resource()])
+
+        build_monitor(mongo, probe=lambda h, r: NO_JAVA).check_host(HOST)
+
+        probe = mongo.resource_repo.update_probe.call_args.args[1]
+        assert probe["ssh_ok"] is True
+        assert probe["cooja_jar_sha256"] == "a" * 64
 
     def test_both_levels_must_pass(self):
         # Docker says it runs, but there is no Cooja build in it.
@@ -713,6 +750,15 @@ class TestProbeIsFresh:
 
     def test_reachable_without_a_cooja_build_is_not_ready(self):
         probe = {**ready_probe(), "cooja_jar_sha256": None}
+        assert probe_is_fresh(in_pool(probe=probe), 300) is False
+
+    def test_a_jar_without_a_working_jvm_is_not_ready(self):
+        probe = {**ready_probe(), "java_ok": False}
+        assert probe_is_fresh(in_pool(probe=probe), 300) is False
+
+    def test_a_probe_from_before_the_jvm_mattered_is_measured_again(self):
+        """It has no `java_ok`, so it no longer means what it used to."""
+        probe = {k: v for k, v in ready_probe().items() if k != "java_ok"}
         assert probe_is_fresh(in_pool(probe=probe), 300) is False
 
     def test_never_probed(self):

@@ -42,9 +42,17 @@
         <div class="stat-value">{{ totals.free }}</div>
         <div class="stat-label">Free</div>
       </div>
+      <!--
+        "In use" rather than "Running": `active` includes reservations that
+        have not started a simulation yet, and the two are worth telling
+        apart when the queue is moving.
+      -->
       <div class="stat-card stat-card--active">
         <div class="stat-value">{{ totals.active }}</div>
-        <div class="stat-label">Running</div>
+        <div class="stat-label">
+          In use
+          <span v-if="activeDetail" class="of">· {{ activeDetail }}</span>
+        </div>
       </div>
       <div class="stat-card stat-card--unavailable">
         <div class="stat-value">{{ totals.unavailable }}</div>
@@ -182,6 +190,20 @@ const pendingResources = reactive(new Set<string>());
 const expanded = reactive(new Set<string>());
 
 const totals = computed(() => overview.value?.totals ?? EMPTY_TOTALS);
+
+/**
+ * What the containers in use are actually doing.
+ *
+ * `active` is reservations plus running simulations. While the queue moves
+ * the two differ, and the card used to call all of it "Running".
+ */
+const activeDetail = computed(() => {
+  const running = totals.value.running;
+  const reserved = totals.value.reserved;
+  if (running === undefined || reserved === undefined) return "";
+  if (!reserved) return "";
+  return `${running} running, ${reserved} starting`;
+});
 
 function occupancyFor(hostId: string) {
   return overview.value?.hosts.find((h) => h.id === hostId) ?? null;

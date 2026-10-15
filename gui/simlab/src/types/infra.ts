@@ -110,6 +110,12 @@ export interface ContainerDto {
 export interface ProbeDto {
   ssh_ok: boolean;
   java_version: string | null;
+  /**
+   * Whether the JVM that launches Cooja ran, as opposed to merely printing a
+   * version. The version was collected and ignored, so a container with a jar
+   * and a broken runtime entered the pool and failed at launch.
+   */
+  java_ok?: boolean;
   cooja_jar_sha256: string | null;
   checked_at: string | null;
   message?: string;
@@ -226,14 +232,33 @@ export interface HostOccupancyDto {
   enabled: boolean;
   schedulable: boolean;
   resource_total: number;
+  /**
+   * `active`, `disabled`, `unavailable` and `free` are a partition of
+   * `resource_total`: each container is in exactly one, so the total is a
+   * valid denominator. They used to overlap — a container busy *and*
+   * disabled for draining counted twice, and summing them gave a total
+   * larger than the inventory.
+   */
   free: number;
   active: number;
   unavailable: number;
   disabled: number;
+  /** Subsets of `active`, for the detail. Never summed with the rest. */
+  draining?: number;
+  running?: number;
+  reserved?: number;
   last_check: string | null;
   last_check_message: string;
 }
 
+/**
+ * `free + active + unavailable + disabled === resources`.
+ *
+ * `running`, `reserved` and `draining` break `active` down and are never
+ * summed with the rest: a reservation that has not started is not a running
+ * simulation, and a worker finishing its work while administratively out is
+ * one worker, not two.
+ */
 export interface OverviewTotalsDto {
   hosts: number;
   hosts_operational: number;
@@ -242,6 +267,9 @@ export interface OverviewTotalsDto {
   active: number;
   unavailable: number;
   disabled: number;
+  running?: number;
+  reserved?: number;
+  draining?: number;
 }
 
 export interface OverviewDto {

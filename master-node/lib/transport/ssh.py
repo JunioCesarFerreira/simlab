@@ -36,6 +36,10 @@ log = logging.getLogger(__name__)
 # compiled for each simulation, whose names are random per run.
 GENERATED_ARTIFACTS = ("build/cooja", "COOJA.testlog", "COOJA.log")
 
+#: Printed by the probe when the JVM exited zero. A marker rather than
+#: parsing the version text, because what matters is that it *ran*.
+JAVA_OK_MARK = "SIMLABJAVA-ok"
+
 CONNECT_TIMEOUT = 20.0
 
 # How long a single SCP receive may stall before the transfer is abandoned.
@@ -163,9 +167,22 @@ class SSHTransport:
             self.plan.jump,
             self._jump_credential,
             pinned_host_key=self._pinned_host_key,
-            on_learn_host_key=self._on_learn_host_key,
+            on_learn_host_key=self._remember_host_key,
             timeout=self._connect_timeout,
         )
+
+    def _remember_host_key(self, fingerprint: str) -> None:
+        """Keep a key learned on first contact, for this object's reconnects.
+
+        The policy is built fresh for every connection, from
+        ``_pinned_host_key``. Leaving that at ``None`` after learning meant a
+        reconnection — and the follower reconnects, that is the point of it —
+        started as a first contact again and would accept *any* key. The pin
+        has to live as long as the transport that learned it.
+        """
+        self._pinned_host_key = fingerprint
+        if self._on_learn_host_key is not None:
+            self._on_learn_host_key(fingerprint)
 
     def _open_tunnel(self, jump: SSHClient):
         transport = jump.get_transport()
@@ -360,13 +377,22 @@ class SSHTransport:
         """Check that this container can actually run a simulation.
 
         Being open is not enough to answer that: a container can accept SSH
-        while its Cooja build is missing. Both facts are reported so the GUI
-        can say which level failed instead of only that something did.
+        while its Cooja build is missing, or while the JVM that launches it
+        cannot run. Each fact is reported separately so the GUI can say which
+        one failed instead of only that something did.
+
+        Readiness asks for all three. The Java version used to be *collected
+        and ignored* — a container with a jar and a broken runtime was put in
+        the pool, and the failure surfaced at launch, as a simulation marked
+        in error for what was a configuration problem.
         """
         jar = f"{self.plan.remote_dir}/build/libs/cooja.jar"
+        # The exit status matters, not just the output: `java -version` writes
+        # to stderr, so a missing binary and a working one both produce text.
         command = (
             f"sha256sum {shlex.quote(jar)} 2>/dev/null | cut -d' ' -f1; "
-            "/opt/java/openjdk/bin/java -version 2>&1 | head -n1"
+            f"if /opt/java/openjdk/bin/java -version 2>&1 | head -n1; "
+            f"then echo {JAVA_OK_MARK}; fi"
         )
         try:
             result = self.exec_command(command, timeout=30)
@@ -379,17 +405,35 @@ class SSHTransport:
         sha = next((l for l in lines if len(l) == 64 and all(
             c in "0123456789abcdef" for c in l)), None)
         java = next((l for l in lines if "version" in l.lower()), None)
+        java_ok = JAVA_OK_MARK in lines
         if sha is None:
             return ProbeResult(
                 reachable=True,
                 cooja_present=False,
                 java_version=java,
+                java_ok=java_ok,
                 message=f"cooja.jar not found at {jar}",
+            )
+        if not java_ok:
+            # The jar is there and nothing can start it. Saying so here is the
+            # difference between a worker an operator can fix and a run that
+            # fails for no stated reason.
+            return ProbeResult(
+                reachable=True,
+                cooja_present=True,
+                java_version=java,
+                java_ok=False,
+                cooja_jar_sha256=sha,
+                message=(
+                    "cooja.jar is there but the JVM did not run "
+                    "(/opt/java/openjdk/bin/java)"
+                ),
             )
         return ProbeResult(
             reachable=True,
             cooja_present=True,
             java_version=java,
+            java_ok=True,
             cooja_jar_sha256=sha,
             message="ready",
         )

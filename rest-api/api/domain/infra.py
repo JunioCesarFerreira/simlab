@@ -151,6 +151,9 @@ class ProbeDto(TypedDict, total=False):
     """
     ssh_ok: bool
     java_version: Optional[str]
+    #: Whether the JVM that launches Cooja actually ran, as opposed to merely
+    #: printing a version. Readiness asks for it.
+    java_ok: bool
     cooja_jar_sha256: Optional[str]
     checked_at: Optional[datetime]
     message: NotRequired[str]
@@ -246,6 +249,14 @@ class HostOccupancyDto(TypedDict, total=False):
     ``free`` and ``active`` count containers; ``schedulable`` describes the
     host. They are separate because an unreachable host still *has* its
     capacity, and folding the two together would under-report it.
+
+    ``active``, ``disabled``, ``unavailable`` and ``free`` are a **partition**
+    of ``resource_total`` — each container is in exactly one — so a client may
+    use the total as a denominator. ``draining``, ``running`` and ``reserved``
+    are subsets of ``active``, reported for the detail and never summed with
+    the rest: a worker finishing its simulation while administratively out is
+    one worker, not two, and a reservation that has not started is not a
+    running simulation.
     """
     id: str
     name: str
@@ -256,20 +267,30 @@ class HostOccupancyDto(TypedDict, total=False):
     resource_total: int
     free: int
     active: int
+    draining: int
+    running: int
+    reserved: int
     unavailable: int
     disabled: int
     last_check: Optional[datetime]
     last_check_message: str
 
 
-class OverviewTotalsDto(TypedDict):
+class OverviewTotalsDto(TypedDict, total=False):
     hosts: int
     hosts_operational: int
     resources: int
+    #: A partition of ``resources``: free + active + unavailable + disabled.
     free: int
     active: int
     unavailable: int
     disabled: int
+    #: Breakdown of ``active``, never summed with the rest. A reservation that
+    #: has not started is not a running simulation, and a card labelled
+    #: "Running" that counted both was saying something untrue.
+    running: int
+    reserved: int
+    draining: int
 
 
 class OverviewDto(TypedDict):

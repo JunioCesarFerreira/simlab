@@ -242,3 +242,52 @@ describe("how old the evidence is", () => {
     expect(evidenceAge(future)).toBe("");
   });
 });
+
+describe("a build without a runtime", () => {
+  function withProbe(probe: Record<string, unknown>) {
+    return {
+      origin: "discovered",
+      connection: {},
+      container: { state: "running", checked_at: "2026-10-15T00:00:00" },
+      probe,
+    } as unknown as ResourceDto;
+  }
+
+  it("says the JVM is the problem, not the build", () => {
+    // Separate from a missing jar because the fix is different, and the
+    // operator needs to know which one to go and look at.
+    const level = probeLevel(
+      withProbe({
+        ssh_ok: true,
+        cooja_jar_sha256: "a".repeat(64),
+        java_ok: false,
+        checked_at: "2026-10-15T00:00:00",
+        message: "cooja.jar is there but the JVM did not run",
+      }),
+    );
+
+    expect(level.label).toBe("no Java");
+    expect(level.tone).toBe("bad");
+    expect(level.title).toContain("JVM");
+  });
+
+  it("a missing jar is still reported as that", () => {
+    const level = probeLevel(
+      withProbe({ ssh_ok: true, cooja_jar_sha256: null, java_ok: false,
+                  checked_at: "2026-10-15T00:00:00" }),
+    );
+
+    expect(level.label).toBe("no Cooja build");
+  });
+
+  it("an older probe without the field is not accused", () => {
+    // It was written before the JVM was part of the verdict; the health cycle
+    // re-measures it rather than the page guessing.
+    const level = probeLevel(
+      withProbe({ ssh_ok: true, cooja_jar_sha256: "a".repeat(64),
+                  checked_at: "2026-10-15T00:00:00" }),
+    );
+
+    expect(level.label).toBe("ready");
+  });
+});

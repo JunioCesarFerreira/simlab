@@ -175,6 +175,7 @@ def resource_from_mongo(
         "probe": {
             "ssh_ok": bool(probe.get("ssh_ok", False)),
             "java_version": probe.get("java_version"),
+            "java_ok": bool(probe.get("java_ok", False)),
             "cooja_jar_sha256": probe.get("cooja_jar_sha256"),
             "checked_at": probe.get("checked_at"),
             "message": probe.get("message", ""),
@@ -206,6 +207,10 @@ def occupancy_from_snapshot(row: dict) -> HostOccupancyDto:
         "resource_total": int(d.get("resource_total") or 0),
         "free": int(d.get("free") or 0),
         "active": int(d.get("active") or 0),
+        # Subsets of `active`, for the detail. Never summed with the rest.
+        "draining": int(d.get("draining") or 0),
+        "running": int(d.get("running") or 0),
+        "reserved": int(d.get("reserved") or 0),
         "unavailable": int(d.get("unavailable") or 0),
         "disabled": int(d.get("disabled") or 0),
         "last_check": d.get("last_check"),
@@ -228,6 +233,12 @@ def overview_from_snapshot(
             "resources": sum(h["resource_total"] for h in hosts),
             "free": sum(h["free"] for h in hosts),
             "active": sum(h["active"] for h in hosts),
+            # Reported apart from `active`, which includes reservations that
+            # have not started: a card labelled "Running" that counted both
+            # was saying something untrue.
+            "running": sum(h.get("running", 0) for h in hosts),
+            "reserved": sum(h.get("reserved", 0) for h in hosts),
+            "draining": sum(h.get("draining", 0) for h in hosts),
             "unavailable": sum(h["unavailable"] for h in hosts),
             "disabled": sum(h["disabled"] for h in hosts),
         },

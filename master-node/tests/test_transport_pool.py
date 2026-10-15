@@ -49,10 +49,12 @@ class FakeSession:
 
     instances: list["FakeSession"] = []
 
-    def __init__(self, endpoint, credential, *, pinned_host_key=None, host_name="?"):
+    def __init__(self, endpoint, credential, *, pinned_host_key=None,
+                 on_learn_host_key=None, host_name="?"):
         self.endpoint = endpoint
         self.credential = credential
         self.pinned_host_key = pinned_host_key
+        self.on_learn_host_key = on_learn_host_key
         self.host_name = host_name
         self.opens = 0
         self.closes = 0
@@ -247,3 +249,50 @@ class TestLifetime:
         pool.session({"name": "lab-02", "type": "remote",
                       "access": REMOTE_HOST["access"]})
         assert len(FakeSession.instances) == 2
+
+
+class TestFirstContact:
+    """A key accepted on first contact has to be written down somewhere.
+
+    The health cycle is usually the first thing to reach a host — it runs
+    before anything is placed — and it had no callback at all, so the pin the
+    next connection would be checked against was never recorded. Trust on
+    first use with nothing recording the first use.
+    """
+
+    def test_the_session_is_given_a_way_to_report_what_it_learned(self):
+        learned: list = []
+        pool = JumpPool(
+            SecretOpener(FakeKeystore()),
+            on_learn=lambda host, fingerprint: learned.append(
+                (host["name"], fingerprint)),
+            session_factory=FakeSession,
+        )
+
+        session = pool.session(REMOTE_HOST)
+        session.on_learn_host_key("SHA256:learned")
+
+        assert learned == [("lab-01", "SHA256:learned")]
+
+    def test_the_callback_names_the_host_it_came_from(self):
+        # One pool serves every host in a cycle; a fingerprint with no host
+        # attached could be written against the wrong registration.
+        learned: list = []
+        pool = JumpPool(
+            SecretOpener(FakeKeystore()),
+            on_learn=lambda host, fingerprint: learned.append(host["name"]),
+            session_factory=FakeSession,
+        )
+
+        pool.session(REMOTE_HOST).on_learn_host_key("a")
+        pool.session(OTHER_HOST).on_learn_host_key("b")
+
+        assert learned == ["lab-01", "lab-02"]
+
+    def test_the_stored_pin_still_reaches_the_session(self):
+        pool = build_pool()
+        assert pool.session(REMOTE_HOST).pinned_host_key == "SHA256:abc"
+
+    def test_without_a_sink_nothing_is_reported(self):
+        pool = build_pool()
+        assert pool.session(REMOTE_HOST).on_learn_host_key is None

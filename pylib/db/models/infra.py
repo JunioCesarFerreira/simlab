@@ -209,6 +209,10 @@ class ResourceProbe(TypedDict, total=False):
     """
     ssh_ok: bool
     java_version: Optional[str]
+    #: Whether the JVM that launches Cooja actually ran. The version string
+    #: alone was collected and ignored, so a container with a jar and a broken
+    #: runtime entered the pool and failed at launch instead.
+    java_ok: NotRequired[bool]
     cooja_jar_sha256: Optional[str]
     checked_at: Optional[datetime]
     message: NotRequired[str]

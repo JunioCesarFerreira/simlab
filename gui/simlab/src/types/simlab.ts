@@ -329,6 +329,31 @@ export interface DodagInfo {
   convergence: DodagConvergence;
 }
 
+/**
+ * Where one simulation ran.
+ *
+ * Recorded by the master-node when it reserves the container, before anything
+ * starts, so a finished simulation still says where it executed even after
+ * the host registration is edited or removed — which is why the names travel
+ * alongside the ids.
+ *
+ * `null` on a simulation that was never placed, and on those recorded before
+ * the master-node began writing this down: that is different from one that
+ * ran somewhere unknown.
+ */
+export interface PlacementDto {
+  host_id?: ID | null;
+  host_name: string;
+  resource_id?: ID | null;
+  resource_name: string;
+  /** Docker's id, when the worker was discovered rather than configured. */
+  container_id?: string | null;
+  /** The placement attempt; two attempts ran in different conditions. */
+  attempt_id?: string | null;
+  assigned_at?: ISODateTime | null;
+  remote_pid?: number | null;
+}
+
 export interface SimulationDto {
   id: ID;
   experiment_id: ID;
@@ -348,6 +373,7 @@ export interface SimulationDto {
   csv_log_id?: ID | null;
   network_metrics: FloatMap;
   dodag?: DodagInfo | null;
+  placement?: PlacementDto | null;
 }
 
 /* -------------------------------------------------------
