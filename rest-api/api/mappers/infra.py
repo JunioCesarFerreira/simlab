@@ -15,11 +15,13 @@ no crypto library, which is the property that keeps it outside the trust
 boundary.
 """
 from copy import deepcopy
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from pylib.crypto import MalformedEnvelope, redact, validate_envelope
 from pylib.db.models.infra import (
     SCHEDULABLE_HOST_STATUSES,
+    EnumAddressMode,
+    EnumAuthMethod,
     EnumDiscoveryMode,
     EnumHostStatus,
     EnumHostType,
@@ -283,7 +285,7 @@ def resource_to_mongo(dto: dict, *, for_update: bool = False) -> dict:
             raise PlaintextRefused("name cannot be empty")
         doc["name"] = name
     if "enabled" in d:
-        doc["enabled"] = bool(d["enabled"])
+        doc["enabled"] = _as_bool(d["enabled"], field="enabled")
     if "remote_dir" in d and d["remote_dir"]:
         doc["remote_dir"] = str(d["remote_dir"])
 
@@ -310,20 +312,52 @@ def resource_to_mongo(dto: dict, *, for_update: bool = False) -> dict:
     return doc
 
 
+#: Fields of a worker's connection that may be overridden, and removed.
+_CONNECTION_FIELDS = ("transport", "username", "port", "auth_method", "secret")
+
+#: What a caller sends to say "stop overriding this; inherit it again".
+REMOVE_OVERRIDE = None
+
+
 def _connection_to_mongo(connection: dict) -> dict:
     """A worker's own SSH parameters. Only what is stated is recorded.
 
     Absent fields fall back to the host's ``container_access`` at connect
     time, so one host's configuration still covers the common case.
+
+    Three intentions, and they have to be distinguishable:
+
+    * **absent** — leave whatever is stored alone;
+    * **present with a value** — override with it;
+    * **present and ``null``** — remove the override and inherit again.
+
+    The third one did not exist. The form omitted an emptied field, the
+    endpoint merged with what was stored, and the old value survived: there
+    was no way to undo an override at all. ``null`` is carried through here
+    and turned into a removal where the merge happens, because removing means
+    deleting the key — a stored ``null`` would still count as the operator
+    having configured something.
     """
     _refuse_plaintext(connection, where="worker connection")
+    _refuse_unknown(connection, _CONNECTION_FIELDS, where="worker connection")
     out: dict[str, Any] = {"transport": "ssh"}
-    if "username" in connection and connection["username"]:
-        out["username"] = str(connection["username"]).strip()
-    if connection.get("port"):
-        out["port"] = int(connection["port"])
-    if "auth_method" in connection and connection["auth_method"]:
-        out["auth_method"] = str(connection["auth_method"])
+    for field in ("username", "auth_method"):
+        if field not in connection:
+            continue
+        value = connection[field]
+        if value is REMOVE_OVERRIDE or (isinstance(value, str) and not value.strip()):
+            out[field] = REMOVE_OVERRIDE
+        else:
+            out[field] = str(value).strip()
+    if "auth_method" in out and out["auth_method"] is not REMOVE_OVERRIDE:
+        out["auth_method"] = _as_choice(
+            out["auth_method"], field="connection.auth_method",
+            allowed=[m.value for m in EnumAuthMethod])
+    if "port" in connection:
+        port = connection["port"]
+        out["port"] = (
+            REMOVE_OVERRIDE if port in (None, "", 0)
+            else _as_port(port, field="connection.port"))
     if "secret" in connection:
         out["secret"] = _secret_to_mongo(connection.get("secret"))
     return out
@@ -381,7 +415,7 @@ def host_to_mongo(dto: dict, *, for_update: bool = False) -> dict:
             raise PlaintextRefused("name cannot be empty")
         doc["name"] = name
     if "enabled" in d:
-        doc["enabled"] = bool(d["enabled"])
+        doc["enabled"] = _as_bool(d["enabled"], field="enabled")
 
     if "access" in d:
         doc["access"] = _access_to_mongo(
@@ -410,17 +444,99 @@ def host_to_mongo(dto: dict, *, for_update: bool = False) -> dict:
     return doc
 
 
+#: Valid TCP port range. A port is the one field here a typo turns into a
+#: connection attempt against something else entirely.
+_MIN_PORT, _MAX_PORT = 1, 65535
+
+
+def _as_bool(value: Any, *, field: str) -> bool:
+    """A boolean the client actually sent, not whatever ``bool()`` makes of it.
+
+    ``bool("false")`` is ``True``, so a client sending the string disabled a
+    host by enabling it. JSON has a boolean; anything else here is a mistake
+    worth reporting rather than coercing.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    raise PlaintextRefused(
+        f"{field} must be true or false, got {value!r}")
+
+
+def _as_port(value: Any, *, field: str) -> int:
+    """A port, or a refusal the API can turn into a 422.
+
+    ``int("invalid")`` raises ``ValueError``, which no handler caught: the
+    client got a 500 and the log got a traceback, for what is plainly bad
+    input.
+    """
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        raise PlaintextRefused(f"{field} must be a number, got {value!r}") from None
+    if not _MIN_PORT <= port <= _MAX_PORT:
+        raise PlaintextRefused(
+            f"{field} must be between {_MIN_PORT} and {_MAX_PORT}, got {port}")
+    return port
+
+
+def _as_choice(value: Any, *, field: str, allowed: Iterable[str]) -> str:
+    choices = list(allowed)
+    text = str(value)
+    if text not in choices:
+        raise PlaintextRefused(
+            f"{field} must be one of {', '.join(choices)}, got {text!r}")
+    return text
+
+
+def _refuse_unknown(payload: dict, known: Iterable[str], *, where: str) -> None:
+    """Refuse fields nobody will read.
+
+    The routes said unknown fields were rejected; they were silently dropped,
+    so a client could send ``passwrod`` and get a 201 believing it had set
+    something.
+    """
+    unknown = sorted(set(payload) - set(known))
+    if unknown:
+        raise PlaintextRefused(
+            f"unknown {where} field(s): {', '.join(unknown)}")
+
+
+_ACCESS_FIELDS = (
+    "transport", "address", "port", "username", "auth_method", "secret",
+    "key_fingerprint", "host_key_fingerprint",
+)
+_CONTAINER_ACCESS_FIELDS = (
+    "transport", "username", "port", "address_mode", "auth_method", "secret",
+    "remote_dir",
+)
+_DISCOVERY_FIELDS = (
+    "mode", "label_filter", "name_prefix", "endpoint", "last_discovery",
+    "discovered_count", "last_discovery_message",
+)
+
+
 def _access_to_mongo(access: dict, *, for_update: bool = False) -> dict:
     _refuse_plaintext(access, where="access")
+    _refuse_unknown(access, _ACCESS_FIELDS, where="access")
     out: dict[str, Any] = {} if for_update else {"transport": "ssh"}
     if "address" in access:
-        out["address"] = str(access["address"]).strip()
+        address = str(access["address"]).strip()
+        if not address:
+            raise PlaintextRefused("access.address cannot be empty")
+        out["address"] = address
     if "port" in access:
-        out["port"] = int(access["port"])
+        out["port"] = _as_port(access["port"], field="access.port")
     if "username" in access:
-        out["username"] = str(access["username"]).strip()
+        username = str(access["username"]).strip()
+        if not username:
+            raise PlaintextRefused("access.username cannot be empty")
+        out["username"] = username
     if "auth_method" in access:
-        out["auth_method"] = str(access["auth_method"])
+        out["auth_method"] = _as_choice(
+            access["auth_method"], field="access.auth_method",
+            allowed=[m.value for m in EnumAuthMethod])
     if "secret" in access:
         out["secret"] = _secret_to_mongo(access.get("secret"))
     return out
@@ -435,16 +551,21 @@ def _container_access_to_mongo(access: dict, *, for_update: bool = False) -> dic
     client changing the port sends nothing else.
     """
     _refuse_plaintext(access, where="container_access")
+    _refuse_unknown(access, _CONTAINER_ACCESS_FIELDS, where="container_access")
     if for_update:
         out: dict[str, Any] = {}
         if "username" in access:
             out["username"] = str(access["username"]).strip()
         if "port" in access:
-            out["port"] = int(access["port"])
+            out["port"] = _as_port(access["port"], field="container_access.port")
         if "address_mode" in access:
-            out["address_mode"] = str(access["address_mode"])
+            out["address_mode"] = _as_choice(
+                access["address_mode"], field="container_access.address_mode",
+                allowed=[m.value for m in EnumAddressMode])
         if "auth_method" in access:
-            out["auth_method"] = str(access["auth_method"])
+            out["auth_method"] = _as_choice(
+                access["auth_method"], field="container_access.auth_method",
+                allowed=[m.value for m in EnumAuthMethod])
         if "secret" in access:
             # Present and null means "remove it"; absent means "leave it".
             out["secret"] = _secret_to_mongo(access.get("secret"))
@@ -454,9 +575,19 @@ def _container_access_to_mongo(access: dict, *, for_update: bool = False) -> dic
     out = {
         "transport": "ssh",
         "username": str(access.get("username") or "root"),
-        "port": int(access.get("port") or 22),
-        "address_mode": str(access.get("address_mode") or "container_ip"),
-        "auth_method": str(access.get("auth_method") or "password"),
+        # `or 22` would read an explicit 0 as absent and quietly use 22,
+        # which is the same silent coercion as `bool("false")`.
+        "port": _as_port(
+            22 if access.get("port") is None else access["port"],
+            field="container_access.port"),
+        "address_mode": _as_choice(
+            access.get("address_mode") or EnumAddressMode.CONTAINER_IP.value,
+            field="container_access.address_mode",
+            allowed=[m.value for m in EnumAddressMode]),
+        "auth_method": _as_choice(
+            access.get("auth_method") or EnumAuthMethod.PASSWORD.value,
+            field="container_access.auth_method",
+            allowed=[m.value for m in EnumAuthMethod]),
         "secret": _secret_to_mongo(access.get("secret")),
     }
     if access.get("remote_dir"):
@@ -477,6 +608,7 @@ def _discovery_to_mongo(discovery: dict, *, for_update: bool = False) -> dict:
             "these discovery fields are produced by the master-node and cannot "
             "be set: " + ", ".join(rejected)
         )
+    _refuse_unknown(discovery, _DISCOVERY_FIELDS, where="discovery")
 
     def _mode(raw: Any) -> str:
         mode = str(raw or EnumDiscoveryMode.DOCKER.value)

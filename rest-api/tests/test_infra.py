@@ -292,22 +292,37 @@ class TestObservationsAreNotWritable:
 # ── Deleting a host that is in use ───────────────────────────────────────────
 
 class TestDeleteGuard:
-    @pytest.mark.parametrize("status", ["reserved", "busy"])
-    def test_a_host_with_a_running_simulation_is_refused(self, client, infra, status):
-        infra.resource_repo.find_by_host.return_value = [sample_resource(status=status)]
+    """The condition travels with the write.
+
+    Counting the busy ones in the endpoint and deleting afterwards left a
+    window the scheduler could reserve in — and the delete then removed the
+    record of a live run, with no way to find it again because the reservation
+    went with it. So the repository refuses, and the endpoint reports what it
+    said.
+    """
+
+    def test_a_host_with_a_running_simulation_is_refused(self, client, infra):
+        infra.host_repo.delete_if_drained.return_value = (False, ["cooja1"])
 
         response = client.delete(f"/api/v1/infra/hosts/{HOST_ID}")
 
         assert response.status_code == 409
         detail = response.json()["detail"]
-        assert "cooja1" in detail
+        assert "cooja1" in detail           # names what blocked it
         assert "drain" in detail            # says what to do instead
-        infra.host_repo.delete.assert_not_called()
 
     def test_an_idle_host_is_deleted(self, client, infra):
+        infra.host_repo.delete_if_drained.return_value = (True, [])
+
         response = client.delete(f"/api/v1/infra/hosts/{HOST_ID}")
+
         assert response.status_code == 204
-        infra.host_repo.delete.assert_called_once()
+        infra.host_repo.delete_if_drained.assert_called_once()
+
+    def test_a_host_that_vanished_meanwhile_is_a_404(self, client, infra):
+        infra.host_repo.delete_if_drained.return_value = (False, [])
+
+        assert client.delete(f"/api/v1/infra/hosts/{HOST_ID}").status_code == 404
 
     def test_disabling_a_busy_host_is_allowed(self, client, infra):
         # Disabling drains rather than interrupts, so it must work while busy.
@@ -552,17 +567,129 @@ class TestManualWorkers:
         assert merged["username"] == "cooja"
         assert merged["secret"]["ciphertext"] == SEALED
 
+    def test_clearing_an_override_removes_it(self, client, infra):
+        """The third intention, which did not exist.
+
+        The form omitted an emptied field, the endpoint merged with what was
+        stored, and the old value survived — there was no way to undo an
+        override at all. A null now removes the key, rather than storing a
+        null: a stored null would still read as the operator having
+        configured something, which is what decides whether Docker's view of
+        the worker is used.
+        """
+        infra.resource_repo.get.return_value = sample_resource(
+            status="available", connection={"username": "simlab", "port": 2223})
+
+        response = client.put(
+            f"/api/v1/infra/resources/{RES_ID}/connection",
+            json={"connection": {"username": None}},
+        )
+
+        assert response.status_code == 200
+        merged = infra.resource_repo.update_manual.call_args.args[1]["connection"]
+        assert "username" not in merged
+        # What was not mentioned is kept.
+        assert merged["port"] == 2223
+
+    def test_an_empty_string_also_removes_it(self, client, infra):
+        # What a cleared text field sends.
+        infra.resource_repo.get.return_value = sample_resource(
+            status="available", connection={"username": "simlab"})
+
+        client.put(
+            f"/api/v1/infra/resources/{RES_ID}/connection",
+            json={"connection": {"username": ""}},
+        )
+
+        merged = infra.resource_repo.update_manual.call_args.args[1]["connection"]
+        assert "username" not in merged
+
+    def test_a_credential_can_be_handed_back_to_the_host(self, client, infra):
+        infra.resource_repo.get.return_value = sample_resource(
+            status="available",
+            connection={"secret": {"alg": "crypto_box_seal",
+                                   "key_id": "a" * 16, "ciphertext": "x"}})
+
+        client.put(
+            f"/api/v1/infra/resources/{RES_ID}/connection",
+            json={"connection": {"secret": None}},
+        )
+
+        merged = infra.resource_repo.update_manual.call_args.args[1]["connection"]
+        assert "secret" not in merged
+
+    def test_an_override_still_overrides(self, client, infra):
+        infra.resource_repo.get.return_value = sample_resource(status="available")
+
+        client.put(
+            f"/api/v1/infra/resources/{RES_ID}/connection",
+            json={"connection": {"username": "outro"}},
+        )
+
+        merged = infra.resource_repo.update_manual.call_args.args[1]["connection"]
+        assert merged["username"] == "outro"
+
+    def test_a_discovered_worker_cannot_be_renamed(self, client, infra):
+        """Its name *is* the container's, and discovery matches on it.
+
+        Renaming one left the original name with no record, so the next
+        discovery inserted it again — two registrations and two reservations
+        for one container.
+        """
+        infra.resource_repo.get.return_value = sample_resource(status="available")
+
+        response = client.put(
+            f"/api/v1/infra/resources/{RES_ID}/connection",
+            json={"name": "worker-rapido"},
+        )
+
+        assert response.status_code == 409
+        detail = response.json()["detail"]
+        assert "found by Docker" in detail
+        # Says what to do instead, rather than only refusing.
+        assert "connection settings" in detail and "by hand" in detail
+        infra.resource_repo.update_manual.assert_not_called()
+
+    def test_changing_a_discovered_workers_connection_is_allowed(self, client, infra):
+        # The address is the operator's business; the name is not.
+        infra.resource_repo.get.return_value = sample_resource(status="available")
+
+        response = client.put(
+            f"/api/v1/infra/resources/{RES_ID}/connection",
+            json={"connection": {"port": 2223}},
+        )
+
+        assert response.status_code == 200
+        infra.resource_repo.update_manual.assert_called_once()
+
     def test_a_busy_worker_cannot_be_removed(self, client, infra):
+        # The repository refuses; the read in the endpoint is only for the
+        # message, because by itself it would be a check-then-act.
         infra.resource_repo.get.return_value = sample_resource(status="busy")
+        infra.resource_repo.delete_if_free.return_value = False
+
         response = client.delete(f"/api/v1/infra/resources/{RES_ID}")
+
         assert response.status_code == 409
         assert "running a simulation" in response.json()["detail"]
-        infra.resource_repo.delete.assert_not_called()
 
     def test_an_idle_worker_is_removed(self, client, infra):
+        infra.resource_repo.delete_if_free.return_value = True
+
         response = client.delete(f"/api/v1/infra/resources/{RES_ID}")
+
         assert response.status_code == 204
-        infra.resource_repo.delete.assert_called_once()
+        infra.resource_repo.delete_if_free.assert_called_once()
+
+    def test_a_worker_reserved_between_the_read_and_the_write_is_refused(
+        self, client, infra
+    ):
+        """The race itself: idle when read, taken by the time it is deleted."""
+        infra.resource_repo.get.return_value = sample_resource(status="available")
+        infra.resource_repo.delete_if_free.return_value = False
+
+        assert client.delete(
+            f"/api/v1/infra/resources/{RES_ID}").status_code == 409
 
     def test_a_workers_credential_is_described_not_returned(self, client, infra):
         infra.resource_repo.get.return_value = sample_resource(

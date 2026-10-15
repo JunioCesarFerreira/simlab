@@ -15,6 +15,7 @@
 import { describe, expect, it } from "vitest";
 import {
   dockerLevel,
+  evidenceAge,
   endpointLabel,
   operatorConfigured,
   overrideSummary,
@@ -196,5 +197,48 @@ describe("the decision comes from the API", () => {
     } as unknown as ResourceDto;
 
     expect(operatorConfigured(resource)).toBe(true);
+  });
+});
+
+describe("how old the evidence is", () => {
+  it("says when a ready worker was last measured", () => {
+    // "ready" is a statement about the past, and the page did not say how
+    // far past. A healthy worker is re-probed every few minutes, so one that
+    // stopped answering reads `ready` until the next probe is due.
+    const twoMinutesAgo = new Date(Date.now() - 125_000).toISOString();
+    const resource = {
+      origin: "discovered",
+      connection: {},
+      container: { state: "running", checked_at: twoMinutesAgo },
+      probe: {
+        ssh_ok: true,
+        cooja_jar_sha256: "a".repeat(64),
+        java_version: "21",
+        checked_at: twoMinutesAgo,
+      },
+    } as unknown as ResourceDto;
+
+    expect(probeLevel(resource).label).toBe("ready");
+    expect(probeLevel(resource).title).toContain("measured 2min ago");
+  });
+
+  it.each([
+    [5_000, "5s ago"],
+    [125_000, "2min ago"],
+    [7_200_000, "2h ago"],
+    [86_400_000 * 3, "3d ago"],
+  ])("reads %ims as %s", (elapsed, expected) => {
+    const when = new Date(Date.now() - (elapsed as number)).toISOString();
+    expect(evidenceAge(when)).toBe(expected);
+  });
+
+  it("says nothing when nothing was measured", () => {
+    expect(evidenceAge(null)).toBe("");
+    expect(evidenceAge(undefined)).toBe("");
+  });
+
+  it("does not invent an age from a clock that moved", () => {
+    const future = new Date(Date.now() + 60_000).toISOString();
+    expect(evidenceAge(future)).toBe("");
   });
 });

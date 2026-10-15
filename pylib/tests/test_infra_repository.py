@@ -70,6 +70,9 @@ def resources() -> tuple[CoojaResourceRepository, MagicMock]:
     repo = CoojaResourceRepository(connection)
     coll = db[RESOURCES_COLLECTION]
     coll.reset_mock()                       # drop the index calls from __init__
+    # Nothing known yet. A MagicMock would be truthy, and discovery reads
+    # `find_one` to recognise a container by its id.
+    coll.find_one.return_value = None
     return repo, coll
 
 
@@ -532,6 +535,56 @@ class TestSyncDiscovered:
         assert upsert.args[0] == {"host_id": HOST_ID, "name": "cooja1"}
         assert "container" in upsert.args[1]["$set"]
 
+    def test_a_container_is_recognised_by_its_id(self, resources):
+        """The identity is the container, not the name it happens to carry.
+
+        Matching on the name alone meant a record whose name had diverged —
+        renamed here, or renamed in Docker — went unrecognised and the
+        container was inserted a second time: two registrations and two
+        reservations for one machine.
+        """
+        repo, coll = resources
+        coll.find_one.return_value = {"_id": RES_ID, "name": "old-name"}
+        coll.update_one.return_value = MagicMock(upserted_id=None)
+        coll.find.return_value = []
+
+        repo.sync_discovered(
+            HOST_ID, self._containers()[:1], remote_dir="/opt/cooja")
+
+        # Looked up by the container's id...
+        assert coll.find_one.call_args.args[0] == {
+            "host_id": HOST_ID, "container.id": "aaa"}
+        # ...and updated by _id, so the name is not the key.
+        first = coll.update_one.call_args_list[0]
+        assert first.args[0] == {"_id": RES_ID}
+        # The divergence is followed rather than duplicated.
+        assert first.args[1]["$set"]["name"] == "cooja1"
+
+    def test_a_container_nobody_has_seen_is_inserted_by_name(self, resources):
+        repo, coll = resources
+        coll.find_one.return_value = None
+        coll.update_one.return_value = MagicMock(upserted_id=ObjectId())
+        coll.find.return_value = []
+
+        result = repo.sync_discovered(
+            HOST_ID, self._containers()[:1], remote_dir="/opt/cooja")
+
+        assert result["created"] == ["cooja1"]
+        assert coll.update_one.call_args_list[0].args[0] == {
+            "host_id": HOST_ID, "name": "cooja1"}
+
+    def test_a_container_without_an_id_falls_back_to_the_name(self, resources):
+        # Nothing to match on; the name is all there is.
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(upserted_id=None)
+        coll.find.return_value = []
+
+        repo.sync_discovered(
+            HOST_ID, [{"name": "cooja9", "state": "running"}],
+            remote_dir="/opt/cooja")
+
+        coll.find_one.assert_not_called()
+
     def test_vanished_container_is_marked_not_deleted(self, resources):
         repo, coll = resources
         coll.update_one.return_value = MagicMock(upserted_id=None)
@@ -648,6 +701,77 @@ class TestQueries:
         }
 
 
+class TestConditionalDeletion:
+    """Deletion carries its condition, instead of trusting a read before it.
+
+    The API asked whether anything was running and deleted afterwards. The
+    scheduler can reserve a container in that window, and the delete then
+    removed the record of a live run — with no way to find it again, because
+    the reservation went with it.
+    """
+
+    def test_a_worker_is_deleted_only_while_free(self, resources):
+        repo, coll = resources
+        coll.delete_one.return_value = MagicMock(deleted_count=1)
+
+        assert repo.delete_if_free(RES_ID) is True
+
+        flt = coll.delete_one.call_args.args[0]
+        assert flt["_id"] == RES_ID
+        assert set(flt["status"]["$nin"]) == {
+            EnumResourceStatus.RESERVED.value, EnumResourceStatus.BUSY.value}
+        assert flt["current_simulation_id"] is None
+
+    def test_an_occupied_worker_survives(self, resources):
+        repo, coll = resources
+        coll.delete_one.return_value = MagicMock(deleted_count=0)
+
+        assert repo.delete_if_free(RES_ID) is False
+
+    def test_a_drained_host_and_its_workers_go(self):
+        connection, db = make_connection()
+        repo = HostRepository(connection)
+        resources_coll = db[RESOURCES_COLLECTION]
+        resources_coll.find.return_value = [
+            {"_id": RES_ID, "name": "cooja1"},
+            {"_id": OTHER_SIM_ID, "name": "cooja2"},
+        ]
+        resources_coll.delete_one.return_value = MagicMock(deleted_count=1)
+        db[HOSTS_COLLECTION].delete_one.return_value = MagicMock(deleted_count=1)
+
+        deleted, blocking = repo.delete_if_drained(HOST_ID)
+
+        assert deleted is True and blocking == []
+        assert resources_coll.delete_one.call_count == 2
+
+    def test_one_occupied_worker_blocks_the_whole_host(self):
+        # And names itself, so the operator knows what to drain.
+        connection, db = make_connection()
+        repo = HostRepository(connection)
+        resources_coll = db[RESOURCES_COLLECTION]
+        resources_coll.find.return_value = [
+            {"_id": RES_ID, "name": "cooja1"},
+            {"_id": OTHER_SIM_ID, "name": "cooja2"},
+        ]
+        resources_coll.delete_one.side_effect = [
+            MagicMock(deleted_count=1), MagicMock(deleted_count=0)]
+
+        deleted, blocking = repo.delete_if_drained(HOST_ID)
+
+        assert deleted is False
+        assert blocking == ["cooja2"]
+        # The host stays, so the surviving worker is not orphaned.
+        db[HOSTS_COLLECTION].delete_one.assert_not_called()
+
+    def test_a_host_with_no_workers_is_deleted(self):
+        connection, db = make_connection()
+        repo = HostRepository(connection)
+        db[RESOURCES_COLLECTION].find.return_value = []
+        db[HOSTS_COLLECTION].delete_one.return_value = MagicMock(deleted_count=1)
+
+        assert repo.delete_if_drained(HOST_ID) == (True, [])
+
+
 # ── Workers configured by hand ───────────────────────────────────────────────
 
 class TestUpdateManual:
@@ -661,6 +785,70 @@ class TestUpdateManual:
         # Without this the next discovery pass marks a hand-configured worker
         # as missing and it is never probed.
         assert payload["origin"] == "manual"
+
+    def test_removing_the_last_override_gives_it_back_to_discovery(self, resources):
+        """"Inherit again" has to actually inherit.
+
+        Ownership used to be a one-way door: once edited, a worker stayed
+        flagged as operator-configured for ever, so Docker's view of it went
+        on being ignored even after the last override was gone.
+        """
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(matched_count=1)
+        coll.find_one.return_value = {
+            "_id": RES_ID, "container": {"id": "abc"}, "connection": {}}
+
+        repo.update_manual(RES_ID, {"connection": {"transport": "ssh"}})
+
+        assert coll.update_one.call_args.args[1]["$set"]["origin"] == "discovered"
+
+    def test_a_standing_override_keeps_ownership(self, resources):
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(matched_count=1)
+        coll.find_one.return_value = {
+            "_id": RES_ID, "container": {"id": "abc"}, "connection": {}}
+
+        repo.update_manual(RES_ID, {"connection": {"port": 2223}})
+
+        assert coll.update_one.call_args.args[1]["$set"]["origin"] == "manual"
+
+    def test_a_hand_registered_worker_stays_manual(self, resources):
+        # Docker never described it, so there is nothing to inherit back to.
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(matched_count=1)
+        coll.find_one.return_value = {"_id": RES_ID, "connection": {}}
+
+        repo.update_manual(RES_ID, {"connection": {"transport": "ssh"}})
+
+        assert coll.update_one.call_args.args[1]["$set"]["origin"] == "manual"
+
+    def test_stating_an_endpoint_takes_ownership(self, resources):
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(matched_count=1)
+        coll.find_one.return_value = {"_id": RES_ID, "container": {"id": "abc"}}
+
+        repo.update_manual(RES_ID, {"endpoint": {"address": "10.0.0.9"}})
+
+        assert coll.update_one.call_args.args[1]["$set"]["origin"] == "manual"
+
+    def test_the_endpoint_discovery_wrote_is_not_a_statement(self, resources):
+        """A discovered worker always has an endpoint: discovery writes it.
+
+        Reading the *stored* endpoint as ownership kept every edited worker
+        manual for ever — the one-way door this is meant to remove.
+        """
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(matched_count=1)
+        coll.find_one.return_value = {
+            "_id": RES_ID,
+            "container": {"id": "abc"},
+            "endpoint": {"address": "172.18.0.5", "port": 22},
+            "connection": {},
+        }
+
+        repo.update_manual(RES_ID, {"connection": {"transport": "ssh"}})
+
+        assert coll.update_one.call_args.args[1]["$set"]["origin"] == "discovered"
 
     def test_changing_the_address_clears_the_probe(self, resources):
         """The stored probe measured the old address.
@@ -801,14 +989,19 @@ class TestHosts:
         # running stays pending instead of being silently swallowed.
         assert coll.update_one.call_args.args[0]["check_requested_at"] == stamp
 
-    def test_delete_removes_the_hosts_resources_too(self, hosts):
+    def test_delete_removes_the_hosts_resources_too(self):
         connection, db = make_connection()
         repo = HostRepository(connection)
+        db[RESOURCES_COLLECTION].find.return_value = [{"_id": RES_ID, "name": "cooja1"}]
+        db[RESOURCES_COLLECTION].delete_one.return_value = MagicMock(deleted_count=1)
         db[HOSTS_COLLECTION].delete_one.return_value = MagicMock(deleted_count=1)
 
-        assert repo.delete(HOST_ID) is True
+        assert repo.delete_if_drained(HOST_ID) == (True, [])
 
-        db[RESOURCES_COLLECTION].delete_many.assert_called_once_with({"host_id": HOST_ID})
+        # One conditional delete per worker, rather than a blanket
+        # `delete_many`: the condition is what makes it safe.
+        db[RESOURCES_COLLECTION].delete_many.assert_not_called()
+        assert db[RESOURCES_COLLECTION].delete_one.call_count == 1
 
 
 class TestInventorySnapshot:

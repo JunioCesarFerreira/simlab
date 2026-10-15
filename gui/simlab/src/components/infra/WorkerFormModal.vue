@@ -89,6 +89,22 @@
               <button class="link-btn" :disabled="saving" @click="replaceSecret = true">
                 {{ hasStoredSecret ? "Replace it" : "Give it its own" }}
               </button>
+              <button
+                v-if="hasStoredSecret"
+                class="link-btn"
+                :disabled="saving"
+                @click="dropSecret = true"
+              >
+                Go back to the host's
+              </button>
+            </div>
+
+            <div v-if="dropSecret" class="stored">
+              Its own credential will be removed; this worker will use the
+              host's again.
+              <button class="link-btn" :disabled="saving" @click="dropSecret = false">
+                Keep it
+              </button>
             </div>
 
             <template v-else>
@@ -204,6 +220,8 @@ const form = reactive({
 
 const secretInput = ref("");
 const replaceSecret = ref(false);
+/** The operator asked for this worker to go back to the host's credential. */
+const dropSecret = ref(false);
 const saving = ref(false);
 const error = ref("");
 const keyError = ref("");
@@ -238,6 +256,7 @@ onMounted(async () => {
 function cancelReplace() {
   secretInput.value = "";
   replaceSecret.value = false;
+  dropSecret.value = false;
 }
 
 async function save() {
@@ -250,13 +269,29 @@ async function save() {
       secretInput.value = "";
     }
 
+    // Three intentions, and the API distinguishes them: a field left out is
+    // kept as it is, a value overrides, and `null` removes the override and
+    // inherits from the host again.
+    //
+    // While editing, every override field is sent — emptied ones as `null`.
+    // Omitting them is what made clearing a field do nothing at all: the
+    // backend merged with what was stored and the old value survived.
     const connection: ResourceConnectionInput = {};
-    if (form.port) connection.port = form.port;
-    if (form.username) connection.username = form.username;
-    if (form.authMethod) connection.auth_method = form.authMethod;
+    if (isEdit.value) {
+      connection.username = form.username || null;
+      connection.auth_method = form.authMethod || null;
+    } else {
+      if (form.username) connection.username = form.username;
+      if (form.authMethod) connection.auth_method = form.authMethod;
+    }
     if (sealed) connection.secret = sealed;
+    else if (dropSecret.value) connection.secret = null;
 
     const payload = {
+      // The port belongs to the endpoint — where this worker's sshd answers.
+      // It used to be sent as a connection override as well, which pinned a
+      // value that was only the host's default and made every worker look
+      // hand-configured.
       name: form.name,
       endpoint: { address: form.address, port: form.port || undefined },
       connection,

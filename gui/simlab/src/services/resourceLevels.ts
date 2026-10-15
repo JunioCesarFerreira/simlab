@@ -105,10 +105,33 @@ export function probeLevel(resource: ResourceDto): LevelView {
   return {
     label: "ready",
     tone: "ok",
-    title: [probe.java_version, `cooja.jar ${probe.cooja_jar_sha256}`]
+    title: [
+      probe.java_version,
+      `cooja.jar ${probe.cooja_jar_sha256}`,
+      `measured ${evidenceAge(probe.checked_at)}`,
+    ]
       .filter(Boolean)
       .join("\n"),
   };
+}
+
+/**
+ * How old the measurement is, in words.
+ *
+ * "ready" is a statement about the past, and the page did not say how far
+ * past. A healthy worker is only re-measured every few minutes, so a worker
+ * that stopped answering goes on reading `ready` until the next probe is due
+ * — and an operator looking at a stale result has no way to tell.
+ */
+export function evidenceAge(checkedAt?: string | null): string {
+  if (!checkedAt) return "";
+  const seconds = Math.round((Date.now() - new Date(checkedAt).getTime()) / 1000);
+  if (!Number.isFinite(seconds) || seconds < 0) return "";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}min ago`;
+  const hours = Math.round(minutes / 60);
+  return hours < 48 ? `${hours}h ago` : `${Math.round(hours / 24)}d ago`;
 }
 
 /** A worker's address, as `host:port`. */

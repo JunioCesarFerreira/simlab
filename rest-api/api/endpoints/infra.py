@@ -13,6 +13,8 @@ That is not a limitation worked around; it is what keeps the API outside the
 trust boundary. A credential travels sealed from the browser, is stored
 sealed, and is opened exactly once, by the one process that runs simulations.
 """
+import logging
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Response, status
 from bson import errors as bson_errors
 
@@ -48,9 +50,15 @@ from api.mappers.infra import (
     resource_to_mongo,
 )
 
+log = logging.getLogger(__name__)
+
 router = APIRouter()
 
 _OCCUPIED = [s.value for s in OCCUPIED_STATUSES]
+
+#: Host fields a worker inherits. Changing one of them invalidates what was
+#: measured about every worker on that host.
+_ACCESS_BLOCKS = {"access", "container_access"}
 
 
 # ── What the browser seals against ───────────────────────────────────────────
@@ -135,6 +143,10 @@ def create_host(
 
     if not doc.get("name"):
         raise HTTPException(status_code=422, detail="name is required")
+    # Only remote hosts are registered through the API, and a remote host is
+    # reached over SSH: without an address and a user there is nothing to
+    # connect to, and the failure would surface much later, in a log.
+    _require_reachable(doc.get("access") or {})
     _require_credential(doc.get("access") or {})
     if factory.host_repo.get_by_name(doc["name"]) is not None:
         raise HTTPException(
@@ -207,6 +219,20 @@ def update_host(
     # `payload` directly replaced each nested block with just those fields,
     # which is how editing a port removed the credential and the pinned key.
     factory.host_repo.update(host["_id"], dotted_update(payload))
+
+    if _ACCESS_BLOCKS & set(payload):
+        # The workers inherit whatever they do not override, so what was
+        # measured about them no longer describes how they are reached.
+        # Forgetting it makes the next health cycle re-measure; leaving it
+        # would let a placement use a configuration nobody has tried while
+        # the page still showed the old result as evidence that it worked.
+        affected = factory.resource_repo.clear_probes_of_host(host["_id"])
+        if affected:
+            log.info(
+                "Host %s access changed; cleared the probe of %d worker(s)",
+                host_id, affected,
+            )
+
     return host_from_mongo(_require_host(factory, host_id))
 
 
@@ -247,20 +273,20 @@ def delete_host(
     it first and let it drain.
     """
     host = _require_host(factory, host_id)
-    busy = [
-        r.get("name", "?")
-        for r in factory.resource_repo.find_by_host(host["_id"])
-        if r.get("status") in _OCCUPIED
-    ]
-    if busy:
+    # The condition travels with the write. Counting the busy ones here and
+    # deleting afterwards left a window the scheduler could reserve in, and
+    # then removed the host along with the record of a live run.
+    deleted, blocking = factory.host_repo.delete_if_drained(host["_id"])
+    if blocking:
         raise HTTPException(
             status_code=409,
             detail=(
                 f"host {host.get('name')!r} still has simulations running on "
-                f"{', '.join(busy)}. Disable the host and let it drain first."
+                f"{', '.join(blocking)}. Disable the host and let it drain first."
             ),
         )
-    factory.host_repo.delete(host["_id"])
+    if not deleted:
+        raise HTTPException(status_code=404, detail="host not found")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -453,11 +479,32 @@ def update_resource_connection(
         raise HTTPException(status_code=422, detail="nothing to update")
 
     if "connection" in payload:
+        # Merge, then drop what was explicitly removed. A null means "inherit
+        # this again", and inheriting is the *absence* of the key: a stored
+        # null would still read as the operator having configured something,
+        # which is what decides whether Docker's view of the worker is used.
         merged = {**(resource.get("connection") or {}), **payload["connection"]}
-        payload["connection"] = merged
+        payload["connection"] = {
+            k: v for k, v in merged.items() if v is not None}
 
     new_name = payload.get("name")
     if new_name and new_name != resource.get("name"):
+        # A discovered worker's name *is* its identity: it is the container's
+        # name, and the next discovery pass matches on it. Renaming one left
+        # the original name with no record, so discovery inserted it again —
+        # two registrations, two reservations, one container, and the database
+        # cannot see that they are the same machine.
+        container_id = (resource.get("container") or {}).get("id")
+        if resource.get("origin") != "manual" or container_id:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"worker {resource.get('name')!r} was found by Docker, so "
+                    "its name identifies the container and cannot be changed. "
+                    "Change its connection settings instead, or remove it and "
+                    "register the worker by hand under the name you want."
+                ),
+            )
         clash = factory.resource_repo.find_by_host_and_name(
             resource["host_id"], new_name)
         if clash is not None:
@@ -485,7 +532,10 @@ def delete_resource(
     on the next pass — disabling it is what keeps it out of the pool.
     """
     resource = _require_resource(factory, resource_id)
-    if resource.get("status") in _OCCUPIED:
+    # Conditional in the write: the read above is only for the message. Between
+    # that read and this call the scheduler can reserve the container, and
+    # deleting it then would orphan a live run with no way to find it again.
+    if not factory.resource_repo.delete_if_free(resource["_id"]):
         raise HTTPException(
             status_code=409,
             detail=(
@@ -493,11 +543,31 @@ def delete_resource(
                 "Disable it and let the simulation finish first."
             ),
         )
-    factory.resource_repo.delete(resource["_id"])
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+
+def _require_reachable(access: dict) -> None:
+    """Refuse a remote host nobody could connect to.
+
+    An empty ``access`` used to pass: a host could be registered with nothing
+    but a name, and every later operation failed with "has no SSH address
+    configured" — far from its cause, and only visible in the master-node's
+    log. A registration says how to reach the host or it is not a
+    registration.
+    """
+    missing = [field for field in ("address", "username") if not access.get(field)]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"a remote host needs {' and '.join('access.' + m for m in missing)}: "
+                "the master-node reaches its containers through the host, so "
+                "there is nothing to connect to without them."
+            ),
+        )
+
 
 def _require_credential(access: dict) -> None:
     """Refuse a host whose authentication needs a credential it does not have.

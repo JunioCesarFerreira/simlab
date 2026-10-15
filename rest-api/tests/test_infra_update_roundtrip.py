@@ -98,6 +98,12 @@ class SetApplyingCollection:
 
 
 @pytest.fixture
+def factory(client) -> MagicMock:
+    """The repository bundle the endpoint was given."""
+    return client.factory
+
+
+@pytest.fixture
 def stored() -> SetApplyingCollection:
     return SetApplyingCollection(STORED_HOST)
 
@@ -124,6 +130,7 @@ def client(stored) -> TestClient:
     app.dependency_overrides[get_api_key] = lambda: "api-password"
 
     with TestClient(app) as c:
+        c.factory = factory
         yield c
 
     app.dependency_overrides.clear()
@@ -235,3 +242,42 @@ class TestEditingAHost:
 
         assert resp.status_code == 422
         assert stored.doc["status"] == "online"
+
+
+class TestProbesDependOnTheHost:
+    """A worker inherits what it does not override, so a host edit stales it.
+
+    Editing the *worker* already cleared its probe. Editing the **host** did
+    not, so the next placement could use a configuration nobody had measured
+    while the page still showed the old result as evidence that it worked.
+
+    Only the measurement is forgotten — not the status, so nothing drops out
+    of the pool for an edit and a worker holding a simulation is untouched.
+    """
+
+    def test_changing_hop_1_clears_the_worker_probes(self, client, factory):
+        client.put(f"{BASE}/hosts/{HOST_ID}", json={"access": {"port": 2223}})
+
+        factory.resource_repo.clear_probes_of_host.assert_called_once_with(HOST_ID)
+
+    def test_changing_hop_2_clears_them_too(self, client, factory):
+        client.put(
+            f"{BASE}/hosts/{HOST_ID}", json={"container_access": {"port": 2022}})
+
+        factory.resource_repo.clear_probes_of_host.assert_called_once_with(HOST_ID)
+
+    def test_renaming_the_host_does_not(self, client, factory):
+        # The name is not something a worker is reached by.
+        client.put(f"{BASE}/hosts/{HOST_ID}", json={"name": "lab-01-renamed"})
+
+        factory.resource_repo.clear_probes_of_host.assert_not_called()
+
+    def test_changing_discovery_does_not(self, client, factory):
+        client.put(f"{BASE}/hosts/{HOST_ID}", json={"discovery": {"mode": "docker"}})
+
+        factory.resource_repo.clear_probes_of_host.assert_not_called()
+
+    def test_a_refused_patch_clears_nothing(self, client, factory):
+        client.put(f"{BASE}/hosts/{HOST_ID}", json={"access": {"secret": None}})
+
+        factory.resource_repo.clear_probes_of_host.assert_not_called()

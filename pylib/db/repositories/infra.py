@@ -206,15 +206,41 @@ class HostRepository:
             res = db[HOSTS_COLLECTION].update_one({"_id": oid}, {"$set": updates})
             return res.modified_count > 0
 
-    def delete(self, host_id: Any) -> bool:
-        """Remove a host and its resources. Callers must check occupancy first."""
+    def delete_if_drained(self, host_id: Any) -> tuple[bool, list[str]]:
+        """Remove a host and its workers, if none of them is holding anything.
+
+        Returns ``(deleted, blocking)``: the names that stopped it, empty when
+        it went through.
+
+        The workers go first, each one conditionally, and the host only if all
+        of them went. Doing it the other way round — count the busy ones, then
+        delete everything — left a window the scheduler could reserve in, and
+        then removed the host along with the record of a live run.
+
+        It is two writes, so a reservation can still arrive between them. What
+        that costs now is a *refusal*: the worker survives, the host survives
+        with it, and the caller is told which one blocked. The previous
+        version lost the data instead.
+        """
         oid = _oid(host_id)
         if oid is None:
-            return False
+            return False, []
         with self.connection.connect() as db:
-            db[RESOURCES_COLLECTION].delete_many({"host_id": oid})
+            resources = list(db[RESOURCES_COLLECTION].find(
+                {"host_id": oid}, {"_id": 1, "name": 1}))
+            blocking: list[str] = []
+            for resource in resources:
+                gone = db[RESOURCES_COLLECTION].delete_one({
+                    "_id": resource["_id"],
+                    "status": {"$nin": _OCCUPIED},
+                    "current_simulation_id": None,
+                }).deleted_count
+                if not gone:
+                    blocking.append(str(resource.get("name", "?")))
+            if blocking:
+                return False, blocking
             res = db[HOSTS_COLLECTION].delete_one({"_id": oid})
-            return res.deleted_count > 0
+            return res.deleted_count > 0, []
 
     # ── bootstrap ──────────────────────────────────────────────────────────
 
@@ -734,6 +760,37 @@ class CoojaResourceRepository:
             )
             return res.modified_count > 0
 
+    def clear_probes_of_host(self, host_id: Any) -> int:
+        """Forget what was measured about a host's workers.
+
+        Called when the host's own access settings change. A worker inherits
+        whatever it does not override — the address of hop 1, the container
+        username, the port, the credential — so a stored probe describes a
+        path that may no longer exist, exactly as it does when the worker's
+        own settings change.
+
+        Editing the *worker* already cleared its probe; editing the **host**
+        did not, so the next placement could use a configuration nobody had
+        measured while the page still showed the old result as evidence that
+        it worked.
+
+        Only the measurement is forgotten. The status is left alone, so a
+        worker holding a simulation is untouched and nothing drops out of the
+        pool for an edit — the next cycle measures and decides.
+
+        Returns how many workers were affected.
+        """
+        oid = _oid(host_id)
+        if oid is None:
+            return 0
+        now = datetime.now()
+        with self.connection.connect() as db:
+            res = db[RESOURCES_COLLECTION].update_many(
+                {"host_id": oid},
+                {"$set": {"probe": {}, "updated_time": now}},
+            )
+            return res.modified_count
+
     def set_enabled(self, resource_id: Any, enabled: bool) -> bool:
         """Administrative override. Survives every discovery pass.
 
@@ -830,11 +887,38 @@ class CoojaResourceRepository:
                 }
                 if endpoint:
                     set_on_insert["endpoint"] = endpoint
-                result = coll.update_one(
-                    {"host_id": host_id, "name": name},
-                    {"$set": set_fields, "$setOnInsert": set_on_insert},
-                    upsert=True,
-                )
+
+                # The container's id is the identity when there is one; the
+                # name is only how a record is first recognised. Matching on
+                # the name alone meant a record whose name had diverged — a
+                # rename here, or one in Docker — was not recognised, and the
+                # container was inserted a second time: two registrations and
+                # two reservations for one machine, with nothing in the
+                # database able to say they were the same.
+                container_id = container.get("id")
+                known = None
+                if container_id:
+                    known = coll.find_one(
+                        {"host_id": host_id, "container.id": container_id},
+                        {"_id": 1, "name": 1},
+                    )
+                if known is not None:
+                    if known.get("name") != name:
+                        log.info(
+                            "Container %s is registered as %r; following the "
+                            "rename", container_id, known.get("name"),
+                        )
+                        set_fields["name"] = name
+                    result = coll.update_one({"_id": known["_id"]}, {"$set": set_fields})
+                    identified_by = {"_id": known["_id"]}
+                else:
+                    result = coll.update_one(
+                        {"host_id": host_id, "name": name},
+                        {"$set": set_fields, "$setOnInsert": set_on_insert},
+                        upsert=True,
+                    )
+                    identified_by = {"host_id": host_id, "name": name}
+
                 if endpoint and result.upserted_id is None:
                     # Refreshing the address of a worker that already exists
                     # is only discovery's business where discovery owns it. A
@@ -844,8 +928,7 @@ class CoojaResourceRepository:
                     # undo a deliberate setting — the same division of
                     # authority the health cycle and the release apply.
                     coll.update_one(
-                        {"host_id": host_id, "name": name,
-                         "origin": {"$ne": "manual"}},
+                        {**identified_by, "origin": {"$ne": "manual"}},
                         {"$set": {"endpoint": endpoint}},
                     )
                 (created if result.upserted_id else updated).append(name)
@@ -954,7 +1037,14 @@ class CoojaResourceRepository:
             # health cycle and the discovery sync both need — without it, the
             # next discovery pass marks a hand-configured worker as missing
             # and the probe never runs.
-            payload["origin"] = "manual"
+            #
+            # And it has to be reversible, or "remove the override and inherit
+            # again" would not actually inherit: the worker would stay flagged
+            # as operator-configured for ever and Docker's view of it would go
+            # on being ignored. Ownership follows the overrides, in both
+            # directions — except for a worker that was registered by hand in
+            # the first place, which Docker never found and cannot describe.
+            payload["origin"] = self._origin_after(oid, payload)
             # The stored probe measured the *old* address, so it no longer
             # says anything about this worker: keeping it would show a result
             # for a path that no longer exists, and let the health cycle skip
@@ -965,13 +1055,56 @@ class CoojaResourceRepository:
             res = db[RESOURCES_COLLECTION].update_one({"_id": oid}, {"$set": payload})
             return res.matched_count > 0
 
-    def delete(self, resource_id: Any) -> bool:
-        """Remove one worker. Callers must check it is not holding anything."""
+    def _origin_after(self, oid: ObjectId, payload: dict) -> str:
+        """Who decides this worker's connection, after this edit.
+
+        ``manual`` while any override stands. Back to ``discovered`` once the
+        last one is gone — but only for a worker Docker actually found, which
+        is the one case where there is something to inherit back to.
+        """
+        with self.connection.connect() as db:
+            current = db[RESOURCES_COLLECTION].find_one(
+                {"_id": oid}, {"container.id": 1, "connection": 1, "endpoint": 1})
+        current = current or {}
+        if not (current.get("container") or {}).get("id"):
+            # Registered by hand: Docker never described it, so there is no
+            # inherited configuration to fall back to.
+            return "manual"
+
+        # Only *this* edit's endpoint counts as a statement of intent. A
+        # discovered worker always has one — discovery writes it — so reading
+        # the stored endpoint as ownership kept every edited worker manual for
+        # ever, which is the one-way door this is meant to remove.
+        if "endpoint" in payload:
+            return "manual"
+
+        connection = payload.get("connection", current.get("connection") or {})
+        if any(key != "transport" for key in connection):
+            return "manual"
+        return "discovered"
+
+    def delete_if_free(self, resource_id: Any) -> bool:
+        """Remove one worker, and **only** if nothing is holding it.
+
+        The condition is in the write, not in a check before it. Asking first
+        and deleting after leaves a window the scheduler can reserve in: the
+        API saw a free container, the dispatcher took it, and the delete then
+        removed the record of a live run — with no way to find it again,
+        because the reservation went with it.
+
+        False means it was occupied, already gone, or never existed. The
+        caller cannot tell those apart from here and does not need to: in
+        every case there is nothing it may delete.
+        """
         oid = _oid(resource_id)
         if oid is None:
             return False
         with self.connection.connect() as db:
-            res = db[RESOURCES_COLLECTION].delete_one({"_id": oid})
+            res = db[RESOURCES_COLLECTION].delete_one({
+                "_id": oid,
+                "status": {"$nin": _OCCUPIED},
+                "current_simulation_id": None,
+            })
             return res.deleted_count > 0
 
     def find_by_host_and_name(self, host_id: Any, name: str) -> Optional[CoojaResource]:

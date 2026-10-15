@@ -116,6 +116,7 @@ import {
   dockerLevel,
   endpointLabel,
   overrideSummary,
+  evidenceAge,
   probeLevel,
 } from "../../services/resourceLevels";
 import type { ResourceDto } from "../../types/infra";
@@ -144,8 +145,11 @@ const busyIds = props.busyIds ?? new Set<string>();
 
 function probeDetail(resource: ResourceDto): string {
   const message = resource.probe?.message ?? "";
-  // "ready" is already the label; repeating it below adds nothing.
-  return message && message !== "ready" ? message : "";
+  // "ready" is already the label. What is worth saying instead is *when* it
+  // was measured: a healthy worker is only re-probed every few minutes, so a
+  // worker that has stopped answering reads `ready` until the next one is due.
+  if (message && message !== "ready") return message;
+  return evidenceAge(resource.probe?.checked_at);
 }
 
 function shortBuild(resource: ResourceDto): string {

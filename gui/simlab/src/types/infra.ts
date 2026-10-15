@@ -129,10 +129,19 @@ export interface ResourceConnectionDto {
   secret?: SecretInfo;
 }
 
+/**
+ * A worker's own SSH parameters, as an intention rather than a state.
+ *
+ * Each field says one of three things, and the API tells them apart:
+ * absent means "leave what is stored", a value overrides, and `null` removes
+ * the override so the worker inherits from its host again. Without the third,
+ * clearing a field on the form did nothing — the backend merged with what was
+ * stored and the old value survived.
+ */
 export interface ResourceConnectionInput {
-  username?: string;
-  port?: number;
-  auth_method?: AuthMethod;
+  username?: string | null;
+  port?: number | null;
+  auth_method?: AuthMethod | null;
   secret?: SealedSecret | null;
 }
 
