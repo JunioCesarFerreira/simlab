@@ -77,11 +77,13 @@ class TestSuccessfulRun:
         build_runner(mongo, execute=execute).run(SIM, HOST, RESOURCE, ATTEMPT)
 
         # A defensive cleanup first, in case a previous run died before its
-        # own; then the inputs; then Cooja.
-        transport.cleanup.assert_called_once_with()
+        # own; then the inputs; then Cooja; then the run's own artifacts, now
+        # that the result is published and nothing needs them.
+        assert transport.cleanup.call_args_list[0].args == ()
         transport.put_files.assert_called_once_with(["tmp/a.c"], ["a.c"])
         execute.assert_called_once()
         assert execute.call_args.args[0] is SIM
+        assert "run.pgid" in transport.cleanup.call_args_list[-1].args[0]
 
     def test_the_container_becomes_busy_when_the_run_actually_starts(self, transport):
         """`reserved` -> `busy` is driven by the execution, not by the plan.

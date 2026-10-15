@@ -498,18 +498,15 @@ class HealthMonitor:
             )
             simulation_id = resource.get("current_simulation_id")
             attempt_id = resource.get("attempt_id")
-            if simulation_id:
-                try:
-                    # Guarded by the attempt this reservation was read with: if
-                    # the runner has meanwhile started a newer one, its result
-                    # must not be overwritten by this sweep.
-                    self._mongo.simulation_repo.mark_error(
-                        simulation_id, STALE_RESERVATION_MESSAGE,
-                        attempt_id=attempt_id)
-                except Exception:
-                    log.exception("Failed to fail simulation %s", simulation_id)
             host = self._mongo.host_repo.get(resource.get("host_id"))
-            if self._mongo.resource_repo.force_release(
+
+            # The container first, and only then the simulation. The two live
+            # in different documents, so one of them has to go first — and if
+            # the runner has meanwhile promoted this reservation to busy and
+            # started the JVM, the release below refuses and nothing about
+            # the simulation is touched. Doing it the other way round failed a
+            # live simulation for a reservation that was never freed.
+            if not self._mongo.resource_repo.force_release(
                 resource["_id"], STALE_RESERVATION_MESSAGE,
                 container_state_counts=not operator_configured(
                     host or {}, resource),
@@ -520,8 +517,23 @@ class HealthMonitor:
                 expect_attempt_id=attempt_id,
                 reserved_before=cutoff,
             ):
-                swept.append(name)
-                self._close_generation(simulation_id)
+                log.info(
+                    "Container %s was no longer the reservation that was read; "
+                    "leaving it and its simulation alone", name,
+                )
+                continue
+
+            swept.append(name)
+            if simulation_id and attempt_id:
+                try:
+                    # Expired *and revoked*: clearing the attempt is what stops
+                    # a thread that still believes in it from following this
+                    # with a start and a result.
+                    self._mongo.simulation_repo.expire_attempt(
+                        simulation_id, attempt_id, STALE_RESERVATION_MESSAGE)
+                except Exception:
+                    log.exception("Failed to expire simulation %s", simulation_id)
+            self._close_generation(simulation_id)
         if swept and self._on_capacity is not None:
             self._on_capacity()
         return swept

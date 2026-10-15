@@ -19,6 +19,8 @@ from lib.scheduler.inventory import (
 )
 from lib.scheduler.runner import (
     LostOwnership,
+    RunFailed,
+    RunReport,
     SimulationRunner,
     TerminationUnconfirmed,
 )
@@ -35,6 +37,8 @@ __all__ = [
     "snapshot_loads",
     "total_capacity",
     "LostOwnership",
+    "RunFailed",
+    "RunReport",
     "SimulationRunner",
     "TerminationUnconfirmed",
     "Dispatcher",

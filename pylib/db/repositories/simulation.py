@@ -188,6 +188,33 @@ class SimulationRepository:
             )
             return res.matched_count > 0
 
+    def expire_attempt(
+        self, sim_id: ObjectId, attempt_id: str, message: str
+    ) -> bool:
+        """End an attempt and **revoke** it, in one write.
+
+        Marking the simulation in error is not enough on its own: the guards
+        on the other writes compare ``_id`` and ``attempt_id`` only, so a
+        thread still holding the expired attempt could follow an error with
+        ``mark_running`` and then ``mark_done`` — all three matching, the
+        document ending ``Done`` after having been expired. Clearing
+        ``attempt_id`` here is what makes those later writes match nothing.
+
+        Used by the stale-reservation sweep, which is the one place that ends
+        an attempt the owner may still believe in.
+        """
+        with self.connection.connect() as db:
+            res = db["simulations"].update_one(
+                {"_id": sim_id, "attempt_id": attempt_id},
+                {"$set": {
+                    "status": EnumStatus.ERROR,
+                    "end_time": datetime.now(),
+                    "system_message": message,
+                    "attempt_id": None,
+                }},
+            )
+            return res.modified_count > 0
+
     def requeue(self, sim_id: ObjectId, attempt_id: str, reason: str) -> bool:
         """Put a simulation back in the queue, losing its placement.
 

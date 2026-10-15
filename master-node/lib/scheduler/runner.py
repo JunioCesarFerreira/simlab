@@ -9,18 +9,51 @@ returned exactly once, guarded by the attempt that holds it, and capacity is
 signalled afterwards so a waiting decision wakes up.
 """
 import logging
+from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 from bson import ObjectId
 
+from lib.detached import RUN_ARTIFACTS
 from lib.transport import TransportError, build_transport
 from pylib.db.models.infra import operator_configured
 
 log = logging.getLogger(__name__)
 
 
+@dataclass
+class RunReport:
+    """What one execution produced, for the runner to publish.
+
+    The executor used to write the simulation's state itself, and so did the
+    runner — two layers translating the same outcome into database writes.
+    With both doing it the inner one won, which is how the quarantine and the
+    re-queue came to be unreachable: the executor's own ``except Exception``
+    swallowed the exceptions that trigger them, marked the simulation in error
+    and returned normally.
+
+    So the executor now reports and the runner decides. Everything about who
+    owns the simulation, what its status becomes and whether the container may
+    be cleaned lives in one place.
+    """
+    log_id: Any = None
+    csv_id: Any = None
+    metrics: dict = field(default_factory=dict)
+    dodag: Optional[dict] = None
+
+
 class _PrepareFailed(Exception):
     """Internal: the inputs could not be assembled, so nothing was started."""
+
+
+class RunFailed(Exception):
+    """The run did not produce a usable result, and nothing is left running.
+
+    An ordinary failure: the simulation is marked in error and the container
+    goes back to the pool. Distinct from ``TerminationUnconfirmed``, where
+    something may still be executing, and from ``LostOwnership``, where the
+    work was fine but is no longer ours.
+    """
 
 
 class TerminationUnconfirmed(Exception):
@@ -99,15 +132,31 @@ class SimulationRunner:
             success, local_files, remote_files = self._prepare(sim, self._mongo)
             if not success:
                 raise _PrepareFailed()
+
+            # Checked before anything is sent. The reservation was granted a
+            # moment ago, but a recovery pass or the stale-reservation sweep
+            # may have handed the container on since — and uploading to a
+            # container that is someone else's now would overwrite the inputs
+            # of a run in progress.
+            self._require_ownership(resource, sim_oid, attempt_id)
+
             # Defensive: clear artifacts left behind if a previous run crashed
             # before its own cleanup could execute.
             transport.cleanup()
             transport.put_files(local_files, remote_files)
-            self._execute(
+
+            if not self._mongo.simulation_repo.mark_running(
+                    sim_oid, attempt_id=attempt_id):
+                raise LostOwnership(
+                    "the simulation was taken over before this run started")
+
+            report = self._execute(
                 sim, transport, self._mongo, remote_files,
                 on_started=self._started(resource["_id"], sim_oid, attempt_id),
                 attempt_id=attempt_id,
             )
+            self._publish(sim, sim_oid, attempt_id, report)
+            self._clear_remote(transport, remote_files)
 
         self._on_container(sim, host, resource, attempt_id, body,
                            cleanup=lambda: local_files)
@@ -130,10 +179,12 @@ class SimulationRunner:
         sim_oid = _oid(sim["_id"])
 
         def body(transport) -> None:
-            self._execute(
+            report = self._execute(
                 sim, transport, self._mongo, None,
                 on_started=None, adopt_pid=int(pid), attempt_id=attempt_id,
             )
+            self._publish(sim, sim_oid, attempt_id, report)
+            self._clear_remote(transport, None)
 
         self._on_container(sim, host, resource, attempt_id, body)
 
@@ -165,6 +216,11 @@ class SimulationRunner:
         except _PrepareFailed:
             log.warning("[%s] Skipping simulation %s (prepare failed)", where, sim_oid)
             self._fail(sim, sim_oid, "Failed to prepare simulation files", attempt_id)
+        except RunFailed as e:
+            # The run produced nothing usable and nothing is left executing.
+            log.warning("[%s] %s did not complete: %s", where, sim_oid, e)
+            self._fail(sim, sim_oid, str(e), attempt_id)
+            self._clear_remote_after_failure(resource, attempt_id)
         except TerminationUnconfirmed as e:
             log.error(
                 "[%s] Could not confirm that the run was stopped: %s. "
@@ -244,6 +300,83 @@ class SimulationRunner:
         return on_started
 
     # ── helpers ────────────────────────────────────────────────────────────
+
+    def _require_ownership(
+        self, resource: dict, sim_oid: ObjectId, attempt_id: str
+    ) -> None:
+        """Refuse to touch the container unless this attempt still holds it."""
+        try:
+            held = self._mongo.resource_repo.is_held_by(
+                resource["_id"], sim_oid, attempt_id)
+        except Exception:
+            # Cannot tell. Carrying on is the old behaviour and the run is
+            # still guarded at launch by `mark_busy`.
+            log.exception(
+                "Could not confirm ownership of %s; continuing",
+                resource.get("name"),
+            )
+            return
+        if not held:
+            raise LostOwnership(
+                f"the reservation for attempt {attempt_id} is gone")
+
+    def _publish(
+        self, sim: dict, sim_oid: ObjectId, attempt_id: str, report: Any
+    ) -> None:
+        """Record the result, if this attempt is still the one that may.
+
+        The executor produced it; deciding what it means belongs here, with
+        every other decision about the simulation's state.
+        """
+        if not self._mongo.simulation_repo.mark_done(
+            sim_oid,
+            getattr(report, "log_id", None),
+            getattr(report, "csv_id", None),
+            getattr(report, "metrics", None) or {},
+            getattr(report, "dodag", None),
+            attempt_id=attempt_id,
+        ):
+            # The result is sound but it is not ours to publish any more. The
+            # blobs are already in GridFS, so they are removed rather than
+            # left with nothing referencing them.
+            self._discard_artifacts(report)
+            raise LostOwnership(
+                "the simulation was taken over while it was running")
+        generation_id = sim.get("generation_id")
+        if generation_id:
+            self._close_generation(generation_id)
+
+    def _discard_artifacts(self, report: Any) -> None:
+        for orphan in (getattr(report, "log_id", None),
+                       getattr(report, "csv_id", None)):
+            if orphan is None:
+                continue
+            try:
+                self._mongo.fs_handler.delete_file(str(orphan))
+            except Exception:
+                log.exception("Could not remove orphaned file %s", orphan)
+
+    def _clear_remote_after_failure(self, resource: dict, attempt_id: str) -> None:
+        """A failed run leaves artifacts; they are the next run's to clear.
+
+        Deliberately a no-op for now. The defensive cleanup at the start of
+        the next run on that container already removes them, and leaving them
+        is what makes a failed collection retryable — which is the pending
+        part of R18, built in the next stage.
+        """
+
+    def _clear_remote(self, transport: Any, remote_files: Optional[list]) -> None:
+        """Clear the run's remote artifacts, now that nothing needs them.
+
+        Reached only after the result is published. The old code did this in a
+        ``finally``, which meant it also ran when the run could not be stopped
+        — deleting ``run.pgid`` and ``run.pid``, the only handles on a process
+        that might still have been executing.
+        """
+        try:
+            transport.cleanup(list(remote_files or []) + list(RUN_ARTIFACTS))
+        except Exception:
+            log.exception("Remote cleanup failed")
 
     def _quarantine(self, resource: dict, reason: str) -> None:
         """Take a worker out of the pool until a person says otherwise.

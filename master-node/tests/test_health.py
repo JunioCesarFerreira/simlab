@@ -37,6 +37,7 @@ from pylib.db.models.infra import EnumHostStatus, EnumResourceStatus
 HOST_ID = ObjectId("507f1f77bcf86cd799430011")
 RES_ID = ObjectId("507f1f77bcf86cd799430021")
 SIM_ID = ObjectId("507f1f77bcf86cd799430003")
+ATTEMPT = "8f14e45fceea167a5a36dedd4bea2543"
 
 HOST = {"_id": HOST_ID, "name": "local", "type": "local",
         "status": "offline", "consecutive_failures": 0,
@@ -454,20 +455,56 @@ class TestServingRequests:
 # ── Stale reservations ───────────────────────────────────────────────────────
 
 class TestStaleReservations:
-    def test_a_reservation_that_never_started_is_freed(self):
-        mongo = fake_mongo()
+    def _stale(self, mongo, **extra):
         mongo.resource_repo.find_stale_reservations.return_value = [{
             "_id": RES_ID, "name": "cooja1",
             "current_simulation_id": SIM_ID,
+            "attempt_id": ATTEMPT,
             "reserved_at": datetime.now() - timedelta(hours=1),
+            **extra,
         }]
+        return mongo
+
+    def test_a_reservation_that_never_started_is_freed(self):
+        mongo = self._stale(fake_mongo())
 
         swept = build_monitor(mongo).sweep_stale_reservations()
 
         assert swept == ["cooja1"]
-        mongo.simulation_repo.mark_error.assert_called_once_with(
-            SIM_ID, STALE_RESERVATION_MESSAGE, attempt_id=None)
         mongo.resource_repo.force_release.assert_called_once()
+        # Expired *and revoked*: clearing the attempt is what stops a thread
+        # that still believes in it from following this with a result.
+        mongo.simulation_repo.expire_attempt.assert_called_once_with(
+            SIM_ID, ATTEMPT, STALE_RESERVATION_MESSAGE)
+
+    def test_the_container_is_released_before_the_simulation_is_touched(self):
+        """The order is the guard.
+
+        The two live in different documents, so one goes first. Touching the
+        simulation first failed a *live* run for a reservation that the
+        release then refused to free — reproduced in review.
+        """
+        mongo = self._stale(fake_mongo())
+        mongo.resource_repo.force_release.return_value = False
+
+        swept = build_monitor(mongo).sweep_stale_reservations()
+
+        assert swept == []
+        mongo.simulation_repo.expire_attempt.assert_not_called()
+        mongo.simulation_repo.mark_error.assert_not_called()
+        mongo.generation_repo.close_if_finished.assert_not_called()
+
+    def test_a_reservation_without_an_attempt_is_still_freed(self):
+        # Seeded or hand-edited records may have none; the container still
+        # has to come back.
+        mongo = fake_mongo()
+        mongo.resource_repo.find_stale_reservations.return_value = [{
+            "_id": RES_ID, "name": "cooja1", "current_simulation_id": SIM_ID,
+            "reserved_at": datetime.now() - timedelta(hours=1),
+        }]
+
+        assert build_monitor(mongo).sweep_stale_reservations() == ["cooja1"]
+        mongo.simulation_repo.expire_attempt.assert_not_called()
 
     def test_the_cutoff_follows_the_configured_ttl(self):
         mongo = fake_mongo()

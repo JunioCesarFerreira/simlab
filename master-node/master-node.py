@@ -24,6 +24,8 @@ from lib.recovery import reconcile_occupied_resources
 from lib.scheduler import (
     Dispatcher,
     LostOwnership,
+    RunFailed,
+    RunReport,
     SimulationRunner,
     TerminationUnconfirmed,
     build_policy,
@@ -144,10 +146,23 @@ def _check_and_close_generation(generation_id: ObjectId, mongo: MongoRepository)
         log.exception("Failed to close generation %s", generation_id)
 
 
-def recover_stuck_simulations(mongo: MongoRepository) -> None:
-    """
-    On startup, marks as ERROR any simulation that was left in RUNNING state
-    (e.g. from a previous crash), then attempts to close affected generations.
+def recover_abandoned_simulations(mongo: MongoRepository) -> None:
+    """Fail the RUNNING simulations that **no container holds**.
+
+    Runs *after* ``reconcile_occupied_resources``, and that order is the whole
+    point. The reconciliation asks each occupied container whether the run is
+    still going, adopts it if so, and collects or fails it if not. Only what
+    is left over reaches here: a simulation marked RUNNING with no reservation
+    behind it, so there is nothing to ask and the clock is all the evidence
+    there is.
+
+    It used to run *first*, and purely by time. The reconciliation then found
+    a simulation already in a terminal state and freed its container without
+    probing — so a JVM that had survived the master-node, which is exactly
+    what detached execution is for, could keep running on a container handed
+    to the next simulation. Narrowing this to the unheld ones is what makes
+    "marked by the clock" honest.
+
     Skipped when SIM_TIMEOUT_SEC == 0.
     """
     if SET.sim_timeout_sec <= 0:
@@ -156,13 +171,41 @@ def recover_stuck_simulations(mongo: MongoRepository) -> None:
     stuck = mongo.simulation_repo.find_running_before(cutoff)
     if not stuck:
         return
-    log.warning("Found %d stuck simulation(s) in RUNNING; recovering...", len(stuck))
+
+    abandoned = []
     for sim in stuck:
         sim_id = ObjectId(sim["_id"])
-        log.warning("Recovering stuck simulation %s (start_time=%s)", sim_id, sim.get("start_time"))
+        try:
+            holder = mongo.resource_repo.find_by_simulation(sim_id)
+        except Exception:
+            log.exception(
+                "Could not check whether a container holds %s; leaving it", sim_id)
+            continue
+        if holder is not None:
+            # The reconciliation owns this one: it has a container to ask.
+            log.info(
+                "Simulation %s is still held by %s; leaving it to the "
+                "reconciliation", sim_id, holder.get("name"),
+            )
+            continue
+        abandoned.append(sim)
+
+    if not abandoned:
+        return
+    log.warning(
+        "Found %d RUNNING simulation(s) no container holds; failing them",
+        len(abandoned),
+    )
+    for sim in abandoned:
+        sim_id = ObjectId(sim["_id"])
+        log.warning(
+            "Recovering abandoned simulation %s (start_time=%s)",
+            sim_id, sim.get("start_time"),
+        )
         try:
             mongo.simulation_repo.mark_error(
-                sim_id, "Recovered: stuck in RUNNING on master-node restart",
+                sim_id,
+                "Recovered: left RUNNING with no container holding it",
                 attempt_id=None)
         except Exception:
             log.exception("Failed to recover simulation %s", sim_id)
@@ -244,10 +287,12 @@ def run_cooja_simulation(
     on_started: Callable[[int], None] | None = None,
     adopt_pid: int | None = None,
     attempt_id: str | None = None,
-) -> None:
+) -> RunReport:
     """
-    Executes the simulation in the container, monitors logs, and stores results in GridFS.
-    Per-run files (remote artifacts and local log/csv) are always removed before returning.
+    Executes the simulation in the container, follows it, and stores its
+    artifacts in GridFS. The local temporary files are always removed; the
+    remote ones are the caller's to clear, because only the caller knows
+    whether anything may still be using them.
 
     The connection arrives already open: the caller owns it, because it also
     sent the input files over it and because closing it is what releases the
@@ -258,11 +303,16 @@ def run_cooja_simulation(
     being started. Collecting the result is identical either way, which is why
     this is one function with one branch rather than two that drift apart.
 
-    ``attempt_id`` is the placement this run belongs to, and every write about
-    the simulation carries it. A run can lose its container without noticing —
-    a recovery pass or the stale-reservation sweep may have handed it on — and
-    the guard is what stops this thread from publishing over the attempt that
-    took over.
+    ``attempt_id`` identifies the placement; it is passed on to the callback
+    that promotes the container, which is where a takeover is detected.
+
+    **This function does not write the simulation's state.** It returns a
+    ``RunReport`` with what it produced, or raises: ``RunFailed`` for a run
+    that produced nothing usable, ``TerminationUnconfirmed`` when something
+    may still be executing, ``LostOwnership`` when the container was handed
+    on. The caller decides what each means, because it used to decide *as
+    well* — and with both writing, the quarantine and the re-queue in the
+    runner were never reached.
     """
     sim_oid = ObjectId(sim["_id"]) if not isinstance(sim["_id"], ObjectId) else sim["_id"]
     where = transport.plan.describe()
@@ -270,6 +320,9 @@ def run_cooja_simulation(
     csv_path = f"{SET.local_log_dir}/sim_{sim_oid}.csv"
     try:
         runner = DetachedRun(transport, poll_interval_sec=SET.run_poll_interval_sec)
+        # Nothing below catches anything but its own business: a blanket
+        # `except Exception` here is what hid the control exceptions from the
+        # caller and made its quarantine and re-queue unreachable.
 
         if adopt_pid:
             log.info("[%s] Resuming simulation %s (pid %s)", where, sim_oid, adopt_pid)
@@ -285,14 +338,9 @@ def run_cooja_simulation(
                 if not runner.terminate():
                     raise TerminationUnconfirmed(
                         f"{message}, and it could not be stopped")
-                raise RuntimeError(message)
+                raise RunFailed(message)
         else:
             log.info("[%s] Starting simulation %s", where, sim_oid)
-            if not mongo.simulation_repo.mark_running(
-                    sim_oid, attempt_id=attempt_id):
-                raise LostOwnership(
-                    "the simulation was taken over before this run started")
-
             # No `cd` and no channel: the run is launched in its own session
             # with its output going to a file, so the JVM outlives a dropped
             # connection instead of being killed by SIGHUP.
@@ -332,7 +380,7 @@ def run_cooja_simulation(
                 # the pool as though it were idle.
                 raise TerminationUnconfirmed(
                     outcome.message or "the run could not be stopped")
-            raise RuntimeError(
+            raise RunFailed(
                 outcome.message or "the simulation did not complete"
             )
         if outcome.exit_code not in (0, None):
@@ -378,42 +426,17 @@ def run_cooja_simulation(
             except Exception:
                 log.exception("[%s] DODAG analysis failed", where)
 
-            if not mongo.simulation_repo.mark_done(
-                    sim_oid, log_id, csv_id, net_meas, dodag,
-                    attempt_id=attempt_id):
-                # The result is sound but it is not ours to publish any more:
-                # something else owns this simulation now. The blobs were
-                # already uploaded, so they are removed rather than left
-                # behind with nothing referencing them.
-                for orphan in (log_id, csv_id):
-                    try:
-                        mongo.fs_handler.delete_file(str(orphan))
-                    except Exception:
-                        log.exception("Could not remove orphaned file %s", orphan)
-                raise LostOwnership(
-                    "the simulation was taken over while it was running")
-        else:
-            log.warning("[%s] CSV file is missing or empty for simulation %s", where, sim_oid)
-            mongo.simulation_repo.mark_error(
-                sim_oid, "CSV file is missing or empty after conversion",
-                attempt_id=attempt_id)
+            return RunReport(
+                log_id=log_id, csv_id=csv_id, metrics=net_meas, dodag=dodag)
 
-        if sim.get("generation_id"):
-            _check_and_close_generation(sim["generation_id"], mongo)
-
-    except Exception as e:
-        log.exception("[%s] Simulation ERROR %s: %s", where, sim_oid, e)
-        try:
-            mongo.simulation_repo.mark_error(
-                sim_oid, str(e), attempt_id=attempt_id)
-        except Exception:
-            log.exception("Failed to mark error on simulation %s", sim_oid)
-        if sim.get("generation_id"):
-            _check_and_close_generation(sim["generation_id"], mongo)
+        log.warning(
+            "[%s] CSV file is missing or empty for simulation %s", where, sim_oid)
+        raise RunFailed("CSV file is missing or empty after conversion")
     finally:
-        # The detached run's bookkeeping files are the caller's to declare:
-        # the transport's cleanup stays generic and knows nothing about them.
-        transport.cleanup(list(remote_files or []) + list(RUN_ARTIFACTS))
+        # Only what this function created locally. The remote artifacts are
+        # the caller's to clear, because clearing them is safe exactly when
+        # the caller knows nothing is still using the container — and that is
+        # the judgement the caller makes.
         for path in (log_path, csv_path):
             try:
                 Path(path).unlink(missing_ok=True)
@@ -591,8 +614,6 @@ def main() -> None:
 
     mongo = create_mongo_repository_factory(SET.mongo_uri, SET.db_name)
 
-    recover_stuck_simulations(mongo)
-
     keystore = Keystore.load_or_create(SET.infra_key_path)
     opener = SecretOpener(keystore)
     publish_public_key(mongo, keystore)
@@ -623,6 +644,12 @@ def main() -> None:
         probe=build_liveness_probe(opener),
         on_adopt=_resume_in_background(dispatcher.runner),
     )
+
+    # Only after the reconciliation, and only for what it did not cover: a
+    # simulation marked RUNNING that no container holds. Before, this ran
+    # first and by the clock alone, which let the reconciliation free a
+    # container whose JVM was still running.
+    recover_abandoned_simulations(mongo)
 
     # Synchronously, before anything is placed: the first placement
     # decision then reads measured statuses instead of assumptions. This is

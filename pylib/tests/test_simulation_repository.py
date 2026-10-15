@@ -214,3 +214,64 @@ class TestRequeue:
 
         assert "reservation" in \
             coll.update_one.call_args.args[1]["$set"]["system_message"]
+
+
+class TestExpireAttempt:
+    """Ending an attempt has to revoke it, not just mark an error.
+
+    The guards on the other writes compare `_id` and `attempt_id` only. With
+    the attempt left in place, a thread that still believed in it could follow
+    an error with `mark_running` and then `mark_done` — all three matching, the
+    document ending `Done` after having been expired. Reproduced in review
+    against a collection that applied the real filters.
+    """
+
+    def test_it_clears_the_attempt(self, simulations):
+        repo, coll = simulations
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        assert repo.expire_attempt(SIM_OID, ATTEMPT, "stale") is True
+
+        sets = coll.update_one.call_args.args[1]["$set"]
+        assert sets["attempt_id"] is None
+        assert sets["status"] == EnumStatus.ERROR
+        assert sets["system_message"] == "stale"
+
+    def test_it_is_guarded_by_the_attempt_it_ends(self, simulations):
+        repo, coll = simulations
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        repo.expire_attempt(SIM_OID, ATTEMPT, "stale")
+
+        assert coll.update_one.call_args.args[0] == {
+            "_id": SIM_OID, "attempt_id": ATTEMPT}
+
+    def test_a_newer_attempt_is_not_expired(self, simulations):
+        repo, coll = simulations
+        coll.update_one.return_value = MagicMock(modified_count=0)
+
+        assert repo.expire_attempt(SIM_OID, ATTEMPT, "stale") is False
+
+    def test_a_revoked_attempt_can_no_longer_write(self, simulations):
+        """The point of the revocation, end to end on one document.
+
+        A collection that applies the filter the repository builds: once the
+        attempt is cleared, the later writes match nothing.
+        """
+        repo, coll = simulations
+        document = {"_id": SIM_OID, "attempt_id": ATTEMPT, "status": "Running"}
+
+        def update_one(flt, update, **kwargs):
+            matched = all(document.get(k) == v for k, v in flt.items())
+            if matched:
+                document.update(update["$set"])
+            return MagicMock(matched_count=int(matched),
+                             modified_count=int(matched))
+
+        coll.update_one.side_effect = update_one
+
+        assert repo.expire_attempt(SIM_OID, ATTEMPT, "stale") is True
+        assert repo.mark_running(SIM_OID, attempt_id=ATTEMPT) is False
+        assert repo.mark_done(
+            SIM_OID, None, None, {}, attempt_id=ATTEMPT) is False
+        assert document["status"] == EnumStatus.ERROR

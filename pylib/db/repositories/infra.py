@@ -620,6 +620,32 @@ class CoojaResourceRepository:
                 return_document=ReturnDocument.AFTER,
             )
 
+    def is_held_by(
+        self, resource_id: Any, simulation_id: ObjectId, attempt_id: str
+    ) -> bool:
+        """Whether this attempt still holds this container.
+
+        A reservation is granted atomically, but everything that happens after
+        it — assembling inputs, uploading them, launching — takes seconds to
+        minutes, and a recovery pass or the stale-reservation sweep can hand
+        the container on in between. Asking before touching the container is
+        what keeps a lost attempt from writing over the inputs of the run that
+        took over.
+
+        ``reserved`` or ``busy`` both count: the question is who holds it, not
+        how far along they are.
+        """
+        oid = _oid(resource_id)
+        if oid is None:
+            return False
+        with self.connection.connect() as db:
+            return db[RESOURCES_COLLECTION].count_documents({
+                "_id": oid,
+                "current_simulation_id": simulation_id,
+                "attempt_id": attempt_id,
+                "status": {"$in": _OCCUPIED},
+            }, limit=1) > 0
+
     def force_release(
         self,
         resource_id: Any,
