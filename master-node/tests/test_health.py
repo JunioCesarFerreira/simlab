@@ -944,6 +944,29 @@ class TestFailureIsolation:
 
         assert [r.host_name for r in results] == ["local"]
 
+    def test_the_cycle_reconciles_unwatched_runs(self):
+        """Every cycle, not just at startup — that is what fixed `busy` forever."""
+        mongo = fake_mongo(resources=[resource()])
+        passes: list[int] = []
+
+        build_monitor(mongo, reconcile=lambda: passes.append(1)).cycle()
+
+        assert passes == [1]
+
+    def test_a_failing_reconciliation_does_not_stop_the_cycle(self):
+        mongo = fake_mongo(resources=[resource()])
+
+        results = build_monitor(
+            mongo,
+            reconcile=lambda: (_ for _ in ()).throw(RuntimeError("mongo gone")),
+        ).cycle()
+
+        assert results[0].ready == ["cooja1"]
+
+    def test_without_a_hook_the_cycle_is_unchanged(self):
+        mongo = fake_mongo(resources=[resource()])
+        assert build_monitor(mongo).cycle()[0].ready == ["cooja1"]
+
     def test_a_failing_sweep_does_not_hide_the_results(self):
         mongo = fake_mongo(resources=[resource()])
         mongo.resource_repo.find_stale_reservations.side_effect = \

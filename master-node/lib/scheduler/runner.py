@@ -9,6 +9,7 @@ returned exactly once, guarded by the attempt that holds it, and capacity is
 signalled afterwards so a waiting decision wakes up.
 """
 import logging
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
@@ -54,6 +55,25 @@ class RunFailed(Exception):
     something may still be executing, and from ``LostOwnership``, where the
     work was fine but is no longer ours.
     """
+
+
+class CollectionFailed(RunFailed):
+    """The run finished, but its result could not be brought back.
+
+    Kept apart from an ordinary failure because the work is not lost: the
+    testlog is sitting on the container and the exit code was recorded. What
+    failed is the fetching or the persisting, and that is worth trying again
+    over a **new** session — the SCP retries inside the transport reopen the
+    channel, not the connection, so a dropped session defeats them all three
+    times.
+
+    Carries the pid so the collection can be resumed exactly like a run
+    adopted after a restart: attach, poll once, collect.
+    """
+
+    def __init__(self, message: str, *, pid: Optional[int] = None):
+        super().__init__(message)
+        self.pid = pid
 
 
 class TerminationUnconfirmed(Exception):
@@ -110,6 +130,20 @@ class SimulationRunner:
         self._on_release = on_release
         self._cleanup_local = cleanup_local
         self._on_learn_host_key = on_learn_host_key
+        # The attempts this process is following. Process-local on purpose:
+        # it is the only honest answer to "is anyone watching this run?", and
+        # nothing in the database can know it. The periodic reconciliation
+        # asks before touching an occupied container, so a run that *is*
+        # being followed is never reconciled underneath its follower.
+        self._following: set[str] = set()
+        self._following_lock = threading.Lock()
+
+    def is_following(self, attempt_id: Optional[str]) -> bool:
+        """Whether a thread of this process is watching that attempt."""
+        if not attempt_id:
+            return False
+        with self._following_lock:
+            return attempt_id in self._following
 
     def run(
         self,
@@ -206,6 +240,8 @@ class SimulationRunner:
         resource_id = resource["_id"]
         where = f"{host.get('name')}/{resource.get('name')}"
 
+        with self._following_lock:
+            self._following.add(attempt_id)
         try:
             transport = build_transport(
                 host, resource, self._opener,
@@ -216,6 +252,12 @@ class SimulationRunner:
         except _PrepareFailed:
             log.warning("[%s] Skipping simulation %s (prepare failed)", where, sim_oid)
             self._fail(sim, sim_oid, "Failed to prepare simulation files", attempt_id)
+        except CollectionFailed as e:
+            # The run finished; bringing its result back did not. Tried again
+            # over a new session, because the retries inside the transport
+            # reopen the channel and not the connection.
+            log.warning("[%s] %s: %s; retrying over a new session", where, sim_oid, e)
+            self._retry_collection(sim, host, resource, attempt_id, e)
         except RunFailed as e:
             # The run produced nothing usable and nothing is left executing.
             log.warning("[%s] %s did not complete: %s", where, sim_oid, e)
@@ -356,6 +398,54 @@ class SimulationRunner:
             except Exception:
                 log.exception("Could not remove orphaned file %s", orphan)
 
+    def _retry_collection(
+        self,
+        sim: dict,
+        host: dict,
+        resource: dict,
+        attempt_id: str,
+        failure: "CollectionFailed",
+    ) -> None:
+        """Fetch a finished run's result again, over a connection of its own.
+
+        The artifacts are on the container and the exit code is recorded, so
+        this is the same work the resume path does after a restart: attach to
+        the pid, poll once, collect. Without it, a session that dropped during
+        the download cost a completed simulation — and the artifacts were
+        cleared by the next job, so nothing could be recovered afterwards.
+        """
+        sim_oid = _oid(sim["_id"])
+        if not failure.pid:
+            log.warning(
+                "No pid recorded for %s; the result cannot be fetched again",
+                sim_oid,
+            )
+            self._fail(sim, sim_oid, str(failure), attempt_id)
+            return
+        try:
+            transport = build_transport(
+                host, resource, self._opener,
+                on_learn_host_key=self._host_key_sink(host),
+            )
+            with transport:
+                report = self._execute(
+                    sim, transport, self._mongo, None,
+                    on_started=None, adopt_pid=int(failure.pid),
+                    attempt_id=attempt_id,
+                )
+                self._publish(sim, sim_oid, attempt_id, report)
+                self._clear_remote(transport, None)
+        except LostOwnership:
+            raise
+        except Exception as error:
+            log.warning(
+                "[%s/%s] The result of %s could not be fetched again: %s",
+                host.get("name"), resource.get("name"), sim_oid, error,
+            )
+            self._fail(sim, sim_oid, f"{failure} (retry: {error})", attempt_id)
+            return
+        log.info("The result of %s was fetched on the second attempt", sim_oid)
+
     def _clear_remote_after_failure(self, resource: dict, attempt_id: str) -> None:
         """A failed run leaves artifacts; they are the next run's to clear.
 
@@ -440,6 +530,8 @@ class SimulationRunner:
         except Exception:
             log.exception("[%s] Failed to release resource %s", where, resource_id)
         finally:
+            with self._following_lock:
+                self._following.discard(attempt_id)
             if self._on_release is not None:
                 self._on_release()
 

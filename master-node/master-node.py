@@ -18,10 +18,11 @@ if project_path not in sys.path:
 # lib master-node
 from lib.bootstrap import ensure_local_host, publish_public_key
 from lib.credentials import SecretOpener
-from lib.detached import RUN_ARTIFACTS, DetachedRun, is_running
+from lib.detached import RUN_ARTIFACTS, DetachedRun, inspect_run
 from lib.health import HealthMonitor
 from lib.recovery import reconcile_occupied_resources
 from lib.scheduler import (
+    CollectionFailed,
     Dispatcher,
     LostOwnership,
     RunFailed,
@@ -394,7 +395,16 @@ def run_cooja_simulation(
             )
 
         log.info("[%s] Copying log to %s", where, log_path)
-        transport.get_file("COOJA.testlog", log_path)
+        # From here on the run is over and its result exists on the container.
+        # A failure is therefore a *collection* failure, which the caller can
+        # retry over a fresh session instead of writing the run off.
+        try:
+            transport.get_file("COOJA.testlog", log_path)
+        except Exception as error:
+            raise CollectionFailed(
+                f"could not bring back the result: {error}",
+                pid=runner.handle().pid if runner.handle() else None,
+            ) from error
 
         log_id = mongo.fs_handler.upload_file(log_path, "sim_result.log")
         log.info("[%s] Log saved with ID: %s", where, log_id)
@@ -545,18 +555,24 @@ def _resume_in_background(runner: SimulationRunner) -> Callable:
 
 
 def build_liveness_probe(opener: SecretOpener) -> Callable:
-    """A probe that answers whether a recorded run is still going.
+    """A probe that asks a container what became of a recorded run.
 
-    Returns None when the container cannot be reached, which the caller must
-    keep distinct from "not running": conflating them is what would let a
-    network blip destroy a simulation.
+    Returns a ``RunState`` — alive, finished with an exit code, or gone, plus
+    whether a testlog is still sitting there — or ``None`` when the container
+    could not be reached. That last distinction is load-bearing: conflating
+    "unreachable" with "not running" is what would let a network blip destroy
+    a simulation.
+
+    It used to answer a bare boolean, and "not alive" was taken for "failed".
+    A run that finished while the master-node was down therefore had its
+    result discarded, and the next job cleared the artifacts that proved it.
     """
 
-    def probe(host: dict, resource: dict, pid: int | None) -> bool | None:
+    def probe(host: dict, resource: dict, pid: int | None):
         transport = build_transport(host, resource, opener)
         try:
             with transport:
-                return is_running(
+                return inspect_run(
                     transport, pid, remote_dir=transport.plan.remote_dir)
         except TransportError:
             return None
@@ -625,6 +641,28 @@ def main() -> None:
         remote_dir=SET.remote_dir,
     )
     dispatcher = build_dispatcher(mongo, keystore, opener)
+    def reconcile(*, quiet: bool = False):
+        """One reconciliation pass, at startup or from the health cycle.
+
+        Containers claimed by a process that is gone would stay claimed, and
+        the pool would shrink by that many on every restart. The probe keeps
+        this from also destroying runs that outlived the master-node, and the
+        handler picks up following them so their results are collected
+        instead of being abandoned to the timeout.
+
+        The decision is the same either way. The periodic pass additionally
+        skips the attempts this process is already following — their follower
+        will collect and release — and stays quiet when there is nothing to
+        report.
+        """
+        return reconcile_occupied_resources(
+            mongo,
+            probe=build_liveness_probe(opener),
+            on_adopt=_resume_in_background(dispatcher.runner),
+            is_followed=dispatcher.runner.is_following if quiet else None,
+            quiet=quiet,
+        )
+
     monitor = HealthMonitor(
         mongo,
         opener=opener,
@@ -632,18 +670,13 @@ def main() -> None:
         failure_threshold=SET.infra_failure_threshold,
         reservation_ttl_sec=SET.reservation_ttl_sec,
         on_capacity=dispatcher.notify_capacity,
+        # Every cycle, not just at startup: a container whose host was
+        # unreachable at boot kept its reservation and nothing ever came back
+        # to it.
+        reconcile=lambda: reconcile(quiet=True),
     )
 
-    # Containers claimed by a process that is gone would stay claimed, and
-    # the pool would shrink by that many on every restart. The probe keeps
-    # this from also destroying runs that outlived the master-node, and the
-    # handler picks up following them so their results are collected
-    # instead of being abandoned to the timeout.
-    reconcile_occupied_resources(
-        mongo,
-        probe=build_liveness_probe(opener),
-        on_adopt=_resume_in_background(dispatcher.runner),
-    )
+    reconcile()
 
     # Only after the reconciliation, and only for what it did not cover: a
     # simulation marked RUNNING that no container holds. Before, this ran

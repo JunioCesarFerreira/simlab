@@ -18,6 +18,7 @@ from lib.scheduler.inventory import (
     total_capacity,
 )
 from lib.scheduler.runner import (
+    CollectionFailed,
     LostOwnership,
     RunFailed,
     RunReport,
@@ -36,6 +37,7 @@ __all__ = [
     "find_load",
     "snapshot_loads",
     "total_capacity",
+    "CollectionFailed",
     "LostOwnership",
     "RunFailed",
     "RunReport",

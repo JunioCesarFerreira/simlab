@@ -61,8 +61,9 @@ __all__ = [
     "OUT_FILE", "PID_FILE", "EXIT_FILE", "PGID_FILE", "RUN_ARTIFACTS",
     "STATUS_PREFIX",
     "DetachedRun", "DetachedRunError", "RunHandle", "RunOutcome", "RunProgress",
-    "build_launch_command", "build_poll_command", "build_liveness_command",
-    "parse_poll_output", "is_running",
+    "build_launch_command", "build_poll_command", "build_inspect_command",
+    "parse_poll_output", "parse_inspect_output", "inspect_run", "is_running",
+    "RunState",
 ]
 
 # Prefix of the status line, chosen so it cannot be confused with Cooja output.
@@ -525,31 +526,106 @@ class DetachedRun:
         return False
 
 
-def build_liveness_command(pid: int, *, remote_dir: str) -> str:
-    """Ask whether a recorded PID is still running.
+@dataclass
+class RunState:
+    """What a container says about a run nobody is following.
 
-    The same guarded ``kill -0`` the poll uses: an empty or non-numeric value
-    must read as dead, because ``kill -0 ''`` succeeds and would report a
-    finished run as alive.
+    Four answers, not two. "Is the process alive?" was all this used to ask,
+    and a dead process was taken for a failed simulation — so a run that
+    finished perfectly well while the master-node was down had its result
+    thrown away, and the next job overwrote the artifacts that proved it.
+
+    * ``alive``      — still going; adopt it and follow from here.
+    * ``finished``   — ``run.exit`` is there, so it ended on its own terms.
+      The exit code says how, and the testlog is still on disk: collectable.
+    * neither, with artifacts — ended without recording an exit code. The
+      testlog may still be worth collecting; see :attr:`collectable`.
+    * neither, nothing — interrupted with nothing to show.
+
+    "Unreachable" is not among them: it is the absence of an answer, and the
+    caller must keep it separate, because treating it as "not running" is what
+    would turn a network blip into a destroyed simulation.
+    """
+    alive: bool
+    finished: bool
+    exit_code: Optional[int] = None
+    testlog_bytes: int = 0
+
+    @property
+    def collectable(self) -> bool:
+        """Whether there is a result worth fetching before giving up.
+
+        A finished run with a testlog, or — more cautiously — one that
+        vanished but left a testlog behind. In both cases the bytes are on the
+        container and the alternative is to delete them.
+        """
+        return self.testlog_bytes > 0 and not self.alive
+
+
+def build_inspect_command(
+    pid: int,
+    *,
+    remote_dir: str,
+    exit_file: str = EXIT_FILE,
+    testlog: str = "COOJA.testlog",
+) -> str:
+    """One round trip that answers alive, finished, and what is left behind.
+
+    The guarded ``kill -0`` is the poll's: an empty or non-numeric value must
+    read as dead, because ``kill -0 ''`` succeeds and would report a finished
+    run as alive.
     """
     return (
         f"cd {shlex.quote(remote_dir)} 2>/dev/null; "
         f'P={shlex.quote(str(pid))}; '
-        f'if [ -n "$P" ] && [ "$P" != - ] && kill -0 "$P" 2>/dev/null; '
-        f"then echo {STATUS_PREFIX}-alive; else echo {STATUS_PREFIX}-dead; fi"
+        f'A=$(if [ -n "$P" ] && [ "$P" != - ] && kill -0 "$P" 2>/dev/null; '
+        f"then echo 1; else echo 0; fi); "
+        f"S=$([ -f {exit_file} ] && cat {exit_file} 2>/dev/null || echo -); "
+        f"N=$(wc -c < {testlog} 2>/dev/null || echo 0); "
+        f'echo "{STATUS_PREFIX} ${{S:--}} $A ${{N:-0}}"'
     )
+
+
+def parse_inspect_output(stdout: str) -> RunState:
+    """Read the status line ``build_inspect_command`` prints."""
+    match = _STATUS_RE.match(stdout.strip().splitlines()[0].strip() if stdout.strip() else "")
+    if match is None:
+        raise DetachedRunError(
+            f"unexpected status line from the remote shell: {stdout[:120]!r}")
+    raw_exit, alive, size = match.groups()
+    exit_code: Optional[int] = None
+    finished = raw_exit != "-"
+    if finished:
+        try:
+            exit_code = int(raw_exit)
+        except ValueError:
+            log.warning("Exit file held %r, not a number", raw_exit)
+    return RunState(
+        alive=alive == "1",
+        finished=finished,
+        exit_code=exit_code,
+        testlog_bytes=int(size),
+    )
+
+
+def inspect_run(transport: Any, pid: Optional[int], *, remote_dir: str) -> RunState:
+    """Ask the container about a run, in one round trip.
+
+    Raises whatever the transport raises when the container cannot be reached:
+    unreachable is the absence of an answer, not an answer.
+    """
+    if not pid:
+        return RunState(alive=False, finished=False)
+    result = transport.exec_command(
+        build_inspect_command(int(pid), remote_dir=remote_dir), timeout=30)
+    return parse_inspect_output(result.stdout)
 
 
 def is_running(transport: Any, pid: Optional[int], *, remote_dir: str) -> bool:
     """Whether the run with this PID is still going.
 
-    Raises whatever the transport raises when the container cannot be reached:
-    "unreachable" and "not running" are different answers, and the caller has
-    to tell them apart — treating the first as the second is what would turn a
-    network blip into a destroyed simulation.
+    Kept as the narrow question, for callers that only need that. Anything
+    deciding what to *do* about a run should use :func:`inspect_run`, because
+    "not alive" alone cannot tell a finished run from an interrupted one.
     """
-    if not pid:
-        return False
-    result = transport.exec_command(
-        build_liveness_command(int(pid), remote_dir=remote_dir), timeout=30)
-    return f"{STATUS_PREFIX}-alive" in result.stdout
+    return inspect_run(transport, pid, remote_dir=remote_dir).alive

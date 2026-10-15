@@ -132,6 +132,7 @@ class HealthMonitor:
         probe: Optional[Callable[[dict, dict], Any]] = None,
         jumps: Optional[JumpPool] = None,
         on_capacity: Optional[Callable[[], None]] = None,
+        reconcile: Optional[Callable[[], Any]] = None,
     ):
         self._mongo = mongo
         self._opener = opener
@@ -145,6 +146,9 @@ class HealthMonitor:
         self._discover = discover or self._default_discover
         self._probe = probe or self._default_probe
         self._on_capacity = on_capacity
+        # Injected rather than imported: the reconciliation needs a transport
+        # and the process's follower registry, neither of which belongs here.
+        self._reconcile = reconcile
         self._stop = threading.Event()
 
     # ── the loop ───────────────────────────────────────────────────────────
@@ -190,9 +194,33 @@ class HealthMonitor:
         except Exception:
             log.exception("Sweeping stale reservations failed; continuing")
 
+        try:
+            self.reconcile_unwatched()
+        except Exception:
+            log.exception("Reconciling unwatched runs failed; continuing")
+
         if any(result.ready for result in results) and self._on_capacity is not None:
             self._on_capacity()
         return results
+
+    def reconcile_unwatched(self) -> Any:
+        """Look again at runs that nobody is following.
+
+        The startup reconciliation handles what a dead process left behind,
+        but it ran **once**. A container whose host was unreachable at that
+        moment kept its reservation — correctly, since unreachable says
+        nothing about the run — and then nothing ever came back to it: this
+        cycle skips occupied containers, and the TTL sweep only covers
+        reserved ones. The container stayed ``busy`` until someone restarted
+        the master-node again.
+
+        So the same reconciliation runs every cycle, over the containers no
+        thread of this process is watching. For a healthy run that is the
+        empty set, and this costs one query.
+        """
+        if self._reconcile is None:
+            return None
+        return self._reconcile()
 
     def _check_host_isolated(self, host: dict, *, force: bool) -> HostHealth:
         """Check one host, absorbing whatever it throws.

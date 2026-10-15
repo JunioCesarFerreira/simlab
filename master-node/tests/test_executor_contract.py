@@ -93,8 +93,9 @@ def wired(entry, monkeypatch, tmp_path):
         transport.plan.remote_dir = "/opt/cooja"
         transport.get_file.side_effect = (
             lambda remote, local: Path(local).write_text("testlog\n"))
-        monkeypatch.setattr(
-            "lib.scheduler.runner.build_transport", lambda *a, **k: transport)
+        opened = MagicMock(return_value=transport)
+        monkeypatch.setattr("lib.scheduler.runner.build_transport", opened)
+        transport.opened = opened
 
         runner = SimulationRunner(
             mongo,
@@ -258,3 +259,64 @@ class TestStartupRecoveryOrder:
         entry.recover_abandoned_simulations(mongo)
 
         mongo.simulation_repo.find_running_before.assert_not_called()
+
+
+class TestCollectionIsRetryable:
+    """A dropped session during the download must not cost the run.
+
+    The SCP retries inside the transport reopen the *channel*; a session that
+    fell takes all three with it. And the artifacts were cleared by the next
+    job, so nothing could be recovered afterwards. So a failure from the fetch
+    onwards is reported apart from "the run did not complete", and tried again
+    over a connection of its own — the same work the resume path does after a
+    restart.
+    """
+
+    def test_a_dropped_fetch_is_tried_again_and_published(self, wired, entry):
+        runner, mongo, transport, _ = wired()
+        attempts = {"n": 0}
+
+        def flaky(remote, local):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise OSError("session dropped")
+            Path(local).write_text("testlog\n")
+
+        transport.get_file.side_effect = flaky
+
+        runner.run(SIM, HOST, RESOURCE, ATTEMPT)
+
+        assert attempts["n"] == 2
+        mongo.simulation_repo.mark_done.assert_called_once()
+        mongo.simulation_repo.mark_error.assert_not_called()
+
+    def test_the_second_attempt_opens_its_own_connection(self, wired):
+        runner, _, transport, _ = wired()
+        transport.get_file.side_effect = OSError("session dropped")
+
+        runner.run(SIM, HOST, RESOURCE, ATTEMPT)
+
+        # A transport is built twice: once for the run, once for the retry.
+        # Reusing the first would hit the same dead session, which is what
+        # makes the transport's own retries useless here.
+        assert transport.opened.call_count == 2
+        assert transport.get_file.call_count == 2
+
+    def test_a_retry_that_also_fails_marks_the_error_once(self, wired):
+        runner, mongo, transport, _ = wired()
+        transport.get_file.side_effect = OSError("session dropped")
+
+        runner.run(SIM, HOST, RESOURCE, ATTEMPT)
+
+        assert mongo.simulation_repo.mark_error.call_count == 1
+        assert "retry" in mongo.simulation_repo.mark_error.call_args.args[1]
+
+    def test_a_run_that_never_finished_is_not_retried(self, wired):
+        # Nothing to fetch: retrying would only delay the failure.
+        runner, mongo, transport, _ = wired(outcome=RunOutcome(
+            completed=False, message="the simulation did not complete"))
+
+        runner.run(SIM, HOST, RESOURCE, ATTEMPT)
+
+        transport.get_file.assert_not_called()
+        assert mongo.simulation_repo.mark_error.call_count == 1

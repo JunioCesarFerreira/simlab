@@ -42,6 +42,7 @@ from typing import Any, Callable, Optional
 
 from bson import ObjectId
 
+from lib.detached import RunState
 from pylib.db.models.enums import EnumStatus
 from pylib.db.models.infra import operator_configured
 
@@ -65,6 +66,8 @@ class ReconcileReport:
     released: list[str] = field(default_factory=list)
     adopted: list[str] = field(default_factory=list)
     unreachable: list[str] = field(default_factory=list)
+    #: Held, but a thread of this process is already watching them.
+    followed: list[str] = field(default_factory=list)
     failed_simulations: list[str] = field(default_factory=list)
 
     @property
@@ -72,30 +75,60 @@ class ReconcileReport:
         return len(self.released) + len(self.adopted) + len(self.unreachable)
 
     def describe(self) -> str:
-        return (
-            f"{len(self.released)} released, {len(self.adopted)} adopted, "
-            f"{len(self.unreachable)} unreachable"
-        )
+        parts = [
+            f"{len(self.released)} released",
+            f"{len(self.adopted)} adopted",
+            f"{len(self.unreachable)} unreachable",
+        ]
+        if self.followed:
+            parts.append(f"{len(self.followed)} already followed")
+        return ", ".join(parts)
 
 
 def reconcile_occupied_resources(
     mongo: Any,
     probe: Optional[LivenessProbe] = None,
     on_adopt: Optional[AdoptionHandler] = None,
+    *,
+    is_followed: Optional[Callable[[Optional[str]], bool]] = None,
+    quiet: bool = False,
 ) -> ReconcileReport:
-    """Decide what to do with every container still held from a previous run.
+    """Decide what to do with every container still held that nobody watches.
 
-    With no ``probe``, every non-terminal simulation is treated as gone. That
-    is only correct where the run cannot have outlived the master-node — the
-    legacy execution path — and callers on the detached path must supply one.
+    With no ``probe``, every non-terminal simulation is treated as gone, which
+    is only correct where a run cannot outlive the master-node. Callers on the
+    detached path must supply one.
+
+    ``is_followed`` names the attempts a thread of this process is already
+    watching, and they are skipped: their follower will collect the result and
+    release the container, and reconciling underneath it would mean two
+    followers for one attempt. Left out, nothing is skipped — which is right
+    at startup, where no thread is following anything yet.
+
+    That parameter is what lets this run *periodically* rather than only at
+    startup. Running once meant a container whose host was unreachable at boot
+    stayed ``busy`` for ever: the reconciliation never came back, the health
+    cycle skips occupied containers, and the TTL sweep only covers reserved
+    ones. ``quiet`` keeps the periodic pass from logging a headline when there
+    is nothing to say.
     """
     report = ReconcileReport()
     occupied = mongo.resource_repo.find_occupied()
+    if is_followed is not None:
+        unwatched = []
+        for resource in occupied:
+            attempt_id = resource.get("attempt_id")
+            if is_followed(attempt_id):
+                report.followed.append(str(resource.get("name", "?")))
+                continue
+            unwatched.append(resource)
+        occupied = unwatched
     if not occupied:
         return report
 
-    log.warning(
-        "Found %d container(s) still held from a previous run; reconciling...",
+    announce = log.info if quiet else log.warning
+    announce(
+        "Found %d container(s) held with nobody following them; reconciling...",
         len(occupied),
     )
     for resource in occupied:
@@ -104,7 +137,7 @@ def reconcile_occupied_resources(
         except Exception:
             log.exception(
                 "Failed to reconcile container %s", resource.get("name", "?"))
-    log.warning("Reconciliation done: %s", report.describe())
+    announce("Reconciliation done: %s", report.describe())
     return report
 
 
@@ -130,14 +163,25 @@ def _reconcile_one(
         return
 
     sim_oid = _as_oid(simulation["_id"])
-    alive = _ask_probe(probe, resource, simulation, name, host)
+    state = _ask_probe(probe, resource, simulation, name, host)
 
-    if alive is True:
-        # Still going. Releasing would invite a second simulation onto a busy
-        # container, so the run is adopted and followed from where it is.
+    if state is not None and (state.alive or state.collectable):
+        # Two cases, one action. Still running: releasing would invite a
+        # second simulation onto a busy container. Already finished, with its
+        # testlog still there: the follower will see the exit code on its
+        # first poll and collect the result. Both are *adopted* — the
+        # difference is only how long the following lasts.
+        #
+        # The second case used to be a failure. A run that completed while
+        # the master-node was down had its result thrown away and the next
+        # job overwrote the evidence.
         log.warning(
-            "Container %s is still running simulation %s (pid %s); adopting it",
-            name, sim_oid, simulation.get("remote_pid"),
+            "Container %s %s simulation %s (pid %s); adopting it",
+            name,
+            "is still running" if state.alive else
+            f"has a finished run (exit {state.exit_code}, "
+            f"{state.testlog_bytes} bytes of log) for",
+            sim_oid, simulation.get("remote_pid"),
         )
         report.adopted.append(name)
         if on_adopt is None:
@@ -161,7 +205,7 @@ def _reconcile_one(
             log.exception("Failed to resume following simulation %s", sim_oid)
         return
 
-    if alive is None:
+    if state is None:
         # Unreachable says nothing about the run. Touching either the
         # container or the simulation here is exactly what the specification
         # forbids.
@@ -186,22 +230,27 @@ def _ask_probe(
     simulation: dict,
     name: str,
     host: Optional[dict],
-) -> Optional[bool]:
-    """Ask whether the recorded run is still going.
+) -> Optional[RunState]:
+    """Ask the container what became of the recorded run.
+
+    ``None`` means "no answer" and the caller must leave everything alone. A
+    ``RunState`` with nothing alive and nothing collectable is the definite
+    "gone".
 
     No PID means it never got far enough to record one, so there is nothing
-    to adopt — that is a definite "gone", not an unknown.
+    to adopt and nothing to collect — a definite gone, not an unknown.
     """
+    gone = RunState(alive=False, finished=False)
     pid = simulation.get("remote_pid")
     if not pid:
         log.info("Container %s holds a simulation with no recorded PID", name)
-        return False
+        return gone
     if probe is None:
-        return False
+        return gone
 
     if host is None:
         log.warning("Host of container %s no longer exists", name)
-        return False
+        return gone
     try:
         return probe(host, resource, int(pid))
     except Exception as error:
