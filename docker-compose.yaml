@@ -335,10 +335,6 @@ services:
       - NUMBER_OF_CONTAINERS=8
       - COOJA_JVM_XMS=4g
       - COOJA_JVM_XMX=4g
-      # managed: place work by policy across the registered hosts.
-      # legacy:  the pre-feature pool, one worker per container, no balancing.
-      #          Kept as an escape hatch for the transition.
-      - INFRA_MODE=managed
       - SCHED_POLICY=least_loaded_host
       - INFRA_KEY_PATH=/run/secrets/simlab-infra/x25519.json
       # Synthetic benchmark mode (global fallback — prefer per-experiment config via GUI)
