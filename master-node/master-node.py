@@ -1,7 +1,6 @@
 import os
 import sys
 import time
-import queue
 import logging
 import pandas as pd
 from dataclasses import dataclass
@@ -17,12 +16,7 @@ if project_path not in sys.path:
     sys.path.insert(0, project_path)
 
 # lib master-node
-from lib.bootstrap import (
-    ensure_local_host,
-    local_host_document,
-    local_resource_documents,
-    publish_public_key,
-)
+from lib.bootstrap import ensure_local_host, publish_public_key
 from lib.credentials import SecretOpener
 from lib.detached import RUN_ARTIFACTS, DetachedRun, is_running
 from lib.health import HealthMonitor
@@ -69,7 +63,6 @@ class Settings:
     sim_timeout_sec: int
     jvm_xms: str
     jvm_xmx: str
-    infra_mode: str
     sched_policy: str
     infra_key_path: str
     run_poll_interval_sec: float
@@ -104,12 +97,6 @@ class Settings:
         jvm_xms = os.getenv("COOJA_JVM_XMS", "1g")
         jvm_xmx = os.getenv("COOJA_JVM_XMX", "2g")
 
-        # "managed" places work by policy across the registered hosts.
-        # "legacy" keeps the pre-feature pool: one worker per container from
-        # NUMBER_OF_CONTAINERS, all racing for the queue. Kept as an escape
-        # hatch for the transition and meant to be removed once the managed
-        # path has been exercised in deployment.
-        infra_mode = os.getenv("INFRA_MODE", "managed").strip().lower()
         sched_policy = os.getenv("SCHED_POLICY", "least_loaded_host")
         infra_key_path = os.getenv("INFRA_KEY_PATH", DEFAULT_KEY_PATH)
         # How often a running simulation is checked on. One cheap round trip
@@ -132,7 +119,6 @@ class Settings:
             sim_timeout_sec=sim_timeout_sec,
             jvm_xms=jvm_xms,
             jvm_xmx=jvm_xmx,
-            infra_mode=infra_mode,
             sched_policy=sched_policy,
             infra_key_path=infra_key_path,
             run_poll_interval_sec=run_poll_interval_sec,
@@ -143,13 +129,6 @@ class Settings:
 
 
 SET = Settings.from_env()
-
-
-def _assert_capacity(num_workers: int) -> None:
-    if num_workers > len(SET.hostnames) or num_workers > len(SET.ports):
-        raise ValueError(
-            f"Workers({num_workers}) > hostnames({len(SET.hostnames)})/ports({len(SET.ports)})"
-        )
 
 
 def _check_and_close_generation(generation_id: ObjectId, mongo: MongoRepository) -> None:
@@ -283,7 +262,7 @@ def run_cooja_simulation(
     the simulation carries it. A run can lose its container without noticing —
     a recovery pass or the stale-reservation sweep may have handed it on — and
     the guard is what stops this thread from publishing over the attempt that
-    took over. ``None`` means the legacy worker path, which has no attempt.
+    took over.
     """
     sim_oid = ObjectId(sim["_id"]) if not isinstance(sim["_id"], ObjectId) else sim["_id"]
     where = transport.plan.describe()
@@ -442,125 +421,6 @@ def run_cooja_simulation(
                 log.warning("Failed to remove temp file %s: %s", path, ex)
 
 
-def simulation_worker(
-    worker_id: int,
-    sim_queue: queue.Queue,
-    host: dict,
-    resource: dict,
-) -> None:
-    """
-    Worker that consumes simulation IDs from the queue and executes each one.
-    The full simulation document is fetched from MongoDB at execution time.
-    Simulations not in WAITING status are skipped (already claimed by another worker).
-
-    The worker is still bound to one container, as before. What changed is how
-    it reaches it: a transport built from the host and resource records, so the
-    same code serves a local container and one on a remote host. The placement
-    decision itself still belongs to whoever fills the queue.
-    """
-    mongo = create_mongo_repository_factory(SET.mongo_uri, SET.db_name)
-    where = f"{host.get('name')}/{resource.get('name')}"
-    while True:
-        sim_id = sim_queue.get()
-        sim = None
-        local_files: list[str] = []
-        try:
-            if sim_id is None:
-                return
-
-            sim = mongo.simulation_repo.get(sim_id)
-            if sim is None:
-                log.warning("[%s] Simulation %s not found; skipping.", where, sim_id)
-                continue
-
-            if sim.get("status") != EnumStatus.WAITING:
-                log.info("[%s] Simulation %s already in status '%s'; skipping.",
-                         where, sim_id, sim.get("status"))
-                continue
-
-            # Resolve synthetic mode: per-experiment config takes priority over env var.
-            exp_id = sim.get("experiment_id")
-            exp_doc = mongo.experiment_repo.get(exp_id)
-            if exp_doc is None:
-                log.warning(
-                    "[%s] Experiment %s not found for simulation %s; "
-                    "falling back to the env-var synthetic setting.",
-                    where, exp_id, sim_id,
-                )
-            mode, bench, noise_std = resolve_synthetic_settings(exp_doc)
-            log.info(
-                "[%s] sim %s → mode=%s (exp=%s)",
-                where, sim_id, "Synthetic Data" if mode else "Simulation", exp_id,
-            )
-            if mode:
-                run_synthetic_simulation(sim, mongo, bench=bench, noise_std=noise_std)
-                continue
-
-            log.info("[%s] Preparing simulation %s", where, sim_id)
-
-            success, local_files, remote_files = prepare_simulation_files(sim, mongo)
-            if not success:
-                log.warning("[%s] Skipping simulation %s (prepare failed)", where, sim_id)
-                try:
-                    mongo.simulation_repo.mark_error(
-                        ObjectId(sim["_id"]),
-                        "Failed to prepare simulation files", attempt_id=None)
-                except Exception:
-                    log.exception("Failed to mark error on simulation %s", sim_id)
-                if sim.get("generation_id"):
-                    _check_and_close_generation(sim["generation_id"], mongo)
-                continue
-
-            # One connection for the whole run, where there used to be two: the
-            # upload and the execution share it, and closing it is what ends
-            # the attempt. Over a tunnel a second handshake is not free.
-            transport = build_transport(host, resource)
-            with transport:
-                # Defensive: clear artifacts left behind if a previous run
-                # crashed before its own cleanup could execute.
-                transport.cleanup()
-                transport.put_files(local_files, remote_files)
-                run_cooja_simulation(sim, transport, mongo, remote_files)
-
-        except Exception as e:
-            log.exception("[%s] General ERROR: %s", where, e)
-            try:
-                if sim and "_id" in sim:
-                    mongo.simulation_repo.mark_error(
-                        ObjectId(sim["_id"]), str(e), attempt_id=None)
-            except Exception:
-                log.exception("Failed to mark error on simulation after general exception")
-            if sim and sim.get("generation_id"):
-                _check_and_close_generation(sim["generation_id"], mongo)
-        finally:
-            for f in local_files:
-                try:
-                    Path(f).unlink(missing_ok=True)
-                except Exception as ex:
-                    log.warning("Failed to remove temp file %s: %s", f, ex)
-            sim_queue.task_done()
-
-
-def start_workers(num_workers: int) -> queue.Queue:
-    _assert_capacity(num_workers)
-    host = local_host_document(is_docker=SET.is_docker)
-    resources = local_resource_documents(
-        hostnames=SET.hostnames,
-        ports=SET.ports,
-        remote_dir=SET.remote_dir,
-    )
-    q: queue.Queue = queue.Queue()
-    for i in range(num_workers):
-        t = Thread(
-            target=simulation_worker,
-            args=(i, q, host, resources[i]),
-            daemon=True,
-        )
-        t.start()
-    log.info("Workers started: %s", num_workers)
-    return q
-
-
 def load_initial_waiting_jobs(
     mongo: MongoRepository, submit: Callable[[str], None]
 ) -> None:
@@ -581,8 +441,8 @@ def watch_status_waiting_enqueue(
     Subscribes to the simulations Change Stream and offers simulation IDs
     as they enter WAITING status.
 
-    ``submit`` is a callable rather than a queue so the same producer feeds
-    the managed dispatcher and the legacy worker pool.
+    ``submit`` is a callable rather than a queue so the producer does not have
+    to know how the dispatcher takes work.
     """
     log.info("[mongowatch] Watching for WAITING simulations...")
 
@@ -722,70 +582,60 @@ def build_dispatcher(
 
 
 def main() -> None:
-    number_of_containers = len(SET.hostnames)
     log.info("start")
-    log.info("number of containers: %s", number_of_containers)
+    log.info("local containers seeded from the environment: %s", len(SET.hostnames))
     log.info(
-        "env: MONGO_URI=%s | DB_NAME=%s | IS_DOCKER=%s | INFRA_MODE=%s",
-        SET.mongo_uri, SET.db_name, SET.is_docker, SET.infra_mode,
+        "env: MONGO_URI=%s | DB_NAME=%s | IS_DOCKER=%s",
+        SET.mongo_uri, SET.db_name, SET.is_docker,
     )
 
     mongo = create_mongo_repository_factory(SET.mongo_uri, SET.db_name)
 
     recover_stuck_simulations(mongo)
 
-    if SET.infra_mode == "legacy":
-        log.warning(
-            "INFRA_MODE=legacy: one worker per container from "
-            "NUMBER_OF_CONTAINERS, no host balancing. This path exists for "
-            "the transition and will be removed."
-        )
-        sim_queue = start_workers(number_of_containers)
-        submit = sim_queue.put
-    else:
-        keystore = Keystore.load_or_create(SET.infra_key_path)
-        opener = SecretOpener(keystore)
-        publish_public_key(mongo, keystore)
-        ensure_local_host(
-            mongo,
-            is_docker=SET.is_docker,
-            hostnames=SET.hostnames,
-            ports=SET.ports,
-            remote_dir=SET.remote_dir,
-        )
-        dispatcher = build_dispatcher(mongo, keystore, opener)
-        monitor = HealthMonitor(
-            mongo,
-            opener=opener,
-            interval_sec=SET.infra_check_interval_sec,
-            failure_threshold=SET.infra_failure_threshold,
-            reservation_ttl_sec=SET.reservation_ttl_sec,
-            on_capacity=dispatcher.notify_capacity,
-        )
+    keystore = Keystore.load_or_create(SET.infra_key_path)
+    opener = SecretOpener(keystore)
+    publish_public_key(mongo, keystore)
+    ensure_local_host(
+        mongo,
+        is_docker=SET.is_docker,
+        hostnames=SET.hostnames,
+        ports=SET.ports,
+        remote_dir=SET.remote_dir,
+    )
+    dispatcher = build_dispatcher(mongo, keystore, opener)
+    monitor = HealthMonitor(
+        mongo,
+        opener=opener,
+        interval_sec=SET.infra_check_interval_sec,
+        failure_threshold=SET.infra_failure_threshold,
+        reservation_ttl_sec=SET.reservation_ttl_sec,
+        on_capacity=dispatcher.notify_capacity,
+    )
 
-        # Containers claimed by a process that is gone would stay claimed, and
-        # the pool would shrink by that many on every restart. The probe keeps
-        # this from also destroying runs that outlived the master-node, and the
-        # handler picks up following them so their results are collected
-        # instead of being abandoned to the timeout.
-        reconcile_occupied_resources(
-            mongo,
-            probe=build_liveness_probe(opener),
-            on_adopt=_resume_in_background(dispatcher.runner),
-        )
+    # Containers claimed by a process that is gone would stay claimed, and
+    # the pool would shrink by that many on every restart. The probe keeps
+    # this from also destroying runs that outlived the master-node, and the
+    # handler picks up following them so their results are collected
+    # instead of being abandoned to the timeout.
+    reconcile_occupied_resources(
+        mongo,
+        probe=build_liveness_probe(opener),
+        on_adopt=_resume_in_background(dispatcher.runner),
+    )
 
-        # Synchronously, before anything is placed: the first placement
-        # decision then reads measured statuses instead of assumptions. This is
-        # what replaced seeding hosts and containers as already usable.
-        # Forced, so it does not inherit the probes of the process that just
-        # ended — later cycles may trust a recent measurement, but the pool
-        # the dispatcher starts from is measured by this process.
-        log.info("Running the first health cycle before placing any work...")
-        monitor.cycle(force=True)
+    # Synchronously, before anything is placed: the first placement
+    # decision then reads measured statuses instead of assumptions. This is
+    # what replaced seeding hosts and containers as already usable.
+    # Forced, so it does not inherit the probes of the process that just
+    # ended — later cycles may trust a recent measurement, but the pool
+    # the dispatcher starts from is measured by this process.
+    log.info("Running the first health cycle before placing any work...")
+    monitor.cycle(force=True)
 
-        Thread(target=monitor.run, daemon=True, name="health").start()
-        Thread(target=dispatcher.run, daemon=True, name="dispatcher").start()
-        submit = dispatcher.submit
+    Thread(target=monitor.run, daemon=True, name="health").start()
+    Thread(target=dispatcher.run, daemon=True, name="dispatcher").start()
+    submit = dispatcher.submit
 
     load_initial_waiting_jobs(mongo, submit)
 

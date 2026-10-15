@@ -71,7 +71,7 @@ def get_public_key(
             status_code=503,
             detail=(
                 "No infrastructure public key has been published yet. The "
-                "master-node publishes it on startup (INFRA_MODE=managed); "
+                "master-node publishes it on startup; "
                 "start it once and retry."
             ),
         )

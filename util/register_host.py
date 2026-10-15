@@ -75,7 +75,7 @@ def published_key(mongo) -> dict:
     if not doc or not doc.get("public_key"):
         raise SystemExit(
             "No infrastructure public key published yet.\n"
-            "The master-node publishes it on startup (INFRA_MODE=managed). "
+            "The master-node publishes it on startup. "
             "Start it once, then retry."
         )
     return doc
