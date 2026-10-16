@@ -66,16 +66,12 @@ describe("reads", () => {
 
   it("fetches the public key", async () => {
     await getPublicKey();
-    expect(vi.mocked(client.get).mock.calls[0]![0]).toBe(
-      "/infra/crypto/public-key",
-    );
+    expect(vi.mocked(client.get).mock.calls[0]![0]).toBe("/infra/crypto/public-key");
   });
 
   it("asks what a container is running", async () => {
     await getResourceSimulation("r1");
-    expect(vi.mocked(client.get).mock.calls[0]![0]).toBe(
-      "/infra/resources/r1/simulation",
-    );
+    expect(vi.mocked(client.get).mock.calls[0]![0]).toBe("/infra/resources/r1/simulation");
   });
 });
 

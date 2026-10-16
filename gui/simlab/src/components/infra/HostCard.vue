@@ -8,13 +8,13 @@
         </h3>
         <p class="where">
           <template v-if="host.access">
-            <span class="mono">{{ host.access.username }}@{{ host.access.address }}:{{ host.access.port }}</span>
+            <span class="mono"
+              >{{ host.access.username }}@{{ host.access.address }}:{{ host.access.port }}</span
+            >
             <span class="sep">·</span>
             containers via {{ addressModeLabel }}
           </template>
-          <template v-else>
-            this machine's own Docker daemon
-          </template>
+          <template v-else> this machine's own Docker daemon </template>
         </p>
       </div>
 
@@ -54,8 +54,7 @@
         <!-- "0 discovered" next to "2 containers ready" reads as a
              contradiction; it only means Docker had nothing to say. -->
         <span v-else-if="discoveredNothing" class="hint-fact">
-          Docker found nothing here — switch this host to listing workers
-          manually to stop asking
+          Docker found nothing here — switch this host to listing workers manually to stop asking
         </span>
         <span v-else-if="host.discovery?.discovered_count !== undefined">
           {{ host.discovery.discovered_count }} discovered
@@ -69,12 +68,7 @@
       </div>
 
       <div class="actions">
-        <button
-          class="ghost"
-          :disabled="pending"
-          :title="checkTitle"
-          @click="emit('check', host)"
-        >
+        <button class="ghost" :disabled="pending" :title="checkTitle" @click="emit('check', host)">
           {{ host.check_pending ? "Checking…" : "Test" }}
         </button>
         <button
@@ -164,9 +158,10 @@ const addressModeLabel = computed(() => {
   }
 });
 
-const checkTitle = computed(() =>
-  "The master-node performs the check: it holds the key and the route to the" +
-  " containers, which the API does not",
+const checkTitle = computed(
+  () =>
+    "The master-node performs the check: it holds the key and the route to the" +
+    " containers, which the API does not",
 );
 
 function relative(iso: string): string {
@@ -195,7 +190,9 @@ function relative(iso: string): string {
   gap: 10px;
 }
 
-.host-card--out { opacity: 0.75; }
+.host-card--out {
+  opacity: 0.75;
+}
 
 header {
   display: flex;
@@ -229,9 +226,13 @@ h3 {
   margin-top: 2px;
 }
 
-.sep { margin: 0 4px; }
+.sep {
+  margin: 0 4px;
+}
 
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
 
 .status-block {
   display: flex;
@@ -252,19 +253,33 @@ h3 {
   white-space: nowrap;
 }
 
-.status--online { background: rgba(16, 185, 129, 0.14); color: var(--status-done); }
-.status--degraded { background: rgba(245, 158, 11, 0.16); color: var(--status-waiting); }
+.status--online {
+  background: rgba(16, 185, 129, 0.14);
+  color: var(--status-done);
+}
+.status--degraded {
+  background: rgba(245, 158, 11, 0.16);
+  color: var(--status-waiting);
+}
 .status--offline,
-.status--misconfigured { background: rgba(239, 68, 68, 0.12); color: var(--status-error); }
+.status--misconfigured {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--status-error);
+}
 
 .message {
   font-size: 12px;
   color: var(--color-text);
 }
 
-.message--muted { color: var(--color-text-muted); font-style: italic; }
+.message--muted {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
 
-.when { color: var(--color-text-muted); }
+.when {
+  color: var(--color-text-muted);
+}
 
 .warn {
   font-size: 12px;
@@ -293,10 +308,19 @@ footer {
   color: var(--color-text-muted);
 }
 
-.failing { color: var(--status-error); font-weight: 600; }
-.hint-fact { color: var(--status-waiting); }
+.failing {
+  color: var(--status-error);
+  font-weight: 600;
+}
+.hint-fact {
+  color: var(--status-waiting);
+}
 
-.actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
 
 .ghost {
   padding: 5px 10px;
@@ -310,8 +334,16 @@ footer {
   transition: background 0.12s;
 }
 
-.ghost:hover:not(:disabled) { background: var(--color-surface-hover); }
-.ghost:disabled { opacity: 0.5; cursor: default; }
+.ghost:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+.ghost:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 
-.ghost--danger { color: var(--status-error); border-color: rgba(239, 68, 68, 0.35); }
+.ghost--danger {
+  color: var(--status-error);
+  border-color: rgba(239, 68, 68, 0.35);
+}
 </style>

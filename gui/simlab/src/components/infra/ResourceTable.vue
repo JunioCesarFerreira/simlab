@@ -59,13 +59,15 @@
           </td>
 
           <td>
-            <RouterLink
+            <button
               v-if="resource.current_simulation_id"
-              :to="simulationLink(resource)"
               class="sim-link"
+              :disabled="resolving === resource.id"
+              :title="`Open the experiment this simulation belongs to`"
+              @click="openSimulation(resource)"
             >
               {{ resource.current_simulation_id.slice(-8) }}
-            </RouterLink>
+            </button>
             <span v-else class="sub">—</span>
           </td>
 
@@ -107,11 +109,14 @@
       No containers discovered on this host yet.
       <template v-if="canDiscover">Run a discovery to look for them.</template>
     </p>
+    <p v-if="linkError" class="link-error">{{ linkError }}</p>
   </div>
 </template>
 
 <script setup lang="ts">
-import { RouterLink } from "vue-router";
+import { ref } from "vue";
+import { useRouter } from "vue-router";
+import { getResourceSimulation } from "../../api/infra";
 import {
   dockerLevel,
   endpointLabel,
@@ -141,6 +146,11 @@ const emit = defineEmits<{
   (event: "remove", resource: ResourceDto): void;
 }>();
 
+const router = useRouter();
+/** The worker whose simulation is being resolved, so its control is held. */
+const resolving = ref<string | null>(null);
+const linkError = ref("");
+
 const busyIds = props.busyIds ?? new Set<string>();
 
 function probeDetail(resource: ResourceDto): string {
@@ -165,10 +175,32 @@ function buildTitle(resource: ResourceDto): string {
   return parts.join("\n");
 }
 
-function simulationLink(resource: ResourceDto): string {
-  // The simulation itself has no page; its experiment does, and that is
-  // where an operator wants to land.
-  return `/experiments?simulation=${resource.current_simulation_id ?? ""}`;
+/**
+ * Open the experiment a running simulation belongs to.
+ *
+ * The link used to be `/experiments?simulation=<id>`, which no page reads:
+ * the click landed on the list of experiments with nothing resolved, and the
+ * operator had to find the right one by hand. The simulation itself has no
+ * page, but its experiment does — and the API already answers which one, so
+ * the resolution happens here rather than being encoded in a URL nobody
+ * interprets.
+ */
+async function openSimulation(resource: ResourceDto): Promise<void> {
+  resolving.value = resource.id;
+  try {
+    const info = await getResourceSimulation(resource.id);
+    if (info.experiment_id) {
+      await router.push(`/experiments/${info.experiment_id}`);
+      return;
+    }
+    // It finished between the page loading and the click. Saying so beats
+    // navigating somewhere arbitrary.
+    linkError.value = "That simulation is no longer running, so there is nothing to open.";
+  } catch {
+    linkError.value = "Could not find out which experiment that simulation is in.";
+  } finally {
+    resolving.value = null;
+  }
 }
 
 function toggleTitle(resource: ResourceDto): string {
@@ -181,6 +213,25 @@ function toggleTitle(resource: ResourceDto): string {
 </script>
 
 <style scoped>
+.link-error {
+  margin: 0.4rem 0 0;
+  font-size: 0.8rem;
+  color: var(--danger, #b91c1c);
+}
+
+button.sim-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+button.sim-link:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
 .resource-table {
   overflow-x: auto;
 }
@@ -213,8 +264,12 @@ tbody tr:last-child td {
   border-bottom: none;
 }
 
-.right { text-align: right; }
-.nowrap { white-space: nowrap; }
+.right {
+  text-align: right;
+}
+.nowrap {
+  white-space: nowrap;
+}
 
 .mini {
   padding: 3px 8px;
@@ -228,12 +283,24 @@ tbody tr:last-child td {
   cursor: pointer;
 }
 
-.mini:hover:not(:disabled) { background: var(--color-surface-hover); }
-.mini:disabled { opacity: 0.5; cursor: default; }
-.mini--danger { color: var(--status-error); border-color: rgba(239, 68, 68, 0.35); }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.mini:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+.mini:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.mini--danger {
+  color: var(--status-error);
+  border-color: rgba(239, 68, 68, 0.35);
+}
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
 
-.name { font-weight: 600; }
+.name {
+  font-weight: 600;
+}
 
 .sub {
   font-size: 11px;
@@ -251,20 +318,36 @@ tbody tr:last-child td {
   color: var(--color-text-muted);
 }
 
-.pill--available { background: rgba(16, 185, 129, 0.14); color: var(--status-done); }
+.pill--available {
+  background: rgba(16, 185, 129, 0.14);
+  color: var(--status-done);
+}
 .pill--busy,
-.pill--reserved { background: rgba(59, 130, 246, 0.14); color: var(--status-running); }
+.pill--reserved {
+  background: rgba(59, 130, 246, 0.14);
+  color: var(--status-running);
+}
 .pill--offline,
-.pill--error { background: rgba(239, 68, 68, 0.12); color: var(--status-error); }
+.pill--error {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--status-error);
+}
 
 .level {
   font-size: 12px;
   font-weight: 500;
 }
 
-.level--ok { color: var(--status-done); }
-.level--bad { color: var(--status-error); }
-.level--unknown { color: var(--color-text-muted); font-style: italic; }
+.level--ok {
+  color: var(--status-done);
+}
+.level--bad {
+  color: var(--status-error);
+}
+.level--unknown {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
 
 .sim-link {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -272,7 +355,9 @@ tbody tr:last-child td {
   color: var(--color-primary);
 }
 
-.sim-link:hover { text-decoration: underline; }
+.sim-link:hover {
+  text-decoration: underline;
+}
 
 .toggle input {
   position: absolute;
@@ -303,7 +388,9 @@ tbody tr:last-child td {
   height: 12px;
   border-radius: 999px;
   background: var(--color-text-muted);
-  transition: transform 0.15s, background 0.15s;
+  transition:
+    transform 0.15s,
+    background 0.15s;
 }
 
 .toggle input:checked + .toggle-track {

@@ -61,10 +61,7 @@ export async function createHost(host: HostCreateInput): Promise<string> {
 }
 
 /** Change a host. Only the fields present are touched. */
-export async function updateHost(
-  id: string,
-  updates: HostUpdateInput,
-): Promise<HostDto> {
+export async function updateHost(id: string, updates: HostUpdateInput): Promise<HostDto> {
   const { data } = await client.put<HostDto>(`/infra/hosts/${id}`, updates);
   return data;
 }
@@ -113,10 +110,7 @@ export async function listResources(signal?: AbortSignal): Promise<ResourceDto[]
  * `enabled` is the only field a client may write: everything else about a
  * container is discovered or measured.
  */
-export async function setResourceEnabled(
-  id: string,
-  enabled: boolean,
-): Promise<ResourceDto> {
+export async function setResourceEnabled(id: string, enabled: boolean): Promise<ResourceDto> {
   const { data } = await client.put<ResourceDto>(`/infra/resources/${id}`, {
     enabled,
   });
@@ -133,10 +127,7 @@ export async function createResource(
   hostId: string,
   resource: ResourceCreateInput,
 ): Promise<ResourceDto> {
-  const { data } = await client.post<ResourceDto>(
-    `/infra/hosts/${hostId}/resources`,
-    resource,
-  );
+  const { data } = await client.post<ResourceDto>(`/infra/hosts/${hostId}/resources`, resource);
   return data;
 }
 
@@ -145,10 +136,7 @@ export async function updateResourceConnection(
   id: string,
   updates: ResourceUpdateInput,
 ): Promise<ResourceDto> {
-  const { data } = await client.put<ResourceDto>(
-    `/infra/resources/${id}/connection`,
-    updates,
-  );
+  const { data } = await client.put<ResourceDto>(`/infra/resources/${id}/connection`, updates);
   return data;
 }
 
@@ -158,11 +146,7 @@ export async function deleteResource(id: string): Promise<void> {
 }
 
 /** What is running on a container, if anything. */
-export async function getResourceSimulation(
-  id: string,
-): Promise<ResourceSimulationDto> {
-  const { data } = await client.get<ResourceSimulationDto>(
-    `/infra/resources/${id}/simulation`,
-  );
+export async function getResourceSimulation(id: string): Promise<ResourceSimulationDto> {
+  const { data } = await client.get<ResourceSimulationDto>(`/infra/resources/${id}/simulation`);
   return data;
 }

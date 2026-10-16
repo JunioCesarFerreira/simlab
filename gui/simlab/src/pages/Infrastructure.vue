@@ -67,14 +67,14 @@
     <!-- A mixed pool can introduce a host effect in the results, so it is
          surfaced rather than left for someone to notice in the data. -->
     <p v-if="overview?.heterogeneous" class="warn-banner">
-      This pool runs {{ overview.cooja_builds.length }} different Cooja builds.
-      A generation distributed across them can pick up a host effect; the
-      build of each container is in its row below.
+      This pool runs {{ overview.cooja_builds.length }} different Cooja builds. A generation
+      distributed across them can pick up a host effect; the build of each container is in its row
+      below.
     </p>
 
     <p v-if="!loading && hosts.length === 0" class="empty-state">
-      No hosts registered yet. The local host is created by the master-node on
-      startup — if it is missing, check that the master-node is running.
+      No hosts registered yet. The local host is created by the master-node on startup — if it is
+      missing, check that the master-node is running.
     </p>
 
     <!-- §7.3 Per-host occupancy -->
@@ -90,10 +90,12 @@
         @add-worker="openWorkerForm"
         @remove="onRemove"
       />
-      <details class="containers" :open="expanded.has(host.id)" @toggle="onToggleDetails(host.id, $event)">
-        <summary>
-          {{ resourcesFor(host.id).length }} container(s)
-        </summary>
+      <details
+        class="containers"
+        :open="expanded.has(host.id)"
+        @toggle="onToggleDetails(host.id, $event)"
+      >
+        <summary>{{ resourcesFor(host.id).length }} container(s)</summary>
         <ResourceTable
           :resources="resourcesFor(host.id)"
           :busy-ids="pendingResources"
@@ -105,12 +107,7 @@
       </details>
     </section>
 
-    <HostFormModal
-      v-if="formOpen"
-      :host="editing"
-      @close="closeForm"
-      @saved="onSaved"
-    />
+    <HostFormModal v-if="formOpen" :host="editing" @close="closeForm" @saved="onSaved" />
 
     <WorkerFormModal
       v-if="workerHost"
@@ -140,12 +137,7 @@ import {
   setHostEnabled,
   setResourceEnabled,
 } from "../api/infra";
-import type {
-  HostDto,
-  OverviewDto,
-  OverviewTotalsDto,
-  ResourceDto,
-} from "../types/infra";
+import type { HostDto, OverviewDto, OverviewTotalsDto, ResourceDto } from "../types/infra";
 
 /**
  * The Infrastructure page.
@@ -379,8 +371,7 @@ async function onRemoveWorker(worker: ResourceDto) {
   const ok = await confirmDialog({
     title: `Remove ${worker.name}?`,
     message:
-      "Simulations that ran on it keep the names they recorded, so the trail " +
-      "is not lost.",
+      "Simulations that ran on it keep the names they recorded, so the trail " + "is not lost.",
     confirmLabel: "Remove",
     danger: true,
   });
@@ -409,11 +400,7 @@ function onToggleDetails(hostId: string, event: Event) {
   else expanded.delete(hostId);
 }
 
-async function withPending(
-  set: Set<string>,
-  id: string,
-  action: () => Promise<void>,
-) {
+async function withPending(set: Set<string>, id: string, action: () => Promise<void>) {
   set.add(id);
   notice.value = "";
   try {
@@ -446,7 +433,10 @@ function describe(e: unknown): string {
   flex-wrap: wrap;
 }
 
-.page-title { font-size: 22px; font-weight: 700; }
+.page-title {
+  font-size: 22px;
+  font-weight: 700;
+}
 
 .subtitle {
   font-size: 13px;
@@ -454,7 +444,9 @@ function describe(e: unknown): string {
   margin-top: 2px;
 }
 
-.when { font-style: italic; }
+.when {
+  font-style: italic;
+}
 
 .header-actions {
   display: flex;
@@ -493,7 +485,10 @@ function describe(e: unknown): string {
   border: 1px solid var(--color-primary);
 }
 
-.refresh-btn:disabled { opacity: 0.5; cursor: default; }
+.refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 
 .error-banner,
 .notice-banner,
@@ -549,12 +544,22 @@ function describe(e: unknown): string {
   font-weight: 500;
 }
 
-.of { font-weight: 400; }
+.of {
+  font-weight: 400;
+}
 
-.stat-card--free .stat-value { color: var(--status-done); }
-.stat-card--active .stat-value { color: var(--status-running); }
-.stat-card--unavailable .stat-value { color: var(--status-error); }
-.stat-card--disabled .stat-value { color: var(--status-cancelled); }
+.stat-card--free .stat-value {
+  color: var(--status-done);
+}
+.stat-card--active .stat-value {
+  color: var(--status-running);
+}
+.stat-card--unavailable .stat-value {
+  color: var(--status-error);
+}
+.stat-card--disabled .stat-value {
+  color: var(--status-cancelled);
+}
 
 .host-section {
   display: flex;
@@ -579,7 +584,9 @@ function describe(e: unknown): string {
   color: var(--color-text-muted);
 }
 
-.containers summary:hover { color: var(--color-text); }
+.containers summary:hover {
+  color: var(--color-text);
+}
 
 .empty-state {
   text-align: center;

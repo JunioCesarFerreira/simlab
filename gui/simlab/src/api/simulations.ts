@@ -19,9 +19,8 @@ export async function getSimulationsByIndividual(
   individualId: string,
   experimentId: string,
 ): Promise<SimulationDto[]> {
-  const { data } = await client.get<SimulationDto[]>(
-    `/simulations/by-individual/${individualId}`,
-    { params: { experiment_id: experimentId } },
-  );
+  const { data } = await client.get<SimulationDto[]>(`/simulations/by-individual/${individualId}`, {
+    params: { experiment_id: experimentId },
+  });
   return data;
 }

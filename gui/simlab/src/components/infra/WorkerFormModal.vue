@@ -20,9 +20,9 @@
 
           <p class="hint">
             Where this worker's sshd answers, reached <em>through</em>
-            <span class="mono">{{ hostLabel }}</span>. Everything left blank
-            below falls back to the host's defaults, so a worker that differs
-            only in its port needs only that field.
+            <span class="mono">{{ hostLabel }}</span
+            >. Everything left blank below falls back to the host's defaults, so a worker that
+            differs only in its port needs only that field.
           </p>
 
           <div class="grid">
@@ -36,15 +36,20 @@
             </label>
             <label class="field field--narrow">
               <span>SSH port</span>
-              <input v-model.number="form.port" type="number" min="1" max="65535" :disabled="saving" />
+              <input
+                v-model.number="form.port"
+                type="number"
+                min="1"
+                max="65535"
+                :disabled="saving"
+              />
             </label>
           </div>
 
           <p class="hint hint--aside">
-            <strong>Address</strong> is resolved on the host, not here. A port
-            published by Docker is usually
-            <span class="mono">127.0.0.1</span> with the published port; a
-            container on the host's bridge is its container IP with port 22.
+            <strong>Address</strong> is resolved on the host, not here. A port published by Docker
+            is usually <span class="mono">127.0.0.1</span> with the published port; a container on
+            the host's bridge is its container IP with port 22.
           </p>
 
           <section>
@@ -81,11 +86,10 @@
             <div v-if="isEdit && !replaceSecret" class="stored">
               <span v-if="hasStoredSecret">
                 This worker has its own credential, sealed against
-                <span class="mono">{{ storedKeyId }}</span>.
+                <span class="mono">{{ storedKeyId }}</span
+                >.
               </span>
-              <span v-else>
-                Uses the host's credential.
-              </span>
+              <span v-else> Uses the host's credential. </span>
               <button class="link-btn" :disabled="saving" @click="replaceSecret = true">
                 {{ hasStoredSecret ? "Replace it" : "Give it its own" }}
               </button>
@@ -100,8 +104,7 @@
             </div>
 
             <div v-if="dropSecret" class="stored">
-              Its own credential will be removed; this worker will use the
-              host's again.
+              Its own credential will be removed; this worker will use the host's again.
               <button class="link-btn" :disabled="saving" @click="dropSecret = false">
                 Keep it
               </button>
@@ -128,8 +131,8 @@
                 />
               </label>
               <small class="hint">
-                Encrypted in your browser before it is sent. Leave empty to use
-                the host's credential instead.
+                Encrypted in your browser before it is sent. Leave empty to use the host's
+                credential instead.
               </small>
               <button v-if="isEdit" class="link-btn" :disabled="saving" @click="cancelReplace">
                 Keep what is stored
@@ -157,11 +160,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref } from "vue";
-import {
-  createResource,
-  getPublicKey,
-  updateResourceConnection,
-} from "../../api/infra";
+import { createResource, getPublicKey, updateResourceConnection } from "../../api/infra";
 import { SealingError, sealSecret } from "../../services/secretEnvelope";
 import type {
   HostDto,
@@ -228,9 +227,7 @@ const keyError = ref("");
 const publicKey = ref<PublicKeyDto | null>(null);
 const dialogEl = ref<HTMLElement | null>(null);
 
-const hasStoredSecret = computed(
-  () => props.worker?.connection?.secret?.has_secret ?? false,
-);
+const hasStoredSecret = computed(() => props.worker?.connection?.secret?.has_secret ?? false);
 const storedKeyId = computed(() => props.worker?.connection?.secret?.key_id ?? "—");
 
 const canSave = computed(() => {
@@ -352,10 +349,18 @@ footer {
   padding: 16px 20px;
 }
 
-header { border-bottom: 1px solid var(--color-border); }
-footer { border-top: 1px solid var(--color-border); gap: 12px; }
+header {
+  border-bottom: 1px solid var(--color-border);
+}
+footer {
+  border-top: 1px solid var(--color-border);
+  gap: 12px;
+}
 
-h2 { font-size: 16px; font-weight: 700; }
+h2 {
+  font-size: 16px;
+  font-weight: 700;
+}
 
 h3 {
   font-size: 12px;
@@ -366,7 +371,12 @@ h3 {
   margin-bottom: 4px;
 }
 
-h3 em, .field em { font-weight: 400; font-style: normal; text-transform: none; }
+h3 em,
+.field em {
+  font-weight: 400;
+  font-style: normal;
+  text-transform: none;
+}
 
 .body {
   padding: 16px 20px;
@@ -375,7 +385,11 @@ h3 em, .field em { font-weight: 400; font-style: normal; text-transform: none; }
   gap: 16px;
 }
 
-section { display: flex; flex-direction: column; gap: 8px; }
+section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 
 .hint {
   font-size: 12px;
@@ -404,7 +418,9 @@ section { display: flex; flex-direction: column; gap: 8px; }
   color: var(--color-text-muted);
 }
 
-.field--narrow { max-width: 150px; }
+.field--narrow {
+  max-width: 150px;
+}
 
 input[type="text"],
 input:not([type]),
@@ -428,12 +444,16 @@ textarea {
   resize: vertical;
 }
 
-input:focus, select:focus, textarea:focus {
+input:focus,
+select:focus,
+textarea:focus {
   outline: 2px solid var(--color-primary-light);
   border-color: var(--color-primary);
 }
 
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
 
 .stored {
   font-size: 12px;
@@ -465,9 +485,13 @@ input:focus, select:focus, textarea:focus {
   color: var(--color-text-muted);
 }
 
-.actions { display: flex; gap: 8px; }
+.actions {
+  display: flex;
+  gap: 8px;
+}
 
-.btn-primary, .btn-secondary {
+.btn-primary,
+.btn-secondary {
   padding: 7px 16px;
   border-radius: var(--radius-md);
   font-size: 13px;
@@ -487,7 +511,11 @@ input:focus, select:focus, textarea:focus {
   border: 1px solid var(--color-border);
 }
 
-.btn-primary:disabled, .btn-secondary:disabled { opacity: 0.5; cursor: default; }
+.btn-primary:disabled,
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 
 .link-btn {
   background: none;

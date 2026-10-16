@@ -36,6 +36,7 @@ from lib.transport import SSHTransport, TransportError, build_transport
 
 # pylib crypto — master-node only; the API deliberately cannot open a secret.
 from pylib.crypto.sealed import DEFAULT_KEY_PATH, Keystore
+from pylib.timeutil import elapsed_since
 
 # pylib
 from pylib.db import create_mongo_repository_factory, MongoRepository, EnumStatus
@@ -499,10 +500,11 @@ def _remaining_timeout(sim: Simulation) -> float | None:
     """
     if not SET.sim_timeout_sec:
         return None
-    started = sim.get("start_time")
-    if not isinstance(started, datetime):
+    # Naive or aware: a resume is exactly the path where a TypeError would
+    # be worst, because it only runs after something already went wrong.
+    spent = elapsed_since(sim.get("start_time"))
+    if spent is None:
         return float(SET.sim_timeout_sec)
-    spent = (datetime.now() - started).total_seconds()
     return float(SET.sim_timeout_sec) - spent
 
 

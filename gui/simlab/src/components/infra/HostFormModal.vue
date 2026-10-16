@@ -22,8 +22,8 @@
           <section>
             <h3>Host access</h3>
             <p class="hint">
-              The master-node connects here first, then tunnels into this
-              host's containers. No container port has to be published.
+              The master-node connects here first, then tunnels into this host's containers. No
+              container port has to be published.
             </p>
             <div class="grid">
               <label class="field">
@@ -36,7 +36,13 @@
               </label>
               <label class="field field--narrow">
                 <span>SSH port</span>
-                <input v-model.number="form.port" type="number" min="1" max="65535" :disabled="saving" />
+                <input
+                  v-model.number="form.port"
+                  type="number"
+                  min="1"
+                  max="65535"
+                  :disabled="saving"
+                />
               </label>
               <label class="field">
                 <span>SSH user</span>
@@ -49,8 +55,8 @@
           <section>
             <h3>Credential</h3>
             <p class="hint">
-              Encrypted in your browser before it is sent, and stored that way.
-              Only the master-node can open it — the API holds no key.
+              Encrypted in your browser before it is sent, and stored that way. Only the master-node
+              can open it — the API holds no key.
               <span v-if="publicKey" class="mono">
                 Sealing against {{ publicKey.fingerprint }}
               </span>
@@ -73,7 +79,8 @@
             <div v-if="isEdit && !replaceSecret" class="stored">
               <span v-if="hasStoredSecret">
                 A credential is stored, sealed against key
-                <span class="mono">{{ storedKeyId }}</span>.
+                <span class="mono">{{ storedKeyId }}</span
+                >.
               </span>
               <span v-else>No credential stored yet.</span>
               <button class="link-btn" :disabled="saving" @click="replaceSecret = true">
@@ -99,8 +106,8 @@
                   @change="readKeyFile"
                 />
                 <small class="hint">
-                  Must be unencrypted — the sealed envelope is what protects it
-                  at rest. Never leaves this page in the clear.
+                  Must be unencrypted — the sealed envelope is what protects it at rest. Never
+                  leaves this page in the clear.
                 </small>
               </label>
               <label v-else class="field">
@@ -112,12 +119,7 @@
                   :disabled="saving"
                 />
               </label>
-              <button
-                v-if="isEdit"
-                class="link-btn"
-                :disabled="saving"
-                @click="cancelReplace"
-              >
+              <button v-if="isEdit" class="link-btn" :disabled="saving" @click="cancelReplace">
                 Keep the stored credential
               </button>
             </template>
@@ -127,9 +129,8 @@
           <section>
             <h3>Container access</h3>
             <p class="hint">
-              How this host reaches its own Cooja containers. Leave the
-              credential empty to use the image's built-in login, which is
-              what the local containers have always used.
+              How this host reaches its own Cooja containers. Leave the credential empty to use the
+              image's built-in login, which is what the local containers have always used.
             </p>
             <div class="grid">
               <label class="field field--narrow">
@@ -138,7 +139,12 @@
               </label>
               <label class="field field--narrow">
                 <span>Port</span>
-                <input v-model.number="form.containerPort" type="number" min="1" :disabled="saving" />
+                <input
+                  v-model.number="form.containerPort"
+                  type="number"
+                  min="1"
+                  :disabled="saving"
+                />
               </label>
               <label class="field">
                 <span>Address mode</span>
@@ -164,15 +170,15 @@
               </label>
             </div>
             <p v-if="form.discoveryMode === 'manual'" class="hint hint--aside">
-              You add each worker yourself, with its own address and port. The
-              only option that works when the SSH user above cannot reach the
-              host's Docker socket — a shared machine, typically.
+              You add each worker yourself, with its own address and port. The only option that
+              works when the SSH user above cannot reach the host's Docker socket — a shared
+              machine, typically.
             </p>
             <template v-else>
               <p class="hint">
-                The master-node runs <span class="mono">docker ps</span> on the
-                host and finds the containers carrying this label. Requires the
-                SSH user to be able to use the Docker socket there.
+                The master-node runs <span class="mono">docker ps</span> on the host and finds the
+                containers carrying this label. Requires the SSH user to be able to use the Docker
+                socket there.
               </p>
               <div class="grid">
                 <label class="field">
@@ -261,9 +267,7 @@ const keyError = ref("");
 const publicKey = ref<PublicKeyDto | null>(null);
 const dialogEl = ref<HTMLElement | null>(null);
 
-const hasStoredSecret = computed(
-  () => props.host?.access?.secret?.has_secret ?? false,
-);
+const hasStoredSecret = computed(() => props.host?.access?.secret?.has_secret ?? false);
 const storedKeyId = computed(() => props.host?.access?.secret?.key_id ?? "—");
 
 const canSave = computed(() => {
@@ -316,9 +320,7 @@ async function save() {
     }
     sealingLabel.value = "Saving…";
 
-    const id = isEdit.value
-      ? await saveEdit(sealed)
-      : await saveNew(sealed!);
+    const id = isEdit.value ? await saveEdit(sealed) : await saveNew(sealed!);
     emit("saved", id);
   } catch (e) {
     error.value = describe(e);
@@ -423,10 +425,18 @@ footer {
   padding: 16px 20px;
 }
 
-header { border-bottom: 1px solid var(--color-border); }
-footer { border-top: 1px solid var(--color-border); gap: 12px; }
+header {
+  border-bottom: 1px solid var(--color-border);
+}
+footer {
+  border-top: 1px solid var(--color-border);
+  gap: 12px;
+}
 
-h2 { font-size: 16px; font-weight: 700; }
+h2 {
+  font-size: 16px;
+  font-weight: 700;
+}
 
 h3 {
   font-size: 12px;
@@ -444,7 +454,11 @@ h3 {
   gap: 20px;
 }
 
-section { display: flex; flex-direction: column; gap: 8px; }
+section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 
 .hint {
   font-size: 12px;
@@ -473,9 +487,14 @@ section { display: flex; flex-direction: column; gap: 8px; }
   color: var(--color-text-muted);
 }
 
-.field--narrow { max-width: 150px; }
+.field--narrow {
+  max-width: 150px;
+}
 
-.field em { font-weight: 400; font-style: normal; }
+.field em {
+  font-weight: 400;
+  font-style: normal;
+}
 
 input[type="text"],
 input:not([type]),
@@ -506,7 +525,10 @@ textarea:focus {
   border-color: var(--color-primary);
 }
 
-.file { font-size: 11px; font-weight: 400; }
+.file {
+  font-size: 11px;
+  font-weight: 400;
+}
 
 .stored {
   font-size: 12px;
@@ -543,7 +565,10 @@ textarea:focus {
   color: var(--color-text-muted);
 }
 
-.actions { display: flex; gap: 8px; }
+.actions {
+  display: flex;
+  gap: 8px;
+}
 
 .btn-primary,
 .btn-secondary {
@@ -567,7 +592,10 @@ textarea:focus {
 }
 
 .btn-primary:disabled,
-.btn-secondary:disabled { opacity: 0.5; cursor: default; }
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 
 .link-btn {
   background: none;

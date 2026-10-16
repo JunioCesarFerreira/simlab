@@ -23,6 +23,7 @@ from pymongo import ReturnDocument
 
 from pylib.crypto.envelope import SecretEnvelope
 from pylib.db.connection import MongoDBConnection
+from pylib.timeutil import utc_now
 from pylib.db.models.infra import (
     CRYPTO_COLLECTION,
     HOSTS_COLLECTION,
@@ -141,7 +142,7 @@ class HostRepository:
     # ── CRUD ───────────────────────────────────────────────────────────────
 
     def insert(self, host: Host) -> ObjectId:
-        now = datetime.now()
+        now = utc_now()
         doc = {**host}
         doc.setdefault("created_time", now)
         doc["updated_time"] = now
@@ -184,7 +185,7 @@ class HostRepository:
         payload = {k: v for k, v in updates.items() if k not in protected}
         if not payload:
             return False
-        payload["updated_time"] = datetime.now()
+        payload["updated_time"] = utc_now()
         with self.connection.connect() as db:
             res = db[HOSTS_COLLECTION].update_one({"_id": oid}, {"$set": payload})
             return res.matched_count > 0
@@ -214,7 +215,7 @@ class HostRepository:
                 },
                 {"$set": {
                     "access.host_key_fingerprint": fingerprint,
-                    "updated_time": datetime.now(),
+                    "updated_time": utc_now(),
                 }},
             )
             return res.modified_count > 0
@@ -229,7 +230,7 @@ class HostRepository:
         oid = _oid(host_id)
         if oid is None:
             return False
-        updates: dict[str, Any] = {"enabled": enabled, "updated_time": datetime.now()}
+        updates: dict[str, Any] = {"enabled": enabled, "updated_time": utc_now()}
         if not enabled:
             updates["status"] = EnumHostStatus.DISABLED.value
         with self.connection.connect() as db:
@@ -283,7 +284,7 @@ class HostRepository:
         ``docker compose up`` working with no registration step while still
         letting an operator reconfigure the local host afterwards.
         """
-        now = datetime.now()
+        now = utc_now()
         name = host["name"]
         on_insert = {k: v for k, v in host.items() if k != "name"}
         on_insert.setdefault("status", EnumHostStatus.OFFLINE.value)
@@ -312,7 +313,7 @@ class HostRepository:
         oid = _oid(host_id)
         if oid is None:
             return False
-        now = datetime.now()
+        now = utc_now()
         update: dict[str, Any] = {
             "$set": {
                 "status": status.value,
@@ -352,7 +353,7 @@ class HostRepository:
             return False
         with self.connection.connect() as db:
             res = db[HOSTS_COLLECTION].update_one(
-                {"_id": oid}, {"$set": {field: datetime.now()}})
+                {"_id": oid}, {"$set": {field: utc_now()}})
             return res.matched_count > 0
 
     def clear_request(self, host_id: Any, field: str, requested_at: datetime) -> bool:
@@ -371,7 +372,7 @@ class HostRepository:
         oid = _oid(host_id)
         if oid is None:
             return False
-        now = datetime.now()
+        now = utc_now()
         with self.connection.connect() as db:
             res = db[HOSTS_COLLECTION].update_one(
                 {"_id": oid},
@@ -598,7 +599,7 @@ class CoojaResourceRepository:
         oid = _oid(resource_id)
         if oid is None:
             return None
-        now = datetime.now()
+        now = utc_now()
         with self.connection.connect() as db:
             return db[RESOURCES_COLLECTION].find_one_and_update(
                 {
@@ -633,7 +634,7 @@ class CoojaResourceRepository:
         oid = _oid(resource_id)
         if oid is None:
             return False
-        now = datetime.now()
+        now = utc_now()
         with self.connection.connect() as db:
             res = db[RESOURCES_COLLECTION].update_one(
                 {
@@ -684,7 +685,7 @@ class CoojaResourceRepository:
         oid = _oid(resource_id)
         if oid is None:
             return None
-        now = datetime.now()
+        now = utc_now()
         pipeline = [{"$set": {
             "status": released_status_expression(
                 container_state_counts=container_state_counts),
@@ -763,7 +764,7 @@ class CoojaResourceRepository:
         oid = _oid(resource_id)
         if oid is None:
             return False
-        now = datetime.now()
+        now = utc_now()
         pipeline = [{"$set": {
             "status": released_status_expression(
                 container_state_counts=container_state_counts),
@@ -805,7 +806,7 @@ class CoojaResourceRepository:
         oid = _oid(resource_id)
         if oid is None:
             return False
-        now = datetime.now()
+        now = utc_now()
         with self.connection.connect() as db:
             res = db[RESOURCES_COLLECTION].update_one(
                 # Reserved and busy are absent from _REASSIGNABLE: a failing
@@ -843,7 +844,7 @@ class CoojaResourceRepository:
         oid = _oid(host_id)
         if oid is None:
             return 0
-        now = datetime.now()
+        now = utc_now()
         with self.connection.connect() as db:
             res = db[RESOURCES_COLLECTION].update_many(
                 {"host_id": oid},
@@ -860,7 +861,7 @@ class CoojaResourceRepository:
         oid = _oid(resource_id)
         if oid is None:
             return False
-        now = datetime.now()
+        now = utc_now()
         updates: dict[str, Any] = {"enabled": enabled, "updated_time": now}
         with self.connection.connect() as db:
             if not enabled:
@@ -876,7 +877,7 @@ class CoojaResourceRepository:
         oid = _oid(resource_id)
         if oid is None:
             return False
-        now = datetime.now()
+        now = utc_now()
         with self.connection.connect() as db:
             res = db[RESOURCES_COLLECTION].update_one(
                 {"_id": oid},
@@ -915,7 +916,7 @@ class CoojaResourceRepository:
         Returns the names affected, keyed by ``created``/``updated``/
         ``missing``/``missing_occupied``.
         """
-        now = datetime.now()
+        now = utc_now()
         endpoints = endpoints or {}
         seen: list[str] = []
         created: list[str] = []
@@ -1046,7 +1047,7 @@ class CoojaResourceRepository:
         Starts ``offline`` like a discovered one: being registered is not
         evidence that it works, and the SSH probe is what puts it in the pool.
         """
-        now = datetime.now()
+        now = utc_now()
         doc = {
             **resource,
             "origin": "manual",
@@ -1089,7 +1090,7 @@ class CoojaResourceRepository:
         payload = {k: v for k, v in updates.items() if k not in protected}
         if not payload:
             return False
-        payload["updated_time"] = datetime.now()
+        payload["updated_time"] = utc_now()
         if "connection" in payload or "endpoint" in payload:
             # Configuring how a worker is reached takes ownership of it, even
             # if it first appeared through discovery. `origin` then means "who
@@ -1241,7 +1242,7 @@ class InfraCryptoRepository:
         fingerprint: str,
         retired_key_ids: Optional[list[str]] = None,
     ) -> None:
-        now = datetime.now()
+        now = utc_now()
         with self.connection.connect() as db:
             db[CRYPTO_COLLECTION].update_one(
                 {"_id": self.DOC_ID},

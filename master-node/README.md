@@ -1,29 +1,51 @@
 # master-node
 
-The **master-node** is the simulation execution orchestrator in SimLab. It bridges MongoDB (where experiments and generations are defined) and a pool of [Cooja](https://github.com/contiki-ng/cooja) simulator containers, managing the full lifecycle of every simulation job: queuing, file transfer, execution, log collection, metric extraction, and status reporting.
+The **master-node** is the simulation execution orchestrator in SimLab. It
+bridges MongoDB (where experiments and generations are defined) and a pool of
+[Cooja](https://github.com/contiki-ng/cooja) simulator containers — on this
+machine and on other hosts — managing the full lifecycle of every simulation
+job: placement, file transfer, execution, log collection, metric extraction and
+status reporting.
+
+Containers are **not** a fixed list of worker threads any more. The master-node
+keeps an inventory of *hosts*, each with its own Cooja *workers*, measures
+them, and places each simulation on the host carrying the fewest active
+simulations. [RECURSOS_DISTRIBUIDOS.md](../docs/markdown/RECURSOS_DISTRIBUIDOS.md)
+describes that design in full; this file is about the process.
 
 ---
 
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                          master-node                            │
-│                                                                 │
-│  ┌──────────────┐    shared     ┌─────────────────────────────┐ │
-│  │  mongowatch  │──────queue───▶│  simulation_worker (×N)     │ │
-│  │  (thread)    │               │  - prepare files            │ │
-│  └──────────────┘               │  - SSH/SCP transfer         │ │
-│         ▲                       │  - run Cooja                │ │
-│         │                       │  - collect logs & metrics   │ │
-│  MongoDB Change                 └──────────────┬──────────────┘ │
-│  Stream (WAITING                               │                │
-│  generations)                                  │ mark done/error│
-│                                                ▼                │
-│                                  MongoDB (simulations,          │
-│                                  generations, GridFS)           │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                             master-node                              │
+│                                                                      │
+│  change stream ─▶ ┌────────────┐   decides where   ┌──────────────┐  │
+│  (WAITING sims)   │ dispatcher │──────────────────▶│ runner × N   │  │
+│                   │ (1 thread) │   reserves a      │ (one thread  │  │
+│                   └────────────┘   container       │  per run)    │  │
+│                         ▲                          └──────┬───────┘  │
+│                         │ capacity                        │          │
+│                   ┌─────┴──────┐                          │ transport│
+│                   │   health   │ measures hosts and       │ (1 or 2  │
+│                   │  monitor   │ workers, frees stale     │  SSH     │
+│                   └────────────┘ reservations, reconciles │  hops)   │
+│                                  unwatched runs           ▼          │
+└──────────────────────────────────────────────────────────────────────┘
+                                   │                  Cooja container
+                                   ▼                  (local or remote)
+                    MongoDB: simulations, generations,
+                    hosts, cooja_resources, GridFS
 ```
+
+Three threads, with one job each:
+
+| Thread | Responsibility |
+|---|---|
+| **dispatcher** | Serialised placement. One decision at a time, which is what makes the load balance correct. |
+| **runner** (one per run) | Executes one simulation on one reserved container and gives it back. |
+| **health monitor** | Measures hosts and workers, frees reservations that never started, and reconciles runs nobody is following. |
 
 ---
 
@@ -32,11 +54,25 @@ The **master-node** is the simulation execution orchestrator in SimLab. It bridg
 When `master-node.py` starts:
 
 1. **Load settings** from environment variables.
-2. **Recover stuck simulations** — any simulation left in `RUNNING` from a previous crash is marked `ERROR`, and its generation is re-evaluated.
-3. **Start N worker threads** — one per Cooja container.
-4. **Drain the pending queue** — all simulations already in `WAITING` state are enqueued immediately.
-5. **Start the watcher thread** — listens to MongoDB Change Streams for new `WAITING` generations and enqueues their simulations in real time.
-6. **Block** on the main thread (keyboard interrupt exits cleanly).
+2. **Load the keystore** and publish its public key, so the GUI can seal
+   credentials that only this process can open.
+3. **Bootstrap the local host** — its containers are seeded from
+   `NUMBER_OF_CONTAINERS` on first start, insert-only, so nothing an operator
+   changed is undone. Discovery takes over afterwards.
+4. **Reconcile occupied containers** — anything still held from a previous
+   process is probed: a run still going is *adopted* and followed, one that
+   finished has its result collected, and only one that left nothing behind is
+   failed. This is why killing the master-node does not destroy running work.
+5. **Recover abandoned simulations** — those marked `RUNNING` that no
+   container holds. After the reconciliation, and only for what it did not
+   cover.
+6. **Run the first health cycle, synchronously** — forced, so the pool the
+   dispatcher starts from was measured by *this* process rather than inherited
+   from the one that ended.
+7. **Start the health and dispatcher threads.**
+8. **Drain the pending queue** — every simulation already `WAITING`.
+9. **Start the change-stream watcher** for simulations entering `WAITING`.
+10. **Block** on the main thread (keyboard interrupt exits cleanly).
 
 ---
 
@@ -49,29 +85,44 @@ The entry point. Holds the `Settings` dataclass, all core functions, and `main()
 | Function | Responsibility |
 |---|---|
 | `Settings.from_env()` | Reads all configuration from environment variables |
-| `recover_stuck_simulations()` | Marks crashed RUNNING simulations as ERROR on startup |
-| `prepare_simulation_files()` | Downloads `.csc`, `.dat`, and source files from GridFS to a temp dir |
-| `run_cooja_simulation()` | Executes Cooja via SSH, tails stdout/stderr, retrieves the log |
-| `simulation_worker()` | Thread loop: dequeues a simulation, runs it (real or synthetic mode) |
-| `start_workers()` | Spawns N worker threads, one per container |
-| `load_initial_waiting_jobs()` | Enqueues all WAITING simulations present at startup |
+| `recover_abandoned_simulations()` | Fails the `RUNNING` simulations that **no container holds**. Runs *after* the reconciliation, which is what keeps the clock from overruling a probe |
+| `prepare_simulation_files()` | Downloads `.csc`, `.dat` and source files from GridFS to a temp dir |
+| `run_cooja_simulation()` | Launches Cooja, follows it, collects its artifacts, and **reports**: it writes no simulation state — the runner decides what the outcome means |
+| `build_liveness_probe()` | Asks a container what became of a recorded run: alive, finished with an exit code, gone, or no answer |
+| `load_initial_waiting_jobs()` | Enqueues all `WAITING` simulations present at startup |
 | `_check_and_close_generation()` | After each simulation completes, checks if the whole generation is DONE or ERROR |
 | `main()` | Orchestrates startup, watcher, and main loop |
 
-### `lib/mongowatch.py`
+### `lib/scheduler/`
 
-Wraps the MongoDB Change Stream subscription for generations.
+`policy` is the placement decision as a pure function over the inventory;
+`inventory` is the snapshot it reads; `dispatcher` is the single-threaded loop
+that applies it; `runner` executes one placed simulation and owns every
+decision about its outcome.
 
-- Watches the `generations` collection for documents that transition to `WAITING`.
-- For each event, fetches all pending simulations of that generation and puts them on the shared queue.
-- Marks the generation as `RUNNING` once its simulations are enqueued.
+### `lib/transport/`
 
-### `lib/sshscp.py`
+How a container is reached: `plan` resolves where to go, `ssh` is the only
+implementation (one hop for a local container, two for one on another host),
+`hostkey` is the trust policy, `pool` keeps the first hop from being opened
+once per worker, and `factory` composes a transport from the stored records.
 
-Thin wrappers around Paramiko and SCP:
+### `lib/health.py`
 
-- `create_ssh_client()` — opens an SSH connection to a Cooja container.
-- `send_files_scp()` — transfers local files to the container's working directory.
+The measuring cycle: Docker says whether a container exists, an SSH probe says
+whether it can actually run a simulation, and both must agree before a worker
+enters the pool.
+
+### `lib/detached.py`
+
+Launching Cooja in its own session so the JVM outlives a dropped connection,
+and following it by polling. This is what lets a simulation survive a
+master-node restart.
+
+### `lib/recovery.py`
+
+Deciding what to do with containers still held from a previous process, and
+with runs nobody is following.
 
 ### `lib/synthetic_data.py`
 
@@ -114,30 +165,38 @@ coordinates, excluding the fixed sink) is normalized to `[0,1]ⁿ` via
 
 ```mermaid
 flowchart TD
-    START([master-node starts]) --> RECOVER[Recover stuck simulations\nRUNNING → ERROR]
-    RECOVER --> WORKERS[Start N worker threads\none per Cooja container]
-    WORKERS --> DRAIN[Enqueue all WAITING\nsimulations from DB]
-    DRAIN --> WATCH[Start mongowatch thread\nChange Stream on generations]
+    START([master-node starts]) --> BOOT[Seed the local host\ninsert-only]
+    BOOT --> RECONCILE[Reconcile held containers\nadopt, collect, or free]
+    RECONCILE --> ABANDONED[Fail RUNNING sims\nno container holds]
+    ABANDONED --> FIRST[First health cycle\nforced, synchronous]
+    FIRST --> THREADS[Start health + dispatcher]
+    THREADS --> DRAIN[Enqueue all WAITING\nsimulations from DB]
+    DRAIN --> WATCH[Start the change-stream watcher\non simulations]
     WATCH --> IDLE([Main thread sleeps\nwaiting for interrupt])
 
-    %% mongowatch path
-    WATCH -->|New WAITING generation| ENQUEUE[Fetch pending simulations\nfor that generation]
-    ENQUEUE --> MARK_RUN_GEN[Mark generation RUNNING]
-    MARK_RUN_GEN --> QUEUE[(Shared simulation queue)]
+    %% change stream path
+    WATCH -->|Simulation enters WAITING| QUEUE[(Dispatcher queue)]
 
-    %% worker path
+    %% placement
     QUEUE -->|sim dequeued| SYNTH{synthetic mode?\nper-experiment config,\nelse ENABLE_DATA_SYNTHETIC}
     SYNTH -->|yes| BENCH[Run benchmark function\nDTLZ2 / ZDT1 / SCH1]
     BENCH --> DONE_SIM
 
-    SYNTH -->|no| PREP[prepare_simulation_files\nDownload .csc + .dat +\nsource files from GridFS]
+    SYNTH -->|no| PLACE{a host with\na free container?}
+    PLACE -->|no| HOLD[Hold the job\nand wait for capacity]
+    HOLD --> QUEUE
+    PLACE -->|yes| RESERVE[Reserve it atomically\nrecord host, worker, attempt]
+
+    RESERVE --> PREP[prepare_simulation_files\nDownload .csc + .dat +\nsource files from GridFS]
     PREP -->|download failed| ERR_PREP[mark_error simulation]
     ERR_PREP --> CLOSE_GEN
 
-    PREP -->|ok| SCP[Send files via SCP\nto Cooja container]
-    SCP --> SSH[SSH: run Cooja JAR\n--no-gui simulation.csc]
-    SSH --> MONITOR[Monitor stdout/stderr\nuntil process exits]
-    MONITOR --> GETLOG[SCP: retrieve COOJA.testlog]
+    PREP -->|ok| OWNS{still holds\nthe container?}
+    OWNS -->|no| REQUEUE[Stop the run\nand re-queue the simulation]
+    OWNS -->|yes| SCP[Send files via SCP\n1 hop local, 2 hops remote]
+    SCP --> SSH[Launch Cooja detached\nsetsid + own session]
+    SSH --> MONITOR[Poll until it ends\nreconnecting if the link drops]
+    MONITOR --> GETLOG[SCP: retrieve COOJA.testlog\nretried over a new session]
     GETLOG --> UPLOAD_LOG[Upload log to GridFS]
     UPLOAD_LOG --> CONVERT[Convert log → CSV\ncooja_files.convert_cooja_log_to_csv]
     CONVERT --> UPLOAD_CSV[Upload CSV to GridFS]
@@ -147,8 +206,9 @@ flowchart TD
     METRICS -->|no| ERR_CSV[mark_error simulation\nCSV missing or empty]
     ERR_CSV --> CLOSE_GEN
 
-    DONE_SIM --> CLEANUP[Delete local temp files]
-    CLEANUP --> CLOSE_GEN[_check_and_close_generation]
+    DONE_SIM --> CLEANUP[Clear the run's remote artifacts\nand the local temp files]
+    CLEANUP --> RELEASE[Release the container\nguarded by the attempt]
+    RELEASE --> CLOSE_GEN[close_if_finished]
 
     CLOSE_GEN --> ALL_DONE{All simulations\nDONE?}
     ALL_DONE -->|yes| GEN_DONE[mark_done generation\n→ triggers mo-engine\nChange Stream]
@@ -163,7 +223,7 @@ flowchart TD
 ```mermaid
 stateDiagram-v2
     [*] --> WAITING : inserted by mo-engine
-    WAITING --> RUNNING : mongowatch enqueues simulations
+    WAITING --> RUNNING : the dispatcher places its simulations
     RUNNING --> DONE : all simulations DONE
     RUNNING --> ERROR : no active simulations left\nbut at least one ERROR
 ```
@@ -176,12 +236,23 @@ stateDiagram-v2
 |---|---|---|
 | `MONGO_URI` | `mongodb://localhost:27017/?replicaSet=rs0` | MongoDB connection string (replica set required for Change Streams) |
 | `DB_NAME` | `simlab` | Database name |
-| `IS_DOCKER` | `false` | If `true`, hostnames are `cooja1..coojaΝ` on port 22; otherwise `localhost` on ports `2231+i` |
-| `NUMBER_OF_CONTAINERS` | `3` | Number of Cooja containers (= number of worker threads) |
-| `SIM_TIMEOUT_SEC` | `3600` | SSH command timeout and stuck-simulation cutoff in seconds. Set to `0` to disable recovery |
+| `IS_DOCKER` | `false` | If `true`, seeded hostnames are `cooja1..coojaN` on port 22; otherwise `localhost` on ports `2231+i` |
+| `NUMBER_OF_CONTAINERS` | `8` | How many local containers to **seed** on first start. Not a thread count any more: the pool comes from the inventory, and discovery maintains it |
+| `SIM_TIMEOUT_SEC` | `3600` | How long one simulation may run, and the cutoff for recovering one left `RUNNING` with no container holding it. `0` disables both |
+| `SCHED_POLICY` | `least_loaded_host` | Placement policy. The load is the **absolute count** of active simulations per host, not a utilisation ratio |
+| `RUN_POLL_INTERVAL_SEC` | `5` | How often a running simulation is checked on. One cheap round trip each time |
+| `INFRA_CHECK_INTERVAL_SEC` | `30` | Health cycle interval |
+| `INFRA_FAILURE_THRESHOLD` | `3` | Consecutive failures before a host leaves the pool. Capacity is slow to lose and quick to regain |
+| `RESERVATION_TTL_SEC` | `600` | How long a container may stay reserved without its simulation starting. Covers only that window — a run that got as far as `busy` is governed by `SIM_TIMEOUT_SEC` |
+| `INFRA_KEY_PATH` | `/run/secrets/simlab-infra/x25519.json` | The keystore that opens sealed credentials. The private half never leaves this process |
+| `COOJA_JVM_XMS` / `COOJA_JVM_XMX` | `1g` / `2g` | JVM heap for Cooja |
 | `ENABLE_DATA_SYNTHETIC` | `false` | Replace Cooja execution with a benchmark function for experiments without a per-experiment `synthetic` block (only affects simulations that reach the master-node — P0 experiments are evaluated in-process by the mo-engine) |
 | `BENCH` | `DTLZ2` | Benchmark to use in synthetic mode: `DTLZ2`, `ZDT1`, or `SCH1` |
 | `NOISE_STD` | `0.0` | Standard deviation of Gaussian noise added to synthetic objectives |
+
+> These are read by the Python process. Adding one to `.env` does **not** reach
+> the service unless it is also listed in the `environment:` block of the
+> master-node service in `docker-compose.yaml`.
 
 ---
 
@@ -189,10 +260,28 @@ stateDiagram-v2
 
 ```
 master-node/
-├── master-node.py          # Entry point and core orchestration logic
+├── master-node.py          # Entry point: settings, startup sequence, the
+│                           #   execution of one simulation
 └── lib/
-    ├── mongowatch.py       # MongoDB Change Stream watcher for generations
-    ├── sshscp.py           # SSH/SCP helpers (Paramiko)
+    ├── scheduler/
+    │   ├── policy.py       # Where a simulation goes, as a pure function
+    │   ├── inventory.py    # The snapshot the policy reads
+    │   ├── dispatcher.py   # The single-threaded loop that places work
+    │   └── runner.py       # Runs one placed simulation; owns the outcome
+    ├── transport/
+    │   ├── plan.py         # Which address, one hop or two
+    │   ├── ssh.py          # The transport itself, with the tunnel
+    │   ├── hostkey.py      # Trust on first use, and refusing a change
+    │   ├── pool.py         # One first hop per host per cycle
+    │   ├── session.py      # A session on a host, with no container
+    │   └── factory.py      # Composes a transport from the stored records
+    ├── dockerctl/          # Asking Docker what containers exist
+    ├── health.py           # The measuring cycle and the stale sweep
+    ├── detached.py         # Launching Cooja so it outlives the connection
+    ├── recovery.py         # What to do with containers still held
+    ├── discovery.py        # Reconciling the inventory with Docker
+    ├── credentials.py      # Opening sealed secrets; never logging them
+    ├── bootstrap.py        # Seeding the local host, insert-only
     └── synthetic_data.py   # Benchmark-based simulation replacement
 ```
 
@@ -212,6 +301,21 @@ master-node/
 | Service | How it interacts |
 |---|---|
 | **mo-engine** | Inserts `Generation` documents with status `WAITING`, which triggers the Change Stream watcher |
-| **MongoDB** | Persistence for simulations, generations, and file storage (GridFS) |
-| **Cooja containers** | Receives simulation files via SCP, runs Cooja, returns `COOJA.testlog` |
-| **rest-api** | Reads simulation and generation status written by master-node; no direct communication |
+| **MongoDB** | Persistence for simulations, generations, the host and worker inventory, and file storage (GridFS) |
+| **Cooja containers** | Receive simulation files over SCP, run Cooja, return `COOJA.testlog`. Local ones are reached directly; those on another host through a `direct-tcpip` channel on the host's own SSH session, so no container port has to be published |
+| **rest-api** | Reads what the master-node measures and writes. It records *requests* for a check or a discovery — it has neither a route to the container network nor the key that opens a credential, so the work happens here |
+| **Docker** | Asked what containers exist: over the mounted socket for the local host, over the host's SSH session for a remote one |
+
+---
+
+## Credentials
+
+A host's SSH credential is sealed in the browser against this process's public
+key and stored sealed. The private half lives only here, in
+`INFRA_KEY_PATH`, and the API has no way to open one — deliberately, and
+there is a test that sabotages the crypto library in `sys.modules` to prove
+the API does not depend on it.
+
+A host key is pinned on first contact and a change afterwards refuses the
+connection, with the message naming how to clear it if the host was
+legitimately rebuilt.

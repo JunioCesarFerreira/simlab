@@ -97,9 +97,7 @@ export function probeLevel(resource: ResourceDto): LevelView {
     return {
       label: "no Cooja build",
       tone: "bad",
-      title:
-        probe.message ||
-        "It answers, but no cooja.jar was found where it is expected",
+      title: probe.message || "It answers, but no cooja.jar was found where it is expected",
     };
   }
   if (probe.java_ok === false) {
@@ -109,9 +107,7 @@ export function probeLevel(resource: ResourceDto): LevelView {
     return {
       label: "no Java",
       tone: "bad",
-      title:
-        probe.message ||
-        "The Cooja build is there, but the JVM that launches it did not run",
+      title: probe.message || "The Cooja build is there, but the JVM that launches it did not run",
     };
   }
   return {

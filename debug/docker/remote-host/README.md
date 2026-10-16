@@ -103,9 +103,19 @@ whose generation holds 6 simulations and watch where they land:
 watch -n 2 'python util/register_host.py list'
 ```
 
-The expected outcome is **3 and 3** with two hosts, or **2/2/2** once a third
-is registered — balanced by count of active simulations, not in proportion to
-how many containers each host has. The master-node log states each decision:
+The expected outcome is **4 and 2** with these two hosts: the policy balances
+by *count* of active simulations, so placements alternate until this host's two
+containers are full, and the remaining four go to the local host because
+nothing else can take them. It is not 3 and 3 — that would need three free
+containers here, and there are two.
+
+With a third host of two containers the first six do land **2/2/2**.
+
+The distinction worth keeping in mind while reading the output: these are
+*simultaneous* occupancies. Cumulative counts over a whole generation look
+different, because a container that finishes takes the next job.
+
+The master-node log states each decision:
 
 ```
 Placed 65b0… on remote-sim/rcooja1 (attempt 7f3a…) — local[2a/6f] remote-sim[1a/1f]

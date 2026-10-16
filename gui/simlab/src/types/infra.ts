@@ -34,20 +34,9 @@ export interface PublicKeyDto {
   retired_key_ids: string[];
 }
 
-export type HostStatus =
-  | "online"
-  | "degraded"
-  | "offline"
-  | "misconfigured"
-  | "disabled";
+export type HostStatus = "online" | "degraded" | "offline" | "misconfigured" | "disabled";
 
-export type ResourceStatus =
-  | "available"
-  | "reserved"
-  | "busy"
-  | "offline"
-  | "error"
-  | "disabled";
+export type ResourceStatus = "available" | "reserved" | "busy" | "offline" | "error" | "disabled";
 
 export type AddressMode =
   | "container_ip"

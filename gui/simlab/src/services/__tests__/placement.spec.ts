@@ -6,11 +6,7 @@
  * the machine. These pin the readings the page depends on.
  */
 import { describe, expect, it } from "vitest";
-import {
-  countByHost,
-  placementLabel,
-  ranInTheSamePlace,
-} from "../placement";
+import { countByHost, placementLabel, ranInTheSamePlace } from "../placement";
 import type { PlacementDto, SimulationDto } from "../../types/simlab";
 
 function placement(overrides: Partial<PlacementDto> = {}): PlacementDto {
@@ -64,8 +60,7 @@ describe("ranInTheSamePlace", () => {
     const b = placement({ container_id: null });
 
     expect(ranInTheSamePlace(a, b)).toBe(true);
-    expect(ranInTheSamePlace(a, placement({ container_id: null, host_name: "vm7" })))
-      .toBe(false);
+    expect(ranInTheSamePlace(a, placement({ container_id: null, host_name: "vm7" }))).toBe(false);
   });
 
   it("an unplaced run is nowhere, not somewhere", () => {

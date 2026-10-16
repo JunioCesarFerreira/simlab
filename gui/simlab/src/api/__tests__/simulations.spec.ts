@@ -26,7 +26,10 @@ describe("getSimulationsByIndividual", () => {
   });
 
   it("returns the simulations as received", async () => {
-    const data = [{ id: "s1", random_seed: 123456 }, { id: "s2", random_seed: 336157 }];
+    const data = [
+      { id: "s1", random_seed: 123456 },
+      { id: "s2", random_seed: 336157 },
+    ];
     vi.mocked(client.get).mockResolvedValue({ data });
 
     const found = await getSimulationsByIndividual("abc123hash", "exp1");

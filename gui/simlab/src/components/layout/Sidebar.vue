@@ -40,18 +40,22 @@
     </div>
 
     <div class="sidebar-footer">
-      <button class="theme-toggle" :title="isDark ? 'Switch to light mode' : 'Switch to dark mode'" @click="toggle">
-        <span class="toggle-icon">{{ isDark ? '☀' : '🌙' }}</span>
-        <span class="toggle-label">{{ isDark ? 'Light mode' : 'Dark mode' }}</span>
+      <button
+        class="theme-toggle"
+        :title="isDark ? 'Switch to light mode' : 'Switch to dark mode'"
+        @click="toggle"
+      >
+        <span class="toggle-icon">{{ isDark ? "☀" : "🌙" }}</span>
+        <span class="toggle-label">{{ isDark ? "Light mode" : "Dark mode" }}</span>
       </button>
     </div>
   </nav>
 </template>
 
 <script setup lang="ts">
-import { useTheme } from '../../composables/useTheme'
+import { useTheme } from "../../composables/useTheme";
 
-const { isDark, toggle } = useTheme()
+const { isDark, toggle } = useTheme();
 </script>
 
 <style scoped>
@@ -102,7 +106,9 @@ const { isDark, toggle } = useTheme()
   font-size: 14px;
   font-weight: 500;
   color: var(--color-text-muted);
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .nav-link:hover {
@@ -145,7 +151,9 @@ const { isDark, toggle } = useTheme()
   font-size: 14px;
   font-weight: 500;
   color: var(--color-text-muted);
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
   cursor: pointer;
 }
 

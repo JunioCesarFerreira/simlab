@@ -28,15 +28,10 @@ export function placementLabel(placement?: PlacementDto | null): string {
  * different machines. Falls back to host and worker, which is all an older
  * record carries.
  */
-export function ranInTheSamePlace(
-  a?: PlacementDto | null,
-  b?: PlacementDto | null,
-): boolean {
+export function ranInTheSamePlace(a?: PlacementDto | null, b?: PlacementDto | null): boolean {
   if (!a || !b) return false;
   if (a.container_id && b.container_id) return a.container_id === b.container_id;
-  return (
-    a.host_name === b.host_name && a.resource_name === b.resource_name
-  );
+  return a.host_name === b.host_name && a.resource_name === b.resource_name;
 }
 
 /** How many runs each host took, for reading a generation at a glance. */

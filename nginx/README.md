@@ -147,7 +147,7 @@ still works while nothing is reachable off-box:
 | cAdvisor | `127.0.0.1:8080` | `ssh -L 8080:localhost:8080 <vm>` |
 | MongoDB | `127.0.0.1:27017` | `ssh -L 27017:localhost:27017 <vm>` |
 | mo-engine / master-node SSH | `127.0.0.1:2219`, `:2220` | `ssh -J <vm> ...` |
-| cooja1–16 SSH | `127.0.0.1:2231`–`:2246` | `ssh -J <vm> ...` |
+| cooja SSH (one port per container) | `127.0.0.1:2231`+ | `ssh -J <vm> ...` |
 
 Known gaps that this proxy does **not** close:
 

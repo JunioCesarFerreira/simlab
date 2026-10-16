@@ -30,13 +30,17 @@ function worker(overrides: Partial<ResourceDto> = {}): ResourceDto {
     name: "vm7-cooja1",
     status: "available",
     enabled: true,
-    container: { id: "", name: "", image: "", state: "running",
-                 checked_at: "2026-10-12T20:00:00" },
+    container: { id: "", name: "", image: "", state: "running", checked_at: "2026-10-12T20:00:00" },
     endpoint: { address: "localhost", port: 2222 },
     connection: {},
     remote_dir: "/opt/contiki-ng/tools/cooja",
-    probe: { ssh_ok: true, java_version: "openjdk 21", cooja_jar_sha256: "a".repeat(64),
-             checked_at: "2026-10-12T20:00:00", message: "ready" },
+    probe: {
+      ssh_ok: true,
+      java_version: "openjdk 21",
+      cooja_jar_sha256: "a".repeat(64),
+      checked_at: "2026-10-12T20:00:00",
+      message: "ready",
+    },
     current_simulation_id: null,
     remote_pid: null,
     reserved_at: null,
@@ -65,32 +69,53 @@ describe("who decided how a worker is reached", () => {
 describe("the Docker level", () => {
   it("is not a failure when the address was configured", () => {
     // What the operator saw: "missing" in red on a worker that was working.
-    const view = dockerLevel(worker({
-      container: { id: "", name: "", image: "", state: "missing",
-                   checked_at: "2026-10-12T20:00:00" },
-      connection: { username: "root", port: 2222 },
-    }));
+    const view = dockerLevel(
+      worker({
+        container: {
+          id: "",
+          name: "",
+          image: "",
+          state: "missing",
+          checked_at: "2026-10-12T20:00:00",
+        },
+        connection: { username: "root", port: 2222 },
+      }),
+    );
     expect(view.label).toBe("not used");
     expect(view.tone).toBe("unknown");
     expect(view.title).toContain("configured by hand");
   });
 
   it("says the same for a manually registered worker", () => {
-    const view = dockerLevel(worker({
-      origin: "manual",
-      container: { id: "", name: "", image: "", state: "missing",
-                   checked_at: "2026-10-12T20:00:00" },
-    }));
+    const view = dockerLevel(
+      worker({
+        origin: "manual",
+        container: {
+          id: "",
+          name: "",
+          image: "",
+          state: "missing",
+          checked_at: "2026-10-12T20:00:00",
+        },
+      }),
+    );
     expect(view.label).toBe("not used");
   });
 
   it("still flags a stopped container that Docker does manage", () => {
     // Kept where it means something: nobody configured this worker, so
     // Docker's verdict is the only word on whether it exists.
-    const view = dockerLevel(worker({
-      container: { id: "", name: "", image: "", state: "exited",
-                   checked_at: "2026-10-12T20:00:00" },
-    }));
+    const view = dockerLevel(
+      worker({
+        container: {
+          id: "",
+          name: "",
+          image: "",
+          state: "exited",
+          checked_at: "2026-10-12T20:00:00",
+        },
+      }),
+    );
     expect(view.label).toBe("exited");
     expect(view.tone).toBe("bad");
   });
@@ -101,9 +126,11 @@ describe("the Docker level", () => {
   });
 
   it("distinguishes not-yet-asked from a negative answer", () => {
-    const view = dockerLevel(worker({
-      container: { id: "", name: "", image: "", state: "", checked_at: null },
-    }));
+    const view = dockerLevel(
+      worker({
+        container: { id: "", name: "", image: "", state: "", checked_at: null },
+      }),
+    );
     expect(view.tone).toBe("unknown");
     expect(view.title).toContain("not been asked");
   });
@@ -118,22 +145,43 @@ describe("the SSH probe level", () => {
 
   it("distinguishes unreachable from present-but-without-Cooja", () => {
     // Different fixes, so one combined badge would hide which.
-    expect(probeLevel(worker({
-      probe: { ssh_ok: false, java_version: null, cooja_jar_sha256: null,
-               checked_at: "2026-10-12T20:00:00", message: "timed out" },
-    })).label).toBe("unreachable");
+    expect(
+      probeLevel(
+        worker({
+          probe: {
+            ssh_ok: false,
+            java_version: null,
+            cooja_jar_sha256: null,
+            checked_at: "2026-10-12T20:00:00",
+            message: "timed out",
+          },
+        }),
+      ).label,
+    ).toBe("unreachable");
 
-    expect(probeLevel(worker({
-      probe: { ssh_ok: true, java_version: "21", cooja_jar_sha256: null,
-               checked_at: "2026-10-12T20:00:00", message: "cooja.jar not found" },
-    })).label).toBe("no Cooja build");
+    expect(
+      probeLevel(
+        worker({
+          probe: {
+            ssh_ok: true,
+            java_version: "21",
+            cooja_jar_sha256: null,
+            checked_at: "2026-10-12T20:00:00",
+            message: "cooja.jar not found",
+          },
+        }),
+      ).label,
+    ).toBe("no Cooja build");
   });
 
   it("says nothing has been attempted yet", () => {
-    expect(probeLevel(worker({
-      probe: { ssh_ok: false, java_version: null, cooja_jar_sha256: null,
-               checked_at: null },
-    })).label).toBe("not probed");
+    expect(
+      probeLevel(
+        worker({
+          probe: { ssh_ok: false, java_version: null, cooja_jar_sha256: null, checked_at: null },
+        }),
+      ).label,
+    ).toBe("not probed");
   });
 
   it("carries the build details for a mixed-pool check", () => {
@@ -150,10 +198,12 @@ describe("what a row shows about a worker", () => {
   });
 
   it("only what it overrides, never what it inherits", () => {
-    const summary = overrideSummary(worker({
-      origin: "manual",
-      connection: { username: "cooja", secret: { has_secret: true } },
-    }));
+    const summary = overrideSummary(
+      worker({
+        origin: "manual",
+        connection: { username: "cooja", secret: { has_secret: true } },
+      }),
+    );
     expect(summary).toBe("user cooja · own credential · configured");
     // A worker that differs in nothing says nothing.
     expect(overrideSummary(worker())).toBe("");
@@ -273,8 +323,12 @@ describe("a build without a runtime", () => {
 
   it("a missing jar is still reported as that", () => {
     const level = probeLevel(
-      withProbe({ ssh_ok: true, cooja_jar_sha256: null, java_ok: false,
-                  checked_at: "2026-10-15T00:00:00" }),
+      withProbe({
+        ssh_ok: true,
+        cooja_jar_sha256: null,
+        java_ok: false,
+        checked_at: "2026-10-15T00:00:00",
+      }),
     );
 
     expect(level.label).toBe("no Cooja build");
@@ -284,8 +338,11 @@ describe("a build without a runtime", () => {
     // It was written before the JVM was part of the verdict; the health cycle
     // re-measures it rather than the page guessing.
     const level = probeLevel(
-      withProbe({ ssh_ok: true, cooja_jar_sha256: "a".repeat(64),
-                  checked_at: "2026-10-15T00:00:00" }),
+      withProbe({
+        ssh_ok: true,
+        cooja_jar_sha256: "a".repeat(64),
+        checked_at: "2026-10-15T00:00:00",
+      }),
     );
 
     expect(level.label).toBe("ready");

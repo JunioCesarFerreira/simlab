@@ -60,7 +60,10 @@ describe("sealing a credential", () => {
   });
 
   it.each([
-    ["an OpenSSH private key", "-----BEGIN OPENSSH PRIVATE KEY-----\nb3Blbg==\n-----END OPENSSH PRIVATE KEY-----"],
+    [
+      "an OpenSSH private key",
+      "-----BEGIN OPENSSH PRIVATE KEY-----\nb3Blbg==\n-----END OPENSSH PRIVATE KEY-----",
+    ],
     ["a password with accents", "senha com acento: ção"],
     ["a single character", "x"],
     ["the maximum size", "a".repeat(MAX_PLAINTEXT_BYTES)],
@@ -82,28 +85,28 @@ describe("sealing a credential", () => {
   });
 
   it("refuses one that is too large", async () => {
-    await expect(
-      sealSecret("a".repeat(MAX_PLAINTEXT_BYTES + 1), PUBLIC_KEY),
-    ).rejects.toThrow(/larger than/);
+    await expect(sealSecret("a".repeat(MAX_PLAINTEXT_BYTES + 1), PUBLIC_KEY)).rejects.toThrow(
+      /larger than/,
+    );
   });
 
   it("refuses a key published for another algorithm", async () => {
     // Better than silently sealing with something the other side cannot open.
-    await expect(
-      sealSecret("x", { ...PUBLIC_KEY, alg: "aes-gcm" }),
-    ).rejects.toThrow(/cannot seal against/);
+    await expect(sealSecret("x", { ...PUBLIC_KEY, alg: "aes-gcm" })).rejects.toThrow(
+      /cannot seal against/,
+    );
   });
 
   it("refuses a missing public key", async () => {
-    await expect(
-      sealSecret("x", { ...PUBLIC_KEY, public_key: "" }),
-    ).rejects.toThrow(/has not published/);
+    await expect(sealSecret("x", { ...PUBLIC_KEY, public_key: "" })).rejects.toThrow(
+      /has not published/,
+    );
   });
 
   it("refuses a public key that is not base64", async () => {
-    await expect(
-      sealSecret("x", { ...PUBLIC_KEY, public_key: "not base64!!" }),
-    ).rejects.toThrow(/not valid base64/);
+    await expect(sealSecret("x", { ...PUBLIC_KEY, public_key: "not base64!!" })).rejects.toThrow(
+      /not valid base64/,
+    );
   });
 });
 
@@ -116,8 +119,7 @@ describe("recognising a sealed envelope", () => {
     // The realistic mistake. Valid base64, but far too short to be a sealed
     // box — the same arithmetic the server applies, so the form can say so
     // before a request is made.
-    expect(looksSealed({ key_id: "0".repeat(16), ciphertext: btoa("hunter2") }))
-      .toBe(false);
+    expect(looksSealed({ key_id: "0".repeat(16), ciphertext: btoa("hunter2") })).toBe(false);
   });
 
   it.each([
@@ -134,15 +136,13 @@ describe("recognising a sealed envelope", () => {
 describe("describing a sealed envelope", () => {
   it("names the key's fingerprint when it is the active one", async () => {
     const envelope = await sealSecret("x", PUBLIC_KEY);
-    expect(describeSealed(envelope, PUBLIC_KEY)).toBe(
-      "sealed against SHA256:test",
-    );
+    expect(describeSealed(envelope, PUBLIC_KEY)).toBe("sealed against SHA256:test");
   });
 
   it("falls back to the key id for a retired key", async () => {
     const envelope = await sealSecret("x", PUBLIC_KEY);
-    expect(
-      describeSealed(envelope, { key_id: "other", fingerprint: "SHA256:other" }),
-    ).toBe(`sealed against key ${VECTOR_KEY_ID}`);
+    expect(describeSealed(envelope, { key_id: "other", fingerprint: "SHA256:other" })).toBe(
+      `sealed against key ${VECTOR_KEY_ID}`,
+    );
   });
 });

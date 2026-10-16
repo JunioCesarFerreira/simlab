@@ -23,6 +23,7 @@ import pytest
 from bson import ObjectId
 
 from lib.credentials import CredentialUnavailable
+from pylib.timeutil import elapsed_since, utc_now
 from lib.health import (
     DEFAULT_PROBE_TTL_SEC,
     STALE_RESERVATION_MESSAGE,
@@ -64,7 +65,7 @@ def resource(name="cooja1", status="offline", enabled=True,
         "probe": probe or {},
         "container": {
             "state": container_state,
-            "checked_at": datetime.now() if checked else None,
+            "checked_at": utc_now() if checked else None,
         },
     }
 
@@ -81,7 +82,11 @@ def ready_probe(age_sec: float = 0.0) -> dict:
         "java_version": "21",
         "java_ok": True,
         "message": "ready",
-        "checked_at": datetime.now() - timedelta(seconds=age_sec),
+        # Aware UTC, as the infra collections now store it. A naive
+        # `datetime.now()` here would be *local*, and reading it as UTC is off
+        # by the offset on any machine that is not — which is the ambiguity
+        # the migration removes.
+        "checked_at": utc_now() - timedelta(seconds=age_sec),
     }
 
 
@@ -497,7 +502,7 @@ class TestStaleReservations:
             "_id": RES_ID, "name": "cooja1",
             "current_simulation_id": SIM_ID,
             "attempt_id": ATTEMPT,
-            "reserved_at": datetime.now() - timedelta(hours=1),
+            "reserved_at": utc_now() - timedelta(hours=1),
             **extra,
         }]
         return mongo
@@ -537,7 +542,7 @@ class TestStaleReservations:
         mongo = fake_mongo()
         mongo.resource_repo.find_stale_reservations.return_value = [{
             "_id": RES_ID, "name": "cooja1", "current_simulation_id": SIM_ID,
-            "reserved_at": datetime.now() - timedelta(hours=1),
+            "reserved_at": utc_now() - timedelta(hours=1),
         }]
 
         assert build_monitor(mongo).sweep_stale_reservations() == ["cooja1"]
@@ -547,8 +552,11 @@ class TestStaleReservations:
         mongo = fake_mongo()
         build_monitor(mongo, reservation_ttl_sec=120).sweep_stale_reservations()
         cutoff = mongo.resource_repo.find_stale_reservations.call_args.args[0]
-        elapsed = (datetime.now() - cutoff).total_seconds()
-        assert 110 < elapsed < 130
+        # Aware, so it compares with what the collections store without the
+        # reader having to guess which zone produced it.
+        assert cutoff.tzinfo is not None
+        elapsed = elapsed_since(cutoff)
+        assert elapsed is not None and 110 < elapsed < 130
 
     def test_a_zero_ttl_disables_the_sweep(self):
         mongo = fake_mongo()
@@ -567,7 +575,7 @@ class TestStaleReservations:
         mongo.host_repo.get.side_effect = lambda _id: host
         mongo.resource_repo.find_stale_reservations.return_value = [
             {"_id": RES_ID, "name": "cooja1", "host_id": HOST_ID,
-             "current_simulation_id": None, "reserved_at": datetime.now()}]
+             "current_simulation_id": None, "reserved_at": utc_now()}]
 
         build_monitor(mongo).sweep_stale_reservations()
 
@@ -579,7 +587,7 @@ class TestStaleReservations:
         mongo.resource_repo.find_stale_reservations.return_value = [
             {"_id": RES_ID, "name": "cooja1", "host_id": HOST_ID,
              "origin": "discovered", "current_simulation_id": None,
-             "reserved_at": datetime.now()}]
+             "reserved_at": utc_now()}]
 
         build_monitor(mongo).sweep_stale_reservations()
 
@@ -590,7 +598,7 @@ class TestStaleReservations:
         mongo = fake_mongo()
         mongo.resource_repo.find_stale_reservations.return_value = [
             {"_id": RES_ID, "name": "cooja1", "current_simulation_id": None,
-             "reserved_at": datetime.now()}]
+             "reserved_at": utc_now()}]
         woken: list[int] = []
 
         build_monitor(mongo, on_capacity=lambda: woken.append(1)) \

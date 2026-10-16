@@ -49,7 +49,7 @@ units — it carries its own reference point.
 |---|---|---|
 | `--expid` | *(required)* | Experiment ObjectId |
 | `--api-key` | *(required)* | REST API key |
-| `--api-base` | `http://localhost:8198/api/v1` | Base URL of the SimLab API |
+| `--api-base` | `https://localhost/api/v1` | Base URL of the SimLab API |
 | `--objectives` | `throughput delay pdr` | Space-separated list of objective names |
 | `--minimize` | `delay` | Objectives to minimise (rest are maximised) |
 | `--keep-the-files` | `False` | Keep local PNG files after upload |
@@ -59,7 +59,7 @@ units — it carries its own reference point.
 **Localhost**
 
 ```bash
-py plot_pareto_results.py --expid 69c677b93b925d1dafcb4151 --api-key api-password --keep-the-files True
+py plot_pareto_results.py --expid 69c677b93b925d1dafcb4151 --api-key api-password --keep-the-files
 ```
 
 **Server**
@@ -67,14 +67,14 @@ py plot_pareto_results.py --expid 69c677b93b925d1dafcb4151 --api-key api-passwor
 Replece `secret` with your api key.
 
 ```bash
-python3 plot_pareto_results.py --expid 69b97e5c911986d1242e5a7e --api-key secret --api-base http://localhost:8198/api/v1
+python3 plot_pareto_results.py --expid 69b97e5c911986d1242e5a7e --api-key secret --api-base https://localhost/api/v1
 ```
 
 
 **Local/Server**
 
 ```bash
-py plot_pareto_results.py --expid 69b97e5c911986d1242e5a7e --keep-the-files --api-key secret --api-base http://andromeda.lasdpc.icmc.usp.br/:8198/api/v1
+py plot_pareto_results.py --expid 69b97e5c911986d1242e5a7e --keep-the-files --api-key secret --api-base https://andromeda.lasdpc.icmc.usp.br/api/v1
 ```
 
 **host linux**

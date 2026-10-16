@@ -69,11 +69,11 @@ export interface AlgorithmParamsDto {
   prob_cx?: number;
   prob_mt?: number;
   per_gene_prob?: number;
-  crossover_method?: string;       // P1 only
-  eta_cx?: number;                 // P0/P1: SBX distribution index
-  eta_mt?: number;                 // P0/P1: polynomial mutation index
-  pm_tau?: number;                 // P4: tau mutation probability
-  sigma_tau?: number;              // P4: tau mutation std. dev.
+  crossover_method?: string; // P1 only
+  eta_cx?: number; // P0/P1: SBX distribution index
+  eta_mt?: number; // P0/P1: polynomial mutation index
+  pm_tau?: number; // P4: tau mutation probability
+  sigma_tau?: number; // P4: tau mutation std. dev.
   apply_coverage_repair?: boolean; // P1/P2
   repair_coverage_budget?: number; // P1/P2
   /** @deprecated the engine ignores these; kept for reading old experiments */
@@ -182,12 +182,7 @@ export interface RuntimeMetricsSeriesResponseDto {
  * every source file, owned by the experiment alone.
  * ----------------------------------------------------- */
 
-export type FirmwareSnapshotStatus =
-  | "captured"
-  | "partial"
-  | "skipped"
-  | "failed"
-  | "capturing";
+export type FirmwareSnapshotStatus = "captured" | "partial" | "skipped" | "failed" | "capturing";
 
 export interface FirmwareFileDto {
   file_name: string;
@@ -225,9 +220,9 @@ export interface FirmwareSnapshotDto {
 
 export interface IndividualDto {
   id: ID;
-  individual_id: string;       // chromosome hash
+  individual_id: string; // chromosome hash
   chromosome: JsonObject;
-  objectives: number[];        // indexed; use parameters.objectives[i].metric_name for the name
+  objectives: number[]; // indexed; use parameters.objectives[i].metric_name for the name
   topology_picture_id: ID | null;
   simulations_ids?: ID[];
 }

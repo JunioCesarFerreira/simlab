@@ -54,6 +54,7 @@ from lib.transport import (
     TransportError,
     build_transport,
 )
+from pylib.timeutil import elapsed_since, utc_now
 from pylib.db.models.infra import (
     EnumHostStatus,
     EnumHostType,
@@ -535,7 +536,7 @@ class HealthMonitor:
         """
         if self._reservation_ttl <= 0:
             return []
-        cutoff = datetime.now() - timedelta(seconds=self._reservation_ttl)
+        cutoff = utc_now() - timedelta(seconds=self._reservation_ttl)
         stale = self._mongo.resource_repo.find_stale_reservations(cutoff)
         swept: list[str] = []
         for resource in stale:
@@ -633,12 +634,12 @@ def probe_is_fresh(resource: dict, ttl_sec: float) -> bool:
         return False
     if not probe.get("java_ok"):
         return False
-    checked_at = probe.get("checked_at")
-    if not isinstance(checked_at, datetime):
+    # Naive or aware, depending on when the document was written: the infra
+    # collections store aware UTC now, and anything from before does not say.
+    elapsed = elapsed_since(probe.get("checked_at"))
+    if elapsed is None:
         return False
-    # Mongo may hand back either, depending on how the driver was configured.
-    now = datetime.now(checked_at.tzinfo) if checked_at.tzinfo else datetime.now()
-    return timedelta(0) <= (now - checked_at) <= timedelta(seconds=ttl_sec)
+    return 0 <= elapsed <= ttl_sec
 
 
 def local_host_only(hosts: list[dict]) -> list[dict]:

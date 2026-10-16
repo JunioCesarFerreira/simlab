@@ -102,11 +102,21 @@ const summary = computed(() => {
   transition: width 0.25s ease;
 }
 
-.segment--active { background: var(--status-running); }
-.segment--free { background: var(--status-done); }
-.segment--unavailable { background: var(--status-error); }
-.segment--disabled { background: var(--status-cancelled); }
-.segment--empty { background: transparent; }
+.segment--active {
+  background: var(--status-running);
+}
+.segment--free {
+  background: var(--status-done);
+}
+.segment--unavailable {
+  background: var(--status-error);
+}
+.segment--disabled {
+  background: var(--status-cancelled);
+}
+.segment--empty {
+  background: transparent;
+}
 
 .legend {
   display: flex;

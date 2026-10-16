@@ -136,3 +136,45 @@ python run_pareto_analysis.py
 `SIMLAB_CA_BUNDLE` is only needed when the server uses the self-signed
 certificate; drop it once a CA-issued one is installed. As a last resort,
 `SIMLAB_TLS_VERIFY=false` skips verification.
+---
+
+### `register_host.py` — Register a remote Cooja host
+
+Registers a host, its SSH access and its workers, from the command line
+instead of the Infrastructure page.
+
+```bash
+python util/register_host.py list
+python util/register_host.py add --name vm7 --address host.example --port 22 \
+    --username simlab --auth-method password
+```
+
+Two things to know before using it:
+
+- **It talks to MongoDB directly**, not through the API. The page's route goes
+  through validation the API performs; this one does not, so a value it accepts
+  may be one the API would have refused.
+- **`list --json` prints the host document as stored, including the sealed
+  credential envelope.** The API redacts that field; this does not. The
+  ciphertext is useless without the master-node's private key, but it does not
+  belong in a log or a ticket.
+
+MongoDB is bound to `127.0.0.1` on the SimLab host, so reach it through an SSH
+tunnel. Careful with a replica set behind a tunnel: the driver follows the
+addresses the set advertises, which are the ones *inside* the deployment — use
+`?directConnection=true` when they are not reachable from where you are.
+
+### `backfill_dodag.py` — Recompute DODAG summaries
+
+Walks finished simulations and derives the RPL DODAG from their stored
+testlogs. It is a dry run by default and prints what it *would* change.
+
+What a legacy log cannot give back is in
+[FIRMWARE_TRACEABILITY.md](../docs/markdown/FIRMWARE_TRACEABILITY.md) and in
+the script's own docstring: only the approximate, first-contact formation is
+recoverable, not the exact parent changes, because those were never logged.
+
+Two limits worth knowing in automation: `--limit` applies *before* the
+eligibility filters, so a small limit can examine a batch and change nothing;
+and an individual log that fails to parse is reported but does not change the
+exit status.

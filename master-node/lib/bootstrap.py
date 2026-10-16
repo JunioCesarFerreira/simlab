@@ -16,6 +16,7 @@ from typing import Any, Optional
 
 from bson import ObjectId
 
+from pylib.timeutil import utc_now
 from pylib.db.models.infra import (
     EnumAddressMode,
     EnumAuthMethod,
@@ -111,7 +112,7 @@ def local_resource_documents(
     Docker confirms the container is running and the SSH probe finds a usable
     Cooja build. Nothing enters the pool on an assertion — including this one.
     """
-    now = datetime.now()
+    now = utc_now()
     documents: list[dict[str, Any]] = []
     for index, (hostname, port) in enumerate(zip(hostnames, ports), start=1):
         name = hostname if hostname not in ("localhost", "127.0.0.1") else f"cooja{index}"

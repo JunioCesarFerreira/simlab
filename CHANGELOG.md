@@ -5,6 +5,88 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Distributed Cooja resources
+
+Simulations can now run on Cooja containers hosted on other machines, with the
+master-node balancing work across hosts. Everything below is behind the same
+`docker compose up`: a single-machine deployment behaves as it did, with its
+containers seeded as before.
+
+### Added
+
+- **Host and worker inventory.** A *host* is a machine, a *worker* is a Cooja
+  container on it. Both are stored, measured, and managed from the new
+  **Infrastructure** page. A host is registered with its SSH access; its
+  workers are either discovered through Docker or listed by hand, which is
+  what makes a shared machine usable where the SSH user cannot reach the
+  Docker daemon.
+- **Placement by absolute load.** Each simulation goes to the host carrying
+  the fewest active simulations — a count, not a utilisation ratio, so a host
+  with eight containers is not kept saturated while one with two sits idle.
+  The decision is serialised in a single dispatcher thread; the executions are
+  not.
+- **Two-hop SSH.** A container on another machine is reached through a
+  `direct-tcpip` channel on that host's own SSH session, so no container port
+  has to be published on the network.
+- **Credentials sealed in the browser.** A host's SSH credential is encrypted
+  against the master-node's public key before it leaves the page, stored
+  sealed, and opened only by the master-node. The API cannot open one, and a
+  test proves it by sabotaging the crypto library in its environment.
+- **Availability measured at two levels.** Docker says whether a container
+  exists and runs; an SSH probe says whether it can actually run a simulation
+  — it answers, it has a Cooja build, and its JVM runs. Both must agree before
+  a worker takes work, and the page says *which* level failed.
+- **Detached execution.** Cooja is launched in its own session, so a run
+  survives a dropped connection and a master-node restart. On start-up, a run
+  still going is adopted and followed; one that finished while the process was
+  down has its result collected.
+- **Where each simulation ran.** Host, worker, container id, attempt and pid
+  are recorded at reservation time and published with the simulation, so the
+  chain experiment → generation → individual → simulation now reaches the
+  machine — and the distribution of work can be audited from the results.
+- **Replica completeness.** The aggregation reports how many replicas stand
+  behind each individual's objectives, and which seeds are missing.
+- **HTTPS through a reverse proxy**, with GUI, API and Grafana behind one
+  entry point and the auxiliary ports bound to loopback.
+
+### Changed
+
+- `NUMBER_OF_CONTAINERS` now **seeds** the local host's workers on first start
+  instead of sizing a thread pool. The pool comes from the inventory, and
+  discovery maintains it.
+- Simulation state is written by one owner. The function that executes a
+  simulation reports what it produced; the runner decides what that means.
+- Deleting a host or a worker carries its condition in the write, so a
+  container reserved between the check and the delete is refused rather than
+  removed.
+- Host and worker updates are partial by field: a change of port no longer
+  replaces the credential, the pinned host key or the second hop's settings.
+- The infrastructure collections store **aware UTC** timestamps.
+
+### Removed
+
+- `INFRA_MODE=legacy`, the escape hatch kept during the transition. It was a
+  second execution path with its own ownership and termination semantics, and
+  keeping it meant every fix had to hold in both.
+
+### Known limitations
+
+- **One master-node.** There is no leader election and no atomic claim of a
+  simulation itself, so two dispatchers could place the same work.
+  Reservations are atomic per container; that is not the same guarantee.
+- **The API key is in the GUI bundle.** Anyone who loads the application can
+  read it and call the administrative routes. HTTPS and credential sealing do
+  not substitute for user authentication.
+- **Runtime metrics cover local containers only.** cAdvisor scrapes this
+  machine, so a distributed generation under-reports CPU and memory.
+- A failed result collection is retried over a new session, but if both
+  attempts fail the simulation is marked in error; the artifacts survive on
+  the worker and nothing goes back for them.
+- Repeating a replica that failed is not implemented: the incompleteness is
+  reported, the repeat is not.
+
+---
+
 ## [Unreleased] — Firmware traceability per experiment
 
 ### Added

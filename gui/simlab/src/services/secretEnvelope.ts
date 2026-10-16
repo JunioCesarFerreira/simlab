@@ -66,9 +66,7 @@ async function loadSodium(): Promise<Sodium> {
       // Do not cache a failure: a transient network problem on the first
       // open should not make the form permanently unusable.
       sodiumPromise = null;
-      throw new SealingError(
-        `Could not load the encryption library: ${String(error)}`,
-      );
+      throw new SealingError(`Could not load the encryption library: ${String(error)}`);
     });
   }
   return sodiumPromise;
@@ -89,9 +87,7 @@ export async function sealSecret(
   }
   const bytes = new TextEncoder().encode(plaintext);
   if (bytes.length > MAX_PLAINTEXT_BYTES) {
-    throw new SealingError(
-      `The credential is larger than ${MAX_PLAINTEXT_BYTES} bytes.`,
-    );
+    throw new SealingError(`The credential is larger than ${MAX_PLAINTEXT_BYTES} bytes.`);
   }
   if (publicKey.alg && publicKey.alg !== ENVELOPE_ALG) {
     throw new SealingError(
@@ -112,10 +108,7 @@ export async function sealSecret(
     throw new SealingError("The published public key is not valid base64.");
   }
 
-  const ciphertext = sodium.to_base64(
-    sodium.crypto_box_seal(bytes, recipient),
-    variant,
-  );
+  const ciphertext = sodium.to_base64(sodium.crypto_box_seal(bytes, recipient), variant);
   return { key_id: publicKey.key_id, ciphertext };
 }
 
