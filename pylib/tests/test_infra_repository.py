@@ -29,6 +29,7 @@ from pylib.db.models.infra import (
 )
 from pylib.db.repositories.infra import (
     CoojaResourceRepository,
+    HostWithdrawing,
     HostRepository,
     InfraCryptoRepository,
     released_status_expression,
@@ -49,7 +50,16 @@ class FakeDb:
         self.collections: dict[str, MagicMock] = {}
 
     def __getitem__(self, name: str) -> MagicMock:
-        return self.collections.setdefault(name, MagicMock())
+        collection = self.collections.get(name)
+        if collection is None:
+            collection = MagicMock()
+            # A count answers zero unless a test says otherwise. A MagicMock's
+            # own answer is a truthy object, which reads as "yes, there is
+            # one" for every `count_documents` guard in the repository — so
+            # the default has to be the quiet one.
+            collection.count_documents.return_value = 0
+            self.collections[name] = collection
+        return collection
 
 
 def make_connection() -> tuple[MagicMock, FakeDb]:
@@ -119,6 +129,7 @@ class TestReserve:
             "_id": RES_ID,
             "enabled": True,
             "status": EnumResourceStatus.AVAILABLE.value,
+            "held_for": None,
         }
         assert update["$set"]["status"] == EnumResourceStatus.RESERVED.value
         assert update["$set"]["current_simulation_id"] == SIM_ID
@@ -181,6 +192,8 @@ class TestRelease:
             "_id": RES_ID,
             "current_simulation_id": SIM_ID,
             "attempt_id": ATTEMPT,
+            # And nothing unresolved on the container: see TestHeldWorkers.
+            "held_for": None,
         }
 
     def test_late_thread_from_an_old_attempt_releases_nothing(self, resources):
@@ -261,7 +274,9 @@ class TestForceRelease:
                               container_state_counts=True) is True
 
         flt = coll.update_one.call_args.args[0]
-        assert flt == {"_id": RES_ID}           # no attempt_id: it is known gone
+        # No attempt_id: it is known gone. But still not a worker holding
+        # something unresolved.
+        assert flt == {"_id": RES_ID, "held_for": None}
         sets = coll.update_one.call_args.args[1][0]["$set"]
         assert sets["current_simulation_id"] is None
         assert sets["attempt_id"] is None
@@ -281,7 +296,8 @@ class TestForceRelease:
 
         repo.force_release(
             RES_ID, "stale", container_state_counts=True,
-            expect_attempt_id=ATTEMPT, reserved_before=cutoff)
+            expect_attempt_id=ATTEMPT, reserved_before=cutoff,
+            expect_reserved=True)
 
         flt = coll.update_one.call_args.args[0]
         assert flt["_id"] == RES_ID
@@ -298,7 +314,8 @@ class TestForceRelease:
 
         repo.force_release(RES_ID, "recovered", container_state_counts=True)
 
-        assert coll.update_one.call_args.args[0] == {"_id": RES_ID}
+        assert coll.update_one.call_args.args[0] == {
+            "_id": RES_ID, "held_for": None}
 
     def test_a_reservation_that_moved_on_is_not_freed(self, resources):
         repo, coll = resources
@@ -728,33 +745,61 @@ class TestConditionalDeletion:
 
         assert repo.delete_if_free(RES_ID) is False
 
-    def test_a_drained_host_and_its_workers_go(self):
+    @staticmethod
+    def _host_removal(listed, *, deleted_each=1, host_deleted=1, late=None):
+        """A host repository whose collections answer a scripted removal.
+
+        ``listed`` is what the first pass sees, ``late`` what the re-count
+        finds afterwards — the worker a concurrent registration inserted,
+        which is the whole subject of R09.
+        """
         connection, db = make_connection()
         repo = HostRepository(connection)
         resources_coll = db[RESOURCES_COLLECTION]
-        resources_coll.find.return_value = [
-            {"_id": RES_ID, "name": "cooja1"},
-            {"_id": OTHER_SIM_ID, "name": "cooja2"},
-        ]
-        resources_coll.delete_one.return_value = MagicMock(deleted_count=1)
-        db[HOSTS_COLLECTION].delete_one.return_value = MagicMock(deleted_count=1)
+        passes = [list(listed), list(late if late is not None else [])]
+        resources_coll.find.side_effect = lambda *a, **k: passes.pop(0) if passes else []
+        if isinstance(deleted_each, list):
+            resources_coll.delete_one.side_effect = [
+                MagicMock(deleted_count=n) for n in deleted_each]
+        else:
+            resources_coll.delete_one.return_value = MagicMock(
+                deleted_count=deleted_each)
+        resources_coll.delete_many.return_value = MagicMock(deleted_count=0)
+        db[HOSTS_COLLECTION].update_one.return_value = MagicMock(matched_count=1)
+        db[HOSTS_COLLECTION].delete_one.return_value = MagicMock(
+            deleted_count=host_deleted)
+        return repo, db, resources_coll
+
+    def test_a_drained_host_and_its_workers_go(self):
+        repo, db, resources_coll = self._host_removal(
+            [{"_id": RES_ID, "name": "cooja1"},
+             {"_id": OTHER_SIM_ID, "name": "cooja2"}])
 
         deleted, blocking = repo.delete_if_drained(HOST_ID)
 
         assert deleted is True and blocking == []
         assert resources_coll.delete_one.call_count == 2
 
+    def test_the_host_is_withdrawn_before_anything_is_deleted(self):
+        """R09, phase one. Deleting the workers and then the host is several
+        writes, and a registration that had already read the host could insert
+        a worker between them — which then outlived its host.
+        """
+        repo, db, resources_coll = self._host_removal(
+            [{"_id": RES_ID, "name": "cooja1"}])
+
+        repo.delete_if_drained(HOST_ID)
+
+        marked = db[HOSTS_COLLECTION].update_one.call_args_list[0]
+        assert marked.args[0] == {"_id": HOST_ID}
+        assert "withdrawn_at" in marked.args[1]["$set"]
+
     def test_one_occupied_worker_blocks_the_whole_host(self):
         # And names itself, so the operator knows what to drain.
-        connection, db = make_connection()
-        repo = HostRepository(connection)
-        resources_coll = db[RESOURCES_COLLECTION]
-        resources_coll.find.return_value = [
-            {"_id": RES_ID, "name": "cooja1"},
-            {"_id": OTHER_SIM_ID, "name": "cooja2"},
-        ]
-        resources_coll.delete_one.side_effect = [
-            MagicMock(deleted_count=1), MagicMock(deleted_count=0)]
+        repo, db, resources_coll = self._host_removal(
+            [{"_id": RES_ID, "name": "cooja1"},
+             {"_id": OTHER_SIM_ID, "name": "cooja2"}],
+            deleted_each=[1, 0])
 
         deleted, blocking = repo.delete_if_drained(HOST_ID)
 
@@ -763,11 +808,73 @@ class TestConditionalDeletion:
         # The host stays, so the surviving worker is not orphaned.
         db[HOSTS_COLLECTION].delete_one.assert_not_called()
 
+    def test_a_refused_removal_puts_the_host_back_in_service(self):
+        """Otherwise the capacity is gone with nothing saying why."""
+        repo, db, _ = self._host_removal(
+            [{"_id": RES_ID, "name": "cooja1"}], deleted_each=0)
+
+        repo.delete_if_drained(HOST_ID)
+
+        unset = [
+            c for c in db[HOSTS_COLLECTION].update_one.call_args_list
+            if "$unset" in c.args[1]
+        ]
+        assert unset and "withdrawn_at" in unset[0].args[1]["$unset"]
+
+    def test_a_worker_registered_during_the_removal_blocks_it(self):
+        """R09, reproduced. The first pass deletes what it listed; a worker
+        inserted after that list was taken is invisible to it, and the host
+        was deleted on top of it — leaving an orphan.
+        """
+        repo, db, _ = self._host_removal(
+            [{"_id": RES_ID, "name": "cooja1"}],
+            late=[{"_id": OTHER_SIM_ID, "name": "cooja9"}])
+
+        deleted, blocking = repo.delete_if_drained(HOST_ID)
+
+        assert deleted is False
+        assert blocking == ["cooja9"]
+        db[HOSTS_COLLECTION].delete_one.assert_not_called()
+
+    def test_a_worker_that_gained_a_reservation_is_not_deleted_under_it(self):
+        """The orphan is the lesser harm.
+
+        A placement that started from a snapshot taken before the withdrawal
+        can reserve one of these. Deleting it would take a live run with it,
+        so it is left in place and **named** — reported rather than hidden.
+        """
+        repo, db, resources_coll = self._host_removal(
+            [{"_id": RES_ID, "name": "cooja1"}])
+        resources_coll.delete_many.return_value = MagicMock(deleted_count=0)
+        passes = [[{"_id": RES_ID, "name": "cooja1"}], [],
+                  [{"_id": OTHER_SIM_ID, "name": "cooja9"}]]
+        resources_coll.find.side_effect = (
+            lambda *a, **k: passes.pop(0) if passes else [])
+
+        deleted, blocking = repo.delete_if_drained(HOST_ID)
+
+        assert deleted is True
+        assert blocking == ["cooja9"]
+
+    def test_nothing_is_left_behind_when_the_host_does_go(self):
+        """Last resort: anything that appeared between the re-count and the
+        delete has no host any more, and this is the only moment at which
+        "orphan" is a decidable state."""
+        repo, db, resources_coll = self._host_removal(
+            [{"_id": RES_ID, "name": "cooja1"}])
+
+        repo.delete_if_drained(HOST_ID)
+
+        # Conditional: a placement from an earlier snapshot can have reserved
+        # one of these, and deleting a worker under a live run loses the run.
+        resources_coll.delete_many.assert_called_once_with({
+            "host_id": HOST_ID,
+            "status": {"$nin": ["reserved", "busy"]},
+            "current_simulation_id": None,
+        })
+
     def test_a_host_with_no_workers_is_deleted(self):
-        connection, db = make_connection()
-        repo = HostRepository(connection)
-        db[RESOURCES_COLLECTION].find.return_value = []
-        db[HOSTS_COLLECTION].delete_one.return_value = MagicMock(deleted_count=1)
+        repo, _, _ = self._host_removal([])
 
         assert repo.delete_if_drained(HOST_ID) == (True, [])
 
@@ -990,18 +1097,19 @@ class TestHosts:
         assert coll.update_one.call_args.args[0]["check_requested_at"] == stamp
 
     def test_delete_removes_the_hosts_resources_too(self):
-        connection, db = make_connection()
-        repo = HostRepository(connection)
-        db[RESOURCES_COLLECTION].find.return_value = [{"_id": RES_ID, "name": "cooja1"}]
-        db[RESOURCES_COLLECTION].delete_one.return_value = MagicMock(deleted_count=1)
-        db[HOSTS_COLLECTION].delete_one.return_value = MagicMock(deleted_count=1)
+        repo, db, resources_coll = TestConditionalDeletion._host_removal(
+            [{"_id": RES_ID, "name": "cooja1"}])
 
         assert repo.delete_if_drained(HOST_ID) == (True, [])
 
-        # One conditional delete per worker, rather than a blanket
-        # `delete_many`: the condition is what makes it safe.
-        db[RESOURCES_COLLECTION].delete_many.assert_not_called()
-        assert db[RESOURCES_COLLECTION].delete_one.call_count == 1
+        # One *conditional* delete per worker, rather than a blanket
+        # `delete_many` over the live records: the condition is what makes it
+        # safe. The sweep afterwards only runs once the host is gone, when
+        # anything remaining is by definition an orphan.
+        assert resources_coll.delete_one.call_count == 1
+        resources_coll.delete_many.assert_called_once()
+        assert resources_coll.delete_many.call_args.args[0][
+            "current_simulation_id"] is None
 
 
 class TestInventorySnapshot:
@@ -1157,3 +1265,379 @@ def _evaluate(expression, resource):
     if operator == "$in":
         return _evaluate(operand[0], resource) in operand[1]
     raise AssertionError(f"unsupported operator in this test: {operator}")
+
+
+# ── Exclusivity, in the writes themselves ───────────────────────────────────
+
+class TestQuarantineIsOneWrite:
+    """R05.1: the protective write and the release cannot be separate.
+
+    It used to be ``set_enabled(False)`` followed by the ordinary release in
+    the runner's ``finally``. When the first failed, the second still ran:
+    the mechanism that keeps a worker with a possibly-live JVM out of the pool
+    failed, and the mechanism that puts it back succeeded. One document, one
+    update — there is no interleaving that produces an eligible worker.
+    """
+
+    def test_it_disables_and_lets_go_in_a_single_update(self, resources):
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        assert repo.quarantine(RES_ID, "could not be stopped") is True
+
+        assert coll.update_one.call_count == 1
+        sets = coll.update_one.call_args.args[1]["$set"]
+        assert sets["enabled"] is False
+        assert sets["status"] == EnumResourceStatus.DISABLED.value
+        assert sets["current_simulation_id"] is None
+        assert sets["attempt_id"] is None
+
+    def test_the_remote_pid_is_kept(self, resources):
+        """It is the only record of what may still be running in there."""
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        repo.quarantine(RES_ID, "could not be stopped")
+
+        assert "remote_pid" not in coll.update_one.call_args.args[1]["$set"]
+
+    def test_it_can_insist_on_the_attempt_that_held_it(self, resources):
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        repo.quarantine(RES_ID, "x", expect_attempt_id=ATTEMPT)
+
+        assert coll.update_one.call_args.args[0] == {
+            "_id": RES_ID, "attempt_id": ATTEMPT}
+
+    def test_a_refusal_is_reported(self, resources):
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(modified_count=0)
+
+        assert repo.quarantine(RES_ID, "x", expect_attempt_id=ATTEMPT) is False
+
+
+class TestTheReservationLease:
+    """R06: a margin is not a guarantee.
+
+    The stale-reservation sweep frees a container that was claimed and never
+    started, and its TTL has to outlast the slowest legitimate preparation —
+    firmware out of GridFS, then up a tunnel. An upload slower than the TTL
+    had its container freed underneath it while the thread went on writing to
+    the directory. The thread now says "still working", and the sweep's
+    ``reserved_before`` condition refuses.
+    """
+
+    def test_renewing_pushes_the_reservation_forward(self, resources):
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        assert repo.touch_reservation(RES_ID, SIM_ID, ATTEMPT) is True
+
+        sets = coll.update_one.call_args.args[1]["$set"]
+        assert sets["reserved_at"].tzinfo is not None
+
+    def test_only_the_holder_may_renew(self, resources):
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        repo.touch_reservation(RES_ID, SIM_ID, ATTEMPT)
+
+        flt = coll.update_one.call_args.args[0]
+        assert flt["attempt_id"] == ATTEMPT
+        assert flt["current_simulation_id"] == SIM_ID
+        # Refused once it is busy: from then on the simulation timeout
+        # governs, not this.
+        assert flt["status"] == EnumResourceStatus.RESERVED.value
+
+    def test_a_refusal_means_the_reservation_is_gone(self, resources):
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(modified_count=0)
+
+        assert repo.touch_reservation(RES_ID, SIM_ID, ATTEMPT) is False
+
+
+class TestTwoNamesForOneWorker:
+    """R08: discovery cannot produce an alias, a person can.
+
+    Two registrations pointing at the same address, port and directory mean
+    two reservations for one run directory — and then each run's defensive
+    cleanup deletes the other's inputs, while the exclusivity the reservation
+    provides is held on the wrong document.
+    """
+
+    def _two(self, first, second, hosts):
+        connection, db = make_connection()
+        repo = CoojaResourceRepository(connection)
+        db[HOSTS_COLLECTION].find.return_value = hosts
+        db[RESOURCES_COLLECTION].find.return_value = [first]
+        return repo, second
+
+    def test_the_same_target_under_another_name_is_found(self):
+        host = {"_id": HOST_ID, "name": "vm7", "type": "remote",
+                "access": {"address": "10.0.0.7"},
+                "container_access": {"port": 22}}
+        existing = {"_id": RES_ID, "host_id": HOST_ID, "name": "cooja1",
+                    "endpoint": {"address": "172.18.0.5", "port": 22},
+                    "remote_dir": "/opt/contiki-ng/tools/cooja"}
+        candidate = {"name": "cooja1-again", "host_id": HOST_ID,
+                     "endpoint": {"address": "172.18.0.5", "port": 22},
+                     "remote_dir": "/opt/contiki-ng/tools/cooja"}
+        repo, candidate = self._two(existing, candidate, [host])
+
+        clash = repo.conflicting_target(host, candidate)
+
+        assert clash is not None and clash["name"] == "cooja1"
+
+    def test_a_different_port_is_a_different_worker(self):
+        host = {"_id": HOST_ID, "name": "vm7", "type": "remote",
+                "access": {"address": "10.0.0.7"}}
+        existing = {"_id": RES_ID, "host_id": HOST_ID, "name": "cooja1",
+                    "endpoint": {"address": "10.0.0.7", "port": 2231}}
+        candidate = {"name": "cooja2", "host_id": HOST_ID,
+                     "endpoint": {"address": "10.0.0.7", "port": 2232}}
+        repo, candidate = self._two(existing, candidate, [host])
+
+        assert repo.conflicting_target(host, candidate) is None
+
+    def test_editing_a_worker_does_not_clash_with_itself(self):
+        host = {"_id": HOST_ID, "name": "vm7", "type": "remote",
+                "access": {"address": "10.0.0.7"}}
+        existing = {"_id": RES_ID, "host_id": HOST_ID, "name": "cooja1",
+                    "endpoint": {"address": "172.18.0.5", "port": 22}}
+        repo, candidate = self._two(existing, dict(existing), [host])
+
+        assert repo.conflicting_target(
+            host, candidate, exclude_id=RES_ID) is None
+
+    def test_a_worker_with_no_address_points_nowhere(self):
+        host = {"_id": HOST_ID, "name": "vm7", "type": "remote",
+                "access": {"address": "10.0.0.7"}}
+        repo, candidate = self._two(
+            {"_id": RES_ID, "host_id": HOST_ID, "name": "cooja1"},
+            {"name": "cooja2", "host_id": HOST_ID}, [host])
+
+        assert repo.conflicting_target(host, candidate) is None
+
+
+class TestCreationRefusesOnAWithdrawingHost:
+    """The other half of R09, checked in the collection being written.
+
+    The orphan came from a caller that had read the host *before* the
+    withdrawal began, so a check anywhere earlier than the write is a check
+    at the wrong time.
+    """
+
+    def _withdrawing(self):
+        connection, db = make_connection()
+        repo = CoojaResourceRepository(connection)
+        db[HOSTS_COLLECTION].count_documents.return_value = 1
+        return repo, db
+
+    def test_a_manual_worker_is_refused(self):
+        repo, _ = self._withdrawing()
+
+        with pytest.raises(HostWithdrawing):
+            repo.insert_manual({"name": "cooja9", "host_id": HOST_ID})
+
+    def test_discovery_is_refused(self):
+        repo, _ = self._withdrawing()
+
+        with pytest.raises(HostWithdrawing):
+            repo.sync_discovered(
+                HOST_ID, [{"id": "abc", "name": "cooja9"}],
+                remote_dir="/opt/cooja")
+
+    def test_the_bootstrap_seed_is_skipped_rather_than_raised(self):
+        """The one creation path that must not raise.
+
+        It runs at every start-up, before anything else. A withdrawal left
+        set by an interrupted removal would stop the master-node from
+        starting at all — a worse failure than the orphan the guard is for.
+        """
+        repo, db = self._withdrawing()
+
+        assert repo.insert_seeded({"host_id": HOST_ID, "name": "cooja1"}) is False
+        db[RESOURCES_COLLECTION].update_one.assert_not_called()
+
+    def test_a_host_in_service_is_not_refused(self):
+        connection, db = make_connection()
+        repo = CoojaResourceRepository(connection)
+        db[HOSTS_COLLECTION].count_documents.return_value = 0
+        db[RESOURCES_COLLECTION].insert_one.return_value = MagicMock(
+            inserted_id=RES_ID)
+
+        assert repo.insert_manual(
+            {"name": "cooja9", "host_id": HOST_ID}) == RES_ID
+
+
+class TestThePortOverrideCanBeRemoved:
+    """R17: an override is removed by the *absence* of the key.
+
+    An older version of the form wrote the port in both ``endpoint`` and
+    ``connection``, and the override wins in the connection plan — so editing
+    such a worker changed the endpoint, reported the new port and went on
+    connecting to the old one. ``$set`` cannot express absence, and a stored
+    ``null`` is not the same thing: it reads as the operator having configured
+    something, which is one of the signals that decides whether Docker's view
+    of this worker applies at all.
+    """
+
+    def test_it_unsets_rather_than_nulling(self, resources):
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        assert repo.clear_connection_port(RES_ID) is True
+
+        update = coll.update_one.call_args.args[1]
+        assert update["$unset"] == {"connection.port": ""}
+        assert "connection.port" not in update.get("$set", {})
+
+
+class TestHeldWorkers:
+    """A worker holding something unresolved is not released by anyone.
+
+    Being disabled kept the *dispatcher* off a quarantined worker, but not the
+    reconciliation: that pass found the simulation in a terminal state,
+    concluded nothing was running and called ``force_release`` with no probe.
+    So a quarantine whose write had failed was undone by the next health
+    cycle — exactly when the database came back. The decision has to outlive
+    the process that made it, which means it has to be in the document.
+    """
+
+    def test_the_ordinary_release_refuses(self, resources):
+        repo, coll = resources
+        coll.find_one_and_update.return_value = None
+
+        repo.release(RES_ID, SIM_ID, ATTEMPT, container_state_counts=True)
+
+        assert coll.find_one_and_update.call_args.args[0]["held_for"] is None
+
+    def test_the_forced_release_refuses_too(self, resources):
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(modified_count=0)
+
+        assert repo.force_release(
+            RES_ID, "recovered", container_state_counts=True) is False
+        assert coll.update_one.call_args.args[0]["held_for"] is None
+
+    def test_a_reservation_cannot_be_granted(self, resources):
+        repo, coll = resources
+        coll.find_one_and_update.return_value = None
+
+        repo.reserve(RES_ID, SIM_ID, ATTEMPT)
+
+        assert coll.find_one_and_update.call_args.args[0]["held_for"] is None
+
+    def test_a_measurement_cannot_promote_it(self, resources):
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(modified_count=0)
+
+        repo.mark_available(RES_ID, "ready")
+
+        assert coll.update_one.call_args.args[0]["held_for"] is None
+
+    def test_the_quarantine_records_what_is_unresolved(self, resources):
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        repo.quarantine(RES_ID, "could not be stopped", held_for={
+            "kind": "termination_unknown", "remote_pid": 4242,
+            "remote_dir": "/opt/cooja"})
+
+        held = coll.update_one.call_args.args[1]["$set"]["held_for"]
+        assert held["kind"] == "termination_unknown"
+        assert held["remote_pid"] == 4242
+        assert held["remote_dir"] == "/opt/cooja"
+        assert held["at"].tzinfo is not None
+
+    def test_holding_does_not_touch_the_reservation(self, resources):
+        """The attempt is over but the container is not accounted for."""
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        repo.hold(RES_ID, "result not collected", {"kind": "collection_pending"})
+
+        sets = coll.update_one.call_args.args[1]["$set"]
+        assert sets["enabled"] is False
+        assert "current_simulation_id" not in sets
+        assert "status" not in sets
+
+    def test_clearing_requires_the_hold_to_exist(self, resources):
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        repo.clear_held_for(RES_ID)
+
+        flt = coll.update_one.call_args.args[0]
+        assert flt["held_for"] == {"$ne": None}
+        update = coll.update_one.call_args.args[1]
+        assert update["$unset"] == {"held_for": ""}
+        # Back in service, but **offline**: the next health cycle measures it.
+        # Clearing a hold is not evidence that the worker works.
+        assert update["$set"]["enabled"] is True
+        assert update["$set"]["status"] == EnumResourceStatus.OFFLINE.value
+
+
+class TestAStaleMeasurementCannotSchedule:
+    """R22: the version has to be a *condition*, not a record.
+
+    An access edit takes the idle workers out of the pool and clears what was
+    measured about them. Two paths got past that: a probe that started before
+    the edit and published after it, and a worker that was busy during the
+    edit and came back on its old measurement when it was released.
+    """
+
+    def test_a_reservation_requires_the_current_configuration(self, resources):
+        repo, coll = resources
+        coll.find_one_and_update.return_value = None
+
+        repo.reserve(RES_ID, SIM_ID, ATTEMPT, expect_config_version=3)
+
+        assert coll.find_one_and_update.call_args.args[0]["$expr"] == {
+            "$eq": [{"$ifNull": ["$probe.config_version", 0]}, 3]}
+
+    def test_a_probe_written_before_this_existed_still_schedules(self, resources):
+        """Through ``$ifNull``, not an equality on the field.
+
+        An equality does not match a *missing* field, so on an existing
+        deployment every worker would have become unschedulable until it was
+        measured again — and `probe_is_fresh` reads a missing value as zero,
+        so a worker that had just been probed would never be re-probed. An
+        absent value means version zero here as it does everywhere else.
+        """
+        repo, coll = resources
+        coll.find_one_and_update.return_value = None
+
+        repo.reserve(RES_ID, SIM_ID, ATTEMPT, expect_config_version=0)
+
+        expr = coll.find_one_and_update.call_args.args[0]["$expr"]
+        assert expr["$eq"][0] == {"$ifNull": ["$probe.config_version", 0]}
+        assert "probe.config_version" not in coll.find_one_and_update.call_args.args[0]
+
+    def test_the_promotion_records_the_version_it_measured(self, resources):
+        repo, coll = resources
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        repo.mark_available(RES_ID, "ready", config_version=3)
+
+        assert coll.update_one.call_args.args[1]["$set"][
+            "probe.config_version"] == 3
+
+    def test_a_release_after_an_edit_lands_offline(self):
+        """The one path an access edit could not reach: a busy worker is left
+        alone on purpose, and used to come back available on a measurement of
+        how it was reached before."""
+        branches = released_status_expression(
+            container_state_counts=False, config_version=2)["$switch"]["branches"]
+        stale = [b for b in branches
+                 if "probe.config_version" in str(b["case"])]
+        assert stale, branches
+        assert stale[0]["then"] == EnumResourceStatus.OFFLINE.value
+
+    def test_without_a_version_nothing_changes(self):
+        """Callers that have no host record keep the previous behaviour."""
+        branches = released_status_expression(
+            container_state_counts=False)["$switch"]["branches"]
+        assert not [b for b in branches
+                    if "probe.config_version" in str(b["case"])]

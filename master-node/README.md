@@ -39,13 +39,17 @@ describes that design in full; this file is about the process.
                     hosts, cooja_resources, GridFS
 ```
 
-Three threads, with one job each:
+Three roles. The dispatcher and the health monitor are one thread each; a
+*runner* is one thread **per run**, so the live thread count is three plus the
+number of simulations in flight, plus the change-stream watchers.
 
-| Thread | Responsibility |
+| Role | Responsibility |
 |---|---|
-| **dispatcher** | Serialised placement. One decision at a time, which is what makes the load balance correct. |
-| **runner** (one per run) | Executes one simulation on one reserved container and gives it back. |
-| **health monitor** | Measures hosts and workers, frees reservations that never started, and reconciles runs nobody is following. |
+| **dispatcher** (1 thread) | Serialised placement. One decision at a time, which is what makes the load balance correct. |
+| **runner** (1 thread per run) | Executes one simulation on one reserved container and gives it back — or takes it out of the pool when it cannot say the run is over. |
+| **health monitor** (1 thread) | Measures hosts and workers, frees reservations that never started, reconciles runs nobody is following, re-closes generations left open, and resolves workers held for something unresolved. |
+| **lease** (1 thread per preparation) | Renews the reservation of a simulation whose inputs are still being assembled and sent. |
+| **watchers** (3 threads) | Change streams on simulations, resources and hosts. |
 
 ---
 
@@ -111,7 +115,15 @@ once per worker, and `factory` composes a transport from the stored records.
 
 The measuring cycle: Docker says whether a container exists, an SSH probe says
 whether it can actually run a simulation, and both must agree before a worker
-enters the pool.
+enters the pool. The cycle also does the housekeeping nothing else owns —
+freeing reservations that never started, reconciling runs nobody is following,
+and re-closing generations left open with nothing running in them.
+
+A probe carries the host's `config_version`, and a worker whose host's access
+settings changed is measured again before it is schedulable. Both halves
+matter: clearing the stored measurement does not stop a probe that was
+*already running* from writing a positive result for a path that no longer
+exists.
 
 ### `lib/detached.py`
 
@@ -122,7 +134,14 @@ master-node restart.
 ### `lib/recovery.py`
 
 Deciding what to do with containers still held from a previous process, and
-with runs nobody is following.
+with runs nobody is following. Five answers, kept apart — alive, finished with
+a collectable result, gone, unreachable, and *still being prepared*.
+
+The last one is a grace rather than a probe: a container `reserved` moments ago
+has had nothing started on it, so there is no process to ask about, and the
+stale-reservation sweep is the component that owns that timeout. Concluding
+anything from it freed a seconds-old reservation and failed its simulation
+while the thread that owned it was still assembling inputs.
 
 ### `lib/synthetic_data.py`
 
@@ -191,11 +210,17 @@ flowchart TD
     PREP -->|download failed| ERR_PREP[mark_error simulation]
     ERR_PREP --> CLOSE_GEN
 
-    PREP -->|ok| OWNS{still holds\nthe container?}
-    OWNS -->|no| REQUEUE[Stop the run\nand re-queue the simulation]
-    OWNS -->|yes| SCP[Send files via SCP\n1 hop local, 2 hops remote]
+    PREP -->|ok| OWNS{lease renewed?\nguarded write}
+    OWNS -->|refused| REQUEUE[Re-queue the simulation\nnothing was sent]
+    OWNS -->|yes| LIVE{anything alive\nin the run directory?}
+    LIVE -->|yes| QUARANTINE[Disable the worker\nno release]
+    LIVE -->|no| SCP[Clean, then send files via SCP\n1 hop local, 2 hops remote]
     SCP --> SSH[Launch Cooja detached\nsetsid + own session]
+    SSH -->|no pid, group alive| QUARANTINE
     SSH --> MONITOR[Poll until it ends\nreconnecting if the link drops]
+    MONITOR -->|stop not confirmed| QUARANTINE
+    MONITOR -->|gone, testlog left| PARTIAL[Collect and keep\nError + partial_metrics]
+    PARTIAL --> CLOSE_GEN
     MONITOR --> GETLOG[SCP: retrieve COOJA.testlog\nretried over a new session]
     GETLOG --> UPLOAD_LOG[Upload log to GridFS]
     UPLOAD_LOG --> CONVERT[Convert log → CSV\ncooja_files.convert_cooja_log_to_csv]
@@ -203,7 +228,7 @@ flowchart TD
     UPLOAD_CSV --> METRICS{CSV exists\nand non-empty?}
     METRICS -->|yes| CALC[Calculate network metrics\nstatistics.evaluate_config]
     CALC --> DONE_SIM[mark_done simulation\nlog_id + csv_id + metrics]
-    METRICS -->|no| ERR_CSV[mark_error simulation\nCSV missing or empty]
+    METRICS -->|no| ERR_CSV[Error with its artifacts\nthe testlog is the only evidence]
     ERR_CSV --> CLOSE_GEN
 
     DONE_SIM --> CLEANUP[Clear the run's remote artifacts\nand the local temp files]
@@ -218,6 +243,83 @@ flowchart TD
 
 ---
 
+## Attempt State Machine
+
+One *attempt* is one placement of one simulation on one worker, identified by
+`attempt_id`. Every transition below is a **single** conditional write, and the
+condition is the attempt — which is what makes "two simulations never share a
+worker" a property of the database rather than of the code around it.
+
+```mermaid
+stateDiagram-v2
+    [*] --> preparing : reserve() granted, attempt registered
+    preparing --> running : mark_busy(), pid recorded
+    preparing --> lost : lease refused, or sweep expired it
+    preparing --> unknown : something alive in the run directory
+    running --> contact_lost : the link dropped
+    contact_lost --> running : reconnected; the run was unaffected
+    running --> collecting : exit code recorded
+    running --> unknown : had to be stopped and the stop was not confirmed
+    collecting --> done : mark_done()
+    collecting --> pending_collection : both fetch attempts failed
+    collecting --> failed : nothing usable came back
+    running --> failed : the run produced nothing
+    lost --> [*] : the simulation returns to the queue
+    unknown --> [*] : the worker is disabled; a person decides
+    done --> [*]
+    failed --> [*]
+    pending_collection --> [*] : artifacts kept, location recorded
+```
+
+Two of these states exist because of what review reproduced:
+
+* **`unknown`** — a run that may still be executing. The worker is taken out of
+  the pool by one write that both disables it and lets go of the attempt. It
+  used to be two writes, and when the first failed the second still ran.
+* **`pending_collection`** — a finished run whose result could not be fetched
+  twice. The artifacts are copied to a name the next run's cleanup does not
+  know, and `simulation.unfetched_result` records the worker, directory and
+  pid. Nothing comes back for them automatically.
+
+### How the hold outlives this process
+
+Being disabled keeps the **dispatcher** off a worker. It does not keep the
+*reconciliation* off it: that pass decides from the simulation's state, and a
+terminal simulation is not evidence that a remote process ended. So a
+quarantine whose write had failed was undone by the next health cycle —
+exactly when the database came back.
+
+The decision therefore lives in the document. A held worker carries:
+
+```
+held_for: { kind, simulation_id, attempt_id, remote_pid, remote_dir, reason, at }
+```
+
+and every write that could make it usable again refuses while it is set:
+
+| Operation | With `held_for` |
+|---|---|
+| `release`, `force_release` | refuse |
+| `reserve` | refuses |
+| any status write (`mark_available`, `mark_offline`, …) | refuses |
+| `clear_held_for` | the only way out |
+
+`HealthMonitor.resolve_held_workers()` is that way out, and it runs every
+cycle. One rule, deliberately conservative: the hold is cleared only when the
+container **answers**, has **nothing alive** and has left **nothing behind**.
+Still running, still holding bytes, or unreachable — it stays held.
+
+That pass is what lets the quarantine be strict. A worker leaves the pool
+whenever something about it is unaccounted for, and most of those causes are
+transient; without a pass that asks the container, every network blip around a
+launch would need a person.
+
+`contact_lost` is deliberately not an outcome: losing the connection says
+nothing about the process on the other end, which is the whole reason the run
+is detached.
+
+---
+
 ## Generation State Machine
 
 ```mermaid
@@ -226,7 +328,16 @@ stateDiagram-v2
     WAITING --> RUNNING : the dispatcher places its simulations
     RUNNING --> DONE : all simulations DONE
     RUNNING --> ERROR : no active simulations left\nbut at least one ERROR
+    DONE --> RUNNING : a failed replica is repeated (mo-engine)
+    ERROR --> RUNNING : idem
 ```
+
+Closing a generation is **idempotent and recoverable**: `close_if_finished`
+re-reads its simulations every time, and the health cycle repeats it for any
+generation left open with nothing running in it. That matters because
+publishing a result and closing its generation are two writes over two
+documents — and a failure of the second used to propagate back and mark the
+*finished* simulation in error.
 
 ---
 
@@ -253,6 +364,55 @@ stateDiagram-v2
 > These are read by the Python process. Adding one to `.env` does **not** reach
 > the service unless it is also listed in the `environment:` block of the
 > master-node service in `docker-compose.yaml`.
+
+Two more timeouts are constants rather than variables, because they are
+properties of the mechanism rather than of a deployment:
+`DEFAULT_PROBE_TTL_SEC` (300s — how long a *ready* probe speaks for its
+worker) and `DEFAULT_GENERATION_GRACE_SEC` (300s — how long a generation may
+stay open with nothing running before the cycle closes it; it has to outlast
+the enqueue of a whole generation, which inserts its simulations one at a
+time).
+
+### What the recovery does and does not guarantee
+
+Worth stating precisely, because an earlier version of this file was broader
+than the code:
+
+* A run that outlives the master-node is **adopted**, and one that finished
+  while the process was down has its result collected. The deadline is applied
+  only after the container has been asked.
+* **Every lost confirmation around the launch** is treated as a possibly-active
+  run: the send failing, the shell answering without a pid, and the pid read
+  losing contact all say the same thing about the JVM. A stop that *is*
+  confirmed makes it an ordinary failure again.
+* **The reservation is held for the whole of the preparation**, by a heartbeat
+  rather than by renewals at its two ends. While that thread lives the sweep
+  cannot expire the reservation. A thread that is alive but *stalled* keeps
+  renewing — correct for work in progress, and the reason a hung transfer
+  holds its worker until `SIM_TIMEOUT_SEC`.
+* A result that cannot be fetched is retried over a new session. If that also
+  fails, the artifacts are **preserved** and their location recorded — nothing
+  goes back for them automatically. When the copy *cannot* be made, because
+  the second session never opened, the worker is **held** rather than released:
+  the original is still under the name the next run deletes.
+* **Nothing remote is cleaned until the result is accounted for.** Storing the
+  artifacts of an unconfirmed run and then failing to record them on the
+  simulation used to be handled as a successful return — the caller cleared
+  the container and released the worker, orphaning the blobs *and* deleting
+  the evidence.
+* A run whose termination could not be confirmed leaves its worker **out of
+  the pool**, not released.
+* Losing contact is never treated as a failed run.
+* There is **no** end-to-end *exactly once*. At most one publication per
+  attempt and at most one blob per artefact per attempt; a crash between the
+  GridFS upload and the state write leaves blobs nothing references.
+* Docker is **not** a requirement for a worker. A hand-registered one needs
+  only SSH; Docker's view of it is ignored where an operator stated its
+  address.
+
+The thread counts in the overview are per role; the live total is higher,
+because each placed simulation gets a follower of its own and each adopted run
+another.
 
 ---
 

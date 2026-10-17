@@ -108,6 +108,11 @@ def infra(mock_factory):
     mock_factory.resource_repo.find_all.return_value = [sample_resource()]
     mock_factory.resource_repo.find_by_host.return_value = [sample_resource()]
     mock_factory.resource_repo.get.return_value = sample_resource()
+    # No other registration points at the same container. A MagicMock's
+    # default answer here is truthy, which would refuse every registration —
+    # the sort of thing a permissive stand-in turns into a confusing failure
+    # rather than a clear one.
+    mock_factory.resource_repo.conflicting_target.return_value = None
     mock_factory.infra_crypto_repo.get_active.return_value = {
         "key_id": "b114dd6d8410a62a", "alg": "crypto_box_seal",
         "public_key": "cHVibGlj", "fingerprint": "SHA256:abc",
@@ -771,3 +776,232 @@ def test_the_api_cannot_open_a_secret():
     )
     assert result.returncode == 0, result.stderr
     assert "ok" in result.stdout
+
+
+# ── R09: removing a host is a withdrawal, not an instant ───────────────────
+
+class TestRemovingAHost:
+    """The refusal has to say what it left behind.
+
+    Deleting the workers and then the host is several writes. A registration
+    that had already read the host could insert a worker between them, and
+    the host was deleted on top of it — one orphaned worker, reproduced
+    against the real collection. The removal is now a withdrawal first, and a
+    refusal leaves the host in service rather than half-removed.
+    """
+
+    def test_a_blocked_removal_names_the_worker_and_says_what_happened(
+        self, client, infra
+    ):
+        infra.host_repo.delete_if_drained.return_value = (False, ["cooja2"])
+
+        resp = client.delete(f"/api/v1/infra/hosts/{HOST_ID}")
+
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert "cooja2" in detail
+        # The operator has to know the refusal was partial, and that the host
+        # is schedulable again.
+        assert "left in service" in detail
+
+    def test_a_drained_host_is_removed(self, client, infra):
+        infra.host_repo.delete_if_drained.return_value = (True, [])
+
+        assert client.delete(f"/api/v1/infra/hosts/{HOST_ID}").status_code == 204
+
+    def test_registering_a_worker_on_a_withdrawing_host_is_refused(
+        self, client, infra
+    ):
+        from pylib.db.repositories.infra import HostWithdrawing
+
+        infra.resource_repo.find_by_host_and_name.return_value = None
+        infra.resource_repo.insert_manual.side_effect = HostWithdrawing(
+            "host is being removed")
+
+        resp = client.post(
+            f"/api/v1/infra/hosts/{HOST_ID}/resources",
+            json={"name": "cooja9", "endpoint": {"address": "10.0.0.9"}},
+        )
+
+        assert resp.status_code == 409
+
+
+# ── R08: two names for one worker ──────────────────────────────────────────
+
+class TestOneRegistrationPerWorker:
+    def test_a_second_name_for_the_same_target_is_refused(self, client, infra):
+        """Two reservations for one run directory: each run's defensive
+        cleanup then deletes the other's inputs, and the lock that exists to
+        prevent it is held on the wrong document."""
+        infra.resource_repo.find_by_host_and_name.return_value = None
+        infra.resource_repo.conflicting_target.return_value = {"name": "cooja1"}
+
+        resp = client.post(
+            f"/api/v1/infra/hosts/{HOST_ID}/resources",
+            json={"name": "cooja1-again",
+                  "endpoint": {"address": "172.18.0.5", "port": 22}},
+        )
+
+        assert resp.status_code == 409
+        assert "cooja1" in resp.json()["detail"]
+
+    def test_the_check_excludes_the_worker_being_edited(self, client, infra):
+        infra.resource_repo.get.return_value = sample_resource(status="available")
+
+        client.put(
+            f"/api/v1/infra/resources/{RES_ID}/connection",
+            json={"endpoint": {"address": "172.18.0.9"}},
+        )
+
+        assert infra.resource_repo.conflicting_target.call_args.kwargs[
+            "exclude_id"] == sample_resource()["_id"]
+
+
+# ── R17: an old document's port override ───────────────────────────────────
+
+class TestThePortTheFormShowsIsThePortUsed:
+    """Reproduced in review: endpoint 2223, effective connection still 2222.
+
+    An older version of the form wrote the port in both ``endpoint`` and
+    ``connection``, and the override wins in the connection plan. Editing
+    such a worker changed the endpoint, reported the new port, and went on
+    connecting to the old one.
+    """
+
+    def test_a_conflicting_override_is_removed(self, client, infra):
+        infra.resource_repo.get.return_value = sample_resource(
+            status="available", connection={"port": 2222})
+
+        resp = client.put(
+            f"/api/v1/infra/resources/{RES_ID}/connection",
+            json={"endpoint": {"address": "10.0.0.7", "port": 2223}},
+        )
+
+        assert resp.status_code == 200
+        infra.resource_repo.clear_connection_port.assert_called_once_with(
+            sample_resource()["_id"])
+
+    def test_the_payload_the_form_actually_sends_also_works(self, client, infra):
+        """R17, reproduced: the form sends a `connection` block.
+
+        The decision used to be made *after* merging that block with the
+        stored one, which reintroduced the old port — so the condition never
+        held and the override survived. Endpoint saved as 2223, effective
+        port still 2222. A test that sent only the endpoint did not represent
+        an edit through the form.
+        """
+        infra.resource_repo.get.return_value = sample_resource(
+            status="available", connection={"port": 2222})
+
+        resp = client.put(
+            f"/api/v1/infra/resources/{RES_ID}/connection",
+            json={
+                "endpoint": {"address": "10.0.0.7", "port": 2223},
+                # Exactly what the form posts for "inherit these".
+                "connection": {"username": None, "auth_method": None,
+                               "secret": None},
+            },
+        )
+
+        assert resp.status_code == 200
+        infra.resource_repo.clear_connection_port.assert_called_once_with(
+            sample_resource()["_id"])
+        # And the override is not written back by the merge either.
+        payload = infra.resource_repo.update_manual.call_args.args[1]
+        assert "port" not in payload.get("connection", {})
+
+    def test_an_override_sent_in_the_same_request_is_kept(self, client, infra):
+        """A client that means to keep one says so."""
+        infra.resource_repo.get.return_value = sample_resource(
+            status="available", connection={"port": 2222})
+
+        client.put(
+            f"/api/v1/infra/resources/{RES_ID}/connection",
+            json={"endpoint": {"address": "10.0.0.7", "port": 2223},
+                  "connection": {"port": 2299}},
+        )
+
+        infra.resource_repo.clear_connection_port.assert_not_called()
+        payload = infra.resource_repo.update_manual.call_args.args[1]
+        assert payload["connection"]["port"] == 2299
+
+    def test_a_matching_override_is_left_alone(self, client, infra):
+        infra.resource_repo.get.return_value = sample_resource(
+            status="available", connection={"port": 2223})
+
+        client.put(
+            f"/api/v1/infra/resources/{RES_ID}/connection",
+            json={"endpoint": {"address": "10.0.0.7", "port": 2223}},
+        )
+
+        infra.resource_repo.clear_connection_port.assert_not_called()
+
+    def test_an_edit_that_does_not_touch_the_endpoint_changes_nothing(
+        self, client, infra
+    ):
+        infra.resource_repo.get.return_value = sample_resource(
+            status="available", connection={"port": 2222})
+
+        client.put(
+            f"/api/v1/infra/resources/{RES_ID}/connection",
+            json={"connection": {"username": "root"}},
+        )
+
+        infra.resource_repo.clear_connection_port.assert_not_called()
+
+
+# ── R22: a configuration edit invalidates more than the measurement ───────
+
+class TestEditingAccessInvalidatesTheEvidence:
+    def test_the_configuration_version_is_bumped(self, client, infra):
+        """A probe already running finishes after the clear and would write a
+        positive result for a path that no longer exists. The version is what
+        lets that result be recognised as describing something else."""
+        client.put(
+            f"/api/v1/infra/hosts/{HOST_ID}",
+            json={"container_access": {"port": 2223}},
+        )
+
+        infra.host_repo.bump_config_version.assert_called_once_with(
+            sample_host()["_id"])
+
+    def test_an_edit_that_touches_no_access_block_does_not_bump_it(
+        self, client, infra
+    ):
+        client.put(f"/api/v1/infra/hosts/{HOST_ID}", json={"name": "lab-renamed"})
+
+        infra.host_repo.bump_config_version.assert_not_called()
+
+
+class TestAHostRemovedWithStrandedWorkers:
+    """The one surprising outcome, and it is reported rather than hidden.
+
+    A placement that started from a snapshot taken before the withdrawal can
+    reserve a worker during it. The final sweep leaves that worker alone —
+    deleting it would take a live run with it — so the host is gone and the
+    worker is not.
+    """
+
+    def test_the_names_come_back_with_a_200(self, client, infra):
+        infra.host_repo.delete_if_drained.return_value = (True, ["cooja9"])
+
+        resp = client.delete(f"/api/v1/infra/hosts/{HOST_ID}")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["deleted"] is True
+        assert body["stranded"] == ["cooja9"]
+        assert "running simulation" in body["detail"]
+
+    def test_a_clean_removal_is_still_a_204(self, client, infra):
+        infra.host_repo.delete_if_drained.return_value = (True, [])
+
+        assert client.delete(f"/api/v1/infra/hosts/{HOST_ID}").status_code == 204
+
+    def test_a_refusal_is_still_a_409(self, client, infra):
+        infra.host_repo.delete_if_drained.return_value = (False, ["cooja1"])
+
+        resp = client.delete(f"/api/v1/infra/hosts/{HOST_ID}")
+
+        assert resp.status_code == 409
+        assert "left in service" in resp.json()["detail"]

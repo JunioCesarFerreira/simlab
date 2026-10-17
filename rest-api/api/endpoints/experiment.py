@@ -37,6 +37,7 @@ from api.mappers.experiment import (
     _runtime_metrics_from_mongo,
 )
 from api.mappers.generation import generation_from_mongo
+from pylib.timeutil import utc_now
 
 router = APIRouter()
 
@@ -363,11 +364,20 @@ def get_experiment_runtime_metrics(
 
 
 def _as_naive(dt: Optional[datetime]) -> Optional[datetime]:
-    """Drop tz info so an override matches the naive timestamps SimLab stores.
+    """Reduce every input to one naive local wall clock.
 
-    Experiment start/end times are persisted as naive local datetimes; a
-    tz-aware override (e.g. an ISO string ending in 'Z') is converted to the
-    same local wall-clock so the Prometheus query window stays consistent.
+    The Prometheus window is built from these and converted with
+    ``.timestamp()``, which reads a naive datetime as local time — so the two
+    ends have to agree on what naive means, and local is what that call
+    implies.
+
+    What arrives is no longer uniform: the database now returns aware UTC
+    (``pylib.db.connection.TZ_AWARE``), a client override may carry any
+    offset, and ``utc_now()`` is aware. ``astimezone()`` resolves all three to
+    the same local instant, so the window is correct wherever the API runs.
+    A value stored by an older process is naive and is passed through, which
+    is right for the data that exists: every process that wrote one ran with
+    its clock on UTC.
     """
     if isinstance(dt, datetime) and dt.tzinfo is not None:
         return dt.astimezone().replace(tzinfo=None)
@@ -410,7 +420,7 @@ def collect_experiment_runtime_metrics(
 
     body = body or RuntimeMetricsCollectRequest()
     started_at = _as_naive(body.start or doc.get("start_time"))
-    finished_at = _as_naive(body.end or doc.get("end_time") or datetime.now())
+    finished_at = _as_naive(body.end or doc.get("end_time") or utc_now())
 
     if not started_at:
         raise HTTPException(

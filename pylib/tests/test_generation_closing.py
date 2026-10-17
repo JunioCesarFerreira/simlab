@@ -124,9 +124,12 @@ class TestReplicaCompleteness:
     single run with no record of the difference.
     """
 
-    def _sims(self, repo_and_sims, docs):
-        repo, sims, _ = repo_and_sims
+    def _sims(self, repo_and_sims, docs, *, plan=None):
+        repo, sims, gens = repo_and_sims
         sims.find.return_value = docs
+        # Explicit: a MagicMock's answer here would be a truthy object, and
+        # the fallback it lands in is exactly the branch under test.
+        gens.find_one.return_value = {"expected_seeds": plan} if plan else {}
         return repo.replica_completeness(GEN_ID, ["latency", "energy"])
 
     def test_a_complete_individual_reports_both_replicas(self, repo_and_sims):
@@ -199,3 +202,300 @@ class TestReplicaCompleteness:
         ])
 
         assert result == {}
+
+
+class TestCompletenessIsMeasuredAgainstThePlan:
+    """R19: the number of documents is not the number of replicas intended.
+
+    Deriving ``expected`` from the simulations that exist cannot see a replica
+    whose *creation* failed — a generation configured for two seeds that
+    enqueued one looked complete, with one replica. And after a repeat there
+    are more documents than seeds, which would make the same individual look
+    over-replicated and let one seed contribute twice.
+    """
+
+    def _result(self, repo_and_sims, docs, plan):
+        repo, sims, gens = repo_and_sims
+        sims.find.return_value = docs
+        gens.find_one.return_value = {"expected_seeds": plan}
+        return repo.replica_completeness(GEN_ID, ["latency"])
+
+    def test_a_replica_that_was_never_created_is_missing(self, repo_and_sims):
+        result = self._result(repo_and_sims, [
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 1, "network_metrics": {"latency": 1.0}},
+        ], plan=[1, 2])
+
+        entry = result["ind-a"]
+        assert entry["expected"] == 2
+        assert entry["observed"] == 1
+        assert entry["missing_seeds"] == [2]
+        assert entry["state"] == "partial"
+
+    def test_five_expected_and_four_done_is_incomplete(self, repo_and_sims):
+        """The acceptance criterion, stated literally."""
+        docs = [
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": seed, "network_metrics": {"latency": 1.0}}
+            for seed in (1, 2, 3, 4)
+        ]
+        result = self._result(repo_and_sims, docs, plan=[1, 2, 3, 4, 5])
+
+        assert result["ind-a"]["state"] == "partial"
+        assert result["ind-a"]["missing_seeds"] == [5]
+
+    def test_a_repeated_replica_counts_once(self, repo_and_sims):
+        """Two documents, one seed. Counting documents would report three of
+        two replicas — and would let the same seed into the mean twice."""
+        result = self._result(repo_and_sims, [
+            {"individual_id": "ind-a", "status": EnumStatus.ERROR,
+             "random_seed": 2, "network_metrics": {}},
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 2, "network_metrics": {"latency": 1.0}},
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 1, "network_metrics": {"latency": 1.0}},
+        ], plan=[1, 2])
+
+        entry = result["ind-a"]
+        assert entry["observed"] == 2
+        assert entry["expected"] == 2
+        assert entry["attempts"] == 3, "the repeat is visible"
+        assert entry["state"] == "complete"
+        assert entry["failed"] == 0, "that seed did produce a result"
+
+    def test_a_metric_missing_from_one_replica_is_partial(self, repo_and_sims):
+        """Both replicas finished; one objective rests on fewer than the other."""
+        result = self._result(repo_and_sims, [
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 1, "network_metrics": {"latency": 1.0}},
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 2, "network_metrics": {}},
+        ], plan=[1, 2])
+
+        entry = result["ind-a"]
+        assert entry["observed"] == 2 and entry["missing_seeds"] == []
+        assert entry["per_metric"] == {"latency": 1}
+        assert entry["state"] == "partial"
+
+    def test_a_planned_seed_with_no_simulation_is_absent(self, repo_and_sims):
+        """Not pending: nothing will arrive, and there is nothing to repeat.
+
+        Collapsing the two made a generation whose second replica was never
+        created look like one that was merely slow — the state that waits for
+        ever.
+        """
+        result = self._result(repo_and_sims, [
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 1, "network_metrics": {"latency": 1.0}},
+        ], plan=[1, 2])
+
+        entry = result["ind-a"]
+        assert entry["state"] == "partial"
+        assert entry["absent"] == 1
+        assert entry["pending"] == 0
+        assert entry["failed_seeds"] == [], "nothing to run again"
+
+    def test_a_failed_seed_is_named_as_repeatable(self, repo_and_sims):
+        result = self._result(repo_and_sims, [
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 1, "network_metrics": {"latency": 1.0}},
+            {"individual_id": "ind-a", "status": EnumStatus.ERROR,
+             "random_seed": 2, "network_metrics": {}},
+        ], plan=[1, 2])
+
+        assert result["ind-a"]["failed_seeds"] == [2]
+        assert result["ind-a"]["absent"] == 0
+
+    def test_a_replica_still_running_is_pending_not_failed(self, repo_and_sims):
+        result = self._result(repo_and_sims, [
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 1, "network_metrics": {"latency": 1.0}},
+            {"individual_id": "ind-a", "status": EnumStatus.RUNNING,
+             "random_seed": 2, "network_metrics": {}},
+        ], plan=[1, 2])
+
+        entry = result["ind-a"]
+        assert entry["state"] == "pending"
+        assert entry["pending"] == 1 and entry["failed"] == 0
+
+    def test_nothing_finished_is_invalid(self, repo_and_sims):
+        result = self._result(repo_and_sims, [
+            {"individual_id": "ind-a", "status": EnumStatus.ERROR,
+             "random_seed": 1, "network_metrics": {}},
+            {"individual_id": "ind-a", "status": EnumStatus.ERROR,
+             "random_seed": 2, "network_metrics": {}},
+        ], plan=[1, 2])
+
+        assert result["ind-a"]["state"] == "invalid"
+        assert result["ind-a"]["failed"] == 2
+
+    def test_a_generation_with_no_plan_reports_unknown(self, repo_and_sims):
+        """Experiments created before the plan was recorded. Claiming they
+        were complete would be a guess about data nobody wrote down."""
+        repo, sims, gens = repo_and_sims
+        sims.find.return_value = [
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 1, "network_metrics": {"latency": 1.0}},
+        ]
+        gens.find_one.return_value = {}
+
+        result = repo.replica_completeness(GEN_ID, ["latency"])
+
+        assert result["ind-a"]["state"] == "unknown"
+        # Still describes what it saw; it just cannot call it complete.
+        assert result["ind-a"]["observed"] == 1
+
+    def test_an_explicit_plan_overrides_the_generation(self, repo_and_sims):
+        repo, sims, gens = repo_and_sims
+        sims.find.return_value = [
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 1, "network_metrics": {"latency": 1.0}},
+        ]
+        gens.find_one.return_value = {"expected_seeds": [1]}
+
+        result = repo.replica_completeness(
+            GEN_ID, ["latency"], expected_seeds=[1, 2, 3])
+
+        assert result["ind-a"]["expected"] == 3
+
+
+class TestClosingRefusesAnEmptyGeneration:
+    """A generation is inserted before its simulations.
+
+    "No simulations" therefore means "not enqueued yet" as often as it means
+    "nothing to wait for", and only the caller knows which. The periodic
+    pass that repairs a failed close cannot know, so it must not decide.
+    """
+
+    def test_a_generation_with_no_simulations_is_left_open(self, repo_and_sims):
+        repo, sims, _ = repo_and_sims
+        _counts(sims, active=0, total=0, done=0)
+
+        assert repo.close_if_finished(GEN_ID, require_simulations=True) is None
+
+    def test_the_engine_may_still_close_an_all_cached_generation(
+        self, repo_and_sims
+    ):
+        repo, sims, _ = repo_and_sims
+        _counts(sims, active=0, total=0, done=0)
+
+        assert repo.close_if_finished(GEN_ID) == EnumStatus.DONE
+
+
+class TestASeedWithARepeatInFlight:
+    """R19's counting half: a repeated seed is pending, not failed.
+
+    The failed attempt puts the seed in the terminal set. Deriving pending as
+    "neither done nor terminal" then lost its waiting clone entirely, and the
+    record described a generation as ``invalid`` while its repeat was running.
+    """
+
+    def _result(self, repo_and_sims, docs, plan):
+        repo, sims, gens = repo_and_sims
+        sims.find.return_value = docs
+        gens.find_one.return_value = {"expected_seeds": plan}
+        return repo.replica_completeness(GEN_ID, ["latency"])
+
+    def test_a_failed_attempt_with_a_waiting_clone_is_pending(self, repo_and_sims):
+        result = self._result(repo_and_sims, [
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 1, "network_metrics": {"latency": 1.0}},
+            {"individual_id": "ind-a", "status": EnumStatus.ERROR,
+             "random_seed": 2, "network_metrics": {}},
+            {"individual_id": "ind-a", "status": EnumStatus.WAITING,
+             "random_seed": 2, "network_metrics": {}},
+        ], plan=[1, 2])
+
+        entry = result["ind-a"]
+        assert entry["state"] == "pending"
+        assert entry["pending"] == 1
+        # And **not** offered for repeating again: that would run the same
+        # replica twice.
+        assert entry["failed_seeds"] == []
+        assert entry["failed"] == 0
+
+    def test_a_running_clone_counts_the_same_way(self, repo_and_sims):
+        result = self._result(repo_and_sims, [
+            {"individual_id": "ind-a", "status": EnumStatus.ERROR,
+             "random_seed": 1, "network_metrics": {}},
+            {"individual_id": "ind-a", "status": EnumStatus.RUNNING,
+             "random_seed": 1, "network_metrics": {}},
+        ], plan=[1])
+
+        assert result["ind-a"]["state"] == "pending"
+        assert result["ind-a"]["failed_seeds"] == []
+
+    def test_a_failed_seed_with_no_clone_is_still_repeatable(self, repo_and_sims):
+        result = self._result(repo_and_sims, [
+            {"individual_id": "ind-a", "status": EnumStatus.ERROR,
+             "random_seed": 1, "network_metrics": {}},
+        ], plan=[1])
+
+        assert result["ind-a"]["failed_seeds"] == [1]
+        assert result["ind-a"]["state"] == "invalid"
+
+
+class TestOneResultPerSeedInTheAggregation:
+    """The counting and the aggregation have to agree.
+
+    Completeness counts seeds; the aggregation walked ``Done`` documents. Two
+    results for one seed therefore weighed it twice in the mean while the
+    record still said two of two — a statistical contribution counted twice
+    with nothing saying so.
+    """
+
+    def _mean(self, repo_and_sims, docs):
+        repo, sims, _ = repo_and_sims
+        sims.find.return_value = docs
+        return repo.get_simulations_metrics_by_individual(GEN_ID, ["latency"])
+
+    def test_two_results_for_one_seed_count_once(self, repo_and_sims):
+        from datetime import datetime, timezone
+
+        early = datetime(2026, 10, 16, 10, 0, tzinfo=timezone.utc)
+        late = datetime(2026, 10, 16, 11, 0, tzinfo=timezone.utc)
+        means = self._mean(repo_and_sims, [
+            {"individual_id": "ind-a", "random_seed": 1,
+             "network_metrics": {"latency": 10.0}, "end_time": early},
+            {"individual_id": "ind-a", "random_seed": 1,
+             "network_metrics": {"latency": 30.0}, "end_time": late},
+            {"individual_id": "ind-a", "random_seed": 2,
+             "network_metrics": {"latency": 20.0}, "end_time": late},
+        ])
+
+        # The later result for seed 1 wins: it is the one the repetition was
+        # for. Mean of 30 and 20, not of 10, 30 and 20.
+        assert means["ind-a"]["latency"] == 25.0
+
+    def test_a_result_without_an_end_time_does_not_displace_one(self, repo_and_sims):
+        from datetime import datetime, timezone
+
+        means = self._mean(repo_and_sims, [
+            {"individual_id": "ind-a", "random_seed": 1,
+             "network_metrics": {"latency": 10.0},
+             "end_time": datetime(2026, 10, 16, 10, 0, tzinfo=timezone.utc)},
+            {"individual_id": "ind-a", "random_seed": 1,
+             "network_metrics": {"latency": 99.0}, "end_time": None},
+        ])
+
+        assert means["ind-a"]["latency"] == 10.0
+
+    def test_documents_with_no_seed_are_all_kept(self, repo_and_sims):
+        """Legacy documents have nothing to deduplicate by, and silently
+        dropping one would change a historical result."""
+        means = self._mean(repo_and_sims, [
+            {"individual_id": "ind-a", "network_metrics": {"latency": 10.0}},
+            {"individual_id": "ind-a", "network_metrics": {"latency": 20.0}},
+        ])
+
+        assert means["ind-a"]["latency"] == 15.0
+
+    def test_distinct_seeds_are_all_counted(self, repo_and_sims):
+        means = self._mean(repo_and_sims, [
+            {"individual_id": "ind-a", "random_seed": 1,
+             "network_metrics": {"latency": 10.0}},
+            {"individual_id": "ind-a", "random_seed": 2,
+             "network_metrics": {"latency": 20.0}},
+        ])
+
+        assert means["ind-a"]["latency"] == 15.0

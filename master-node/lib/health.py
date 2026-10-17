@@ -54,6 +54,7 @@ from lib.transport import (
     TransportError,
     build_transport,
 )
+from pylib.db.repositories.infra import HostWithdrawing
 from pylib.timeutil import elapsed_since, utc_now
 from pylib.db.models.infra import (
     EnumHostStatus,
@@ -82,6 +83,12 @@ DEFAULT_RESERVATION_TTL_SEC = 600.0
 # instead of twenty times, and a container that stops answering is still found
 # within one interval, because only a *ready* result earns the silence.
 DEFAULT_PROBE_TTL_SEC = 300.0
+
+# How long a generation may stay open with nothing running in it before this
+# closes it. Generously long: it has to outlast the enqueue of a whole
+# generation, which inserts its simulations one at a time, and the cost of
+# waiting is a delay in a repair rather than anything lost.
+DEFAULT_GENERATION_GRACE_SEC = 300.0
 
 STALE_RESERVATION_MESSAGE = (
     "Recovered: the container was reserved but the simulation never started"
@@ -129,11 +136,13 @@ class HealthMonitor:
         failure_threshold: int = DEFAULT_FAILURE_THRESHOLD,
         reservation_ttl_sec: float = DEFAULT_RESERVATION_TTL_SEC,
         probe_ttl_sec: float = DEFAULT_PROBE_TTL_SEC,
+        generation_grace_sec: float = DEFAULT_GENERATION_GRACE_SEC,
         discover: Optional[Callable[[Any, dict], Any]] = None,
         probe: Optional[Callable[[dict, dict], Any]] = None,
         jumps: Optional[JumpPool] = None,
         on_capacity: Optional[Callable[[], None]] = None,
         reconcile: Optional[Callable[[], Any]] = None,
+        inspect_run: Optional[Callable[[dict, dict, Any], Any]] = None,
     ):
         self._mongo = mongo
         self._opener = opener
@@ -141,6 +150,7 @@ class HealthMonitor:
         self._threshold = max(1, failure_threshold)
         self._reservation_ttl = reservation_ttl_sec
         self._probe_ttl = probe_ttl_sec
+        self._generation_grace = generation_grace_sec
         # Hop 1, opened at most once per host per turn. Owned here because the
         # monitor is the only thing that knows when a host's turn is over.
         self._jumps = jumps or JumpPool(opener, on_learn=self._pin_host_key)
@@ -150,6 +160,10 @@ class HealthMonitor:
         # Injected rather than imported: the reconciliation needs a transport
         # and the process's follower registry, neither of which belongs here.
         self._reconcile = reconcile
+        # Asks a container what became of a recorded run. The same probe the
+        # reconciliation uses; this cycle needs it to decide whether a held
+        # worker may come back.
+        self._inspect_run = inspect_run
         self._stop = threading.Event()
 
     # ── the loop ───────────────────────────────────────────────────────────
@@ -200,6 +214,16 @@ class HealthMonitor:
         except Exception:
             log.exception("Reconciling unwatched runs failed; continuing")
 
+        try:
+            self.close_finished_generations()
+        except Exception:
+            log.exception("Closing finished generations failed; continuing")
+
+        try:
+            self.resolve_held_workers()
+        except Exception:
+            log.exception("Resolving held workers failed; continuing")
+
         if any(result.ready for result in results) and self._on_capacity is not None:
             self._on_capacity()
         return results
@@ -222,6 +246,120 @@ class HealthMonitor:
         if self._reconcile is None:
             return None
         return self._reconcile()
+
+    def resolve_held_workers(self) -> list[str]:
+        """Ask the container about each worker held for something unresolved.
+
+        The counterpart of the quarantine, and the reason it can afford to be
+        strict. A worker is taken out of the pool whenever something about it
+        is unaccounted for — a run whose stop was never confirmed, a launch
+        whose confirmation was lost, a result that could neither be stored nor
+        copied aside. Most of those are transient: the connection came back,
+        or nothing was running in the first place.
+
+        Without this pass each one would need a person, which is a bad trade
+        for a network blip. With it, the only ones that do are the ones where
+        the container still has something on it.
+
+        **One rule, and it is deliberately conservative:** the hold is cleared
+        only when the container answers *and* has nothing alive *and* has left
+        nothing behind. Anything else — still running, still holding bytes,
+        or unreachable — stays held. A testlog sitting there is an uncollected
+        result, and letting the worker take the next simulation is what
+        deletes it.
+        """
+        if self._inspect_run is None:
+            return []
+        try:
+            held = self._mongo.resource_repo.find_held()
+        except Exception:
+            log.exception("Could not read the workers held for resolution")
+            return []
+        freed: list[str] = []
+        for resource in held:
+            name = str(resource.get("name", "?"))
+            record = resource.get("held_for") or {}
+            host = self._mongo.host_repo.get(resource.get("host_id"))
+            if host is None:
+                log.warning(
+                    "Worker %s is held but its host is gone; leaving it", name)
+                continue
+            pid = record.get("remote_pid") or resource.get("remote_pid")
+            try:
+                state = self._inspect_run(host, resource, pid)
+            except Exception as error:
+                log.warning("Could not ask %s about its held run: %s", name, error)
+                continue
+            if state is None:
+                log.info(
+                    "Worker %s is held for %s and could not be reached; "
+                    "leaving it", name, record.get("kind", "?"))
+                continue
+            if state.alive:
+                log.warning(
+                    "Worker %s is held for %s and something is still running "
+                    "there (pid %s); leaving it",
+                    name, record.get("kind", "?"), pid)
+                continue
+            if state.testlog_bytes > 0:
+                log.warning(
+                    "Worker %s is held for %s and still has %d bytes of "
+                    "testlog; leaving it so the result is not destroyed",
+                    name, record.get("kind", "?"), state.testlog_bytes)
+                continue
+            if self._mongo.resource_repo.clear_held_for(resource["_id"]):
+                log.warning(
+                    "Worker %s was held for %s; the container answered with "
+                    "nothing running and nothing left behind, so it is back "
+                    "in service", name, record.get("kind", "?"))
+                freed.append(name)
+        if freed and self._on_capacity is not None:
+            self._on_capacity()
+        return freed
+
+    def close_finished_generations(self) -> list[str]:
+        """Close generations whose simulations are all finished.
+
+        The repair half of R24. Publishing a result and closing its generation
+        are two writes over two documents, and the second one can fail on its
+        own. It used to propagate: the failure came back out of the publish
+        and the generic handler marked the *finished* simulation in error, so
+        an administrative failure changed an experiment's outcome.
+
+        The publish now isolates it, which leaves a generation open with
+        nothing running in it — and the experiment waiting on an event that
+        will never come. This is what comes back for it. ``close_if_finished``
+        re-reads everything, so repeating it is free and deciding twice is
+        impossible.
+
+        The grace keeps it off a generation that is still being enqueued: the
+        simulations are inserted one at a time, and a fast worker can finish
+        the first before the second exists.
+        """
+        if self._generation_grace <= 0:
+            return []
+        cutoff = utc_now() - timedelta(seconds=self._generation_grace)
+        try:
+            open_generations = self._mongo.generation_repo.find_open_before(cutoff)
+        except Exception:
+            log.exception("Could not read the generations still open")
+            return []
+        closed: list[str] = []
+        for generation in open_generations:
+            try:
+                decided = self._mongo.generation_repo.close_if_finished(
+                    generation["_id"], require_simulations=True)
+            except Exception:
+                log.exception(
+                    "Could not close generation %s", generation.get("_id"))
+                continue
+            if decided:
+                log.warning(
+                    "Generation %s had nothing running and was still open; "
+                    "closed it as %s", generation.get("_id"), decided,
+                )
+                closed.append(str(generation["_id"]))
+        return closed
 
     def _check_host_isolated(self, host: dict, *, force: bool) -> HostHealth:
         """Check one host, absorbing whatever it throws.
@@ -337,7 +475,7 @@ class HealthMonitor:
             health.unhealthy.append(name)
             return
 
-        if not force and probe_is_fresh(resource, self._probe_ttl):
+        if not force and probe_is_fresh(resource, self._probe_ttl, host=host):
             # It is in the pool and the last measurement found it ready, so
             # there is nothing a new connection could tell us. Anything that
             # did change — a stopped container, a failed placement, an edited
@@ -347,6 +485,10 @@ class HealthMonitor:
             health.fresh.append(name)
             return
 
+        # Read before the measurement, written with it, and re-read after:
+        # a probe takes seconds over two hops, and an access edit landing in
+        # that window makes the answer describe the previous configuration.
+        version = _config_version(host)
         try:
             probe = self._probe(host, resource)
         except (CredentialError, PlanError, HostKeyMismatch) as error:
@@ -365,19 +507,50 @@ class HealthMonitor:
             health.unhealthy.append(name)
             return
 
+        if self._configuration_moved(host, version):
+            # Discarded rather than written. Publishing it would put a worker
+            # into the pool on the strength of a measurement of how it used
+            # to be reached, which is the delayed-publication half of R22.
+            log.info(
+                "Discarding the probe of %s: the host's access settings "
+                "changed while it ran", name,
+            )
+            health.unhealthy.append(name)
+            return
+
         self._mongo.resource_repo.update_probe(resource["_id"], {
             "ssh_ok": probe.reachable,
             "java_version": probe.java_version,
             "java_ok": probe.java_ok,
             "cooja_jar_sha256": probe.cooja_jar_sha256,
             "message": probe.message,
-        })
+        }, config_version=version)
         if probe.ready:
-            self._mongo.resource_repo.mark_available(resource["_id"], probe.message)
+            # The version travels with the promotion, and `reserve` requires
+            # the two to match: a measurement of the previous configuration
+            # cannot make a worker schedulable, even in the window between the
+            # re-read above and this write.
+            self._mongo.resource_repo.mark_available(
+                resource["_id"], probe.message, config_version=version)
             health.ready.append(name)
         else:
             self._mongo.resource_repo.mark_offline(resource["_id"], probe.message)
             health.unhealthy.append(name)
+
+    def _configuration_moved(self, host: dict, version: int) -> bool:
+        """Whether this host's access settings changed during the measurement."""
+        try:
+            fresh = self._mongo.host_repo.get(host["_id"])
+        except Exception:
+            # Cannot tell. Writing the probe is the previous behaviour and the
+            # placement is still guarded by the freshness check, which
+            # compares the version this write is about to store.
+            log.exception(
+                "Could not re-read host %s to confirm its configuration",
+                host.get("name"),
+            )
+            return False
+        return fresh is not None and _config_version(fresh) != version
 
     def _conclude(
         self, health: HostHealth, discovery_message: str
@@ -449,13 +622,23 @@ class HealthMonitor:
         """Level 1, over the session this host's turn already has."""
         try:
             session = self._jumps.session(host)
+        except HostWithdrawing as error:
+            # Asked to discover a host that is being removed. Recorded like
+            # any other reason Docker could not be consulted, rather than
+            # raised: `_serve_requests` has no handler, and one withdrawing
+            # host would cost every other host its queued request.
+            return unavailable_report(mongo, host, str(error))
         except (CredentialError, PlanError, TransportError) as error:
             # Hop 1 is not available, so Docker cannot be consulted either.
             # The probes that follow will raise the same cached error and
             # report it per container; here it only has to be written down,
             # and not attempted a second time.
             return unavailable_report(mongo, host, str(error))
-        return discover_host(mongo, host, opener=self._opener, session=session)
+        try:
+            return discover_host(
+                mongo, host, opener=self._opener, session=session)
+        except HostWithdrawing as error:
+            return unavailable_report(mongo, host, str(error))
 
     def _pin_host_key(self, host: dict, fingerprint: str) -> None:
         """Persist a host key accepted on first contact.
@@ -473,8 +656,22 @@ class HealthMonitor:
                     "Pinned the host key of %s on first contact: %s",
                     host.get("name"), fingerprint,
                 )
+                return
+            stored = ((self._mongo.host_repo.get(host["_id"]) or {}).get(
+                "access") or {}).get("host_key_fingerprint")
         except Exception:
             log.exception("Could not pin the host key of %s", host.get("name"))
+            return
+        if stored and stored != fingerprint:
+            # The pin was won by another path with a different key. The policy
+            # only calls this when it found none, so the session that just
+            # accepted this one is already open — refusing it is the point.
+            log.error(
+                "Host %s is pinned to %s but presented %s; refusing this "
+                "session", host.get("name"), stored, fingerprint,
+            )
+            raise HostKeyMismatch(
+                str(host.get("name") or host["_id"]), stored, fingerprint)
 
     def _jump_client(self, host: dict) -> Optional[Any]:
         """The host session to use as hop 1, or ``None`` for a local host."""
@@ -565,6 +762,10 @@ class HealthMonitor:
                 # container that is running something to the next placement.
                 expect_attempt_id=attempt_id,
                 reserved_before=cutoff,
+                # And still only a reservation: the attempt guard alone would
+                # also match a container the runner has meanwhile promoted to
+                # busy with the same attempt, which is a live simulation.
+                expect_reserved=True,
             ):
                 log.info(
                     "Container %s was no longer the reservation that was read; "
@@ -611,7 +812,13 @@ def _close_generation_after_sweep(mongo: Any, simulation_id: Any) -> None:
         log.exception("Failed to close generation %s", generation_id)
 
 
-def probe_is_fresh(resource: dict, ttl_sec: float) -> bool:
+def _config_version(host: dict) -> int:
+    return int((host or {}).get("config_version") or 0)
+
+
+def probe_is_fresh(
+    resource: dict, ttl_sec: float, *, host: Optional[dict] = None
+) -> bool:
     """Whether this worker's last probe still speaks for it.
 
     Only a worker *in the pool* whose last probe found it *ready* qualifies:
@@ -633,6 +840,12 @@ def probe_is_fresh(resource: dict, ttl_sec: float) -> bool:
     if not probe.get("ssh_ok") or not probe.get("cooja_jar_sha256"):
         return False
     if not probe.get("java_ok"):
+        return False
+    if host is not None and int(
+        probe.get("config_version") or 0
+    ) != _config_version(host):
+        # It measured a different configuration. Not a failure — just not
+        # evidence about this one (R22).
         return False
     # Naive or aware, depending on when the document was written: the infra
     # collections store aware UTC now, and anything from before does not say.

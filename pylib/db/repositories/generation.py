@@ -2,31 +2,183 @@ import logging
 from datetime import datetime
 from typing import Callable, Optional, TypedDict
 from bson import ObjectId, errors
+from pymongo import ReturnDocument
 
 from pylib.db.models.generation import Generation
 from pylib.db.models.enums import EnumStatus
 from pylib.db.connection import MongoDBConnection
+from pylib.timeutil import as_aware, utc_now
 
 log = logging.getLogger(__name__)
+
+
+#: An evaluation whose objectives rest on every replica that was planned, and
+#: on every metric those replicas were supposed to carry.
+STATE_COMPLETE = "complete"
+#: Some replicas finished and some did not. The objectives *can* be computed;
+#: they are a mean over fewer runs than the design called for, and saying so
+#: is the whole point of this record.
+STATE_PARTIAL = "partial"
+#: Replicas are still in flight. Not a verdict, a timestamp.
+STATE_PENDING = "pending"
+#: Nothing finished. There is no mean to take.
+STATE_INVALID = "invalid"
+#: The generation never recorded what it planned, so completeness cannot be
+#: decided — only observed. Experiments created before this existed are in
+#: this state for ever, and claiming they were complete would be a guess.
+STATE_UNKNOWN = "unknown"
 
 
 class ReplicaCompleteness(TypedDict):
     """What stands behind one individual's objectives.
 
-    ``expected`` counts the simulations this generation created for the
-    individual — one per configured seed — and ``observed`` how many of them
-    finished. They differ when a replica failed, and the difference used to be
-    invisible: the objective was the mean of what survived.
+    ``expected`` is what the generation *planned* — one simulation per
+    configured seed — and ``observed`` how many of those seeds produced a
+    result. They differ when a replica failed, and the difference used to be
+    invisible: the objective was the mean of whatever survived.
+
+    Counted by **seed**, not by document. A replica that was repeated has two
+    documents for one seed, and counting documents would make a retried
+    individual look over-replicated and let one seed contribute twice.
     """
     expected: int
     observed: int
+    #: Seeds whose simulation ended without a result. These have something to
+    #: run again.
+    failed: int
+    #: Seeds whose simulation exists and has not finished.
+    pending: int
+    #: Planned seeds with no simulation at all — a creation that failed, or a
+    #: generation still being enqueued. Nothing arrives on its own and there
+    #: is nothing to repeat.
+    absent: int
     expected_seeds: list[int]
     observed_seeds: list[int]
     missing_seeds: list[int]
+    failed_seeds: list[int]
     #: Per metric, because a run can finish without carrying every one of
     #: them — two objectives of the same individual then rest on different
     #: numbers of replicas.
     per_metric: dict[str, int]
+    #: How many simulation documents exist, which is how a repeat shows up.
+    attempts: int
+    #: One of the ``STATE_*`` constants above. A description, not a decision:
+    #: what to *do* about a partial evaluation is a question about the
+    #: experiment, and it is answered by the engine's policy.
+    state: str
+
+
+def _ended_after(candidate: dict, kept: dict) -> bool:
+    """Whether ``candidate`` is the later of two results for one seed.
+
+    Missing end times compare as oldest, so a document without one never
+    displaces a document that has one.
+    """
+    new_end, old_end = candidate.get("end_time"), kept.get("end_time")
+    if new_end is None:
+        return False
+    if old_end is None:
+        return True
+    try:
+        return as_aware(new_end) > as_aware(old_end)
+    except TypeError:
+        return False
+
+
+def _completeness_of(
+    runs: list[dict], metrics: list[str], planned_seeds: Optional[list[int]]
+) -> ReplicaCompleteness:
+    """One individual's completeness, counted by seed.
+
+    Pure, so the counting rules can be tested without a collection — and they
+    need testing, because "how many replicas does this objective rest on?" has
+    three plausible wrong answers: the number of documents, the number of
+    finished documents, and the number of finished documents carrying the
+    metric. Only the last is right, and only per metric.
+    """
+    done_seeds: set[int] = set()
+    terminal_seeds: set[int] = set()
+    active_seeds: set[int] = set()
+    seen_seeds: set[int] = set()
+    per_metric: dict[str, int] = {}
+    metric_seeds: dict[str, set[int]] = {m: set() for m in metrics}
+
+    for run in runs:
+        seed = run.get("random_seed")
+        seed = int(seed) if seed is not None else None
+        if seed is not None:
+            seen_seeds.add(seed)
+        status = run.get("status")
+        if status == EnumStatus.DONE:
+            if seed is not None:
+                done_seeds.add(seed)
+            measured = run.get("network_metrics") or {}
+            for metric in metrics:
+                if metric in measured and seed is not None:
+                    metric_seeds[metric].add(seed)
+        elif status in (EnumStatus.ERROR, EnumStatus.CANCELLED):
+            if seed is not None:
+                terminal_seeds.add(seed)
+        elif seed is not None:
+            # A seed is in flight if **any** of its documents is non-terminal.
+            # Deriving that from "neither done nor terminal" was wrong once a
+            # repeat existed: the failed attempt put the seed in
+            # `terminal_seeds`, so its waiting clone disappeared from the
+            # count and the evaluation read `invalid` while it was running.
+            active_seeds.add(seed)
+
+    expected_seeds = planned_seeds if planned_seeds is not None else sorted(seen_seeds)
+    expected = len(expected_seeds)
+    missing = sorted(set(expected_seeds) - done_seeds)
+    # Three reasons a planned seed has no result, and they are not
+    # interchangeable:
+    #
+    # * ``failed``  — it ran and ended without one. There is a document to
+    #   run again, which is what makes a repeat possible.
+    # * ``pending`` — a document exists and has not finished. Not a verdict.
+    # * ``absent``  — no document at all. Either the generation is still being
+    #   enqueued, or the creation of that replica failed; nothing will arrive
+    #   on its own, and there is nothing to repeat either.
+    #
+    # Collapsing ``absent`` into ``pending`` made a generation with a replica
+    # that was never created look like one that was merely slow, which is the
+    # state that waits for ever.
+    # `active_seeds` takes precedence over `terminal_seeds`: a seed whose
+    # earlier attempt failed and whose repeat is in flight is pending, not
+    # failed, and repeating it again would run the same replica twice.
+    pending_seeds = sorted(active_seeds - done_seeds)
+    failed_seeds = sorted(terminal_seeds - done_seeds - active_seeds)
+    absent_seeds = sorted(set(expected_seeds) - seen_seeds)
+    for metric in metrics:
+        per_metric[metric] = len(metric_seeds[metric])
+
+    thin_metrics = any(per_metric[m] != expected for m in metrics)
+    if planned_seeds is None:
+        state = STATE_UNKNOWN
+    elif pending_seeds:
+        state = STATE_PENDING
+    elif not done_seeds:
+        state = STATE_INVALID
+    elif missing or thin_metrics:
+        state = STATE_PARTIAL
+    else:
+        state = STATE_COMPLETE
+
+    return {
+        "expected": expected,
+        "observed": len(done_seeds),
+        "failed": len(failed_seeds),
+        "pending": len(pending_seeds),
+        "absent": len(absent_seeds),
+        "expected_seeds": list(expected_seeds),
+        "observed_seeds": sorted(done_seeds),
+        "missing_seeds": missing,
+        #: The subset of ``missing_seeds`` that has a simulation to run again.
+        "failed_seeds": failed_seeds,
+        "per_metric": per_metric,
+        "attempts": len(runs),
+        "state": state,
+    }
 
 
 class GenerationRepository:
@@ -85,27 +237,35 @@ class GenerationRepository:
     def mark_running(self, generation_id: ObjectId):
         self.update(generation_id, {
             "status": EnumStatus.RUNNING,
-            "start_time": datetime.now()
+            "start_time": utc_now()
         })
 
     def mark_done(self, generation_id: ObjectId):
         self.update(generation_id, {
             "status": EnumStatus.DONE,
-            "end_time": datetime.now()
+            "end_time": utc_now()
         })
 
     def mark_error(self, generation_id: ObjectId):
         self.update(generation_id, {
             "status": EnumStatus.ERROR,
-            "end_time": datetime.now()
+            "end_time": utc_now()
         })
 
-    def close_if_finished(self, generation_id: ObjectId) -> Optional[str]:
+    def close_if_finished(
+        self, generation_id: ObjectId, *, require_simulations: bool = False
+    ) -> Optional[str]:
         """Close a generation once nothing in it is still running.
 
         ``Done`` when every simulation finished well, ``Error`` when at least
         one did not, and ``None`` when there is still work in progress.
         Returns what it decided so a caller can log or act on it.
+
+        **Idempotent**: it re-reads the generation's simulations every time, so
+        repeating it decides the same thing. That is what makes the close
+        recoverable — a failure of this write after a simulation was published
+        must not fall back on the simulation, so the caller isolates it and a
+        periodic pass repeats it (R24).
 
         This exists as one method because the same five lines were written out
         in four places — the entrypoint, the runner, the recovery pass and the
@@ -113,14 +273,128 @@ class GenerationRepository:
         sweep failed the last active simulation of a generation without ever
         re-evaluating it, so the generation stayed pending for ever and the
         experiment waited on a strategy event that would never come.
+
+        ``require_simulations`` refuses to close one that has none. A
+        generation is inserted *before* its simulations, so "no simulations"
+        means "not enqueued yet" as often as it means "nothing to wait for" —
+        and only the caller knows which. The engine's all-cached path means
+        the second and passes the default; a periodic reconciliation cannot
+        know, and passes true.
         """
         if self.any_simulation_active(generation_id):
+            return None
+        if require_simulations and not self.count_simulations(generation_id):
             return None
         if self.all_simulations_done(generation_id):
             self.mark_done(generation_id)
             return EnumStatus.DONE
         self.mark_error(generation_id)
         return EnumStatus.ERROR
+
+    def count_simulations(self, generation_id: ObjectId) -> int:
+        with self.connection.connect() as db:
+            return db["simulations"].count_documents(
+                {"generation_id": generation_id})
+
+    def find_open_before(self, cutoff: datetime) -> list[Generation]:
+        """Generations still open, old enough that nothing is mid-enqueue.
+
+        The input to the periodic close. The grace is what keeps it off a
+        generation whose simulations are still being created: the documents go
+        in one at a time, and a fast worker can finish the first before the
+        second exists — so "one simulation, none active, all done" is a state
+        an enqueue in progress passes through.
+        """
+        with self.connection.connect() as db:
+            return list(db["generations"].find({
+                "status": {"$in": [EnumStatus.WAITING, EnumStatus.RUNNING]},
+                "start_time": {"$lt": cutoff},
+            }))
+
+    def record_plan(
+        self, generation_id: ObjectId, expected_seeds: list[int]
+    ) -> bool:
+        """Write down what this generation intends to run.
+
+        Completeness has to be measured against the plan, not against the
+        documents that exist: a generation whose second simulation failed to
+        be created looked complete with one replica, because one replica was
+        all there was to count.
+        """
+        return self.update(
+            generation_id, {"expected_seeds": [int(s) for s in expected_seeds]})
+
+    def claim_retry_round(
+        self, generation_id: ObjectId, max_retries: int
+    ) -> Optional[int]:
+        """Take the next repetition round, if the limit allows one.
+
+        Returns the round number, or ``None`` when the limit is spent.
+
+        **Claimed before anything is created.** The counter used to be
+        incremented after the clones were inserted, and the order was the
+        defect: a failure of that write — or a restart in the window — left
+        clones that would run and a count that had not moved, so the next
+        evaluation saw the old number and created another round. Reproduced
+        with ``max_retries=1``: two effective repetitions.
+
+        The condition is in the write, so two passes cannot both claim the
+        same round, and a crash after this point costs a *wasted* round rather
+        than an extra one. That is the direction to fail in: exceeding a
+        budget is worse than not using it.
+        """
+        with self.connection.connect() as db:
+            doc = db["generations"].find_one_and_update(
+                {
+                    "_id": generation_id,
+                    "$or": [
+                        {"replica_retries": {"$lt": int(max_retries)}},
+                        {"replica_retries": {"$exists": False}},
+                    ],
+                },
+                {"$inc": {"replica_retries": 1}},
+                return_document=ReturnDocument.AFTER,
+                projection={"replica_retries": 1},
+            )
+            if doc is None:
+                return None
+            return int(doc.get("replica_retries") or 0)
+
+    def reopen(self, generation_id: ObjectId) -> bool:
+        """Put a generation back to ``Running`` so its repeats can close it.
+
+        Separate from claiming the round: the round is a budget decision and
+        this is a state change, and doing them in one write is what made the
+        budget unrecoverable.
+        """
+        with self.connection.connect() as db:
+            res = db["generations"].update_one(
+                {"_id": generation_id},
+                {"$set": {"status": EnumStatus.RUNNING, "end_time": None}},
+            )
+            return res.matched_count > 0
+
+    def release_retry_round(self, generation_id: ObjectId) -> int:
+        """Give a claimed round back when nothing was created for it.
+
+        The budget is claimed before the clones precisely so that a failure
+        cannot exceed it; this is the other half, so a round that produced
+        nothing is not silently consumed.
+        """
+        with self.connection.connect() as db:
+            doc = db["generations"].find_one_and_update(
+                {"_id": generation_id, "replica_retries": {"$gt": 0}},
+                {"$inc": {"replica_retries": -1}},
+                return_document=ReturnDocument.AFTER,
+                projection={"replica_retries": 1},
+            )
+            return int((doc or {}).get("replica_retries") or 0)
+
+    def retries_used(self, generation_id: ObjectId) -> int:
+        with self.connection.connect() as db:
+            doc = db["generations"].find_one(
+                {"_id": generation_id}, {"replica_retries": 1}) or {}
+            return int(doc.get("replica_retries") or 0)
 
     def all_simulations_done(self, generation_id: ObjectId) -> bool:
         """Returns True if every simulation in this generation has status DONE."""
@@ -167,12 +441,31 @@ class GenerationRepository:
         with self.connection.connect() as db:
             sims = list(db["simulations"].find(
                 {"generation_id": generation_id, "status": EnumStatus.DONE},
-                {"_id": 0, "individual_id": 1, "network_metrics": 1}
+                {"_id": 0, "individual_id": 1, "network_metrics": 1,
+                 "random_seed": 1, "end_time": 1}
             ))
+
+        # One result per seed. A replica that was repeated can leave two
+        # ``Done`` documents for one seed — the collection of a run that was
+        # adopted and then published again, say — and appending both would
+        # weigh that seed twice in the mean while the completeness record,
+        # which counts seeds, still said two of two. The later result wins:
+        # it is the one the repetition was for.
+        latest: dict[tuple[str, Any], dict] = {}
+        for sim in sims:
+            key = (sim.get("individual_id", ""), sim.get("random_seed"))
+            if key[1] is None:
+                # No seed to deduplicate by — legacy documents. Kept, under a
+                # key of their own, so nothing is silently dropped.
+                latest[(key[0], id(sim))] = sim
+                continue
+            kept = latest.get(key)
+            if kept is None or _ended_after(sim, kept):
+                latest[key] = sim
 
         # Accumulate per individual
         accumulated: dict[str, dict[str, list[float]]] = {}
-        for sim in sims:
+        for sim in latest.values():
             ind_id = sim.get("individual_id", "")
             metrics_map = sim.get("network_metrics") or {}
             if ind_id not in accumulated:
@@ -196,20 +489,31 @@ class GenerationRepository:
         return result
 
     def replica_completeness(
-        self, generation_id: ObjectId | str, metrics: list[str]
+        self,
+        generation_id: ObjectId | str,
+        metrics: list[str],
+        expected_seeds: Optional[list[int]] = None,
     ) -> dict[str, "ReplicaCompleteness"]:
         """How much evidence stands behind each individual's objectives.
 
         The aggregation above averages whatever finished and says nothing
-        about what did not. An individual evaluated from one replicate is
-        then indistinguishable from one evaluated from two — and that happened
-        in practice: a pilot lost one simulation of a two-seed individual, and
+        about what did not. An individual evaluated from one replicate is then
+        indistinguishable from one evaluated from two — and that happened in
+        practice: a pilot lost one simulation of a two-seed individual, and
         the objective published for it was a single run's, with no record of
         the difference.
 
-        Reported rather than decided here. What to do about an incomplete
+        Reported rather than decided. What to do about an incomplete
         evaluation — accept it, repeat the replica, reject the individual — is
-        a question about the experiment, not about this collection.
+        a question about the experiment, and it is answered by the engine.
+
+        ``expected_seeds`` is **the plan**, read from the generation when the
+        caller does not supply it. Deriving it from the documents that happen
+        to exist cannot see a replica whose creation failed, so a generation
+        that enqueued one simulation instead of two looked complete; and after
+        a repeat there are more documents than seeds, which would make the
+        same individual look over-replicated. A generation written before this
+        was recorded reports :data:`STATE_UNKNOWN` rather than a guess.
 
         ``per_metric`` is separate from ``observed`` because a run can finish
         and still not carry every metric: two objectives of the *same*
@@ -218,41 +522,28 @@ class GenerationRepository:
         if isinstance(generation_id, str):
             generation_id = ObjectId(generation_id)
         with self.connection.connect() as db:
+            if expected_seeds is None:
+                generation = db["generations"].find_one(
+                    {"_id": generation_id}, {"expected_seeds": 1}) or {}
+                planned = generation.get("expected_seeds")
+                expected_seeds = (
+                    [int(s) for s in planned] if planned else None)
             sims = list(db["simulations"].find(
                 {"generation_id": generation_id},
                 {"_id": 0, "individual_id": 1, "status": 1,
                  "random_seed": 1, "network_metrics": 1},
             ))
 
-        out: dict[str, ReplicaCompleteness] = {}
+        planned_seeds = sorted(set(expected_seeds)) if expected_seeds else None
+        grouped: dict[str, list[dict]] = {}
         for sim in sims:
             ind_id = str(sim.get("individual_id") or "")
-            if not ind_id:
-                continue
-            entry = out.setdefault(ind_id, {
-                "expected": 0, "observed": 0,
-                "expected_seeds": [], "observed_seeds": [], "missing_seeds": [],
-                "per_metric": {},
-            })
-            seed = sim.get("random_seed")
-            entry["expected"] += 1
-            if seed is not None:
-                entry["expected_seeds"].append(int(seed))
-            if sim.get("status") != EnumStatus.DONE:
-                continue
-            entry["observed"] += 1
-            if seed is not None:
-                entry["observed_seeds"].append(int(seed))
-            for metric in metrics:
-                if metric in (sim.get("network_metrics") or {}):
-                    entry["per_metric"][metric] = \
-                        entry["per_metric"].get(metric, 0) + 1
+            if ind_id:
+                grouped.setdefault(ind_id, []).append(sim)
 
-        for entry in out.values():
-            entry["expected_seeds"].sort()
-            entry["observed_seeds"].sort()
-            entry["missing_seeds"] = sorted(
-                set(entry["expected_seeds"]) - set(entry["observed_seeds"]))
+        out: dict[str, ReplicaCompleteness] = {}
+        for ind_id, runs in grouped.items():
+            out[ind_id] = _completeness_of(runs, metrics, planned_seeds)
         return out
 
     def watch_status_waiting(self, on_change: Callable[[dict], None]):

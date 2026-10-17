@@ -22,6 +22,7 @@ from bson import ObjectId, errors as bson_errors
 
 from pylib.db import MongoRepository
 from pylib.db.models import FirmwareFile, FirmwareRepositorySnapshot, FirmwareSnapshot
+from pylib.timeutil import utc_now
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ def capture_firmware_snapshot(
         return None
 
     try:
-        if not mongo.experiment_repo.claim_firmware_snapshot(experiment_id, datetime.now()):
+        if not mongo.experiment_repo.claim_firmware_snapshot(experiment_id, utc_now()):
             log.info("[firmware] Snapshot already present for experiment %s.", experiment_id)
             return None
     except Exception:
@@ -217,7 +218,7 @@ def _block(status: str, *, repositories: list[FirmwareRepositorySnapshot],
            **extra: Any) -> FirmwareSnapshot:
     block: FirmwareSnapshot = {
         "status": status,
-        "captured_at": datetime.now(),
+        "captured_at": utc_now(),
         "schema_version": SCHEMA_VERSION,
         "repositories": repositories,
     }

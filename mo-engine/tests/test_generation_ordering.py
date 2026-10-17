@@ -15,6 +15,7 @@ from lib.strategy.nsga3 import NSGA3LoopStrategy
 from lib.strategy.nsga2 import NSGA2LoopStrategy
 from lib.strategy.random_search import RandomSearchStrategy
 from lib.strategy.batch import BatchStrategy
+from lib.strategy.completeness import ReplicaGate, ReplicaPolicy
 
 
 def _make_strategy(cls, enqueue_name):
@@ -28,11 +29,16 @@ def _make_strategy(cls, enqueue_name):
     # The enqueue snapshots this onto the generation document, for resume.
     strat._ga_rng = random.Random(42)
     strat._genome_objectives_cache = {}
+    strat._genome_completeness_cache = {}
+    strat._generation_completeness = {}
     strat._inserted_genomes = set()
     strat._sim_done_count = 0
     strat._count_sims_inserted = 0
     strat._objective_keys = ["f1"]
     strat._map_genome_objectives = {}
+    # The enqueue records what the generation plans to run, which is what the
+    # completeness of its evaluations is later measured against.
+    strat._replica_policy = ReplicaPolicy()
     # Feasible genome (no penalty) so the enqueue reaches the simulation path.
     strat._problem_adapter = MagicMock()
     strat._problem_adapter.penalty_objectives.return_value = None
@@ -45,6 +51,10 @@ def _make_strategy(cls, enqueue_name):
     mongo.generation_repo.insert.side_effect = lambda doc: (order.append("generation"), doc["_id"])[1]
     mongo.simulation_repo.insert.side_effect = lambda doc: (order.append("simulation"), ObjectId())[1]
     strat.mongo = mongo
+    # Through the strategy's own repositories: the plan is written with the
+    # generation, and what completeness is later measured against.
+    strat._replica_gate = ReplicaGate(
+        mongo, objective_keys=["f1"], policy=strat._replica_policy)
 
     genome = MagicMock()
     genome.get_hash.return_value = "hash-1"
@@ -96,11 +106,14 @@ def test_analytical_enqueue_skips_simulations(cls):
     # The enqueue snapshots this onto the generation document, for resume.
     strat._ga_rng = random.Random(42)
     strat._genome_objectives_cache = {}
+    strat._genome_completeness_cache = {}
+    strat._generation_completeness = {}
     strat._inserted_genomes = set()
     strat._count_sims_inserted = 0
     strat._objective_keys = ["f1", "f2"]
     strat._objective_goals = [1, 1]
     strat._map_genome_objectives = {}
+    strat._replica_policy = ReplicaPolicy()
 
     strat._problem_adapter = MagicMock()
     strat._problem_adapter.is_analytical = True
@@ -114,6 +127,9 @@ def test_analytical_enqueue_skips_simulations(cls):
     mongo.generation_repo.insert.side_effect = lambda doc: (order.append("generation"), doc["_id"])[1]
     mongo.simulation_repo.insert.side_effect = lambda doc: (order.append("simulation"), ObjectId())[1]
     strat.mongo = mongo
+    strat._replica_gate = ReplicaGate(
+        mongo, objective_keys=strat._objective_keys,
+        policy=strat._replica_policy)
 
     genome = MagicMock()
     genome.get_hash.return_value = "hash-1"

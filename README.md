@@ -198,9 +198,16 @@ Every variable has a working default, so the stack also comes up without a
 `.env` file. See [nginx/README.md](nginx/README.md) for the full proxy setup,
 including how to install a CA-issued certificate.
 
-In `docker-compose.yaml` itself you still need to set the **number of Cooja
-simulators**: add or remove `cooja*` services and keep the master node's
+In `docker-compose.yaml` itself you still set the **number of Cooja simulators
+on this machine**: add or remove `cooja*` services and keep the master node's
 `NUMBER_OF_CONTAINERS` in sync.
+
+That variable now **seeds** the local host's workers on the first start rather
+than sizing a worker pool. Capacity comes from an inventory of hosts and
+workers in the database, maintained by Docker discovery and the health cycle,
+and more machines are added from the **Infrastructure** page without touching
+the compose file — see
+[Distributed Cooja resources](docs/markdown/RECURSOS_DISTRIBUIDOS.md).
 
 #### 4. Launch the full stack with Docker Compose
 

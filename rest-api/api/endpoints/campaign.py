@@ -13,6 +13,7 @@ from api.mappers.campaign import (
     campaign_to_mongo,
 )
 from api.mappers.experiment import experiment_from_mongo
+from pylib.timeutil import utc_now
 
 router = APIRouter()
 
@@ -25,7 +26,7 @@ def create_campaign(
     """Create a new campaign. Returns the generated campaign_id."""
     try:
         doc = campaign_to_mongo(campaign)
-        doc.setdefault("created_time", datetime.now())
+        doc.setdefault("created_time", utc_now())
         doc.setdefault("experiment_ids", [])
         return str(factory.campaign_repo.insert(doc))
     except Exception as e:

@@ -18,12 +18,14 @@ alone cannot tell a run that finished from one that was interrupted — and
 taking the first for the second threw away results that had completed while
 the master-node was down.
 """
+from datetime import timedelta
 from unittest.mock import MagicMock
 
 from bson import ObjectId
 
 from lib.detached import RunState
 from lib.recovery import RECOVERY_MESSAGE, reconcile_occupied_resources
+from pylib.timeutil import utc_now
 
 #: The probe's answers, named.
 ALIVE = RunState(alive=True, finished=False)
@@ -50,8 +52,10 @@ class FakeMongo:
         self.generation_repo.all_simulations_done.return_value = False
 
 
-def resource(_id=RES_1, name="cooja1", simulation_id=SIM_1) -> dict:
-    return {"_id": _id, "name": name, "current_simulation_id": simulation_id}
+def resource(_id=RES_1, name="cooja1", simulation_id=SIM_1, **over) -> dict:
+    doc = {"_id": _id, "name": name, "current_simulation_id": simulation_id}
+    doc.update(over)
+    return doc
 
 
 def simulation(status="Running", generation_id=GEN_1, remote_pid=4242) -> dict:
@@ -439,3 +443,166 @@ class TestGenerationClosing:
         report = reconcile_occupied_resources(mongo, probe=lambda *a: GONE)
         assert report.released == ["cooja1"]
         mongo.generation_repo.any_simulation_active.assert_not_called()
+
+
+# ── R04: a placement in progress is not an orphan ───────────────────────────
+
+class TestFreshReservationsAreLeftAlone:
+    """A reservation seconds old belongs to a thread that is still working.
+
+    Reproduces R04. The periodic pass read a held container, saw that nobody
+    was following it — the registration was taken later, on the runner thread
+    — and treated it as the leftover of a dead process. A reservation created
+    moments earlier was freed and its simulation failed while the thread that
+    owned it was still assembling its inputs.
+
+    Two mechanisms now prevent it, and both are tested: the dispatcher claims
+    the attempt before the reservation can be observed, and this pass refuses
+    to conclude anything from a ``reserved`` container younger than the TTL
+    that the sweep owns.
+    """
+
+    def _just_reserved(self):
+        return resource(
+            status="reserved", reserved_at=utc_now(), attempt_id="A")
+
+    def test_a_recent_reservation_is_not_released(self):
+        mongo = FakeMongo(
+            occupied=[self._just_reserved()],
+            simulation=simulation("Waiting", remote_pid=None))
+
+        report = reconcile_occupied_resources(
+            mongo, probe=lambda *a: GONE, reserved_grace_sec=600)
+
+        assert report.preparing == ["cooja1"]
+        mongo.resource_repo.force_release.assert_not_called()
+        mongo.simulation_repo.mark_error.assert_not_called()
+
+    def test_an_old_reservation_is_still_reconciled(self):
+        """The grace is a grace, not an exemption."""
+        old = resource(
+            status="reserved",
+            reserved_at=utc_now() - timedelta(seconds=1200),
+            attempt_id="A")
+        mongo = FakeMongo(
+            occupied=[old], simulation=simulation("Waiting", remote_pid=None))
+
+        report = reconcile_occupied_resources(
+            mongo, probe=lambda *a: GONE, reserved_grace_sec=600)
+
+        assert report.preparing == []
+        mongo.resource_repo.force_release.assert_called_once()
+
+    def test_a_reservation_that_did_start_is_reconciled_regardless(self):
+        """A pid means the run began; the status write is simply behind."""
+        started = resource(
+            status="reserved", reserved_at=utc_now(), attempt_id="A",
+            remote_pid=4242)
+        mongo = FakeMongo(
+            occupied=[started], simulation=simulation("Running"))
+
+        report = reconcile_occupied_resources(
+            mongo, probe=lambda *a: ALIVE, reserved_grace_sec=600)
+
+        assert report.adopted == ["cooja1"]
+
+    def test_startup_concludes_about_everything(self):
+        """Nothing at startup can belong to this process, so no grace."""
+        mongo = FakeMongo(
+            occupied=[self._just_reserved()],
+            simulation=simulation("Waiting", remote_pid=None))
+
+        report = reconcile_occupied_resources(mongo, probe=lambda *a: GONE)
+
+        assert report.preparing == []
+        mongo.resource_repo.force_release.assert_called_once()
+
+
+class TestTheWritesAreGuardedByTheAttempt:
+    def test_the_release_insists_on_the_attempt_it_read(self):
+        mongo = FakeMongo(
+            occupied=[resource(status="busy", attempt_id="A")],
+            simulation=simulation("Running"))
+
+        reconcile_occupied_resources(mongo, probe=lambda *a: GONE)
+
+        assert mongo.resource_repo.force_release.call_args.kwargs[
+            "expect_attempt_id"] == "A"
+
+    def test_a_refused_release_leaves_the_simulation_alone(self):
+        """Between the read and the write, a new placement may have landed.
+
+        Failing its simulation then marks a failure against work that is
+        running perfectly well.
+        """
+        mongo = FakeMongo(
+            occupied=[resource(status="busy", attempt_id="A")],
+            simulation=simulation("Running"))
+        mongo.resource_repo.force_release.return_value = False
+
+        report = reconcile_occupied_resources(mongo, probe=lambda *a: GONE)
+
+        mongo.simulation_repo.mark_error.assert_not_called()
+        assert report.released == []
+        assert report.failed_simulations == []
+
+    def test_the_failure_is_guarded_too(self):
+        mongo = FakeMongo(
+            occupied=[resource(status="busy", attempt_id="A")],
+            simulation=simulation("Running"))
+
+        reconcile_occupied_resources(mongo, probe=lambda *a: GONE)
+
+        assert mongo.simulation_repo.mark_error.call_args.kwargs[
+            "attempt_id"] == "A"
+
+
+# ── R05.3: the pid is written in two places ─────────────────────────────────
+
+class TestThePidIsFoundWhereverItWasRecorded:
+    """``_started`` writes the resource first, then the simulation.
+
+    A failure between the two writes left the only copy of the pid on the
+    resource — where this never looked. The probe was then asked about
+    nothing, answered "gone", and a live run had its container released
+    (R05.3).
+    """
+
+    def test_the_resource_pid_is_used_when_the_simulation_has_none(self):
+        asked = []
+
+        def probe(host, res, pid):
+            asked.append(pid)
+            return ALIVE
+
+        mongo = FakeMongo(
+            occupied=[resource(status="busy", attempt_id="A", remote_pid=9001)],
+            simulation=simulation("Running", remote_pid=None))
+
+        report = reconcile_occupied_resources(mongo, probe=probe)
+
+        assert asked == [9001]
+        assert report.adopted == ["cooja1"]
+        mongo.resource_repo.force_release.assert_not_called()
+
+    def test_an_adopted_run_is_resumed_with_that_pid(self):
+        resumed = []
+        mongo = FakeMongo(
+            occupied=[resource(status="busy", attempt_id="A", remote_pid=9001)],
+            simulation=simulation("Running", remote_pid=None))
+
+        reconcile_occupied_resources(
+            mongo, probe=lambda *a: ALIVE,
+            on_adopt=lambda sim, h, r, attempt, pid: resumed.append((attempt, pid)))
+
+        assert resumed == [("A", 9001)]
+
+    def test_no_pid_anywhere_is_still_a_definite_gone(self):
+        mongo = FakeMongo(
+            occupied=[resource(status="busy", attempt_id="A", remote_pid=None)],
+            simulation=simulation("Running", remote_pid=None))
+
+        reconcile_occupied_resources(mongo, probe=lambda *a: ALIVE)
+
+        # The probe is never asked: there is nothing to ask about.
+        mongo.resource_repo.force_release.assert_called_once()

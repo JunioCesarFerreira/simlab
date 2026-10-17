@@ -194,9 +194,16 @@ Todas as variáveis têm um valor padrão funcional, então a pilha também sobe
 o arquivo `.env`. Veja [nginx/README.md](nginx/README.md) para a configuração
 completa do proxy, incluindo como instalar um certificado emitido por uma CA.
 
-No próprio `docker-compose.yaml` ainda é preciso definir o **número de
-simuladores Cooja**: adicione ou remova serviços `cooja*` e mantenha a variável
-`NUMBER_OF_CONTAINERS` do master node sincronizada.
+No próprio `docker-compose.yaml` ainda se define o **número de simuladores
+Cooja desta máquina**: adicione ou remova serviços `cooja*` e mantenha a
+variável `NUMBER_OF_CONTAINERS` do master node sincronizada.
+
+Essa variável agora **semeia** os workers do host local no primeiro start, em
+vez de dimensionar um pool. A capacidade vem de um inventário de hosts e
+workers no banco, mantido pela descoberta Docker e pelo ciclo de saúde, e
+outras máquinas são acrescentadas pela página **Infraestrutura** sem tocar no
+compose — ver
+[Recursos computacionais distribuídos](docs/markdown/RECURSOS_DISTRIBUIDOS.md).
 
 #### 4. Inicializar a pilha completa com Docker Compose
 
@@ -243,9 +250,11 @@ Após tudo estar em execução, o ambiente estará pronto para receber requisiç
 
 ## Uso
 
-> Esta seção será atualizada futuramente conforme a GUI for desenvolvida.
-
-Uma vez que o ambiente esteja em execução (conforme descrito nas **Instruções de Configuração**), o sistema pode ser operado principalmente pela interface **Swagger UI** exposta pela REST API.
+Uma vez que o ambiente esteja em execução (conforme descrito nas **Instruções
+de Configuração**), o sistema é operado pela **WebGUI** — experimentos,
+instâncias sintéticas, resultados e a página de **Infraestrutura**. A
+**Swagger UI** da REST API continua disponível e é o caminho para o que a
+interface ainda não cobre.
 
 ### 1. Acessar o SimLab
 

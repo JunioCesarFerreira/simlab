@@ -124,6 +124,25 @@ export function probeLevel(resource: ResourceDto): LevelView {
 }
 
 /**
+ * Read a timestamp from the API as an instant, whatever it carries.
+ *
+ * An ISO string with an offset is unambiguous and `Date` handles it. One
+ * *without* an offset is not, and `new Date("2026-10-15T15:00:00")` resolves
+ * it in the **browser's** timezone — so a measurement one minute old read as
+ * three hours in the future on a machine in `America/Sao_Paulo`, and the age
+ * came out empty because the code refuses a negative one.
+ *
+ * The API now sends an offset. This stays because the fix is only true of
+ * what the API sends *today*: a response from a cache, a proxy, or an older
+ * deployment can still arrive without one, and the documented
+ * interpretation of a naive SimLab timestamp is UTC.
+ */
+export function parseInstant(value: string): number {
+  const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(value.trim());
+  return new Date(hasZone ? value : `${value.trim()}Z`).getTime();
+}
+
+/**
  * How old the measurement is, in words.
  *
  * "ready" is a statement about the past, and the page did not say how far
@@ -133,7 +152,7 @@ export function probeLevel(resource: ResourceDto): LevelView {
  */
 export function evidenceAge(checkedAt?: string | null): string {
   if (!checkedAt) return "";
-  const seconds = Math.round((Date.now() - new Date(checkedAt).getTime()) / 1000);
+  const seconds = Math.round((Date.now() - parseInstant(checkedAt)) / 1000);
   if (!Number.isFinite(seconds) || seconds < 0) return "";
   if (seconds < 60) return `${seconds}s ago`;
   const minutes = Math.round(seconds / 60);

@@ -20,6 +20,7 @@ from lib.detached import (
     STATUS_PREFIX,
     DetachedRun,
     DetachedRunError,
+    LaunchUnconfirmed,
     RunHandle,
     build_launch_command,
     build_poll_command,
@@ -224,10 +225,40 @@ class TestLaunch:
         assert build_run(transport).launch(JAVA).pid == 77
 
     def test_a_run_that_never_starts_is_reported(self):
+        """No PID *and* nothing left running: an ordinary start-up failure."""
         transport = FakeTransport([ExecResult(0, "launched", "")])
-        transport.default = ExecResult(0, "", "")
+        # The group file is written before the command, so its absence means
+        # the inner shell never reached its first statement — the stop
+        # command then reports `-gone`.
+        transport.default = ExecResult(0, f"{STATUS_PREFIX}-gone", "")
         with pytest.raises(DetachedRunError, match="did not record a PID"):
             build_run(transport).launch(JAVA)
+
+    def test_an_unreadable_pid_with_a_live_group_is_not_a_failed_start(self):
+        """R05.4: "error while launching" is not evidence that nothing ran.
+
+        The launch is two round trips. The second one failing says nothing
+        about the first: the JVM may be running with nobody holding its pid.
+        Reported as a plain failure, the container went back to the pool with
+        a simulation on it — so this case is kept apart, and the caller
+        quarantines the worker instead of releasing it.
+        """
+        transport = FakeTransport([ExecResult(0, "launched", "")])
+        transport.default = ExecResult(0, f"{STATUS_PREFIX}-alive", "")
+        with pytest.raises(LaunchUnconfirmed, match="may still be executing"):
+            build_run(transport).launch(JAVA)
+
+    def test_an_unreadable_pid_signals_the_group_before_giving_up(self):
+        transport = FakeTransport([ExecResult(0, "launched", "")])
+        transport.default = ExecResult(0, f"{STATUS_PREFIX}-gone", "")
+        with pytest.raises(DetachedRunError):
+            build_run(transport).launch(JAVA)
+
+        # The group, not the pid: there is no pid, which is the whole problem.
+        assert any(
+            f"cat {PGID_FILE}" in c and "kill -TERM" in c
+            for c in transport.commands
+        ), transport.commands
 
     def test_a_failing_launch_surfaces_the_stderr(self):
         transport = FakeTransport([ExecResult(127, "", "setsid: not found")])

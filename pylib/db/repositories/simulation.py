@@ -6,6 +6,7 @@ from bson import ObjectId, errors
 from pylib.db.models.simulation import Simulation
 from pylib.db.models.enums import EnumStatus
 from pylib.db.connection import MongoDBConnection
+from pylib.timeutil import utc_now
 
 log = logging.getLogger(__name__)
 
@@ -137,7 +138,7 @@ class SimulationRepository:
                 self._attempt_filter(sim_id, attempt_id),
                 {"$set": {
                     "status": EnumStatus.RUNNING,
-                    "start_time": datetime.now(),
+                    "start_time": utc_now(),
                 }}
             )
             return res.matched_count > 0
@@ -160,7 +161,7 @@ class SimulationRepository:
         """
         fields: dict = {
             "status": EnumStatus.DONE,
-            "end_time": datetime.now(),
+            "end_time": utc_now(),
             "log_cooja_id": log_id,
             "csv_log_id": csv_id,
             "network_metrics": network_metrics,
@@ -175,17 +176,51 @@ class SimulationRepository:
             return res.matched_count > 0
 
     def mark_error(
-        self, sim_id: ObjectId, system_message: str, *, attempt_id: Optional[str]
+        self,
+        sim_id: ObjectId,
+        system_message: str,
+        *,
+        attempt_id: Optional[str],
+        log_id: Optional[ObjectId] = None,
+        csv_id: Optional[ObjectId] = None,
+        partial_metrics: Optional[dict[str, float]] = None,
     ) -> bool:
+        """Record a failure — never over a result that was already published.
+
+        The ``$ne: Done`` guard is an invariant, not a precaution. A
+        simulation that reached ``Done`` has had its metrics read by the
+        optimiser; turning it into ``Error`` afterwards changes an experiment's
+        outcome retroactively. It happened: ``_publish`` wrote ``mark_done``
+        and then closed the generation, and a failure of that *second*,
+        administrative write fell through to the generic handler, which marked
+        the finished simulation in error (R24).
+
+        The guard belongs here rather than only at the call site, because the
+        call site is exactly what got it wrong, and because the attempt filter
+        alone matches a simulation this attempt itself has just completed.
+
+        ``log_id``/``csv_id``/``partial_metrics`` carry the artifacts of a run
+        that produced bytes without a confirmed completion. They are recorded
+        so nothing is lost, and ``partial_metrics`` is deliberately *not*
+        ``network_metrics``: the aggregation that feeds the objectives reads
+        the latter, and an unconfirmed run must not enter a mean.
+        """
+        fields: dict[str, Any] = {
+            "status": EnumStatus.ERROR,
+            "end_time": utc_now(),
+            "system_message": system_message,
+        }
+        if log_id is not None:
+            fields["log_cooja_id"] = log_id
+        if csv_id is not None:
+            fields["csv_log_id"] = csv_id
+        if partial_metrics is not None:
+            fields["partial_metrics"] = partial_metrics
+            fields["partial"] = True
+        condition = self._attempt_filter(sim_id, attempt_id)
+        condition["status"] = {"$ne": EnumStatus.DONE}
         with self.connection.connect() as db:
-            res = db["simulations"].update_one(
-                self._attempt_filter(sim_id, attempt_id),
-                {"$set": {
-                    "status": EnumStatus.ERROR,
-                    "end_time": datetime.now(),
-                    "system_message": system_message
-                }}
-            )
+            res = db["simulations"].update_one(condition, {"$set": fields})
             return res.matched_count > 0
 
     def expire_attempt(
@@ -208,7 +243,7 @@ class SimulationRepository:
                 {"_id": sim_id, "attempt_id": attempt_id},
                 {"$set": {
                     "status": EnumStatus.ERROR,
-                    "end_time": datetime.now(),
+                    "end_time": utc_now(),
                     "system_message": message,
                     "attempt_id": None,
                 }},
@@ -276,7 +311,7 @@ class SimulationRepository:
                     "assigned_resource_name": resource_name,
                     "assigned_container_id": container_id,
                     "attempt_id": attempt_id,
-                    "assigned_at": datetime.now(),
+                    "assigned_at": utc_now(),
                 }},
             )
             return res.matched_count > 0
@@ -294,6 +329,92 @@ class SimulationRepository:
                 {"$set": {"remote_pid": remote_pid}},
             )
             return res.modified_count > 0
+
+    #: Fields a repeat must *not* inherit: everything about the attempt that
+    #: failed, and everything about its result.
+    _RETRY_DROPS = (
+        "_id", "status", "start_time", "end_time", "system_message",
+        "log_cooja_id", "csv_log_id", "network_metrics", "partial_metrics",
+        "partial", "dodag", "attempt_id", "remote_pid", "assigned_at",
+        "assigned_host_id", "assigned_host_name", "assigned_resource_id",
+        "assigned_resource_name", "assigned_container_id", "unfetched_result",
+        "retry_round",
+    )
+
+    def clone_for_retry(
+        self,
+        sim_id: ObjectId,
+        *,
+        reason: str = "",
+        retry_round: Optional[int] = None,
+    ) -> Optional[ObjectId]:
+        """Queue the same replica again: same individual, same seed.
+
+        A failed replica leaves a hole in an evaluation, and the only honest
+        ways to fill it are to run that seed again or to say the evaluation is
+        incomplete. This is the first.
+
+        A **new document** rather than a reset of the old one, and that is the
+        point: the failure stays on the record with its message, and the
+        repeat is a separate run with its own placement and its own outcome.
+        Resetting would erase the evidence that a replica had to be repeated,
+        which is exactly what the completeness record exists to show.
+
+        Only ``Done`` documents are aggregated and completeness counts
+        **seeds**, so the pair cannot contribute twice. Refuses to repeat a
+        simulation that already has a result.
+
+        **Idempotent per round.** ``retry_round`` is the repetition this clone
+        belongs to, and a second call for the same
+        ``(generation, individual, seed, round)`` creates nothing. That is what
+        makes the whole repetition recoverable: a pass that claimed a round
+        and then failed part-way can be run again without duplicating the
+        clones it did manage to create.
+        """
+        with self.connection.connect() as db:
+            original = db["simulations"].find_one({"_id": sim_id})
+            if original is None:
+                log.error("Cannot repeat simulation %s: it no longer exists", sim_id)
+                return None
+            if original.get("status") == EnumStatus.DONE:
+                log.info("Simulation %s already has a result; not repeating it", sim_id)
+                return None
+            if retry_round is not None:
+                existing = db["simulations"].find_one({
+                    "generation_id": original.get("generation_id"),
+                    "individual_id": original.get("individual_id"),
+                    "random_seed": original.get("random_seed"),
+                    "retry_round": int(retry_round),
+                }, {"_id": 1})
+                if existing is not None:
+                    log.info(
+                        "Replica %s of %s is already queued for round %s",
+                        original.get("random_seed"),
+                        original.get("individual_id"), retry_round,
+                    )
+                    return None
+            clone = {k: v for k, v in original.items() if k not in self._RETRY_DROPS}
+            clone["status"] = EnumStatus.WAITING
+            clone["retry_of"] = sim_id
+            clone["retry_reason"] = reason
+            clone["created_time"] = utc_now()
+            if retry_round is not None:
+                clone["retry_round"] = int(retry_round)
+            return db["simulations"].insert_one(clone).inserted_id
+
+    def find_terminal_by_generation(
+        self, generation_id: ObjectId
+    ) -> list[Simulation]:
+        """Simulations of one generation that ended without a result.
+
+        What a repeat decision needs: the failed replicas, with their seeds
+        and the identity of what they were evaluating.
+        """
+        with self.connection.connect() as db:
+            return list(db["simulations"].find({
+                "generation_id": generation_id,
+                "status": {"$in": [EnumStatus.ERROR, EnumStatus.CANCELLED]},
+            }))
 
     def find_assigned_to_resource(self, resource_id: ObjectId) -> list[Simulation]:
         with self.connection.connect() as db:

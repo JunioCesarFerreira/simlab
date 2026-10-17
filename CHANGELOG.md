@@ -44,8 +44,53 @@ containers seeded as before.
   are recorded at reservation time and published with the simulation, so the
   chain experiment → generation → individual → simulation now reaches the
   machine — and the distribution of work can be audited from the results.
-- **Replica completeness.** The aggregation reports how many replicas stand
-  behind each individual's objectives, and which seeds are missing.
+- **Replica completeness, from the plan to the page.** Each generation records
+  the seeds it intends to run, and the completeness of an individual's
+  evaluation is measured against *that* — not against the simulation documents
+  that happen to exist, which cannot see a replica whose creation failed.
+  Counted by seed rather than by document, so a repeated replica neither looks
+  like an extra one nor contributes twice. Published on the individual
+  (`completeness`) and shown in its panel, with "not recorded" kept distinct
+  from "complete".
+- **A policy for an incomplete evaluation**, read from the experiment's
+  simulation configuration rather than assumed: `replica_policy`
+  (`repeat`/`none`), `max_replica_retries` and `incomplete_objective`
+  (`worst`/`accept`). A failed replica is run again with its own seed, as a
+  new simulation document so the failure stays on the record.
+- **A worker that may still be running something leaves the pool, and stays
+  out until a container is asked.** Disabling it and letting go of the attempt
+  is one write, so a failure of the protective step cannot be followed by a
+  release that undoes it — and the reason is recorded on the worker
+  (`held_for`), so `release`, `force_release`, `reserve` and every status
+  write refuse while it is set. Being disabled kept the *dispatcher* off the
+  worker but not the reconciliation, which found a terminal simulation,
+  concluded nothing was running and freed it with no probe.
+- **A pass that resolves those holds**, every health cycle: it asks the
+  container and clears the hold only when there is nothing alive and nothing
+  left behind. Without it every lost confirmation — most of them transient —
+  would need a person.
+- **Every lost launch confirmation is treated the same way.** The launch is
+  two round trips, and a connection that drops around either of them says
+  nothing about the JVM. Only one of the three failure modes was classified
+  before; the others released the worker. A stop that is *confirmed* still
+  makes it an ordinary failure.
+- **A lease held for the whole of the preparation.** A heartbeat renews the
+  reservation while the firmware is fetched and uploaded, so the sweep cannot
+  expire it underneath the thread doing the work — renewing only at the two
+  ends proved ownership at two instants, and the sweep acts on what is true in
+  between. A refused renewal is a definite answer that the reservation is
+  gone, and nothing further is sent.
+- **A run directory is never cleaned over a live process.** The reservation is
+  not evidence that the previous run is over, so the container is asked.
+- **An uncollected result is preserved under a name the next run will not
+  delete**, and where it is — worker, directory, pid — is written on the
+  simulation. When the copy cannot be made, because the second session never
+  opened, the worker is **held** instead of released: the original is still
+  under the name the next run deletes.
+- **A repetition round is claimed before any clone exists**, with the limit in
+  the condition of the write, and each clone carries its round. The counter
+  used to be written after the clones, so a failure of that write let the
+  limit be exceeded.
 - **HTTPS through a reverse proxy**, with GUI, API and Grafana behind one
   entry point and the auxiliary ports bound to loopback.
 
@@ -61,7 +106,64 @@ containers seeded as before.
   removed.
 - Host and worker updates are partial by field: a change of port no longer
   replaces the credential, the pinned host key or the second hop's settings.
-- The infrastructure collections store **aware UTC** timestamps.
+- **Timestamps are aware UTC end to end.** The collections already wrote it;
+  the Mongo client now *reads* it that way (`tz_aware=True`), so an API
+  response carries an offset instead of an ISO string a browser resolves in
+  its own timezone — a measurement one minute old displayed as being in the
+  future. A naive value already stored is read as UTC, which is correct for
+  the data that exists: every process that wrote one ran with its clock on
+  UTC. No data was migrated.
+- **An incomplete evaluation no longer reaches the optimiser as a complete
+  one.** This changes results. Before, the objective was the mean of whichever
+  replicas finished, with nothing recording the difference. The default now
+  repeats the missing replica once and, if it is still incomplete, gives the
+  individual the worst objective — an under-replicated individual should not
+  compete on equal terms with a fully evaluated one. Set
+  `incomplete_objective: accept` for the previous numbers, with the
+  completeness recorded alongside.
+- **A published result is never reclassified.** `mark_error` refuses to write
+  over a simulation that reached `Done`: closing its generation is separate
+  bookkeeping, and a failure of that write used to mark the finished
+  simulation in error.
+- **A reused evaluation keeps its evidence.** The genome cache stores the
+  completeness next to the objectives, so a genome that reappears in a later
+  generation — where it has no simulations of its own to count — is not
+  reported as "unknown, used". Measured in a 344-simulation pilot: 38 of 210
+  individuals had lost a record that said *complete, 2 of 2*. An analytical
+  evaluation and an individual rejected by a constraint are now named as such
+  rather than sharing the same word.
+- **One result per seed, in the counting and in the mean.** The aggregation
+  walked every `Done` document, so two results for one seed weighed it twice
+  while the completeness record still said two of two. And a seed whose
+  earlier attempt failed while its repeat is in flight is *pending*, not
+  failed — deriving pending by exclusion lost the repeat entirely.
+- **A measurement has to be about the configuration in force.** The probe's
+  version is now a condition of the reservation and of the promotion, not just
+  a record: a probe that started before an access edit and published after it
+  could leave a worker schedulable on evidence about a path that no longer
+  existed.
+- **A conflicting host key refuses the session**, instead of being logged while
+  the connection that accepted it carried on.
+- **A resumed run is asked what became of it before any deadline applies.**
+  The time the master-node spent down is not time the simulation spent
+  executing.
+- **The readiness probe takes Java's own exit status.** It was reading the
+  status of a `head` at the end of a pipeline, which succeeds after printing
+  the error message of a runtime that is not there.
+- **Removing a host is a withdrawal first.** Nothing can be created on or
+  placed on a host being removed, so a registration that had already read it
+  cannot leave a worker behind without one.
+- **Two registrations may not point at the same worker.** Address, port and
+  directory are compared across every host before one is accepted.
+- **Validation is uniform across the infrastructure routes**: unknown fields
+  at the root of a body, textual and fractional ports, booleans sent as
+  strings and nulls sent where text is expected are all refused with a 422.
+- **Editing a worker's port removes a conflicting override** left by an older
+  version of the form, which used to win silently over the port the page
+  showed.
+- **Editing a host's access takes its workers out of the pool** until they are
+  measured again, and the measurement carries the configuration version it was
+  taken under — so a probe that started before the edit cannot validate it.
 
 ### Removed
 
@@ -79,11 +181,41 @@ containers seeded as before.
   not substitute for user authentication.
 - **Runtime metrics cover local containers only.** cAdvisor scrapes this
   machine, so a distributed generation under-reports CPU and memory.
-- A failed result collection is retried over a new session, but if both
-  attempts fail the simulation is marked in error; the artifacts survive on
-  the worker and nothing goes back for them.
-- Repeating a replica that failed is not implemented: the incompleteness is
-  reported, the repeat is not.
+- A failed result collection is retried over a new session. If that also
+  fails, the artifacts are copied aside and their location recorded on the
+  simulation — but **nothing goes back for them**: recovering one is a manual
+  operation.
+- **No end-to-end *exactly once*,** and the earlier wording here was itself
+  too strong. The attempt guard makes a publication by *another* attempt fail;
+  it does not forbid the same attempt from publishing twice. What is
+  implemented: a publication by an attempt that lost its container is refused
+  and its blobs removed; a repeated publish reuses the same ids; a repeated
+  conversion removes the previous blobs first, and leaves one unreferenced if
+  that removal fails; a crash between the GridFS upload and the state write
+  leaves blobs nothing references, and nothing collects them. The aggregation
+  reads one result per seed, so a duplicate `Done` document cannot enter a
+  mean twice — that is a property of the query, not of the writes.
+- **Removing a host can be partial, and says so.** Workers already deleted
+  stay deleted; a refusal leaves the host in service and names the worker that
+  blocked it. A worker that gained a reservation *during* the withdrawal is
+  left in place rather than deleted under a running simulation — the host is
+  removed and the response is a 200 naming what was stranded, because an
+  orphan is the lesser harm and hiding it is not an option. Closing that
+  window entirely would need a multi-document transaction.
+- **Two registrations for one worker on one host** are refused by a unique
+  index as well as by the API check. The same container reached through two
+  different *host* registrations is still only caught by the check, because
+  the host's address is not in that collection.
+- **Repeating a replica reopens a terminal generation**, which touches the
+  optimisation loop. The cycle is covered by tests against the real handler
+  and the real gate; it has **not** yet run with Cooja, because no replica
+  failed in the pilots.
+- **A stalled upload holds its worker.** The lease heartbeat renews while the
+  thread is alive, which is correct for work in progress but means a transfer
+  that hangs keeps the worker until `SIM_TIMEOUT_SEC`. Detecting progress is a
+  different mechanism from detecting life.
+- **Nothing comes back for a preserved result.** `unfetched_result` records
+  the worker, directory and pid; recovering one is a manual operation.
 
 ---
 

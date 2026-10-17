@@ -13,6 +13,7 @@ from datetime import datetime
 from pylib.service_settings import env_to_bool
 from pylib.telemetry.artifact import ARTIFACT_SCHEMA_VERSION, serialize_samples
 from pylib.telemetry.prometheus import PrometheusClient
+from pylib.timeutil import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -192,7 +193,7 @@ def collect_and_store(
         # experiment page shows an explicit warning and a manual-retry shortcut.
         # The block remains eligible for the periodic backfill sweep.
         block = {**base, "status": STATUS_UNAVAILABLE,
-                 "collection_finished_at": datetime.now(),
+                 "collection_finished_at": utc_now(),
                  "error": f"Prometheus unreachable at {prometheus_url}"}
         mongo.experiment_repo.set_runtime_metrics(experiment_id, block)
         logger.warning(
@@ -210,7 +211,7 @@ def collect_and_store(
 
         if not samples:
             block = {**base, "status": STATUS_NO_DATA,
-                     "collection_finished_at": datetime.now(), "summary": summary}
+                     "collection_finished_at": utc_now(), "summary": summary}
             mongo.experiment_repo.set_runtime_metrics(experiment_id, block)
             logger.warning(
                 "[telemetry] no Prometheus samples for experiment %s over [%s, %s] "
@@ -227,7 +228,7 @@ def collect_and_store(
         block = {
             **base,
             "status": STATUS_COMPLETED,
-            "collection_finished_at": datetime.now(),
+            "collection_finished_at": utc_now(),
             "artifact": {
                 "storage": "gridfs",
                 "file_id": file_id,
@@ -251,7 +252,7 @@ def collect_and_store(
         mongo.experiment_repo.set_runtime_metrics(experiment_id, {
             **base,
             "status": STATUS_FAILED,
-            "collection_finished_at": datetime.now(),
+            "collection_finished_at": utc_now(),
             "error": str(e),
         })
         return STATUS_FAILED

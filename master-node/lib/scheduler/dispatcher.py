@@ -276,11 +276,19 @@ class Dispatcher:
             sim_id, host.get("name"), resource.get("name"), attempt_id,
             describe_loads(loads),
         )
-        self._thread_factory(
-            target=self._runner.run,
-            args=(sim, host, resource, attempt_id),
-            name=f"sim-{sim_id[:8]}",
-        )
+        try:
+            self._thread_factory(
+                target=self._runner.run,
+                args=(sim, host, resource, attempt_id),
+                name=f"sim-{sim_id[:8]}",
+            )
+        except Exception:
+            # The thread that would have owned this attempt does not exist, so
+            # the registration taken in `_claim` has to go: an attempt nobody
+            # follows must be visible to the reconciliation, which is the
+            # whole reason the registration is conditional on a thread.
+            self._runner.forget_attempt(attempt_id)
+            raise
         return True
 
     def _log_starvation(self, sim_id: str, loads: list) -> None:
@@ -338,22 +346,49 @@ class Dispatcher:
         if host is None:
             log.warning("Host %s vanished between snapshot and claim", chosen.host_id)
             return None
+        if host.get("withdrawn_at"):
+            # Being removed. The snapshot the policy chose from may predate
+            # the withdrawal, and placing work on a host whose workers are
+            # being deleted strands the run.
+            log.info(
+                "Host %s is being removed; not placing work on it",
+                host.get("name"))
+            return None
+
+        # The configuration the measurement has to belong to. A probe that
+        # started before an access edit and published after it can leave a
+        # worker `available` describing a path that no longer exists, and the
+        # status filter alone cannot see that.
+        config_version = int(host.get("config_version") or 0)
 
         for candidate in self._mongo.resource_repo.find_free_by_host(chosen.host_id):
             attempt_id = uuid.uuid4().hex
             reserved = self._mongo.resource_repo.reserve(
-                candidate["_id"], sim_oid, attempt_id)
+                candidate["_id"], sim_oid, attempt_id,
+                expect_config_version=config_version)
             if reserved is None:
                 continue  # lost the race for this one; try the next
+
+            # Claimed as this process's *before* anything else can observe
+            # the reservation. The registration used to be taken by the runner
+            # thread, which starts later — and in that gap the periodic
+            # reconciliation saw a held container that nobody was following,
+            # read it as the leftover of a dead process, freed it and failed
+            # its simulation (R04). Registering on this thread, between the
+            # atomic reservation and everything that follows, removes the gap
+            # rather than making it smaller.
+            self._runner.register_attempt(attempt_id)
 
             if self._record_assignment(host, reserved, sim_oid, attempt_id):
                 return host, reserved, attempt_id
 
             # The reservation stands but the simulation does not know about it,
             # which would strand the container. Give it back and stop.
+            self._runner.forget_attempt(attempt_id)
             self._mongo.resource_repo.release(
                 reserved["_id"], sim_oid, attempt_id,
-                container_state_counts=not operator_configured(host, reserved))
+                container_state_counts=not operator_configured(host, reserved),
+                config_version=config_version)
             return None
         return None
 

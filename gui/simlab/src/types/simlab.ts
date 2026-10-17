@@ -218,6 +218,47 @@ export interface FirmwareSnapshotDto {
  * Individual (within a generation)
  * ----------------------------------------------------- */
 
+/**
+ * What an individual's objectives rest on.
+ *
+ * Published because the objectives alone cannot say: a mean over one replica
+ * and a mean over five look identical. `state` is the short answer and the
+ * counts are the evidence; `objective_used` says whether the experiment's
+ * configured policy let this evaluation reach the algorithm.
+ */
+export interface CompletenessDto {
+  /**
+   * `analytical` and `infeasible` exist so that `unknown` keeps meaning one
+   * thing — *the plan was not recorded*. Neither of those had replicas to
+   * count in the first place.
+   */
+  state: "complete" | "partial" | "pending" | "invalid" | "unknown" | "analytical" | "infeasible";
+  expected?: number;
+  observed?: number;
+  failed?: number;
+  pending?: number;
+  /** Planned seeds with no simulation at all — nothing to repeat. */
+  absent?: number;
+  expected_seeds?: number[];
+  observed_seeds?: number[];
+  missing_seeds?: number[];
+  failed_seeds?: number[];
+  /** Observations per metric: two objectives can rest on different counts. */
+  per_metric?: Record<string, number>;
+  attempts?: number;
+  objective_used?: boolean;
+  policy?: string;
+  /**
+   * Carried over from an earlier evaluation of the same genome, with that
+   * evaluation's decision intact. A reused individual has no simulations in
+   * its own generation to count.
+   */
+  reused?: boolean;
+  source?: string;
+  /** Why there were no replicas, for `analytical` and `infeasible`. */
+  reason?: string;
+}
+
 export interface IndividualDto {
   id: ID;
   individual_id: string; // chromosome hash
@@ -225,6 +266,11 @@ export interface IndividualDto {
   objectives: number[]; // indexed; use parameters.objectives[i].metric_name for the name
   topology_picture_id: ID | null;
   simulations_ids?: ID[];
+  /**
+   * `null` when the evaluation predates the record, **not** when it is
+   * complete. The two are different states and the panel says which.
+   */
+  completeness?: CompletenessDto | null;
 }
 
 /* -------------------------------------------------------

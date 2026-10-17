@@ -7,6 +7,7 @@ from bson import ObjectId, errors
 from pylib.db.models.experiment import Experiment, DataConversionConfig
 from pylib.db.models.enums import EnumStatus
 from pylib.db.connection import MongoDBConnection
+from pylib.timeutil import utc_now
 
 log = logging.getLogger(__name__)
 
@@ -83,7 +84,7 @@ class ExperimentRepository:
                 {"$set": {
                     "id": experiment_id,
                     "status": EnumStatus.RUNNING,
-                    "start_time": datetime.now()
+                    "start_time": utc_now()
                 }}
             )
             return result.modified_count > 0
@@ -146,7 +147,7 @@ class ExperimentRepository:
                     "status": "collecting",
                     "started_at": started_at,
                     "finished_at": finished_at,
-                    "claimed_at": datetime.now(),
+                    "claimed_at": utc_now(),
                 }}}
             )
             return result.modified_count > 0

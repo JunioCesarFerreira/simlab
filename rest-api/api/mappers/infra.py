@@ -279,7 +279,7 @@ def resource_to_mongo(dto: dict, *, for_update: bool = False) -> dict:
     it differs from its host's default, how to authenticate to it. Everything
     else about a worker is measured.
     """
-    d = deepcopy(dict(dto))
+    d = deepcopy(_as_block(dto, where="worker"))
     _refuse_plaintext(d, where="worker")
 
     rejected = sorted(set(d) & _OBSERVED_RESOURCE_FIELDS)
@@ -289,31 +289,40 @@ def resource_to_mongo(dto: dict, *, for_update: bool = False) -> dict:
             + ", ".join(rejected)
         )
 
+    _refuse_unknown(d, _RESOURCE_FIELDS, where="worker")
+
     doc: dict[str, Any] = {}
     if "name" in d:
-        name = str(d["name"]).strip()
-        if not name:
-            raise PlaintextRefused("name cannot be empty")
-        doc["name"] = name
+        doc["name"] = _as_text(d["name"], field="name")
     if "enabled" in d:
-        doc["enabled"] = _as_bool(d["enabled"], field="enabled")
+        doc["enabled"] = as_bool(d["enabled"], field="enabled")
     if "remote_dir" in d and d["remote_dir"]:
         doc["remote_dir"] = str(d["remote_dir"])
 
     if "endpoint" in d:
-        endpoint = d.get("endpoint") or {}
-        address = str(endpoint.get("address") or "").strip()
-        if not address:
+        endpoint = _as_block(d.get("endpoint"), where="worker endpoint")
+        _refuse_unknown(endpoint, _ENDPOINT_FIELDS, where="worker endpoint")
+        if not endpoint.get("address"):
             raise PlaintextRefused(
                 "endpoint.address is required: it is where this worker's sshd "
                 "answers, and the master-node will not guess it"
             )
+        # Through the same rule as the host's address, which refused a null
+        # and a nested object while this one wrapped both in `str()` — so
+        # `{"a": 1}` was stored as the text "{'a': 1}" and every later
+        # connection resolved that name.
+        address = _as_text(endpoint["address"], field="endpoint.address")
         doc["endpoint"] = {"address": address}
-        if endpoint.get("port"):
-            doc["endpoint"]["port"] = int(endpoint["port"])
+        if endpoint.get("port") is not None:
+            # Through the same validation as every other port. `int()` here
+            # raised ValueError, which no handler caught: a textual port
+            # answered 500 with a traceback for plainly bad input.
+            doc["endpoint"]["port"] = _as_port(
+                endpoint["port"], field="endpoint.port")
 
     if "connection" in d:
-        doc["connection"] = _connection_to_mongo(d.get("connection") or {})
+        doc["connection"] = _connection_to_mongo(
+            _as_block(d.get("connection"), where="worker connection"))
 
     if not for_update:
         if not doc.get("name"):
@@ -409,7 +418,7 @@ def host_to_mongo(dto: dict, *, for_update: bool = False) -> dict:
     anything is written: the database must never hold a credential in the
     clear, not even briefly.
     """
-    d = deepcopy(dict(dto))
+    d = deepcopy(_as_block(dto, where="host"))
     _refuse_plaintext(d, where="host")
 
     rejected = sorted(set(d) & _OBSERVED_HOST_FIELDS)
@@ -419,24 +428,27 @@ def host_to_mongo(dto: dict, *, for_update: bool = False) -> dict:
             + ", ".join(rejected)
         )
 
+    # The nested blocks refused unknown fields; the root did not, so
+    # `passwrod` at the top level was dropped and answered with a 201.
+    _refuse_unknown(d, _HOST_FIELDS, where="host")
+
     doc: dict[str, Any] = {}
     if "name" in d:
-        name = str(d["name"]).strip()
-        if not name:
-            raise PlaintextRefused("name cannot be empty")
-        doc["name"] = name
+        doc["name"] = _as_text(d["name"], field="name")
     if "enabled" in d:
-        doc["enabled"] = _as_bool(d["enabled"], field="enabled")
+        doc["enabled"] = as_bool(d["enabled"], field="enabled")
 
     if "access" in d:
         doc["access"] = _access_to_mongo(
-            d.get("access") or {}, for_update=for_update)
+            _as_block(d.get("access"), where="access"), for_update=for_update)
     if "container_access" in d:
         doc["container_access"] = _container_access_to_mongo(
-            d.get("container_access") or {}, for_update=for_update)
+            _as_block(d.get("container_access"), where="container_access"),
+            for_update=for_update)
     if "discovery" in d:
         doc["discovery"] = _discovery_to_mongo(
-            d.get("discovery") or {}, for_update=for_update)
+            _as_block(d.get("discovery"), where="discovery"),
+            for_update=for_update)
 
     if not for_update:
         # Set once, at creation: only remote hosts are registered through the
@@ -460,7 +472,7 @@ def host_to_mongo(dto: dict, *, for_update: bool = False) -> dict:
 _MIN_PORT, _MAX_PORT = 1, 65535
 
 
-def _as_bool(value: Any, *, field: str) -> bool:
+def as_bool(value: Any, *, field: str) -> bool:
     """A boolean the client actually sent, not whatever ``bool()`` makes of it.
 
     ``bool("false")`` is ``True``, so a client sending the string disabled a
@@ -482,6 +494,15 @@ def _as_port(value: Any, *, field: str) -> int:
     client got a 500 and the log got a traceback, for what is plainly bad
     input.
     """
+    if isinstance(value, bool):
+        # `int(True)` is 1, a valid port. A client that sent a boolean here
+        # meant something else entirely.
+        raise PlaintextRefused(f"{field} must be a number, got {value!r}")
+    if isinstance(value, float) and not value.is_integer():
+        # `int(22.9)` is 22: a typo silently became a different port, and the
+        # response said 22 as though that had been asked for.
+        raise PlaintextRefused(
+            f"{field} must be a whole number, got {value!r}")
     try:
         port = int(value)
     except (TypeError, ValueError):
@@ -490,6 +511,40 @@ def _as_port(value: Any, *, field: str) -> int:
         raise PlaintextRefused(
             f"{field} must be between {_MIN_PORT} and {_MAX_PORT}, got {port}")
     return port
+
+
+def _as_block(value: Any, *, where: str) -> dict:
+    """A nested object, or a refusal the API can turn into a 422.
+
+    Every rule below enumerates a block's fields, and enumerating something
+    that is not a mapping raises ``TypeError`` — which no route catches, so
+    ``{"endpoint": 123}`` answered 500 with a traceback. The *shape* has to be
+    checked before the fields, and this is the one place that does it.
+
+    ``None`` becomes an empty block: sending a block as null is "nothing to
+    say about it", which the field-level rules already express.
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise PlaintextRefused(
+            f"{where} must be an object, got {type(value).__name__}")
+    return value
+
+
+def _as_text(value: Any, *, field: str) -> str:
+    """A non-empty string the client actually sent.
+
+    ``str(None)`` is ``"None"``, and that is what got stored: a host whose
+    ``access.address`` was sent as null had the four characters ``None``
+    written to it, and every later connection attempt resolved that name.
+    """
+    if value is None or isinstance(value, (dict, list, bool)):
+        raise PlaintextRefused(f"{field} must be text, got {value!r}")
+    text = str(value).strip()
+    if not text:
+        raise PlaintextRefused(f"{field} cannot be empty")
+    return text
 
 
 def _as_choice(value: Any, *, field: str, allowed: Iterable[str]) -> str:
@@ -514,6 +569,12 @@ def _refuse_unknown(payload: dict, known: Iterable[str], *, where: str) -> None:
             f"unknown {where} field(s): {', '.join(unknown)}")
 
 
+#: What a client may send at the root of each body. The nested blocks already
+#: refused unknown fields; these are the two levels that did not.
+_HOST_FIELDS = ("name", "enabled", "access", "container_access", "discovery")
+_RESOURCE_FIELDS = ("name", "enabled", "remote_dir", "endpoint", "connection")
+_ENDPOINT_FIELDS = ("address", "port")
+
 _ACCESS_FIELDS = (
     "transport", "address", "port", "username", "auth_method", "secret",
     "key_fingerprint", "host_key_fingerprint",
@@ -533,17 +594,11 @@ def _access_to_mongo(access: dict, *, for_update: bool = False) -> dict:
     _refuse_unknown(access, _ACCESS_FIELDS, where="access")
     out: dict[str, Any] = {} if for_update else {"transport": "ssh"}
     if "address" in access:
-        address = str(access["address"]).strip()
-        if not address:
-            raise PlaintextRefused("access.address cannot be empty")
-        out["address"] = address
+        out["address"] = _as_text(access["address"], field="access.address")
     if "port" in access:
         out["port"] = _as_port(access["port"], field="access.port")
     if "username" in access:
-        username = str(access["username"]).strip()
-        if not username:
-            raise PlaintextRefused("access.username cannot be empty")
-        out["username"] = username
+        out["username"] = _as_text(access["username"], field="access.username")
     if "auth_method" in access:
         out["auth_method"] = _as_choice(
             access["auth_method"], field="access.auth_method",
@@ -566,7 +621,8 @@ def _container_access_to_mongo(access: dict, *, for_update: bool = False) -> dic
     if for_update:
         out: dict[str, Any] = {}
         if "username" in access:
-            out["username"] = str(access["username"]).strip()
+            out["username"] = _as_text(
+                access["username"], field="container_access.username")
         if "port" in access:
             out["port"] = _as_port(access["port"], field="container_access.port")
         if "address_mode" in access:

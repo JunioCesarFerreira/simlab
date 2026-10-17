@@ -60,8 +60,9 @@ RUN_ARTIFACTS = (OUT_FILE, PID_FILE, EXIT_FILE, PGID_FILE)
 __all__ = [
     "OUT_FILE", "PID_FILE", "EXIT_FILE", "PGID_FILE", "RUN_ARTIFACTS",
     "STATUS_PREFIX",
-    "DetachedRun", "DetachedRunError", "RunHandle", "RunOutcome", "RunProgress",
+    "DetachedRun", "DetachedRunError", "LaunchUnconfirmed", "RunHandle", "RunOutcome", "RunProgress",
     "build_launch_command", "build_poll_command", "build_inspect_command",
+    "build_live_check_command", "assert_no_live_run", "LiveRunPresent",
     "parse_poll_output", "parse_inspect_output", "inspect_run", "is_running",
     "RunState",
 ]
@@ -80,6 +81,27 @@ RECONNECT_MAX_SEC = 30.0
 
 class DetachedRunError(RuntimeError):
     """The run could not be started, or its bookkeeping is unreadable."""
+
+
+class LaunchUnconfirmed(DetachedRunError):
+    """The launch may have started something, and that something is still up.
+
+    ``launch`` sends a shell that backgrounds the JVM and then reads the PID
+    the shell recorded. Those are two round trips, and the second one failing
+    says nothing about the first: the JVM may be running perfectly well with
+    nobody holding its pid. Reported as a plain failure, the container went
+    back to the pool with a simulation on it — "error while launching" is not
+    evidence that no launch occurred.
+
+    Raised only when the group could not be stopped either. A confirmed stop
+    turns this back into an ordinary start-up failure, which it then is.
+
+    Covers three moments, because all three say the same thing about the JVM:
+    the launch command was sent and contact was lost, the shell answered but
+    the pid file never appeared, and the pid read itself lost contact. Only the
+    second was classified before, so a dropped connection around the launch
+    released the worker.
+    """
 
 
 @dataclass(frozen=True)
@@ -283,17 +305,50 @@ class DetachedRun:
         the launch's own shell exits immediately by design, so it cannot know
         the PID the inner shell recorded.
         """
-        result = self._transport.exec_command(
-            build_launch_command(command, remote_dir=self._remote_dir),
-            timeout=self._exec_timeout,
-        )
+        try:
+            result = self._transport.exec_command(
+                build_launch_command(command, remote_dir=self._remote_dir),
+                timeout=self._exec_timeout,
+            )
+        except Exception as error:
+            # The command was *sent*. Whether it arrived is exactly what we do
+            # not know: a connection that drops after sshd accepted it leaves
+            # a JVM running with nobody holding its pid. Reported as a
+            # transport failure, this released the worker (R05).
+            if self._stop_by_group():
+                raise
+            raise LaunchUnconfirmed(
+                f"contact was lost while starting the run ({error}), and "
+                "nothing could be stopped, so something may be executing in "
+                f"{self._remote_dir}"
+            ) from error
         if not result.ok:
+            # The remote shell answered and said no. Nothing started.
             raise DetachedRunError(
                 f"could not start the run (exit {result.exit_status}): "
                 f"{result.stderr.strip() or result.stdout.strip()}"
             )
 
-        pid = self._read_pid()
+        try:
+            pid = self._read_pid()
+        except Exception:
+            # The launch command itself succeeded, so the inner shell ran and
+            # may have started the JVM. Before calling this a failed start,
+            # stop whatever it left: the group file is written *before* the
+            # command, so there is normally something to signal, and its
+            # absence means the inner shell never got that far.
+            #
+            # Every failure, not just `DetachedRunError`: a transport error
+            # while reading the pid says just as little about the JVM, and
+            # catching only the one class let it through to the generic
+            # handler, which released the worker.
+            if self._stop_by_group():
+                raise
+            raise LaunchUnconfirmed(
+                "the run recorded no PID and the process group could not be "
+                "stopped, so something may still be executing in "
+                f"{self._remote_dir}"
+            ) from None
         self._handle = RunHandle(pid=pid, remote_dir=self._remote_dir)
         log.info("Started detached run, pid=%s in %s", pid, self._remote_dir)
         return self._handle
@@ -331,6 +386,32 @@ class DetachedRun:
             "the run did not record a PID; it may have failed to start "
             f"(last read: {raw!r})"
         )
+
+    def _stop_by_group(self, grace_sec: float = TERMINATE_GRACE_SEC) -> bool:
+        """Stop what the launch started, knowing only its process group.
+
+        Used when the PID could not be read. Returns true when nothing is
+        left — including when no group was ever recorded, which means the
+        inner shell never reached its first statement and therefore started
+        nothing.
+        """
+        grace = max(1, int(grace_sec))
+        command = (
+            f"cd {shlex.quote(self._remote_dir)} 2>/dev/null; "
+            f"G=$(cat {PGID_FILE} 2>/dev/null); "
+            f'if [ -z "$G" ]; then echo {STATUS_PREFIX}-gone; exit 0; fi; '
+            f'kill -TERM -"$G" 2>/dev/null; sleep {grace}; '
+            f'kill -KILL -"$G" 2>/dev/null; sleep 1; '
+            f'if kill -0 -"$G" 2>/dev/null; '
+            f"then echo {STATUS_PREFIX}-alive; else echo {STATUS_PREFIX}-gone; fi"
+        )
+        try:
+            result = self._transport.exec_command(
+                command, timeout=self._exec_timeout + grace_sec + 2)
+        except Exception as error:
+            log.warning("Could not stop the launched group: %s", error)
+            return False
+        return f"{STATUS_PREFIX}-gone" in (result.stdout or "")
 
     # ── following ──────────────────────────────────────────────────────────
 
@@ -606,6 +687,66 @@ def parse_inspect_output(stdout: str) -> RunState:
         exit_code=exit_code,
         testlog_bytes=int(size),
     )
+
+
+class LiveRunPresent(DetachedRunError):
+    """A run is still executing in a directory something is about to disturb.
+
+    Raised by :func:`assert_no_live_run`. It means the database and the
+    container disagree: the reservation says this worker is ours and nothing
+    has been started on it, and the container says a JVM is running. Neither
+    cleaning the directory nor uploading into it is safe, so the caller must
+    treat the worker as needing a person rather than as free.
+    """
+
+
+def build_live_check_command(*, remote_dir: str, pid_file: str = PID_FILE) -> str:
+    """One round trip: is the pid recorded in this directory still alive?
+
+    The same guarded ``kill -0`` as everywhere: an empty or non-numeric value
+    must read as dead, because ``kill -0 ''`` succeeds.
+    """
+    return (
+        f"cd {shlex.quote(remote_dir)} 2>/dev/null; "
+        f"P=$(cat {pid_file} 2>/dev/null); "
+        f'if [ -n "$P" ] && [ "$P" != - ] && kill -0 "$P" 2>/dev/null; '
+        f"then echo {STATUS_PREFIX}-live; else echo {STATUS_PREFIX}-clear; fi"
+    )
+
+
+def assert_no_live_run(transport: Any, *, remote_dir: Optional[str] = None) -> None:
+    """Refuse to disturb a directory in which a run is still executing.
+
+    The run directory is shared by every attempt that lands on a worker, and
+    the first thing a new run does is a defensive ``rm -rf`` of the previous
+    one's artifacts. That is correct when the previous run is over and
+    destructive when it is not — and "is it over?" was never asked: the
+    reservation was taken as proof, which it is not. An attempt whose lease
+    expired while it was uploading, a JVM that outlived a release, a worker
+    handed on by a recovery pass: in each case two attempts share one
+    directory and the newcomer deletes the other's testlog.
+
+    One extra round trip buys the check. It is deliberately a *refusal* and
+    not a cleanup: if something is alive in there, no automatic action is
+    safe, and the caller takes the worker out of the pool instead.
+
+    Silent when the container cannot answer — this guards against a *known*
+    live process, and an unreachable container is handled by the transport
+    errors that follow.
+    """
+    target = remote_dir or getattr(
+        getattr(transport, "plan", None), "remote_dir", ".")
+    try:
+        result = transport.exec_command(
+            build_live_check_command(remote_dir=target), timeout=30)
+    except Exception as error:
+        log.warning("Could not check %s for a live run: %s", target, error)
+        return
+    if f"{STATUS_PREFIX}-live" in (result.stdout or ""):
+        raise LiveRunPresent(
+            f"a process recorded in {target} is still running, so the "
+            "directory must not be cleaned or written to"
+        )
 
 
 def inspect_run(transport: Any, pid: Optional[int], *, remote_dir: str) -> RunState:

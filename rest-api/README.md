@@ -69,12 +69,31 @@ master-node's health cycle carries them out — within one cycle, not instantly.
 | Code | When |
 |---|---|
 | **202** | A check or discovery was *recorded*. It has not happened yet |
-| **409** | The request conflicts with reality: a name already taken, a worker running a simulation, a discovered worker whose name identifies its container |
-| **422** | The input was refused before anything was written: a credential in the clear, a port that is not a number, an unknown field, a remote host with no address |
+| **409** | The request conflicts with reality: a name already taken, a worker running a simulation, a discovered worker whose name identifies its container, a host being removed, a second registration pointing at a worker another one already names |
+| **422** | The input was refused before anything was written: a credential in the clear, a port that is not a number or not whole, a boolean sent as something else, text sent as `null`, an unknown field at any level, a remote host with no address |
 
 A 409 on a delete is worth reading closely: the condition travels with the
 write, so it also means "it was free when you asked and taken by the time we
 deleted" — the record is intact.
+
+**Removing a host is the one operation that can be partial**, and it has two
+unhappy outcomes rather than one:
+
+| Response | What happened |
+|---|---|
+| **204** | The host and every worker are gone |
+| **409** | A worker could not be removed. The free ones *stay* deleted — undoing a delete is not possible — and the host is put **back in service** so its remaining capacity is not silently unschedulable |
+| **200** with `stranded` | The host is gone and the named workers are **not**: they gained a reservation during the withdrawal, and deleting a worker under a running simulation would lose the run. An orphan is the lesser harm, and it is reported rather than hidden |
+
+It withdraws the host first — nothing can be created on it or placed on it
+from that moment — then deletes each free worker conditionally, and only
+removes the host once a re-count finds nothing left.
+
+**Two registrations may not point at one worker.** Address, port and directory
+are compared before a registration is accepted, and on a single host a unique
+index refuses a duplicate even if two requests interleave. The same container
+reached through two different *host* registrations is only caught by the
+check, because a host's address is not in the workers' collection.
 
 ---
 
@@ -92,6 +111,37 @@ distinguishable:
 The third one matters: without it there is no way to undo an override, and
 changing a port used to replace the whole access block — taking the
 credential and the pinned host key with it.
+
+`null` is supported where inheriting is meaningful, which is not everywhere:
+
+| Block | Fields that accept `null` |
+|---|---|
+| worker `connection` | `transport`, `username`, `port`, `auth_method`, `secret` |
+| host `container_access` | `secret` (and `remote_dir` as an empty string) |
+| host `access` | `secret` only — a host with no address or user is not a host |
+
+Two other behaviours of an update are worth knowing:
+
+* **A worker's port.** Sending `endpoint.port` without a `connection.port`
+  states the *effective* port, and a conflicting override left by an older
+  version of the form is removed. That override wins in the connection plan,
+  so without this an edit changed the endpoint, reported the new port, and
+  went on connecting to the old one. A client that means to keep an override
+  sends it in the same request.
+* **Editing a host's access** clears what was measured about its workers,
+  bumps the host's configuration version and takes the idle ones out of the
+  pool until they are measured again. Workers holding a simulation are left
+  alone: the run in progress reached its container by a path that worked — and
+  when it is released it lands `offline`, because its measurement is about the
+  previous configuration. The version is a **condition** of the reservation
+  and of the promotion, not just a record, so a probe that started before the
+  edit cannot leave a worker schedulable after it.
+
+A malformed body is refused rather than coerced. The shape of each block is
+checked before its fields: `{"endpoint": 123}`, `{"access": 42}` and
+`{"endpoint": {"address": {"a": 1}}}` all answer 422, where the first two
+raised `TypeError` behind a 500 and the third was stored as the text
+`"{'a': 1}"`.
 
 ---
 

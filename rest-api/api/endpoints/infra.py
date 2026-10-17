@@ -16,11 +16,13 @@ sealed, and is opened exactly once, by the one process that runs simulations.
 import logging
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Response, status
+from fastapi.responses import JSONResponse
 from bson import errors as bson_errors
 
 from pylib.crypto import MalformedEnvelope
 from pylib.db import MongoRepository
 from pylib.db.models.infra import OCCUPIED_STATUSES, EnumAuthMethod
+from pylib.db.repositories.infra import HostWithdrawing
 
 from api.dependencies import get_factory
 
@@ -40,6 +42,7 @@ from api.domain.infra import (
 )
 from api.mappers.infra import (
     PlaintextRefused,
+    as_bool,
     dotted_update,
     host_from_mongo,
     host_to_mongo,
@@ -226,7 +229,13 @@ def update_host(
         # Forgetting it makes the next health cycle re-measure; leaving it
         # would let a placement use a configuration nobody has tried while
         # the page still showed the old result as evidence that it worked.
+        # Bumped first: the version is what lets a probe that is *already
+        # running* be recognised as describing the previous configuration
+        # when it finishes (R22). Clearing alone could not see that one.
+        version = factory.host_repo.bump_config_version(host["_id"])
         affected = factory.resource_repo.clear_probes_of_host(host["_id"])
+        log.info("Host %s access changed; configuration is now v%s",
+                 host_id, version)
         if affected:
             log.info(
                 "Host %s access changed; cleared the probe of %d worker(s)",
@@ -277,16 +286,41 @@ def delete_host(
     # deleting afterwards left a window the scheduler could reserve in, and
     # then removed the host along with the record of a live run.
     deleted, blocking = factory.host_repo.delete_if_drained(host["_id"])
-    if blocking:
+    if blocking and not deleted:
         raise HTTPException(
             status_code=409,
             detail=(
-                f"host {host.get('name')!r} still has simulations running on "
-                f"{', '.join(blocking)}. Disable the host and let it drain first."
+                f"host {host.get('name')!r} still has worker(s) that could "
+                f"not be removed: {', '.join(blocking)}. Any that were free "
+                "have been removed and the host has been left in service; "
+                "disable it, let the simulations drain, and try again."
             ),
         )
     if not deleted:
         raise HTTPException(status_code=404, detail="host not found")
+    if blocking:
+        # The host is gone and these are not: they gained a reservation during
+        # the withdrawal, and deleting a worker under a live run would lose the
+        # run. Reported rather than hidden — a 200 with the names, because a
+        # 204 would say nothing happened that the operator should know about.
+        log.error(
+            "Host %s was removed, but %s gained a reservation during the "
+            "withdrawal and were left in place", host_id, blocking,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "deleted": True,
+                "stranded": blocking,
+                "detail": (
+                    f"host {host.get('name')!r} was removed, but "
+                    f"{', '.join(blocking)} gained a reservation while it was "
+                    "being withdrawn and were left in place rather than "
+                    "deleted under a running simulation. Remove them once "
+                    "their simulations finish."
+                ),
+            },
+        )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -387,7 +421,14 @@ def set_resource_enabled(
     resource = _require_resource(factory, resource_id)
     if "enabled" not in body:
         raise HTTPException(status_code=422, detail="enabled is required")
-    factory.resource_repo.set_enabled(resource["_id"], bool(body["enabled"]))
+    try:
+        # `bool("false")` is True, so a client sending the string put a worker
+        # *into* the pool while asking for the opposite. Every other route
+        # went through this check; this one still called `bool()`.
+        enabled = as_bool(body["enabled"], field="enabled")
+    except PlaintextRefused as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    factory.resource_repo.set_enabled(resource["_id"], enabled)
     host = factory.host_repo.get(resource.get("host_id")) or {}
     return resource_from_mongo(
         _require_resource(factory, resource_id),
@@ -420,6 +461,31 @@ def get_resource_simulation(
         "attempt_id": resource.get("attempt_id"),
     }
 
+
+
+def _refuse_duplicate_target(
+    factory: MongoRepository, host: dict, resource: dict, exclude_id=None
+) -> None:
+    """Refuse a second name for the same physical worker.
+
+    Discovery cannot create one — it keys on the container id — but a
+    hand-registered worker can, and then two reservations exist for one run
+    directory: each run's defensive cleanup deletes the other's inputs, and
+    the exclusivity the reservation provides is held on the wrong document
+    (R08).
+    """
+    clash = factory.resource_repo.conflicting_target(
+        host, resource, exclude_id=exclude_id)
+    if clash is None:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            f"worker {clash.get('name')!r} already points at the same "
+            "address, port and directory. Two registrations for one container "
+            "would let two simulations share it."
+        ),
+    )
 
 # ── Workers configured one by one ────────────────────────────────────────────
 
@@ -454,7 +520,11 @@ def create_resource(
         )
     doc["host_id"] = host["_id"]
     doc.setdefault("remote_dir", DEFAULT_REMOTE_DIR)
-    resource_id = factory.resource_repo.insert_manual(doc)
+    _refuse_duplicate_target(factory, host, doc)
+    try:
+        resource_id = factory.resource_repo.insert_manual(doc)
+    except HostWithdrawing as e:
+        raise HTTPException(status_code=409, detail=str(e))
     created = factory.resource_repo.get(resource_id)
     return resource_from_mongo(created, host_name=host.get("name", ""), host=host)
 
@@ -478,6 +548,16 @@ def update_resource_connection(
     if not payload:
         raise HTTPException(status_code=422, detail="nothing to update")
 
+    # What the **client** sent, read before anything is merged. This is the
+    # whole of R17: the decision below asks whether a port override was
+    # stated, and asking it after the merge asks the wrong question — the
+    # merge has just reintroduced the stored one. The form sends `connection`
+    # with `username` and `auth_method` (nulls included), so the merged block
+    # always had a port and the override was never removed. Endpoint saved as
+    # 2223, effective port still 2222.
+    sent_connection = dict(payload.get("connection") or {})
+    states_effective_port = "endpoint" in payload and "port" not in sent_connection
+
     if "connection" in payload:
         # Merge, then drop what was explicitly removed. A null means "inherit
         # this again", and inheriting is the *absence* of the key: a stored
@@ -486,6 +566,32 @@ def update_resource_connection(
         merged = {**(resource.get("connection") or {}), **payload["connection"]}
         payload["connection"] = {
             k: v for k, v in merged.items() if v is not None}
+
+    if states_effective_port:
+        # The port the form sends is the port it shows. An older version of
+        # the form also wrote `connection.port`, and that override *wins* in
+        # the connection plan — so editing such a worker changed the endpoint,
+        # reported the new port, and went on connecting to the old one.
+        #
+        # Sending an endpoint without a connection override is therefore taken
+        # as stating the effective port, and a conflicting override is
+        # removed. A client that means to keep one sends it in the same body.
+        stored = (resource.get("connection") or {}).get("port")
+        new_port = (payload.get("endpoint") or {}).get("port")
+        if stored is not None and stored != new_port:
+            payload["connection"] = {
+                k: v for k, v in (payload.get("connection") or {}).items()
+                if k != "port"}
+            payload["_unset_connection_port"] = True
+
+    merged_for_target = {
+        **resource,
+        **{k: v for k, v in payload.items()
+           if k in ("name", "remote_dir", "endpoint", "connection")},
+    }
+    _refuse_duplicate_target(
+        factory, factory.host_repo.get(resource.get("host_id")) or {},
+        merged_for_target, exclude_id=resource["_id"])
 
     new_name = payload.get("name")
     if new_name and new_name != resource.get("name"):
@@ -512,7 +618,10 @@ def update_resource_connection(
                 status_code=409,
                 detail=f"this host already has a worker named {new_name!r}")
 
+    drop_connection_port = payload.pop("_unset_connection_port", False)
     factory.resource_repo.update_manual(resource["_id"], payload)
+    if drop_connection_port:
+        factory.resource_repo.clear_connection_port(resource["_id"])
     updated = _require_resource(factory, resource_id)
     host = factory.host_repo.get(updated.get("host_id")) or {}
     return resource_from_mongo(updated, host_name=host.get("name", ""), host=host)

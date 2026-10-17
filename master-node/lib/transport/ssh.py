@@ -40,6 +40,10 @@ GENERATED_ARTIFACTS = ("build/cooja", "COOJA.testlog", "COOJA.log")
 #: parsing the version text, because what matters is that it *ran*.
 JAVA_OK_MARK = "SIMLABJAVA-ok"
 
+#: Where the Cooja image keeps its runtime. The same path the launch uses, so
+#: the probe answers for the binary that will actually run the simulation.
+JAVA_BIN = "/opt/java/openjdk/bin/java"
+
 CONNECT_TIMEOUT = 20.0
 
 # How long a single SCP receive may stall before the transfer is abandoned.
@@ -83,6 +87,32 @@ def _describe_error(error: BaseException) -> str:
     """
     text = str(error).strip()
     return text or type(error).__name__
+
+
+def build_probe_command(jar: str, java_bin: str = JAVA_BIN) -> str:
+    """The shell that answers "is there a Cooja build, and can Java run it?".
+
+    Extracted so it can be *executed* in a test rather than have its output
+    simulated. That distinction caught the defect this version fixes.
+
+    The previous command was ``if java -version 2>&1 | head -n1; then echo
+    ok; fi``, and ``if`` on a pipeline reads the status of its **last**
+    element. ``head`` exits zero after reading the error message of a Java
+    that does not exist, so the mark was printed for a container with no
+    runtime at all: measured on a real shell, the probe returned
+    ``java_ok=True, ready=True, java_version=None`` with the binary missing.
+
+    So the status is taken from Java itself, by capturing its output into a
+    variable first: for ``V=$(cmd)`` the exit status is the command's, and
+    nothing is interposed. The first line is printed either way, because a
+    runtime that fails still says something worth recording.
+    """
+    return (
+        f"sha256sum {shlex.quote(jar)} 2>/dev/null | cut -d' ' -f1; "
+        f"if V=$({shlex.quote(java_bin)} -version 2>&1); then "
+        f'printf "%s\n" "$V" | head -n 1; echo {JAVA_OK_MARK}; '
+        f'else printf "%s\n" "$V" | head -n 1; fi'
+    )
 
 
 def build_cleanup_command(remote_dir: str, remote_files: Optional[list[str]] = None) -> str:
@@ -387,13 +417,7 @@ class SSHTransport:
         in error for what was a configuration problem.
         """
         jar = f"{self.plan.remote_dir}/build/libs/cooja.jar"
-        # The exit status matters, not just the output: `java -version` writes
-        # to stderr, so a missing binary and a working one both produce text.
-        command = (
-            f"sha256sum {shlex.quote(jar)} 2>/dev/null | cut -d' ' -f1; "
-            f"if /opt/java/openjdk/bin/java -version 2>&1 | head -n1; "
-            f"then echo {JAVA_OK_MARK}; fi"
-        )
+        command = build_probe_command(jar)
         try:
             result = self.exec_command(command, timeout=30)
         except TransportUnreachable as e:

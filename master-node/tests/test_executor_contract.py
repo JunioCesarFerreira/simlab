@@ -24,8 +24,9 @@ from unittest.mock import MagicMock
 import pytest
 from bson import ObjectId
 
-from lib.detached import RunOutcome
+from lib.detached import STATUS_PREFIX, RunOutcome
 from lib.scheduler.runner import SimulationRunner
+from lib.transport.base import ExecResult
 
 SIM_OID = ObjectId("507f1f77bcf86cd799430003")
 RES_ID = ObjectId("507f1f77bcf86cd799430021")
@@ -91,6 +92,14 @@ def wired(entry, monkeypatch, tmp_path):
         transport.__exit__ = lambda s, *a: None
         transport.plan.describe.return_value = "host-a/cooja1"
         transport.plan.remote_dir = "/opt/cooja"
+        # A parseable status line, because the executor now *asks* the
+        # container things a MagicMock cannot invent: whether anything is
+        # alive in the run directory before cleaning it, and what became of a
+        # run being resumed. "finished, exit 0, nothing alive, no testlog
+        # left" is the quiet answer — a leftover result is opted into per
+        # test, since finding one changes the decision.
+        transport.exec_command.return_value = ExecResult(
+            0, f"{STATUS_PREFIX} 0 0 0", "")
         transport.get_file.side_effect = (
             lambda remote, local: Path(local).write_text("testlog\n"))
         opened = MagicMock(return_value=transport)
@@ -120,7 +129,12 @@ class TestTerminationUnconfirmed:
 
         runner.run(SIM, HOST, RESOURCE, ATTEMPT)
 
-        mongo.resource_repo.set_enabled.assert_called_once_with(RES_ID, False)
+        # One write that disables *and* releases, and no ordinary release
+        # after it: two writes meant a failure of the first was followed by
+        # the second putting the worker back in the pool.
+        mongo.resource_repo.quarantine.assert_called_once()
+        assert mongo.resource_repo.quarantine.call_args.args[0] == RES_ID
+        mongo.resource_repo.release.assert_not_called()
 
     def test_the_simulation_is_marked_once(self, wired):
         runner, mongo, _, _ = self._unstoppable(wired)

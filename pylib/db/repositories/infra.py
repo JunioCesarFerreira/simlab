@@ -26,6 +26,7 @@ from pylib.db.connection import MongoDBConnection
 from pylib.timeutil import utc_now
 from pylib.db.models.infra import (
     CRYPTO_COLLECTION,
+    target_fingerprint,
     HOSTS_COLLECTION,
     OCCUPIED_STATUSES,
     RESOURCES_COLLECTION,
@@ -42,6 +43,16 @@ from pylib.db.models.infra import (
 
 log = logging.getLogger(__name__)
 
+
+class HostWithdrawing(RuntimeError):
+    """A worker was offered to a host that is being removed.
+
+    Raised rather than returned, because every caller of the creation paths
+    treats a falsy answer as "nothing to do" and this needs to reach the API
+    as a refusal the operator can read.
+    """
+
+
 _OCCUPIED = [s.value for s in OCCUPIED_STATUSES]
 _SCHEDULABLE = [s.value for s in SCHEDULABLE_HOST_STATUSES]
 
@@ -57,7 +68,9 @@ _REASSIGNABLE = [
 ]
 
 
-def released_status_expression(*, container_state_counts: bool) -> dict[str, Any]:
+def released_status_expression(
+    *, container_state_counts: bool, config_version: Optional[int] = None
+) -> dict[str, Any]:
     """Where a released container lands, as an aggregation expression.
 
     Only a *negative observation* takes a container out of the pool:
@@ -79,6 +92,13 @@ def released_status_expression(*, container_state_counts: bool) -> dict[str, Any
     "yes" is what sent two hand-configured remote workers out of the pool on
     every completed simulation. Pass
     ``not operator_configured(host, resource)``.
+
+    ``config_version`` is the host's current one. Given, a worker whose probe
+    measured an **older** configuration lands ``offline`` instead of
+    ``available``: an access edit takes the idle workers out of the pool, but
+    it deliberately leaves a busy one alone, and that worker used to come back
+    as available on the strength of a measurement of how it was reached
+    before.
 
     Shared by the normal release and the recovery release so the rule exists
     once.
@@ -106,6 +126,18 @@ def released_status_expression(*, container_state_counts: bool) -> dict[str, Any
         ]},
         "then": EnumResourceStatus.OFFLINE.value,
     })
+    if config_version is not None:
+        branches.append({
+            # The host's access settings changed while this worker was busy.
+            # Its probe describes the previous configuration, so letting the
+            # release decide availability from it would put the worker back in
+            # the pool on evidence about something else — the one path an
+            # access edit could not reach, because an occupied worker is left
+            # alone on purpose.
+            "case": {"$ne": [
+                {"$ifNull": ["$probe.config_version", 0]}, config_version]},
+            "then": EnumResourceStatus.OFFLINE.value,
+        })
     return {
         "$switch": {
             "branches": branches,
@@ -165,8 +197,16 @@ class HostRepository:
             return list(db[HOSTS_COLLECTION].find(sort=[("name", 1)]))
 
     def find_enabled(self) -> list[Host]:
+        """Hosts the health cycle and discovery may act on.
+
+        A host being withdrawn is excluded: discovery would re-create the very
+        workers the removal is deleting, and a probe would put them back in
+        the pool. Runs already on it are unaffected — the runner holds its own
+        connection and does not come through here.
+        """
         with self.connection.connect() as db:
-            return list(db[HOSTS_COLLECTION].find({"enabled": True}, sort=[("name", 1)]))
+            return list(db[HOSTS_COLLECTION].find(
+                {"enabled": True, "withdrawn_at": None}, sort=[("name", 1)]))
 
     def update(self, host_id: Any, updates: dict) -> bool:
         """Partial update. Refuses the fields the master-node alone may set.
@@ -189,6 +229,34 @@ class HostRepository:
         with self.connection.connect() as db:
             res = db[HOSTS_COLLECTION].update_one({"_id": oid}, {"$set": payload})
             return res.matched_count > 0
+
+    def bump_config_version(self, host_id: Any) -> int:
+        """Record that the way this host's workers are reached has changed.
+
+        R22. Clearing a probe is a *point* invalidation, and the two things it
+        does not cover are the two that matter:
+
+        * a probe that **started before** the edit can finish after the clear
+          and write a positive result describing the old configuration;
+        * the worker's ``status`` is untouched, so it stays in the pool and a
+          placement can use a configuration nobody has measured.
+
+        A version makes both decidable. The measurement carries the version it
+        was taken under, and a reader can see that it describes something
+        else. Returns the new value.
+        """
+        oid = _oid(host_id)
+        if oid is None:
+            return 0
+        with self.connection.connect() as db:
+            doc = db[HOSTS_COLLECTION].find_one_and_update(
+                {"_id": oid},
+                {"$inc": {"config_version": 1},
+                 "$set": {"updated_time": utc_now()}},
+                return_document=ReturnDocument.AFTER,
+                projection={"config_version": 1},
+            )
+            return int((doc or {}).get("config_version") or 0)
 
     def pin_host_key(self, host_id: Any, fingerprint: str) -> bool:
         """Record a host key learned on first contact, and only then.
@@ -237,24 +305,101 @@ class HostRepository:
             res = db[HOSTS_COLLECTION].update_one({"_id": oid}, {"$set": updates})
             return res.modified_count > 0
 
+    def begin_withdrawal(self, host_id: Any) -> bool:
+        """Mark a host as being taken out, before anything is deleted.
+
+        The first half of the two-phase removal. Deleting the workers and then
+        the host is two or more writes, and between them a discovery pass or a
+        registration that had *already read* this host could insert a new
+        worker — which then outlived the host it belonged to. Reproduced
+        against the real collection: the host was removed and one worker was
+        left orphaned (R09).
+
+        So a withdrawal is a state, not an instant. While it is set:
+
+        * :meth:`find_enabled` skips the host, so neither the health cycle nor
+          discovery touches it;
+        * :meth:`inventory_snapshot` reports it unschedulable, so nothing new
+          is placed on it;
+        * resource creation refuses, which is what closes the orphan window.
+
+        Runs already on the host are **not** disturbed: they keep their
+        reservations and finish, and the deletion refuses until they have.
+        """
+        oid = _oid(host_id)
+        if oid is None:
+            return False
+        with self.connection.connect() as db:
+            res = db[HOSTS_COLLECTION].update_one(
+                {"_id": oid}, {"$set": {
+                    "withdrawn_at": utc_now(),
+                    "updated_time": utc_now(),
+                }})
+            return res.matched_count > 0
+
+    def cancel_withdrawal(self, host_id: Any) -> bool:
+        """Put a host back in service after a refused removal.
+
+        A withdrawal that cannot complete must not leave the host silently
+        unschedulable: that would take its capacity out of the pool with
+        nothing in the interface saying why.
+        """
+        oid = _oid(host_id)
+        if oid is None:
+            return False
+        with self.connection.connect() as db:
+            res = db[HOSTS_COLLECTION].update_one(
+                {"_id": oid},
+                {"$unset": {"withdrawn_at": ""},
+                 "$set": {"updated_time": utc_now()}})
+            return res.matched_count > 0
+
+    def is_withdrawing(self, host_id: Any) -> bool:
+        oid = _oid(host_id)
+        if oid is None:
+            return False
+        with self.connection.connect() as db:
+            return db[HOSTS_COLLECTION].count_documents(
+                {"_id": oid, "withdrawn_at": {"$ne": None}}, limit=1) > 0
+
     def delete_if_drained(self, host_id: Any) -> tuple[bool, list[str]]:
         """Remove a host and its workers, if none of them is holding anything.
 
         Returns ``(deleted, blocking)``: the names that stopped it, empty when
         it went through.
 
-        The workers go first, each one conditionally, and the host only if all
-        of them went. Doing it the other way round — count the busy ones, then
-        delete everything — left a window the scheduler could reserve in, and
-        then removed the host along with the record of a live run.
+        Three phases, and each one exists because of a way the simpler
+        versions failed:
 
-        It is two writes, so a reservation can still arrive between them. What
-        that costs now is a *refusal*: the worker survives, the host survives
-        with it, and the caller is told which one blocked. The previous
-        version lost the data instead.
+        1. **Withdraw** the host, so nothing new can be created on it or
+           placed on it. Without this, a creation that had already read the
+           host inserted a worker after the list below was taken, and the
+           worker outlived its host.
+        2. **Delete each worker conditionally.** Counting the busy ones first
+           and then deleting everything left a window the scheduler could
+           reserve in, and removed the host along with the record of a live
+           run.
+        3. **Delete the host only if nothing is left**, re-counting rather
+           than trusting step 2. A worker that appears between them keeps the
+           host alive and is reported.
+
+        A refusal is **partial by nature**: workers deleted in step 2 stay
+        deleted, because undoing a delete is not possible. That is why step 1
+        comes first — and when the removal cannot complete the host is put
+        **back in service** (``cancel_withdrawal``) rather than left
+        withdrawn, so its remaining capacity is not silently unschedulable.
+
+        The ``(deleted, blocking)`` pair says which happened. ``deleted`` with
+        a non-empty ``blocking`` is the one surprising combination: the host
+        is gone and the named workers are **not**, because they gained a
+        reservation during the withdrawal and deleting a worker under a live
+        run would lose the run. An orphan is the lesser harm, and it is
+        reported rather than hidden.
         """
         oid = _oid(host_id)
         if oid is None:
+            return False, []
+        if not self.begin_withdrawal(oid):
             return False, []
         with self.connection.connect() as db:
             resources = list(db[RESOURCES_COLLECTION].find(
@@ -268,10 +413,50 @@ class HostRepository:
                 }).deleted_count
                 if not gone:
                     blocking.append(str(resource.get("name", "?")))
+            if not blocking:
+                # Re-counted, not inferred: step 2 only knows about the
+                # workers it listed, and the whole point of this phase is the
+                # one that was not in that list.
+                late = list(db[RESOURCES_COLLECTION].find(
+                    {"host_id": oid}, {"name": 1}))
+                blocking = [str(r.get("name", "?")) for r in late]
             if blocking:
+                self.cancel_withdrawal(oid)
                 return False, blocking
             res = db[HOSTS_COLLECTION].delete_one({"_id": oid})
-            return res.deleted_count > 0, []
+            if res.deleted_count == 0:
+                self.cancel_withdrawal(oid)
+                return False, []
+            # Anything that appeared between the count and the delete has no
+            # host any more. Removing it here is the only moment at which
+            # "orphan" is a decidable state — but **only if it is free**: a
+            # placement that started from an earlier snapshot can have
+            # reserved one of these, and deleting a worker that holds a live
+            # run loses the run with it. One that is occupied is left behind
+            # and named, which is worse than nothing and better than silent
+            # data loss.
+            orphaned = db[RESOURCES_COLLECTION].delete_many({
+                "host_id": oid,
+                "status": {"$nin": _OCCUPIED},
+                "current_simulation_id": None,
+            }).deleted_count
+            if orphaned:
+                log.warning(
+                    "Removed %d worker(s) registered on host %s while it was "
+                    "being withdrawn", orphaned, oid,
+                )
+            stranded = [
+                str(r.get("name", "?"))
+                for r in db[RESOURCES_COLLECTION].find(
+                    {"host_id": oid}, {"name": 1})
+            ]
+            if stranded:
+                log.error(
+                    "Host %s was removed and %s gained a reservation during "
+                    "the withdrawal; they are left in place rather than "
+                    "deleted under a running simulation", oid, stranded,
+                )
+            return True, stranded
 
     # ── bootstrap ──────────────────────────────────────────────────────────
 
@@ -469,6 +654,12 @@ class HostRepository:
                         "$and": [
                             {"$eq": ["$enabled", True]},
                             {"$in": ["$status", _SCHEDULABLE]},
+                            # A host being withdrawn takes no new work. Its
+                            # `free` count stays honest — the containers are
+                            # there and the interface should say so — but
+                            # nothing is placed on them.
+                            {"$eq": [
+                                {"$ifNull": ["$withdrawn_at", None]}, None]},
                         ]
                     },
                 }
@@ -510,6 +701,42 @@ class CoojaResourceRepository:
                 [("status", 1)], name="idx_resources_status")
             db[RESOURCES_COLLECTION].create_index(
                 [("current_simulation_id", 1)], name="idx_resources_simulation")
+            self._ensure_target_index(db)
+
+    @staticmethod
+    def _ensure_target_index(db: Any) -> None:
+        """One registration per physical target on a host, enforced by the index.
+
+        ``conflicting_target`` reads and then the caller inserts, which two
+        requests can interleave through. For the realistic case — two names
+        for one container on one host — the database can decide instead, and a
+        unique index is the only thing that actually serialises it.
+
+        Partial, on ``endpoint.address``: a freshly seeded worker has no
+        endpoint until discovery describes it, and every one of those would
+        otherwise collide on a missing field. Cross-host aliases are not
+        covered, because the host's own address is part of the identity and is
+        not in this collection; those stay with the read-then-insert check and
+        are documented as such.
+
+        A failure is logged rather than raised. An existing deployment may
+        already hold a duplicate, and refusing to start over an index is worse
+        than starting without it.
+        """
+        try:
+            db[RESOURCES_COLLECTION].create_index(
+                [("host_id", 1), ("endpoint.address", 1),
+                 ("endpoint.port", 1), ("remote_dir", 1)],
+                unique=True,
+                name="idx_resources_target",
+                partialFilterExpression={"endpoint.address": {"$type": "string"}},
+            )
+        except Exception as error:
+            log.warning(
+                "Could not create the unique target index; two registrations "
+                "for one worker would only be caught by the API check: %s",
+                error,
+            )
 
     # ── reads ──────────────────────────────────────────────────────────────
 
@@ -586,7 +813,12 @@ class CoojaResourceRepository:
     # ── the reservation cycle ──────────────────────────────────────────────
 
     def reserve(
-        self, resource_id: Any, simulation_id: ObjectId, attempt_id: str
+        self,
+        resource_id: Any,
+        simulation_id: ObjectId,
+        attempt_id: str,
+        *,
+        expect_config_version: Optional[int] = None,
     ) -> Optional[CoojaResource]:
         """Claim a container for a simulation, atomically.
 
@@ -600,13 +832,34 @@ class CoojaResourceRepository:
         if oid is None:
             return None
         now = utc_now()
+        condition: dict[str, Any] = {
+            "_id": oid,
+            "enabled": True,
+            "status": EnumResourceStatus.AVAILABLE.value,
+            "held_for": None,
+        }
+        if expect_config_version is not None:
+            # The measurement has to be about the configuration in force. A
+            # probe that started before an access edit and published after it
+            # could leave a worker `available` on the strength of a path that
+            # no longer exists; the status filter alone cannot see that, and
+            # the window between the two is a placement.
+            #
+            # Through `$ifNull`, not an equality on the field: a probe written
+            # before this existed has no `config_version` at all, and
+            # `{"probe.config_version": 0}` does not match a missing field. On
+            # an existing deployment that would have made every worker
+            # unschedulable until it was measured again — and `probe_is_fresh`
+            # reads a missing field as 0, so a worker that had just been
+            # probed would never be re-probed. An absent value means version
+            # zero here exactly as it does everywhere else.
+            condition["$expr"] = {"$eq": [
+                {"$ifNull": ["$probe.config_version", 0]},
+                int(expect_config_version),
+            ]}
         with self.connection.connect() as db:
             return db[RESOURCES_COLLECTION].find_one_and_update(
-                {
-                    "_id": oid,
-                    "enabled": True,
-                    "status": EnumResourceStatus.AVAILABLE.value,
-                },
+                condition,
                 {"$set": {
                     "status": EnumResourceStatus.RESERVED.value,
                     "current_simulation_id": simulation_id,
@@ -652,6 +905,179 @@ class CoojaResourceRepository:
             )
             return res.modified_count > 0
 
+    def touch_reservation(
+        self, resource_id: Any, simulation_id: ObjectId, attempt_id: str
+    ) -> bool:
+        """Renew the lease on a reservation that is still being prepared.
+
+        The stale-reservation sweep frees a container that was claimed and
+        never started, and its TTL has to cover the slowest legitimate
+        preparation: downloading the firmware from GridFS and sending it over
+        a tunnel. Those are minutes, and a margin is not a guarantee — an
+        upload slower than the TTL had its container freed underneath it while
+        the thread went on writing to the directory.
+
+        So the thread doing the work says so, and the sweep's
+        ``reserved_before`` condition then refuses. This is a lease, with the
+        properties a lease needs: only the holder can renew it (the attempt
+        guard), renewal is refused once the reservation is gone, and a thread
+        that dies stops renewing — so nothing is held for ever by a process
+        that is not there.
+
+        Refused once the reservation became ``busy``: from then on the run is
+        governed by the simulation timeout, not by this.
+        """
+        oid = _oid(resource_id)
+        if oid is None:
+            return False
+        now = utc_now()
+        with self.connection.connect() as db:
+            res = db[RESOURCES_COLLECTION].update_one(
+                {
+                    "_id": oid,
+                    "status": EnumResourceStatus.RESERVED.value,
+                    "current_simulation_id": simulation_id,
+                    "attempt_id": attempt_id,
+                },
+                {"$set": {"reserved_at": now, "updated_time": now}},
+            )
+            return res.modified_count > 0
+
+    def quarantine(
+        self,
+        resource_id: Any,
+        reason: str,
+        *,
+        expect_attempt_id: Optional[str] = None,
+        held_for: Optional[dict[str, Any]] = None,
+    ) -> bool:
+        """Take a worker out of the pool **and** stop holding it, in one write.
+
+        For the case where a run could not be confirmed stopped. Two writes
+        were used before — ``set_enabled(False)`` and then the ordinary
+        release — and the failure mode was the reason this method exists: when
+        the first write failed, the second still ran, and a container that may
+        still have had a JVM on it went back into the pool as ``available``.
+        The protective mechanism failing was followed by the unprotective one
+        succeeding.
+
+        One document, one update: either the worker is disabled *and* released
+        to ``disabled``, or nothing changed and it keeps holding the attempt —
+        which is also out of the pool, because ``find_free_by_host`` requires
+        ``available``. There is no interleaving that produces an eligible
+        worker.
+
+        ``remote_pid`` is deliberately kept. It is the only record of what may
+        still be running in there, and an operator looking at a disabled
+        worker needs it.
+
+        ``held_for`` is the **persistent** half, and it is what makes the
+        protection survive this process. Disabling a worker was enough to keep
+        the *dispatcher* off it, but not the reconciliation: that pass found a
+        simulation in a terminal state, concluded nothing was running and
+        called ``force_release`` with no probe — so a quarantine whose write
+        had failed, or one whose worker still had a JVM on it, was undone by
+        the next health cycle. :meth:`force_release` and :meth:`release` now
+        refuse while this field is set, and
+        :meth:`clear_held_for` is the only way out.
+        """
+        oid = _oid(resource_id)
+        if oid is None:
+            return False
+        now = utc_now()
+        condition: dict[str, Any] = {"_id": oid}
+        if expect_attempt_id is not None:
+            condition["attempt_id"] = expect_attempt_id
+        fields: dict[str, Any] = {
+            "enabled": False,
+            "status": EnumResourceStatus.DISABLED.value,
+            "current_simulation_id": None,
+            "attempt_id": None,
+            "reserved_at": None,
+            "started_at": None,
+            "quarantined_at": now,
+            "last_check_message": reason,
+            "updated_time": now,
+        }
+        if held_for is not None:
+            fields["held_for"] = {**held_for, "at": now, "reason": reason}
+        with self.connection.connect() as db:
+            res = db[RESOURCES_COLLECTION].update_one(
+                condition, {"$set": fields})
+            return res.modified_count > 0
+
+    def hold(
+        self, resource_id: Any, reason: str, held_for: dict[str, Any]
+    ) -> bool:
+        """Mark a worker as holding something unresolved, without releasing it.
+
+        The difference from :meth:`quarantine` is that nothing about the
+        reservation is cleared: the worker keeps whatever it was holding. Used
+        when the attempt is over but the *container* still has something on it
+        that nobody has accounted for — a run whose stop was never confirmed,
+        or a result that could not be collected and could not be copied aside.
+
+        Either way the worker is out of the pool and stays out until something
+        looks. That is the point: the previous behaviour marked the simulation
+        and let the ordinary release hand the worker on.
+        """
+        oid = _oid(resource_id)
+        if oid is None:
+            return False
+        now = utc_now()
+        with self.connection.connect() as db:
+            res = db[RESOURCES_COLLECTION].update_one(
+                {"_id": oid},
+                {"$set": {
+                    "enabled": False,
+                    "held_for": {**held_for, "at": now, "reason": reason},
+                    "last_check_message": reason,
+                    "updated_time": now,
+                }},
+            )
+            return res.modified_count > 0
+
+    def find_held(self) -> list[CoojaResource]:
+        """Workers held for something unresolved — the resolver's input."""
+        with self.connection.connect() as db:
+            return list(db[RESOURCES_COLLECTION].find(
+                {"held_for": {"$ne": None}}))
+
+    def clear_held_for(
+        self, resource_id: Any, *, expect_attempt_id: Optional[str] = None
+    ) -> bool:
+        """Let a held worker back in, once something has established it is free.
+
+        Deliberately narrow: it clears the hold and re-enables the worker, and
+        the *status* is left to the next health cycle, which measures it. A
+        caller that has not probed the container has no business calling this.
+        """
+        oid = _oid(resource_id)
+        if oid is None:
+            return False
+        condition: dict[str, Any] = {"_id": oid, "held_for": {"$ne": None}}
+        if expect_attempt_id is not None:
+            condition["held_for.attempt_id"] = expect_attempt_id
+        now = utc_now()
+        with self.connection.connect() as db:
+            res = db[RESOURCES_COLLECTION].update_one(
+                condition,
+                {"$unset": {"held_for": ""},
+                 "$set": {
+                     "enabled": True,
+                     "status": EnumResourceStatus.OFFLINE.value,
+                     "current_simulation_id": None,
+                     "attempt_id": None,
+                     "remote_pid": None,
+                     "reserved_at": None,
+                     "started_at": None,
+                     "last_check_message": (
+                         "released after the unresolved run was confirmed gone"),
+                     "updated_time": now,
+                 }},
+            )
+            return res.modified_count > 0
+
     def release(
         self,
         resource_id: Any,
@@ -659,6 +1085,7 @@ class CoojaResourceRepository:
         attempt_id: str,
         *,
         container_state_counts: bool,
+        config_version: Optional[int] = None,
     ) -> Optional[CoojaResource]:
         """Hand a container back, if this attempt is still the one holding it.
 
@@ -688,7 +1115,8 @@ class CoojaResourceRepository:
         now = utc_now()
         pipeline = [{"$set": {
             "status": released_status_expression(
-                container_state_counts=container_state_counts),
+                container_state_counts=container_state_counts,
+                config_version=config_version),
             "current_simulation_id": None,
             "attempt_id": None,
             "remote_pid": None,
@@ -702,6 +1130,8 @@ class CoojaResourceRepository:
                     "_id": oid,
                     "current_simulation_id": simulation_id,
                     "attempt_id": attempt_id,
+                    # Nothing unresolved on the container. See `hold`.
+                    "held_for": None,
                 },
                 pipeline,
                 return_document=ReturnDocument.AFTER,
@@ -739,8 +1169,10 @@ class CoojaResourceRepository:
         message: str = "",
         *,
         container_state_counts: bool,
+        config_version: Optional[int] = None,
         expect_attempt_id: Optional[str] = None,
         reserved_before: Optional[datetime] = None,
+        expect_reserved: bool = False,
     ) -> bool:
         """Free a container outside the normal completion path.
 
@@ -767,7 +1199,8 @@ class CoojaResourceRepository:
         now = utc_now()
         pipeline = [{"$set": {
             "status": released_status_expression(
-                container_state_counts=container_state_counts),
+                container_state_counts=container_state_counts,
+                config_version=config_version),
             "current_simulation_id": None,
             "attempt_id": None,
             "remote_pid": None,
@@ -776,11 +1209,22 @@ class CoojaResourceRepository:
             "last_check_message": message,
             "updated_time": now,
         }}]
-        condition: dict[str, Any] = {"_id": oid}
+        # A worker held for something unresolved is **not** released by this,
+        # whatever the simulation says. That composition was the gap: the
+        # runner correctly kept the worker when its quarantine write failed,
+        # and the next reconciliation pass found a terminal simulation, assumed
+        # nothing was running and freed it — with no probe and no guard. A
+        # terminal status is not evidence that a remote process ended.
+        condition: dict[str, Any] = {"_id": oid, "held_for": None}
         if expect_attempt_id is not None:
             condition["attempt_id"] = expect_attempt_id
+        if expect_reserved:
             # Still waiting to start. A reservation that got as far as `busy`
-            # is governed by the simulation timeout, not by this.
+            # is governed by the simulation timeout, not by this. Separate
+            # from the attempt guard because the reconciliation needs the
+            # guard over a container that *is* busy: it releases only the
+            # attempt it read, and insisting on `reserved` there would make
+            # the guard silently never match.
             condition["status"] = EnumResourceStatus.RESERVED.value
         if reserved_before is not None:
             condition["reserved_at"] = {"$lt": reserved_before}
@@ -790,9 +1234,25 @@ class CoojaResourceRepository:
 
     # ── health and discovery (never touching an occupied resource) ─────────
 
-    def mark_available(self, resource_id: Any, message: str = "") -> bool:
-        """Put a container into the pool after both check levels passed."""
-        return self._set_status(resource_id, EnumResourceStatus.AVAILABLE, message)
+    def mark_available(
+        self,
+        resource_id: Any,
+        message: str = "",
+        *,
+        config_version: Optional[int] = None,
+    ) -> bool:
+        """Put a container into the pool after both check levels passed.
+
+        ``config_version`` records which configuration the measurement behind
+        this belongs to, in the same write. A reservation requires the two to
+        match, so a probe that published after an access edit cannot leave a
+        worker schedulable on evidence about the previous path.
+        """
+        extra = (
+            {"probe.config_version": int(config_version)}
+            if config_version is not None else None)
+        return self._set_status(
+            resource_id, EnumResourceStatus.AVAILABLE, message, extra=extra)
 
     def mark_offline(self, resource_id: Any, message: str = "") -> bool:
         return self._set_status(resource_id, EnumResourceStatus.OFFLINE, message)
@@ -801,23 +1261,33 @@ class CoojaResourceRepository:
         return self._set_status(resource_id, EnumResourceStatus.ERROR, message)
 
     def _set_status(
-        self, resource_id: Any, status: EnumResourceStatus, message: str
+        self,
+        resource_id: Any,
+        status: EnumResourceStatus,
+        message: str,
+        *,
+        extra: Optional[dict[str, Any]] = None,
     ) -> bool:
         oid = _oid(resource_id)
         if oid is None:
             return False
         now = utc_now()
+        fields: dict[str, Any] = {
+            "status": status.value,
+            "last_check": now,
+            "last_check_message": message,
+            "updated_time": now,
+        }
+        if extra:
+            fields.update(extra)
         with self.connection.connect() as db:
             res = db[RESOURCES_COLLECTION].update_one(
                 # Reserved and busy are absent from _REASSIGNABLE: a failing
                 # check must never evict a simulation that may still be running.
-                {"_id": oid, "status": {"$in": _REASSIGNABLE}},
-                {"$set": {
-                    "status": status.value,
-                    "last_check": now,
-                    "last_check_message": message,
-                    "updated_time": now,
-                }},
+                # `held_for` likewise: a worker holding something unresolved
+                # must not be promoted into the pool by a measurement.
+                {"_id": oid, "status": {"$in": _REASSIGNABLE}, "held_for": None},
+                {"$set": fields},
             )
             return res.modified_count > 0
 
@@ -835,9 +1305,16 @@ class CoojaResourceRepository:
         measured while the page still showed the old result as evidence that
         it worked.
 
-        Only the measurement is forgotten. The status is left alone, so a
-        worker holding a simulation is untouched and nothing drops out of the
-        pool for an edit — the next cycle measures and decides.
+        A worker **holding a simulation is untouched**: the run in progress
+        reached its container by a path that worked, and interrupting it over
+        an edit would throw away work for nothing.
+
+        Everything else leaves the pool. Forgetting the measurement while
+        leaving the status at ``available`` was not enough — the scheduler
+        decides on the status, so a placement could still land on a
+        configuration nobody had measured in the window before the next cycle
+        (R22). ``offline`` with a message saying so is the honest state: the
+        next cycle measures it and puts it back, usually within seconds.
 
         Returns how many workers were affected.
         """
@@ -846,11 +1323,22 @@ class CoojaResourceRepository:
             return 0
         now = utc_now()
         with self.connection.connect() as db:
-            res = db[RESOURCES_COLLECTION].update_many(
+            resources = db[RESOURCES_COLLECTION]
+            affected = resources.update_many(
                 {"host_id": oid},
                 {"$set": {"probe": {}, "updated_time": now}},
+            ).modified_count
+            resources.update_many(
+                {"host_id": oid, "status": {"$nin": _OCCUPIED}},
+                {"$set": {
+                    "status": EnumResourceStatus.OFFLINE.value,
+                    "last_check_message": (
+                        "waiting to be measured again: the host's access "
+                        "settings changed"),
+                    "updated_time": now,
+                }},
             )
-            return res.modified_count
+            return affected
 
     def set_enabled(self, resource_id: Any, enabled: bool) -> bool:
         """Administrative override. Survives every discovery pass.
@@ -872,16 +1360,32 @@ class CoojaResourceRepository:
             res = db[RESOURCES_COLLECTION].update_one({"_id": oid}, {"$set": updates})
             return res.matched_count > 0
 
-    def update_probe(self, resource_id: Any, probe: ResourceProbe) -> bool:
-        """Record functional readiness without deciding the status."""
+    def update_probe(
+        self,
+        resource_id: Any,
+        probe: ResourceProbe,
+        *,
+        config_version: Optional[int] = None,
+    ) -> bool:
+        """Record functional readiness without deciding the status.
+
+        ``config_version`` is the host's at the moment the measurement was
+        taken. Stored with it so a reader can tell a probe that describes the
+        current configuration from one that describes the previous — a probe
+        started before an access edit finishes after it, and otherwise writes
+        a positive result for a path that no longer exists (R22).
+        """
         oid = _oid(resource_id)
         if oid is None:
             return False
         now = utc_now()
+        record: dict[str, Any] = {**probe, "checked_at": now}
+        if config_version is not None:
+            record["config_version"] = int(config_version)
         with self.connection.connect() as db:
             res = db[RESOURCES_COLLECTION].update_one(
                 {"_id": oid},
-                {"$set": {"probe": {**probe, "checked_at": now}, "updated_time": now}},
+                {"$set": {"probe": record, "updated_time": now}},
             )
             return res.matched_count > 0
 
@@ -923,6 +1427,11 @@ class CoojaResourceRepository:
         updated: list[str] = []
 
         with self.connection.connect() as db:
+            # A discovery that started before the removal would otherwise
+            # re-create the very workers it is deleting. Checked here, in the
+            # same connection as the writes, because the pass may have read
+            # the host minutes ago.
+            self._refuse_if_withdrawing(db, host_id)
             coll = db[RESOURCES_COLLECTION]
             for container in containers:
                 name = container.get("name")
@@ -1037,6 +1546,53 @@ class CoojaResourceRepository:
             "missing_occupied": missing_occupied,
         }
 
+    def _refuse_if_withdrawing(self, db: Any, host_id: Any) -> None:
+        """The other half of the two-phase host removal.
+
+        Checked in the collection that is about to be written, not only in the
+        API: the orphan this prevents came from a caller that had read the
+        host before the withdrawal began, so a check anywhere earlier than
+        this write is a check at the wrong time.
+        """
+        if host_id is None:
+            return
+        if db[HOSTS_COLLECTION].count_documents(
+            {"_id": host_id, "withdrawn_at": {"$ne": None}}, limit=1
+        ):
+            raise HostWithdrawing(
+                f"host {host_id} is being removed; no worker may be added to it"
+            )
+
+    def conflicting_target(
+        self, host: Host, resource: CoojaResource, exclude_id: Any = None
+    ) -> Optional[CoojaResource]:
+        """Another registration that resolves to the same physical worker.
+
+        Two names for one container mean two reservations for one run
+        directory, and then each run's defensive cleanup deletes the other's
+        inputs — while the lock that exists to prevent it is held on the wrong
+        document (R08). Discovery cannot produce this, because it keys on the
+        container id; a hand-registered worker can.
+
+        Compared across *all* hosts, since the fingerprint includes the host's
+        own address: the same container reached through two different host
+        registrations is still one container.
+        """
+        fingerprint = target_fingerprint(host or {}, resource)
+        if fingerprint is None:
+            return None
+        exclude = _oid(exclude_id) if exclude_id is not None else None
+        with self.connection.connect() as db:
+            hosts = {h["_id"]: h for h in db[HOSTS_COLLECTION].find()}
+            for other in db[RESOURCES_COLLECTION].find():
+                if exclude is not None and other["_id"] == exclude:
+                    continue
+                if target_fingerprint(
+                    hosts.get(other.get("host_id")) or {}, other
+                ) == fingerprint:
+                    return other
+        return None
+
     def insert_manual(self, resource: CoojaResource) -> ObjectId:
         """Register one worker with its own connection parameters.
 
@@ -1069,6 +1625,7 @@ class CoojaResourceRepository:
             "state": "", "labels": {}, "checked_at": None,
         })
         with self.connection.connect() as db:
+            self._refuse_if_withdrawing(db, doc.get("host_id"))
             return db[RESOURCES_COLLECTION].insert_one(doc).inserted_id
 
     def update_manual(self, resource_id: Any, updates: dict) -> bool:
@@ -1144,6 +1701,31 @@ class CoojaResourceRepository:
             return "manual"
         return "discovered"
 
+    def clear_connection_port(self, resource_id: Any) -> bool:
+        """Remove a worker's port override, leaving its endpoint in charge.
+
+        Separate from :meth:`update_manual` because an override is removed by
+        the *absence* of the key, and ``$set`` cannot express absence. A
+        stored ``null`` is not the same thing: it reads as the operator having
+        configured something, which is one of the signals that decides whether
+        Docker's view of this worker applies at all.
+
+        Exists for the documents an older version of the form created, which
+        wrote the port in both places. The override wins in the connection
+        plan, so editing such a worker changed the endpoint, reported the new
+        port and kept connecting to the old one (R17).
+        """
+        oid = _oid(resource_id)
+        if oid is None:
+            return False
+        with self.connection.connect() as db:
+            res = db[RESOURCES_COLLECTION].update_one(
+                {"_id": oid},
+                {"$unset": {"connection.port": ""},
+                 "$set": {"updated_time": utc_now()}},
+            )
+            return res.modified_count > 0
+
     def delete_if_free(self, resource_id: Any) -> bool:
         """Remove one worker, and **only** if nothing is holding it.
 
@@ -1188,6 +1770,20 @@ class CoojaResourceRepository:
         """
         document = {k: v for k, v in resource.items() if k not in ("host_id", "name")}
         with self.connection.connect() as db:
+            # Not raised here, unlike the other two creation paths. This runs
+            # at every start-up, before anything else: a withdrawal left set
+            # by an interrupted removal would stop the master-node from
+            # starting at all, which is a worse failure than the orphan this
+            # guards against. Skipped and said out loud instead.
+            if db[HOSTS_COLLECTION].count_documents(
+                {"_id": resource.get("host_id"), "withdrawn_at": {"$ne": None}},
+                limit=1,
+            ):
+                log.warning(
+                    "Host %s is marked as being removed; not seeding %r",
+                    resource.get("host_id"), resource.get("name"),
+                )
+                return False
             result = db[RESOURCES_COLLECTION].update_one(
                 {"host_id": resource["host_id"], "name": resource["name"]},
                 {"$setOnInsert": document},

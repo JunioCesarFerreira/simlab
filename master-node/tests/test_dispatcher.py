@@ -59,7 +59,7 @@ class FakeMongo:
             free if free is not None else [{"_id": RES_1, "name": "cooja1"}])
         self.resource_repo.reserve.side_effect = (
             reserve if reserve is not None
-            else lambda rid, sim_oid, attempt: {
+            else lambda rid, sim_oid, attempt, **_: {
                 "_id": rid, "name": "cooja1", "container": {"id": "abc"}})
 
 
@@ -142,7 +142,7 @@ class TestClaimRaces:
     def test_moves_on_to_the_next_free_container(self):
         taken = {RES_1}
 
-        def reserve(resource_id, sim_oid, attempt):
+        def reserve(resource_id, sim_oid, attempt, **_):
             if resource_id in taken:
                 return None     # someone claimed it between snapshot and now
             return {"_id": resource_id, "name": "cooja2", "container": {}}
@@ -510,3 +510,105 @@ class TestLoopRobustness:
         # One placement happened between the two, so the tie rotated exactly
         # once: a skip must not consume a turn.
         assert first != second
+
+
+# ── R04: the attempt is this process's before anyone can observe it ─────────
+
+class TestTheAttemptIsClaimedOnThisThread:
+    """Reproduces R04, from the dispatcher's side.
+
+    The runner registered the attempt it was following inside
+    ``_on_container`` — on the *runner* thread, which starts later. Between
+    the reservation being written and that line being reached, the periodic
+    reconciliation could read a held container, see nobody following it, and
+    free it as the leftover of a dead process.
+
+    The window is closed by construction rather than narrowed: the attempt is
+    claimed on the dispatcher's own thread, between the atomic reservation and
+    everything that follows it.
+    """
+
+    def _runner_with_a_real_registry(self):
+        from lib.scheduler.runner import SimulationRunner
+        return SimulationRunner(
+            MagicMock(), execute=MagicMock(), prepare=MagicMock())
+
+    def _dispatcher(self, mongo, runner):
+        started: list[dict] = []
+
+        def thread_factory(target, args, name):
+            started.append({"target": target, "args": args, "name": name})
+            return MagicMock()
+
+        return Dispatcher(
+            mongo, runner=runner, policy=LeastLoadedHostPolicy(),
+            idle_tick_sec=0.01, thread_factory=thread_factory,
+        ), started
+
+    def test_the_attempt_is_followed_as_soon_as_step_returns(self):
+        mongo = FakeMongo()
+        runner = self._runner_with_a_real_registry()
+        dispatcher, started = self._dispatcher(mongo, runner)
+        dispatcher.submit(SIM_ID)
+
+        assert dispatcher.step() is True
+
+        # No runner thread has run — `thread_factory` only recorded it — and
+        # the attempt is already known. That is the property: there is no
+        # instant at which the reservation exists and the attempt does not.
+        attempt = mongo.resource_repo.reserve.call_args.args[2]
+        assert runner.is_following(attempt)
+        assert len(started) == 1
+
+    def test_the_registration_precedes_the_assignment_write(self):
+        mongo = FakeMongo()
+        order: list[str] = []
+        runner = MagicMock()
+        runner.register_attempt.side_effect = lambda a: order.append("register")
+        mongo.simulation_repo.set_assignment.side_effect = (
+            lambda *a, **k: order.append("assignment") or True)
+        mongo.resource_repo.reserve.side_effect = (
+            lambda rid, sim_oid, attempt, **_: order.append("reserve") or {
+                "_id": rid, "name": "cooja1", "container": {"id": "abc"}})
+        dispatcher, _ = self._dispatcher(mongo, runner)
+        dispatcher.submit(SIM_ID)
+
+        dispatcher.step()
+
+        assert order == ["reserve", "register", "assignment"]
+
+    def test_a_reservation_given_back_is_also_unregistered(self):
+        """Otherwise an attempt nobody follows is invisible to reconciliation
+        for the lifetime of the process — the opposite leak."""
+        mongo = FakeMongo()
+        mongo.simulation_repo.set_assignment.return_value = False
+        runner = self._runner_with_a_real_registry()
+        dispatcher, started = self._dispatcher(mongo, runner)
+        dispatcher.submit(SIM_ID)
+
+        dispatcher.step()
+
+        attempt = mongo.resource_repo.reserve.call_args.args[2]
+        assert not runner.is_following(attempt)
+        mongo.resource_repo.release.assert_called_once()
+        assert started == []
+
+    def test_a_thread_that_cannot_start_is_also_unregistered(self):
+        mongo = FakeMongo()
+        runner = self._runner_with_a_real_registry()
+
+        def refuse(target, args, name):
+            raise RuntimeError("cannot start a thread")
+
+        dispatcher = Dispatcher(
+            mongo, runner=runner, policy=LeastLoadedHostPolicy(),
+            idle_tick_sec=0.01, thread_factory=refuse,
+        )
+        dispatcher.submit(SIM_ID)
+
+        # The step absorbs it and holds the job, as it does any placement
+        # failure; what matters here is the registry.
+        dispatcher.step()
+
+        attempt = mongo.resource_repo.reserve.call_args.args[2]
+        assert not runner.is_following(attempt)

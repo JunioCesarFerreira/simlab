@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 from threading import Thread
 
 from pylib.telemetry.collector import collect_and_store
+from pylib.timeutil import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +54,12 @@ def _collect_later(mongo, exp_doc: dict, delay: float, force: bool = False) -> N
 
 def _run_sweep(mongo, backfill_hours: float, stale_claim_seconds: float) -> None:
     """One backfill pass: release stale claims, then (re)collect pending runs."""
-    cutoff = datetime.now() - timedelta(hours=backfill_hours)
-    claimed_before = datetime.now() - timedelta(seconds=stale_claim_seconds)
+    # UTC: both are compared against stored timestamps, and a naive local
+    # value is stored and compared by PyMongo as though it were UTC — so on a
+    # machine that is not on UTC the whole sweep window was wrong by the
+    # offset, in whichever direction hurts.
+    cutoff = utc_now() - timedelta(hours=backfill_hours)
+    claimed_before = utc_now() - timedelta(seconds=stale_claim_seconds)
     try:
         released = mongo.experiment_repo.release_stale_runtime_metrics_claims(claimed_before)
         if released:

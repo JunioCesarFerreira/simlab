@@ -32,7 +32,8 @@ algorithm (MOEA) experiments, and analysing the resulting Pareto fronts.
 
 ### Prerequisites
 
-- Node.js ≥ 18
+- Node.js ≥ 20. Vite 7 and Vitest 4 require it; 18 is no longer enough, and
+  the build fails on it rather than warning.
 - SimLab stack running behind the reverse proxy (default `https://localhost`)
 
 ### Environment
@@ -88,11 +89,15 @@ src/
 ├── components/
 │   ├── charts/          # All ECharts chart components
 │   ├── detail/          # Individual detail panel, generation rows
+│   ├── infra/           # Host cards, worker table, occupancy, the two forms
 │   ├── layout/          # Sidebar navigation, theme toggle
 │   └── problem-editor/  # Canvas editor + 5-step launch wizard
 ├── composables/         # useEChart, useResizable, useExperimentViewState, useTheme
 ├── pages/               # One file per top-level route
-├── services/            # Import/export helpers, validators
+├── services/            # Import/export helpers, validators, and the pure
+│                        # modules that mirror a decision the backend makes:
+│                        # resourceLevels, placement, completeness,
+│                        # secretEnvelope
 ├── types/               # TypeScript types (simlab.ts, problem.ts)
 └── utils/               # Comparison quality indicators (comparisonMetrics.ts)
 ```
@@ -107,6 +112,8 @@ src/
 | Problems | `/problems` | WSN problem editor (full-screen canvas) |
 | Sources | `/sources` | Firmware source-code repositories |
 | Compare | `/compare` | Side-by-side comparison of two finished experiments |
+| Synthetic | `/synthetic` | Analytical benchmark instances (P0), evaluated in-process |
+| Infrastructure | `/infrastructure` | Hosts and their Cooja workers: register a machine, discover or hand-configure its containers, see which level of availability failed, take one in or out of the pool |
 
 ---
 

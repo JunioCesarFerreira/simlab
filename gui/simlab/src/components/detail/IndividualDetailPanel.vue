@@ -38,6 +38,21 @@
           </div>
         </section>
 
+        <!-- What the objectives rest on -->
+        <section class="section">
+          <div class="section-title">Evaluation</div>
+          <div class="evaluation">
+            <span :class="['level', `level--${completenessTone(individual.completeness)}`]">
+              {{ completenessLabel(individual.completeness) }}
+            </span>
+            <ul v-if="completenessDetail(individual.completeness).length" class="eval-detail">
+              <li v-for="line in completenessDetail(individual.completeness)" :key="line">
+                {{ line }}
+              </li>
+            </ul>
+          </div>
+        </section>
+
         <!-- Chromosome -->
         <section class="section">
           <div class="section-title">Chromosome</div>
@@ -205,6 +220,11 @@ import type { DodagInfo, IndividualDto, SimulationDto } from "../../types/simlab
 import { getSimulationsByIndividual } from "../../api/simulations";
 import { fetchBlobUrl, downloadFile } from "../../api/files";
 import { placementLabel } from "../../services/placement";
+import {
+  completenessDetail,
+  completenessLabel,
+  completenessTone,
+} from "../../services/completeness";
 
 const props = defineProps<{
   individual: IndividualDto;
@@ -538,6 +558,39 @@ onBeforeUnmount(() => {
   word-break: break-all;
   font-size: 11px;
   color: var(--color-text);
+}
+
+/* Evaluation */
+.evaluation {
+  font-size: 12px;
+}
+
+.eval-detail {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.level {
+  font-weight: 600;
+}
+
+.level--ok {
+  color: var(--status-done);
+}
+
+.level--warn {
+  color: var(--status-running);
+}
+
+.level--bad {
+  color: var(--status-error);
+}
+
+.level--unknown {
+  color: var(--color-text-muted);
+  font-style: italic;
 }
 
 /* Simulations */

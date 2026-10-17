@@ -213,6 +213,10 @@ class ResourceProbe(TypedDict, total=False):
     #: alone was collected and ignored, so a container with a jar and a broken
     #: runtime entered the pool and failed at launch instead.
     java_ok: NotRequired[bool]
+    #: The host's ``config_version`` when this was measured. A probe whose
+    #: version is behind the host's describes a path that has since changed,
+    #: and is not evidence about the current one (R22).
+    config_version: NotRequired[int]
     cooja_jar_sha256: Optional[str]
     checked_at: Optional[datetime]
     message: NotRequired[str]
@@ -265,6 +269,57 @@ class InfraCrypto(TypedDict, total=False):
     created_at: datetime
     updated_at: datetime
     retired_keys: list[dict[str, Any]]
+
+
+# ── Identidade física: dois registros, um alvo ───────────────────────────────
+
+#: Mirrors ``lib.transport.plan``. Kept here because the question "do these
+#: two registrations point at the same container?" is asked by the API, which
+#: cannot import the master-node, and the answer has to be the same one the
+#: master-node would give.
+DEFAULT_REMOTE_DIR = "/opt/contiki-ng/tools/cooja"
+DEFAULT_CONTAINER_SSH_PORT = 22
+
+
+def target_fingerprint(
+    host: dict[str, Any], resource: dict[str, Any]
+) -> Optional[tuple[str, str, int, str]]:
+    """What this registration actually points at, as a comparable value.
+
+    ``(host_access_address, container_address, port, remote_dir)``, or ``None``
+    when the registration has no address yet and therefore points nowhere.
+
+    Two registrations with the same fingerprint are the same physical worker
+    under two names. Discovery cannot produce that — it keys on the container
+    id — but a hand-registered worker can, and then two simulations run in one
+    directory: each one's defensive cleanup deletes the other's inputs, and
+    the reservation that is supposed to prevent exactly this is held on the
+    wrong document (R08).
+
+    The precedence is **the plan's**, deliberately duplicated rather than
+    imported: the worker's own port, then its endpoint's, then the host
+    default. A fingerprint computed by a different rule than the connection
+    would compare something nobody connects to.
+    """
+    endpoint = resource.get("endpoint") or {}
+    address = (endpoint.get("address") or "").strip()
+    if not address:
+        return None
+    connection = resource.get("connection") or {}
+    container_access = host.get("container_access") or {}
+    port = (
+        connection.get("port")
+        or endpoint.get("port")
+        or container_access.get("port")
+        or DEFAULT_CONTAINER_SSH_PORT
+    )
+    # The host's own address is part of the identity: the same container name
+    # and port on two different machines are two different workers.
+    jump = ((host.get("access") or {}).get("address") or "").strip()
+    if (host.get("type") or EnumHostType.REMOTE.value) == EnumHostType.LOCAL.value:
+        jump = EnumHostType.LOCAL.value
+    remote_dir = (resource.get("remote_dir") or DEFAULT_REMOTE_DIR).rstrip("/")
+    return (jump, address.lower(), int(port), remote_dir)
 
 
 # ── Elegibilidade: de quem é a palavra final ─────────────────────────────────

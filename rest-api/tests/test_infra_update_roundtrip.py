@@ -69,13 +69,28 @@ STORED_HOST = {
 
 
 def _apply(doc: dict, update: dict) -> None:
-    """Apply a ``$set`` the way MongoDB does, dotted paths included."""
-    for key, value in (update.get("$set") or {}).items():
+    """Apply ``$set``, ``$unset`` and ``$inc`` the way MongoDB does.
+
+    Dotted paths included, because that is the whole subject of this file: a
+    partial update has to leave the siblings of what it touches alone, and a
+    fake that replaced whole sub-documents would agree with the bug.
+    """
+    def locate(doc: dict, key: str) -> tuple[dict, str]:
         target = doc
         parts = key.split(".")
         for part in parts[:-1]:
             target = target.setdefault(part, {})
-        target[parts[-1]] = value
+        return target, parts[-1]
+
+    for key, value in (update.get("$set") or {}).items():
+        target, leaf = locate(doc, key)
+        target[leaf] = value
+    for key in (update.get("$unset") or {}):
+        target, leaf = locate(doc, key)
+        target.pop(leaf, None)
+    for key, delta in (update.get("$inc") or {}).items():
+        target, leaf = locate(doc, key)
+        target[leaf] = int(target.get(leaf) or 0) + int(delta)
 
 
 class SetApplyingCollection:
@@ -95,6 +110,15 @@ class SetApplyingCollection:
     def update_one(self, flt, update, **k):
         _apply(self.doc, update)
         return MagicMock(matched_count=1, modified_count=1)
+
+    def find_one_and_update(self, flt, update, **k):
+        """Used by the host-key pin and the configuration version.
+
+        Returns the document *after* the update, which is what both callers
+        read: the version they bumped, and whether the pin took.
+        """
+        _apply(self.doc, update)
+        return deepcopy(self.doc)
 
 
 @pytest.fixture

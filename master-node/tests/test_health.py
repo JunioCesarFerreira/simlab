@@ -24,6 +24,7 @@ from bson import ObjectId
 
 from lib.credentials import CredentialUnavailable
 from pylib.timeutil import elapsed_since, utc_now
+from lib.detached import RunState
 from lib.health import (
     DEFAULT_PROBE_TTL_SEC,
     STALE_RESERVATION_MESSAGE,
@@ -1069,3 +1070,118 @@ class TestCycle:
         monitor = build_monitor(fake_mongo())
         monitor._stop.set()
         monitor.run()                      # returns immediately, no exception
+
+
+# ── Letting a held worker back in, once the container says so ────────────
+
+class TestResolvingHeldWorkers:
+    """The counterpart of the quarantine, and the reason it can be strict.
+
+    A worker leaves the pool whenever something about it is unaccounted for —
+    a run whose stop was never confirmed, a launch whose confirmation was
+    lost, a result that could neither be stored nor copied aside. Most of
+    those are transient. Without a pass that *asks the container*, each one
+    would need a person, which is a bad trade for a network blip.
+
+    One rule, deliberately conservative: cleared only when the container
+    answers, has nothing alive, and has left nothing behind.
+    """
+
+    def _held(self, **over) -> dict:
+        doc = resource(name="cooja1", status="disabled", enabled=False)
+        doc["held_for"] = {
+            "kind": "termination_unknown", "attempt_id": "A",
+            "remote_pid": 4242, "remote_dir": "/opt/cooja",
+        }
+        doc.update(over)
+        return doc
+
+    def _monitor(self, state, held=None):
+        mongo = fake_mongo()
+        mongo.resource_repo.find_held.return_value = [held or self._held()]
+        mongo.resource_repo.clear_held_for.return_value = True
+        asked: list = []
+
+        def inspect(host, res, pid):
+            asked.append(pid)
+            return state
+
+        return build_monitor(mongo, inspect_run=inspect), mongo, asked
+
+    def test_nothing_alive_and_nothing_left_comes_back(self):
+        monitor, mongo, asked = self._monitor(
+            RunState(alive=False, finished=True, exit_code=0, testlog_bytes=0))
+
+        assert monitor.resolve_held_workers() == ["cooja1"]
+        assert asked == [4242]
+        mongo.resource_repo.clear_held_for.assert_called_once()
+
+    def test_a_live_process_stays_held(self):
+        monitor, mongo, _ = self._monitor(RunState(alive=True, finished=False))
+
+        assert monitor.resolve_held_workers() == []
+        mongo.resource_repo.clear_held_for.assert_not_called()
+
+    def test_leftover_bytes_stay_held(self):
+        """A testlog sitting there is an uncollected result. Letting the
+        worker take the next simulation is what deletes it."""
+        monitor, mongo, _ = self._monitor(
+            RunState(alive=False, finished=True, exit_code=0,
+                     testlog_bytes=11_456_431))
+
+        assert monitor.resolve_held_workers() == []
+        mongo.resource_repo.clear_held_for.assert_not_called()
+
+    def test_an_unreachable_container_stays_held(self):
+        """Unreachable is the absence of an answer, not an answer."""
+        monitor, mongo, _ = self._monitor(None)
+
+        assert monitor.resolve_held_workers() == []
+        mongo.resource_repo.clear_held_for.assert_not_called()
+
+    def test_a_probe_that_raises_leaves_it_alone(self):
+        mongo = fake_mongo()
+        mongo.resource_repo.find_held.return_value = [self._held()]
+
+        def inspect(host, res, pid):
+            raise RuntimeError("tunnel closed")
+
+        monitor = build_monitor(mongo, inspect_run=inspect)
+
+        assert monitor.resolve_held_workers() == []
+        mongo.resource_repo.clear_held_for.assert_not_called()
+
+    def test_the_resource_pid_is_used_when_the_hold_has_none(self):
+        held = self._held()
+        held["held_for"]["remote_pid"] = None
+        held["remote_pid"] = 9001
+        monitor, mongo, asked = self._monitor(
+            RunState(alive=False, finished=True, exit_code=0), held=held)
+
+        monitor.resolve_held_workers()
+
+        assert asked == [9001]
+
+    def test_capacity_is_signalled_when_one_comes_back(self):
+        mongo = fake_mongo()
+        mongo.resource_repo.find_held.return_value = [self._held()]
+        mongo.resource_repo.clear_held_for.return_value = True
+        woken: list = []
+        monitor = build_monitor(
+            mongo,
+            inspect_run=lambda h, r, p: RunState(
+                alive=False, finished=True, exit_code=0),
+            on_capacity=lambda: woken.append(1),
+        )
+
+        monitor.resolve_held_workers()
+
+        assert woken == [1]
+
+    def test_without_a_probe_nothing_is_resolved(self):
+        """A monitor with no way to ask must not guess."""
+        mongo = fake_mongo()
+        mongo.resource_repo.find_held.return_value = [self._held()]
+
+        assert build_monitor(mongo).resolve_held_workers() == []
+        mongo.resource_repo.clear_held_for.assert_not_called()

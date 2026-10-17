@@ -114,7 +114,7 @@ class TestSuccessfulRun:
             SIM, HOST, RESOURCE, ATTEMPT)
         mongo.resource_repo.mark_busy.assert_not_called()
         mongo.resource_repo.release.assert_called_once_with(
-            RES_ID, SIM_OID, ATTEMPT, container_state_counts=True)
+            RES_ID, SIM_OID, ATTEMPT, container_state_counts=True, config_version=0)
 
     def test_a_lost_pid_write_does_not_fail_the_simulation(self, transport):
         # Bookkeeping only: the run is already going, and failing it over a
@@ -134,7 +134,7 @@ class TestSuccessfulRun:
         mongo = FakeMongo()
         build_runner(mongo).run(SIM, HOST, RESOURCE, ATTEMPT)
         mongo.resource_repo.release.assert_called_once_with(
-            RES_ID, SIM_OID, ATTEMPT, container_state_counts=True)
+            RES_ID, SIM_OID, ATTEMPT, container_state_counts=True, config_version=0)
 
     def test_signals_capacity_after_releasing(self, transport):
         mongo = FakeMongo()
@@ -163,7 +163,7 @@ class TestReleaseOnEveryPath:
         mongo.simulation_repo.mark_error.assert_called_once()
         assert "prepare" in mongo.simulation_repo.mark_error.call_args.args[1].lower()
         mongo.resource_repo.release.assert_called_once_with(
-            RES_ID, SIM_OID, ATTEMPT, container_state_counts=True)
+            RES_ID, SIM_OID, ATTEMPT, container_state_counts=True, config_version=0)
         transport.put_files.assert_not_called()
 
     def test_a_manual_worker_is_released_without_dockers_veto(self, transport):
@@ -195,7 +195,7 @@ class TestReleaseOnEveryPath:
 
         mongo.simulation_repo.mark_error.assert_called_once()
         mongo.resource_repo.release.assert_called_once_with(
-            RES_ID, SIM_OID, ATTEMPT, container_state_counts=True)
+            RES_ID, SIM_OID, ATTEMPT, container_state_counts=True, config_version=0)
 
     def test_a_transport_error_releases(self, transport):
         mongo = FakeMongo()
@@ -289,10 +289,13 @@ class TestUnconfirmedStop:
 
         build_runner(mongo, execute=execute).run(SIM, HOST, RESOURCE, ATTEMPT)
 
-        # `enabled = False` rather than a status, because a successful probe
-        # cannot undo it: a health check cannot tell a leftover JVM from an
-        # idle container and would hand the worker straight back.
-        mongo.resource_repo.set_enabled.assert_called_once_with(RES_ID, False)
+        # One write that disables *and* stops holding, rather than
+        # `set_enabled(False)` followed by the ordinary release: when the
+        # first failed the second still ran, and the worker came back as
+        # `available` (R05.1).
+        mongo.resource_repo.quarantine.assert_called_once()
+        assert mongo.resource_repo.quarantine.call_args.args[0] == RES_ID
+        mongo.resource_repo.release.assert_not_called()
 
     def test_the_simulation_is_still_marked_failed(self, transport):
         mongo = FakeMongo()
@@ -313,18 +316,76 @@ class TestUnconfirmedStop:
 
         build_runner(mongo, execute=execute).run(SIM, HOST, RESOURCE, ATTEMPT)
 
-        mongo.resource_repo.set_enabled.assert_not_called()
+        mongo.resource_repo.quarantine.assert_not_called()
+        mongo.resource_repo.release.assert_called_once()
 
-    def test_a_failure_to_disable_does_not_crash_the_thread(self, transport):
+    def test_a_failure_to_quarantine_does_not_release_the_worker(self, transport):
+        """R05.1: the protective write failing must not be followed by the
+        unprotective one succeeding.
+
+        This is the defect, stated as a test. ``set_enabled(False)`` raised,
+        the exception was swallowed, and the release in ``finally`` ran
+        anyway — so a worker that may still have had a JVM on it went back
+        into the pool as ``available``. The worker now keeps holding its
+        attempt, which is also out of the pool.
+        """
         mongo = FakeMongo()
-        mongo.resource_repo.set_enabled.side_effect = RuntimeError("mongo gone")
+        mongo.resource_repo.quarantine.side_effect = RuntimeError("mongo gone")
 
         def execute(sim, tr, repo, rf, on_started=None, **kw):
             raise TerminationUnconfirmed("could not be stopped")
 
         build_runner(mongo, execute=execute).run(SIM, HOST, RESOURCE, ATTEMPT)
 
-        mongo.resource_repo.release.assert_called_once()
+        mongo.resource_repo.release.assert_not_called()
+
+    def test_a_quarantine_refused_by_the_guard_does_not_release_either(
+        self, transport
+    ):
+        """Refused means another attempt owns the worker now — also not ours
+        to hand back."""
+        mongo = FakeMongo()
+        mongo.resource_repo.quarantine.return_value = False
+
+        def execute(sim, tr, repo, rf, on_started=None, **kw):
+            raise TerminationUnconfirmed("could not be stopped")
+
+        build_runner(mongo, execute=execute).run(SIM, HOST, RESOURCE, ATTEMPT)
+
+        mongo.resource_repo.release.assert_not_called()
+
+    def test_capacity_is_still_signalled_when_the_release_is_skipped(
+        self, transport
+    ):
+        """Skipping the release must not also skip waking the dispatcher.
+
+        The bookkeeping moved out of ``_release`` for exactly this reason: a
+        held job waiting on capacity would otherwise wait for the idle tick.
+        """
+        mongo = FakeMongo()
+        woken = []
+
+        def execute(sim, tr, repo, rf, on_started=None, **kw):
+            raise TerminationUnconfirmed("could not be stopped")
+
+        build_runner(
+            mongo, execute=execute, on_release=lambda: woken.append(1),
+        ).run(SIM, HOST, RESOURCE, ATTEMPT)
+
+        assert woken == [1]
+
+    def test_an_attempt_stops_being_followed_even_without_a_release(
+        self, transport
+    ):
+        mongo = FakeMongo()
+
+        def execute(sim, tr, repo, rf, on_started=None, **kw):
+            raise TerminationUnconfirmed("could not be stopped")
+
+        runner = build_runner(mongo, execute=execute)
+        runner.run(SIM, HOST, RESOURCE, ATTEMPT)
+
+        assert not runner.is_following(ATTEMPT)
 
 
 class TestLostOwnership:

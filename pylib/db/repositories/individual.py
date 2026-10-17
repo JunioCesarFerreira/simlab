@@ -1,4 +1,6 @@
 import logging
+from typing import Optional
+
 from bson import ObjectId, errors
 
 from pylib.db.models.individual import Individual
@@ -82,6 +84,33 @@ class IndividualRepository:
             result = db["individuals"].update_one(
                 {"generation_id": generation_id, "individual_id": individual_id},
                 {"$set": {"objectives": objectives}}
+            )
+            return result.modified_count > 0
+
+    def update_evaluation(
+        self,
+        individual_id: str,
+        generation_id: ObjectId,
+        objectives: list[float],
+        completeness: Optional[dict] = None,
+    ) -> bool:
+        """Persist an objective vector **with** the evidence behind it.
+
+        The two belong in one write. Stored separately, a reader could see
+        objectives whose completeness had not been written yet and would have
+        no way to know that — which is the state the whole invariant is about.
+
+        ``completeness`` is the record from
+        ``GenerationRepository.replica_completeness``, plus whatever the
+        engine's policy decided to do about it.
+        """
+        fields: dict = {"objectives": objectives}
+        if completeness is not None:
+            fields["completeness"] = completeness
+        with self.connection.connect() as db:
+            result = db["individuals"].update_one(
+                {"generation_id": generation_id, "individual_id": individual_id},
+                {"$set": fields},
             )
             return result.modified_count > 0
 

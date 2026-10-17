@@ -18,7 +18,13 @@ if project_path not in sys.path:
 # lib master-node
 from lib.bootstrap import ensure_local_host, publish_public_key
 from lib.credentials import SecretOpener
-from lib.detached import RUN_ARTIFACTS, DetachedRun, inspect_run
+from lib.detached import (
+    RUN_ARTIFACTS,
+    DetachedRun,
+    LaunchUnconfirmed,
+    RunOutcome,
+    inspect_run,
+)
 from lib.health import HealthMonitor
 from lib.recovery import reconcile_occupied_resources
 from lib.scheduler import (
@@ -32,11 +38,16 @@ from lib.scheduler import (
     build_policy,
 )
 from lib.synthetic_data import run_synthetic_simulation, resolve_synthetic_settings
-from lib.transport import SSHTransport, TransportError, build_transport
+from lib.transport import (
+    HostKeyMismatch,
+    SSHTransport,
+    TransportError,
+    build_transport,
+)
 
 # pylib crypto — master-node only; the API deliberately cannot open a secret.
 from pylib.crypto.sealed import DEFAULT_KEY_PATH, Keystore
-from pylib.timeutil import elapsed_since
+from pylib.timeutil import elapsed_since, utc_now
 
 # pylib
 from pylib.db import create_mongo_repository_factory, MongoRepository, EnumStatus
@@ -169,7 +180,11 @@ def recover_abandoned_simulations(mongo: MongoRepository) -> None:
     """
     if SET.sim_timeout_sec <= 0:
         return
-    cutoff = datetime.now() - timedelta(seconds=SET.sim_timeout_sec)
+    # UTC: `datetime.now()` is naive *local* time, and pymongo stores and
+    # compares it as though it were UTC. On a host that is not on UTC the
+    # cutoff was wrong by the offset — in one direction it recovers nothing,
+    # in the other it recovers live simulations.
+    cutoff = utc_now() - timedelta(seconds=SET.sim_timeout_sec)
     stuck = mongo.simulation_repo.find_running_before(cutoff)
     if not stuck:
         return
@@ -281,6 +296,103 @@ def prepare_simulation_files(
     return True, local_files, remote_files
 
 
+def _detached_pid(runner: DetachedRun) -> int | None:
+    """The pid of the run being followed, if one was recorded.
+
+    One accessor, because ``handle`` is a *property*: the expression
+    ``runner.handle()`` raised ``TypeError`` before the exception that needed
+    the pid could even be constructed, which made the retry over a fresh
+    session unreachable (R23).
+    """
+    handle = runner.handle
+    return handle.pid if handle else None
+
+
+def _resume_outcome(
+    sim: Simulation,
+    transport: SSHTransport,
+    runner: DetachedRun,
+    adopt_pid: int,
+    where: str,
+    sim_oid: ObjectId,
+) -> RunOutcome:
+    """What became of a run we attached to, asked **before** any deadline.
+
+    The order is the whole fix. ``_remaining_timeout`` used to be applied
+    first, so a master-node that came back after a long stop failed a
+    simulation that had in fact finished minutes in: the time the master-node
+    spent down was counted as time the simulation spent executing, and the
+    result sitting on the container was never looked for.
+
+    Three answers, kept apart:
+
+    * still alive → follow it, with whatever is left of its timeout;
+    * ended with an exit code → nothing to follow, go straight to collection;
+    * ended without one → the same, and the caller's policy for an
+      unconfirmed result decides what the bytes are worth.
+    """
+    try:
+        state = inspect_run(
+            transport, adopt_pid, remote_dir=transport.plan.remote_dir)
+    except Exception as error:
+        # We hold a container running something we cannot ask about. A plain
+        # failure here would release it, so this is the unconfirmed case: the
+        # worker is taken out of the pool rather than handed to the next job.
+        raise TerminationUnconfirmed(
+            f"could not ask {where} what became of the resumed run: {error}"
+        ) from error
+
+    if not state.alive:
+        log.info(
+            "[%s] The resumed run for %s is no longer executing "
+            "(exit %s, %d bytes of testlog)",
+            where, sim_oid, state.exit_code, state.testlog_bytes,
+        )
+        return RunOutcome(
+            completed=state.finished,
+            exit_code=state.exit_code,
+            message="" if state.finished
+            else "the run ended without recording an exit code",
+        )
+
+    remaining = _remaining_timeout(sim)
+    if remaining is not None and remaining <= 0:
+        message = (
+            "the simulation was still running and had already exceeded "
+            "SIM_TIMEOUT_SEC when it was resumed"
+        )
+        if not runner.terminate():
+            raise TerminationUnconfirmed(
+                f"{message}, and it could not be stopped")
+        raise RunFailed(message)
+    return runner.wait(
+        timeout_sec=remaining,
+        on_output=lambda text: log.info("[cooja][%s] %s", where, text.rstrip()),
+    )
+
+
+def _leftover_result(
+    transport: SSHTransport, runner: DetachedRun, where: str
+) -> int | None:
+    """Bytes of testlog left behind by a run that is no longer executing.
+
+    ``None`` when there is nothing to collect: the process is still alive, the
+    container could not be asked, or it left nothing. Conservative on purpose
+    — a live process means the artifacts are still being written, so they are
+    not a result.
+    """
+    try:
+        state = inspect_run(
+            transport, _detached_pid(runner),
+            remote_dir=transport.plan.remote_dir)
+    except Exception as error:
+        log.warning("[%s] Could not look for a leftover result: %s", where, error)
+        return None
+    if not state.collectable:
+        return None
+    return state.testlog_bytes
+
+
 def run_cooja_simulation(
     sim: Simulation,
     transport: SSHTransport,
@@ -329,18 +441,7 @@ def run_cooja_simulation(
         if adopt_pid:
             log.info("[%s] Resuming simulation %s (pid %s)", where, sim_oid, adopt_pid)
             runner.attach(adopt_pid)
-            # The deadline counts from when the run actually started, not from
-            # now: a restart must not hand a simulation a fresh timeout.
-            timeout_sec = _remaining_timeout(sim)
-            if timeout_sec is not None and timeout_sec <= 0:
-                message = (
-                    "the simulation had already exceeded SIM_TIMEOUT_SEC when "
-                    "it was resumed"
-                )
-                if not runner.terminate():
-                    raise TerminationUnconfirmed(
-                        f"{message}, and it could not be stopped")
-                raise RunFailed(message)
+            outcome = _resume_outcome(sim, transport, runner, adopt_pid, where, sim_oid)
         else:
             log.info("[%s] Starting simulation %s", where, sim_oid)
             # No `cd` and no channel: the run is launched in its own session
@@ -351,11 +452,17 @@ def run_cooja_simulation(
                 f"-Xms{SET.jvm_xms} -Xmx{SET.jvm_xmx} "
                 f"-jar build/libs/cooja.jar --no-gui simulation.csc"
             )
-            handle = runner.launch(command)
+            try:
+                handle = runner.launch(command)
+            except LaunchUnconfirmed as error:
+                # Something may be executing with nobody holding its pid.
+                # Reported as an ordinary failure, the container went back to
+                # the pool with a simulation on it (R05.4).
+                raise TerminationUnconfirmed(str(error)) from error
             if on_started is not None:
                 try:
                     on_started(handle.pid)
-                except LostOwnership:
+                except LostOwnership as error:
                     # The container was handed to someone else while this run
                     # was starting. The pool already believes it is free, so
                     # the JVM has to go before a second simulation lands on
@@ -364,14 +471,19 @@ def run_cooja_simulation(
                         "[%s] Lost the container for %s during launch; "
                         "stopping the run", where, sim_oid,
                     )
-                    runner.terminate()
-                    raise
-            timeout_sec = SET.sim_timeout_sec or None
+                    # The answer is the point. It was discarded, so a run that
+                    # refused to stop on a container the pool already believed
+                    # free was re-queued with nothing taking that worker out
+                    # of the pool (R05.2).
+                    raise LostOwnership(
+                        str(error), stopped=runner.terminate()) from error
+            outcome = runner.wait(
+                timeout_sec=SET.sim_timeout_sec or None,
+                on_output=lambda text: log.info(
+                    "[cooja][%s] %s", where, text.rstrip()),
+            )
 
-        outcome = runner.wait(
-            timeout_sec=timeout_sec,
-            on_output=lambda text: log.info("[cooja][%s] %s", where, text.rstrip()),
-        )
+        confirmed = True
         if not outcome.completed:
             # Timed out, killed from outside, or contact never came back. The
             # distinction is already in the outcome; what matters here is that
@@ -382,10 +494,22 @@ def run_cooja_simulation(
                 # the pool as though it were idle.
                 raise TerminationUnconfirmed(
                     outcome.message or "the run could not be stopped")
-            raise RunFailed(
-                outcome.message or "the simulation did not complete"
+            # Before writing the run off: are there bytes on the container?
+            # A process reaped without recording an exit code leaves a
+            # complete-looking testlog behind, and deleting it was the only
+            # thing the previous code could do with it. They are collected and
+            # kept, but **not** published as a result — see `confirmed` below.
+            leftover = _leftover_result(transport, runner, where)
+            if leftover is None:
+                raise RunFailed(
+                    outcome.message or "the simulation did not complete"
+                )
+            log.warning(
+                "[%s] %s left %d bytes of testlog with no exit code; keeping "
+                "them as an unconfirmed result", where, sim_oid, leftover,
             )
-        if outcome.exit_code not in (0, None):
+            confirmed = False
+        elif outcome.exit_code not in (0, None):
             # Recorded rather than fatal: Cooja has exited non-zero while
             # still producing a usable testlog, and the previous
             # implementation ignored the status entirely. The CSV check below
@@ -404,22 +528,60 @@ def run_cooja_simulation(
         except Exception as error:
             raise CollectionFailed(
                 f"could not bring back the result: {error}",
-                pid=runner.handle().pid if runner.handle() else None,
+                # `handle` is a property. Calling it raised TypeError before
+                # this line could build the exception, so the retry over a
+                # fresh session was unreachable and a dropped download cost a
+                # finished simulation. The test that covered it drove a
+                # MagicMock, on which `handle()` is valid.
+                pid=_detached_pid(runner),
+                stage="download",
             ) from error
 
-        log_id = mongo.fs_handler.upload_file(log_path, "sim_result.log")
+        # Each stage of the collection fails differently, and conflating them
+        # is what made "the download dropped" indistinguishable from "GridFS
+        # refused the upload". The stage travels with the exception so the
+        # caller knows what may be retried and which blobs already exist.
+        try:
+            log_id = mongo.fs_handler.upload_file(log_path, "sim_result.log")
+        except Exception as error:
+            raise CollectionFailed(
+                f"the testlog could not be stored: {error}",
+                pid=_detached_pid(runner), stage="upload",
+            ) from error
         log.info("[%s] Log saved with ID: %s", where, log_id)
 
-        cooja_files.convert_cooja_log_to_csv(log_path, csv_path)
-        csv_id = mongo.fs_handler.upload_file(csv_path, "sim_result.csv")
+        try:
+            cooja_files.convert_cooja_log_to_csv(log_path, csv_path)
+            csv_id = mongo.fs_handler.upload_file(csv_path, "sim_result.csv")
+        except Exception as error:
+            raise CollectionFailed(
+                f"the result could not be converted or stored: {error}",
+                pid=_detached_pid(runner), stage="convert",
+                # Already in GridFS. Named so the caller can remove it rather
+                # than leave a blob nothing references.
+                log_id=log_id,
+            ) from error
         log.info("[%s] Log converted CSV and saved with ID: %s", where, csv_id)
 
         csv_file = Path(csv_path)
         if csv_file.exists() and csv_file.stat().st_size != 0:
-            df = pd.read_csv(csv_path)
-            exp_id = sim["experiment_id"]
-            cfg = mongo.experiment_repo.get_metrics_data_conversion(str(exp_id))
-            net_meas = statistics.evaluate_config(df, cfg, log)
+            # Still collection, not execution. Reading the CSV back or
+            # evaluating the metric configuration can fail for reasons that
+            # have nothing to do with the run — and falling through to the
+            # generic handler wrote the simulation off while its testlog sat
+            # in GridFS, referenced by nothing.
+            try:
+                df = pd.read_csv(csv_path)
+                exp_id = sim["experiment_id"]
+                cfg = mongo.experiment_repo.get_metrics_data_conversion(
+                    str(exp_id))
+                net_meas = statistics.evaluate_config(df, cfg, log)
+            except Exception as error:
+                raise CollectionFailed(
+                    f"the result was stored but could not be evaluated: {error}",
+                    pid=_detached_pid(runner), stage="evaluate",
+                    log_id=log_id, csv_id=csv_id,
+                ) from error
             log.info("[%s] Metrics calculated: %s", where, net_meas)
 
             # RPL DODAG analysis (formation time + tree) from the raw testlog.
@@ -438,11 +600,24 @@ def run_cooja_simulation(
                 log.exception("[%s] DODAG analysis failed", where)
 
             return RunReport(
-                log_id=log_id, csv_id=csv_id, metrics=net_meas, dodag=dodag)
+                log_id=log_id, csv_id=csv_id, metrics=net_meas, dodag=dodag,
+                confirmed=confirmed,
+                reason="" if confirmed else (
+                    "the run process ended without recording an exit code, so "
+                    "this result is not confirmed"
+                ),
+            )
 
         log.warning(
             "[%s] CSV file is missing or empty for simulation %s", where, sim_oid)
-        raise RunFailed("CSV file is missing or empty after conversion")
+        # Not a plain failure any more: the testlog is in GridFS and it is the
+        # only evidence of what happened. Previously it was uploaded and then
+        # orphaned, with the simulation marked in error and nothing to read.
+        return RunReport(
+            log_id=log_id, csv_id=csv_id, metrics={}, dodag=None,
+            confirmed=False,
+            reason="the converted CSV was empty, so no metrics could be computed",
+        )
     finally:
         # Only what this function created locally. The remote artifacts are
         # the caller's to clear, because clearing them is safe exactly when
@@ -587,7 +762,42 @@ def build_dispatcher(
 ) -> Dispatcher:
     """Assemble the managed scheduling path."""
     def learn_host_key(host_id, fingerprint: str) -> None:
-        mongo.host_repo.update(host_id, {"access.host_key_fingerprint": fingerprint})
+        """Pin a host key seen on first contact — without overwriting one.
+
+        R11. This used to be an unconditional ``update``, so the *second*
+        path to reach a host could replace the pin the first one established.
+        Trust on first use only means something if the first use is the one
+        that sticks, so the write is conditional on the field being unset, and
+        a refusal is checked against what is stored rather than ignored: the
+        two cases it can mean — someone else pinned the same key, or the host
+        is answering with a different one — are not the same event.
+
+        A conflict **raises**. Logging it and returning left the session that
+        had just accepted the other key open and in use: the policy only
+        calls this when it found no pin, so by the time the conflict is
+        visible the connection is already established. ``HostKeyMismatch``
+        propagates out of the policy and out of ``connect``, which is what
+        refusing actually means.
+        """
+        try:
+            if mongo.host_repo.pin_host_key(host_id, fingerprint):
+                log.info("Pinned the host key of %s: %s", host_id, fingerprint)
+                return
+            host = mongo.host_repo.get(host_id) or {}
+            stored = (host.get("access") or {}).get("host_key_fingerprint")
+        except Exception:
+            # Cannot tell. The connection stands, as it did before: refusing
+            # a session over a database failure would take the pool out for a
+            # reason that has nothing to do with the host.
+            log.exception("Could not pin the host key of %s", host_id)
+            return
+        if stored and stored != fingerprint:
+            log.error(
+                "Host %s is pinned to %s but presented %s; refusing this "
+                "session", host.get("name", host_id), stored, fingerprint,
+            )
+            raise HostKeyMismatch(
+                str(host.get("name") or host_id), stored, fingerprint)
 
     runner = SimulationRunner(
         mongo,
@@ -662,6 +872,10 @@ def main() -> None:
             probe=build_liveness_probe(opener),
             on_adopt=_resume_in_background(dispatcher.runner),
             is_followed=dispatcher.runner.is_following if quiet else None,
+            # A reservation younger than its own TTL is a placement in
+            # progress, and the sweep is what owns that timeout. Zero at
+            # startup: nothing there can belong to this process.
+            reserved_grace_sec=SET.reservation_ttl_sec if quiet else 0.0,
             quiet=quiet,
         )
 
@@ -676,6 +890,10 @@ def main() -> None:
         # unreachable at boot kept its reservation and nothing ever came back
         # to it.
         reconcile=lambda: reconcile(quiet=True),
+        # The counterpart of the quarantine: a worker held for something
+        # unresolved comes back only when the container says it has nothing
+        # alive and nothing left behind.
+        inspect_run=build_liveness_probe(opener),
     )
 
     reconcile()

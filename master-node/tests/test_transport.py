@@ -41,10 +41,12 @@ from lib.transport.plan import (
 from lib.transport.factory import build_transport
 from lib.transport.ssh import (
     GENERATED_ARTIFACTS,
+    JAVA_OK_MARK,
     SCP_SOCKET_TIMEOUT,
     TRANSFER_ATTEMPTS,
     SSHTransport,
     build_cleanup_command,
+    build_probe_command,
 )
 from scp import SCPException
 
@@ -759,3 +761,69 @@ class TestCleanupIsBestEffort:
     def test_transport_failure_is_swallowed(self):
         transport = self._transport_with(error=TransportError("connection lost"))
         assert transport.cleanup() is False
+
+
+# ── The readiness probe, run as a shell rather than simulated ───────────────
+
+class TestProbeCommandAgainstARealShell:
+    """R15: the probe's verdict about Java must come from Java.
+
+    These tests *execute* the composed command in ``/bin/sh``. That is the
+    whole point of them. The previous version was
+    ``if java -version 2>&1 | head -n1; then echo ok; fi``, and ``if`` on a
+    pipeline reads the status of its **last** element: ``head`` exits zero
+    after reading the error message of a Java that is not there. Every test
+    that fed the probe its expected *output* passed, and the shell that was
+    supposed to produce that output printed the mark for a container with no
+    runtime at all.
+    """
+
+    @staticmethod
+    def _run(tmp_path, java_script: str | None, jar: bool = True):
+        import subprocess
+        jar_path = tmp_path / "cooja.jar"
+        if jar:
+            jar_path.write_text("jar bytes\n")
+        if java_script is None:
+            java = tmp_path / "java-does-not-exist"
+        else:
+            java = tmp_path / "java"
+            java.write_text(java_script)
+            java.chmod(0o755)
+        command = build_probe_command(str(jar_path), str(java))
+        done = subprocess.run(
+            ["/bin/sh", "-c", command], capture_output=True, text=True,
+            timeout=30)
+        lines = [l.strip() for l in done.stdout.splitlines() if l.strip()]
+        return lines, JAVA_OK_MARK in lines
+
+    def test_a_missing_java_is_not_ok(self, tmp_path):
+        lines, java_ok = self._run(tmp_path, None)
+        assert java_ok is False, lines
+
+    def test_a_java_that_exits_non_zero_is_not_ok(self, tmp_path):
+        lines, java_ok = self._run(
+            tmp_path,
+            '#!/bin/sh\necho "Error: could not open jvm.cfg" >&2\nexit 1\n')
+        assert java_ok is False, lines
+        # The message is still reported: a runtime that fails says something
+        # worth putting in front of whoever has to fix it.
+        assert any("jvm.cfg" in line for line in lines), lines
+
+    def test_a_working_java_is_ok_and_its_version_is_captured(self, tmp_path):
+        lines, java_ok = self._run(
+            tmp_path,
+            '#!/bin/sh\necho \'openjdk version "21.0.4"\' >&2\nexit 0\n')
+        assert java_ok is True, lines
+        assert any("version" in line for line in lines), lines
+
+    def test_the_jar_digest_is_independent_of_java(self, tmp_path):
+        """A missing runtime must not also hide the build that is there."""
+        lines, java_ok = self._run(tmp_path, None)
+        assert any(len(line) == 64 for line in lines), lines
+        assert java_ok is False
+
+    def test_a_missing_jar_reports_no_digest(self, tmp_path):
+        lines, _ = self._run(
+            tmp_path, '#!/bin/sh\nexit 0\n', jar=False)
+        assert not any(len(line) == 64 for line in lines), lines

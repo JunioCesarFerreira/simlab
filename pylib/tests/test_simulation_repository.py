@@ -168,7 +168,10 @@ class TestAttemptGuards:
 
         repo.mark_error(SIM_OID, "recovered", attempt_id=None)
 
-        assert coll.update_one.call_args.args[0] == {"_id": SIM_OID}
+        # Unconditional on the *attempt*, but never over a published result:
+        # see TestAPublishedResultIsFinal.
+        assert coll.update_one.call_args.args[0] == {
+            "_id": SIM_OID, "status": {"$ne": EnumStatus.DONE}}
 
 
 class TestRequeue:
@@ -275,3 +278,110 @@ class TestExpireAttempt:
         assert repo.mark_done(
             SIM_OID, None, None, {}, attempt_id=ATTEMPT) is False
         assert document["status"] == EnumStatus.ERROR
+
+
+class TestAPublishedResultIsFinal:
+    """R24: a ``Done`` simulation is never reclassified as ``Error``.
+
+    ``_publish`` wrote ``mark_done`` and then closed the generation. A failure
+    of that *second*, administrative write propagated out of the publish and
+    the generic handler marked the finished simulation in error — an
+    experiment's outcome changed retroactively by a failure that had nothing
+    to do with the run.
+
+    The guard belongs in the repository and not only at the call site,
+    because the call site is what got it wrong, and because the attempt filter
+    alone matches a simulation this same attempt has just completed.
+    """
+
+    def test_the_filter_excludes_a_done_simulation(self, simulations):
+        repo, coll = simulations
+        coll.update_one.return_value = MagicMock(matched_count=1)
+
+        repo.mark_error(SIM_OID, "generation write failed", attempt_id=ATTEMPT)
+
+        flt = coll.update_one.call_args.args[0]
+        assert flt["attempt_id"] == ATTEMPT
+        assert flt["status"] == {"$ne": EnumStatus.DONE}
+
+    def test_a_refused_write_is_reported_as_refused(self, simulations):
+        repo, coll = simulations
+        coll.update_one.return_value = MagicMock(matched_count=0)
+
+        assert repo.mark_error(
+            SIM_OID, "too late", attempt_id=ATTEMPT) is False
+
+
+class TestUnconfirmedResultsKeepTheirArtifacts:
+    """The stated policy for a run that produced bytes without completing.
+
+    Preserved and referenced, but not published: ``network_metrics`` is what
+    the objective aggregation reads, and an unconfirmed run must not enter a
+    mean without the evaluation above it knowing that it did.
+    """
+
+    def test_the_artifacts_are_recorded_and_the_metrics_are_set_apart(
+        self, simulations
+    ):
+        repo, coll = simulations
+        coll.update_one.return_value = MagicMock(matched_count=1)
+
+        repo.mark_error(
+            SIM_OID, "Unconfirmed result: no exit code", attempt_id=ATTEMPT,
+            log_id="LOG", csv_id="CSV", partial_metrics={"latency": 3.0})
+
+        sets = coll.update_one.call_args.args[1]["$set"]
+        assert sets["status"] == EnumStatus.ERROR
+        assert sets["log_cooja_id"] == "LOG"
+        assert sets["csv_log_id"] == "CSV"
+        assert sets["partial_metrics"] == {"latency": 3.0}
+        assert sets["partial"] is True
+        # Not under the name the aggregation reads.
+        assert "network_metrics" not in sets
+
+    def test_an_ordinary_failure_writes_none_of_that(self, simulations):
+        repo, coll = simulations
+        coll.update_one.return_value = MagicMock(matched_count=1)
+
+        repo.mark_error(SIM_OID, "did not complete", attempt_id=ATTEMPT)
+
+        sets = coll.update_one.call_args.args[1]["$set"]
+        assert "partial" not in sets and "log_cooja_id" not in sets
+
+
+class TestTimestampsAreUtc:
+    """R25, the write half.
+
+    ``datetime.now()`` is naive *local* time, and PyMongo stores and compares
+    it as though it were UTC. On a machine that is not on UTC every one of
+    these was wrong by the offset — and the recovery cutoff, which compares
+    against ``start_time``, was wrong in whichever direction hurts.
+    """
+
+    def _written(self, simulations, call):
+        repo, coll = simulations
+        coll.update_one.return_value = MagicMock(matched_count=1)
+        call(repo)
+        return coll.update_one.call_args.args[1]["$set"]
+
+    def test_mark_running(self, simulations):
+        sets = self._written(
+            simulations, lambda r: r.mark_running(SIM_OID, attempt_id=ATTEMPT))
+        assert sets["start_time"].tzinfo is not None
+
+    def test_mark_done(self, simulations):
+        sets = self._written(
+            simulations,
+            lambda r: r.mark_done(SIM_OID, None, None, {}, attempt_id=ATTEMPT))
+        assert sets["end_time"].tzinfo is not None
+
+    def test_mark_error(self, simulations):
+        sets = self._written(
+            simulations, lambda r: r.mark_error(SIM_OID, "x", attempt_id=ATTEMPT))
+        assert sets["end_time"].tzinfo is not None
+
+    def test_set_assignment(self, simulations):
+        sets = self._written(simulations, lambda r: r.set_assignment(
+            SIM_OID, host_id=SIM_OID, host_name="h", resource_id=SIM_OID,
+            resource_name="w", attempt_id=ATTEMPT))
+        assert sets["assigned_at"].tzinfo is not None

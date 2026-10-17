@@ -13,7 +13,10 @@ def test_pooled_client_survives_queries_and_query_errors_until_shutdown():
             assert db is constructor.return_value.__getitem__.return_value
         with pytest.raises(RuntimeError), connection.connect():
             raise RuntimeError("query failure")
-        constructor.assert_called_once_with("mongodb://unused")
+        # `tz_aware` is part of the contract, not a detail: without it a BSON
+        # date comes back with no timezone and nothing downstream can tell UTC
+        # from a local reading of it.
+        constructor.assert_called_once_with("mongodb://unused", tz_aware=True)
         constructor.return_value.close.assert_not_called()
         connection.close()
         constructor.return_value.close.assert_called_once()
