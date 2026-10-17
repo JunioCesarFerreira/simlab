@@ -125,6 +125,33 @@ describe("completenessDetail", () => {
     );
   });
 
+  it("names the replicas that were never created", () => {
+    // The hole no repeat can fill, so the reader needs to know which replica
+    // was decided without ever running.
+    expect(
+      completenessDetail({
+        state: "partial",
+        expected: 3,
+        observed: 1,
+        absent: 2,
+        absent_seeds: [222, 333],
+      }),
+    ).toContain("2 replica(s) were never created (seeds 222, 333)");
+  });
+
+  it("shows the reason the engine recorded", () => {
+    // `partial` with every planned seed finished: only the reason explains it.
+    expect(
+      completenessDetail({
+        state: "partial",
+        expected: 2,
+        observed: 2,
+        thin_metrics: ["energy"],
+        reason: "finished replicas are missing energy (nothing to repeat)",
+      }),
+    ).toContain("finished replicas are missing energy (nothing to repeat)");
+  });
+
   it("explains an absent record instead of showing nothing", () => {
     expect(completenessDetail(null)).toEqual([
       "This evaluation was made before completeness was recorded.",

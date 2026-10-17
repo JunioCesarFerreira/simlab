@@ -174,7 +174,7 @@ class BatchStrategy(EngineStrategy):
             )
             self._start_watcher()
             self._start_generation_poll()
-            if status == EnumStatus.DONE:
+            if status in (EnumStatus.DONE, EnumStatus.ERROR):
                 with self._lock:
                     self._handle_generation_done(self._generation_id)
             return

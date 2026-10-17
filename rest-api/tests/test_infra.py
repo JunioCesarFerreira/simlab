@@ -314,6 +314,7 @@ class TestDeleteGuard:
         assert response.status_code == 409
         detail = response.json()["detail"]
         assert "cooja1" in detail           # names what blocked it
+        assert "recover retained results" in detail
         assert "drain" in detail            # says what to do instead
 
     def test_an_idle_host_is_deleted(self, client, infra):
@@ -470,6 +471,63 @@ class TestUpdates:
 
     def test_an_empty_update_is_refused(self, client, infra):
         assert client.put(f"/api/v1/infra/hosts/{HOST_ID}", json={}).status_code == 422
+
+    def test_the_pinned_host_key_can_be_cleared(self, client, infra):
+        """The only administrative route to replace a pinned host key.
+
+        The pin is written on first contact and never overwritten — a second
+        path presenting a different key has its session refused instead. So a
+        legitimate key change needs an explicit act, and this is it.
+
+        `host_key_fingerprint` was listed in the accepted access fields and
+        published in the OpenAPI schema as nullable, and the write mapper
+        dropped it: the request answered 200 and changed nothing. Found by
+        following the procedure the guide documents.
+        """
+        response = client.put(f"/api/v1/infra/hosts/{HOST_ID}", json={
+            "access": {"host_key_fingerprint": None}})
+
+        assert response.status_code == 200
+        payload = infra.host_repo.update.call_args.args[1]
+        assert payload["access.host_key_fingerprint"] is None, (
+            "a null stores null, which `pin_host_key` and the transport both "
+            "read as 'no pin' — so the host is back to first contact")
+
+    def test_a_pin_can_also_be_set_by_hand(self, client, infra):
+        """An operator who knows the fingerprint out of band is in a stronger
+        position than trust-on-first-use, so this is allowed."""
+        client.put(f"/api/v1/infra/hosts/{HOST_ID}", json={
+            "access": {"host_key_fingerprint": "SHA256:known-out-of-band"}})
+
+        payload = infra.host_repo.update.call_args.args[1]
+        assert payload["access.host_key_fingerprint"] == (
+            "SHA256:known-out-of-band")
+
+    def test_clearing_the_pin_leaves_the_rest_of_the_access_alone(
+            self, client, infra):
+        """Written by path, so the credential and the address survive — the
+        defect this mapper already carries a comment about."""
+        client.put(f"/api/v1/infra/hosts/{HOST_ID}", json={
+            "access": {"host_key_fingerprint": None}})
+
+        payload = infra.host_repo.update.call_args.args[1]
+        assert set(payload) == {"access.host_key_fingerprint"}
+
+    def test_a_pin_sent_as_a_structure_is_refused(self, client, infra):
+        """What is stored is null or a string, never a document.
+
+        A scalar goes through the same text rule as every other field here, so
+        a number arrives as its digits — nonsense as a fingerprint, and it
+        fails every session loudly, which is the safe direction. A document or
+        a boolean is refused outright, because that is the shape that could
+        make a later comparison do something unexpected.
+        """
+        for bad in ({"sha": "x"}, ["x"], True):
+            response = client.put(f"/api/v1/infra/hosts/{HOST_ID}", json={
+                "access": {"host_key_fingerprint": bad}})
+
+            assert response.status_code == 422, bad
+            assert "host_key_fingerprint" in response.json()["detail"]
 
     def test_creating_a_duplicate_name_is_refused(self, client, infra):
         infra.host_repo.get_by_name.return_value = sample_host()
@@ -677,6 +735,7 @@ class TestManualWorkers:
 
         assert response.status_code == 409
         assert "running a simulation" in response.json()["detail"]
+        assert "recover retained results" in response.json()["detail"]
 
     def test_an_idle_worker_is_removed(self, client, infra):
         infra.resource_repo.delete_if_free.return_value = True
@@ -800,9 +859,9 @@ class TestRemovingAHost:
         assert resp.status_code == 409
         detail = resp.json()["detail"]
         assert "cooja2" in detail
-        # The operator has to know the refusal was partial, and that the host
-        # is schedulable again.
-        assert "left in service" in detail
+        # The operator has to know that nothing was removed and the host is
+        # schedulable again.
+        assert "still in service" in detail
 
     def test_a_drained_host_is_removed(self, client, infra):
         infra.host_repo.delete_if_drained.return_value = (True, [])
@@ -973,35 +1032,49 @@ class TestEditingAccessInvalidatesTheEvidence:
         infra.host_repo.bump_config_version.assert_not_called()
 
 
-class TestAHostRemovedWithStrandedWorkers:
-    """The one surprising outcome, and it is reported rather than hidden.
+class TestRemovingAHostIsAllOrNothing:
+    """Two outcomes, not three.
 
-    A placement that started from a snapshot taken before the withdrawal can
-    reserve a worker during it. The final sweep leaves that worker alone —
-    deleting it would take a live run with it — so the host is gone and the
-    worker is not.
+    The deletions run in one transaction, so a worker that cannot go rolls the
+    whole removal back. That is what makes the refusal cost nothing: before,
+    the free workers stayed deleted because undoing a delete is not possible
+    outside a transaction, and the response had to explain a half-removed
+    host.
     """
 
-    def test_the_names_come_back_with_a_200(self, client, infra):
-        infra.host_repo.delete_if_drained.return_value = (True, ["cooja9"])
-
-        resp = client.delete(f"/api/v1/infra/hosts/{HOST_ID}")
-
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["deleted"] is True
-        assert body["stranded"] == ["cooja9"]
-        assert "running simulation" in body["detail"]
-
-    def test_a_clean_removal_is_still_a_204(self, client, infra):
+    def test_a_clean_removal_is_a_204(self, client, infra):
         infra.host_repo.delete_if_drained.return_value = (True, [])
 
         assert client.delete(f"/api/v1/infra/hosts/{HOST_ID}").status_code == 204
 
-    def test_a_refusal_is_still_a_409(self, client, infra):
+    def test_a_blocked_removal_removes_nothing(self, client, infra):
         infra.host_repo.delete_if_drained.return_value = (False, ["cooja1"])
 
         resp = client.delete(f"/api/v1/infra/hosts/{HOST_ID}")
 
         assert resp.status_code == 409
-        assert "left in service" in resp.json()["detail"]
+        detail = resp.json()["detail"]
+        assert "cooja1" in detail
+        assert "Nothing was removed" in detail
+        assert "still in service" in detail
+
+    def test_a_host_that_vanished_is_a_404(self, client, infra):
+        infra.host_repo.delete_if_drained.return_value = (False, [])
+
+        assert client.delete(
+            f"/api/v1/infra/hosts/{HOST_ID}").status_code == 404
+
+    def test_a_concurrent_registration_is_a_409_not_a_404(self, client, infra):
+        """A write conflict means nothing was removed and the host is still
+        there. Answering 404 for a host that exists sends the operator looking
+        for the wrong problem."""
+        from pylib.db.repositories.infra import RemovalConflicted
+
+        infra.host_repo.delete_if_drained.side_effect = RemovalConflicted(
+            "a worker was registered on this host while it was being removed; "
+            "nothing was removed")
+
+        resp = client.delete(f"/api/v1/infra/hosts/{HOST_ID}")
+
+        assert resp.status_code == 409
+        assert "Try again" in resp.json()["detail"]

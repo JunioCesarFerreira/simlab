@@ -89,6 +89,27 @@ class ExperimentRepository:
             )
             return result.modified_count > 0
 
+    def claim_resume(self, experiment_id: str) -> bool:
+        """Take over an experiment left ``Running`` by a process that stopped.
+
+        ``update_starting`` cannot do this: it claims ``Waiting`` and moves to
+        ``Running``, which is the right guard for a *new* experiment and
+        matches nothing for one already under way. So an engine restart picked
+        up nothing, and an experiment interrupted mid-generation stayed
+        ``Running`` for ever — its strategy state died with the process, and
+        nothing came back for it. Observed while validating this feature: an
+        engine restart left a finished generation with no evolution after it.
+
+        Records when the takeover happened, so the history shows that this
+        run was resumed rather than started.
+        """
+        with self.connection.connect() as db:
+            result = db["experiments"].update_one(
+                {"_id": ObjectId(experiment_id), "status": EnumStatus.RUNNING},
+                {"$set": {"id": experiment_id, "resumed_at": utc_now()}},
+            )
+            return result.modified_count > 0
+
     # ------------------------------
     # Firmware traceability
     # ------------------------------

@@ -1,0 +1,22 @@
+/* Text on status badges and action buttons needs more contrast than chart
+   colors. Keep these tokens within infrastructure, including teleported forms. */
+.infra,
+.infra-dialog {
+  --color-primary: #2563eb;
+  --color-link: #1d4ed8;
+  --color-text-muted: #606978;
+  --status-done: #047857;
+  --status-running: #1d4ed8;
+  --status-error: #b91c1c;
+  --status-waiting: #92400e;
+}
+
+html.dark .infra,
+html.dark .infra-dialog {
+  --color-link: #93c5fd;
+  --color-text-muted: #a6adc8;
+  --status-done: #34d399;
+  --status-running: #93c5fd;
+  --status-error: #fca5a5;
+  --status-waiting: #fcd34d;
+}

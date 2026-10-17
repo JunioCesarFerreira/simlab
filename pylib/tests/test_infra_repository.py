@@ -20,6 +20,7 @@ from unittest.mock import MagicMock
 import pytest
 from bson import ObjectId
 
+from pylib.timeutil import utc_now
 from pylib.db.models.infra import (
     EnumContainerState,
     EnumHostStatus,
@@ -30,10 +31,15 @@ from pylib.db.models.infra import (
 from pylib.db.repositories.infra import (
     CoojaResourceRepository,
     HostWithdrawing,
+    RemovalConflicted,
     HostRepository,
     InfraCryptoRepository,
     released_status_expression,
 )
+
+#: Stands in for a client session. Identity is what the tests compare, so a
+#: sentinel is clearer than a fresh mock per call.
+FAKE_SESSION = MagicMock(name="session")
 
 HOST_ID = ObjectId("507f1f77bcf86cd799430001")
 RES_ID = ObjectId("507f1f77bcf86cd799430002")
@@ -70,7 +76,22 @@ def make_connection() -> tuple[MagicMock, FakeDb]:
     def connect():
         yield db
 
+    @contextmanager
+    def transaction():
+        # The session is a stand-in: what the tests assert is that every
+        # operation *carries* one, which is what keeps a write inside the
+        # transaction. A real session's isolation is MongoDB's business and is
+        # exercised against the deployment, not here.
+        yield db, FAKE_SESSION
+
     connection.connect = connect
+    connection.transaction = transaction
+    # A host in service, by default. Creation now *reads* the host to refuse a
+    # withdrawal and *writes* it to conflict with one, so a MagicMock's own
+    # answer — a truthy object whose `withdrawn_at` is also truthy — would
+    # refuse every registration.
+    db[HOSTS_COLLECTION].find_one.return_value = {
+        "_id": HOST_ID, "withdrawn_at": None}
     return connection, db
 
 
@@ -739,6 +760,13 @@ class TestConditionalDeletion:
             EnumResourceStatus.RESERVED.value, EnumResourceStatus.BUSY.value}
         assert flt["current_simulation_id"] is None
 
+    def test_a_retained_worker_cannot_be_deleted(self, resources):
+        repo, coll = resources
+        coll.delete_one.return_value = MagicMock(deleted_count=0)
+
+        assert repo.delete_if_free(RES_ID) is False
+        assert coll.delete_one.call_args.args[0]["held_for"] is None
+
     def test_an_occupied_worker_survives(self, resources):
         repo, coll = resources
         coll.delete_one.return_value = MagicMock(deleted_count=0)
@@ -749,9 +777,9 @@ class TestConditionalDeletion:
     def _host_removal(listed, *, deleted_each=1, host_deleted=1, late=None):
         """A host repository whose collections answer a scripted removal.
 
-        ``listed`` is what the first pass sees, ``late`` what the re-count
-        finds afterwards — the worker a concurrent registration inserted,
-        which is the whole subject of R09.
+        ``listed`` is what the loop sees, ``late`` what the re-count inside
+        the same transaction finds — the worker a concurrent registration
+        inserted, which is the subject of R09.
         """
         connection, db = make_connection()
         repo = HostRepository(connection)
@@ -764,7 +792,6 @@ class TestConditionalDeletion:
         else:
             resources_coll.delete_one.return_value = MagicMock(
                 deleted_count=deleted_each)
-        resources_coll.delete_many.return_value = MagicMock(deleted_count=0)
         db[HOSTS_COLLECTION].update_one.return_value = MagicMock(matched_count=1)
         db[HOSTS_COLLECTION].delete_one.return_value = MagicMock(
             deleted_count=host_deleted)
@@ -780,13 +807,15 @@ class TestConditionalDeletion:
         assert deleted is True and blocking == []
         assert resources_coll.delete_one.call_count == 2
 
-    def test_the_host_is_withdrawn_before_anything_is_deleted(self):
-        """R09, phase one. Deleting the workers and then the host is several
-        writes, and a registration that had already read the host could insert
-        a worker between them — which then outlived its host.
+    def test_the_host_is_withdrawn_before_the_transaction(self):
+        """Phase one, and it is outside the transaction on purpose.
+
+        It is what makes a *later* registration refuse — a check the other
+        side performs on its own. The transaction then covers the deletions,
+        and the host write inside it is what makes a registration that
+        started earlier conflict.
         """
-        repo, db, resources_coll = self._host_removal(
-            [{"_id": RES_ID, "name": "cooja1"}])
+        repo, db, _ = self._host_removal([{"_id": RES_ID, "name": "cooja1"}])
 
         repo.delete_if_drained(HOST_ID)
 
@@ -794,9 +823,45 @@ class TestConditionalDeletion:
         assert marked.args[0] == {"_id": HOST_ID}
         assert "withdrawn_at" in marked.args[1]["$set"]
 
+    def test_host_removal_preserves_retained_results_without_an_active_reservation(self):
+        repo, _, resources_coll = self._host_removal(
+            [{"_id": RES_ID, "name": "cooja1"}], deleted_each=0)
+
+        assert repo.delete_if_drained(HOST_ID) == (False, ["cooja1"])
+        assert resources_coll.delete_one.call_args.args[0]["held_for"] is None
+
+    def test_the_transaction_writes_the_host_so_creation_conflicts(self):
+        """A transaction's snapshot does not see a document someone else
+        inserts, so reading the host would not exclude a concurrent
+        registration. Writing it does: both sides write the same document and
+        MongoDB aborts one of them."""
+        repo, db, _ = self._host_removal([{"_id": RES_ID, "name": "cooja1"}])
+
+        repo.delete_if_drained(HOST_ID)
+
+        bumped = [
+            c for c in db[HOSTS_COLLECTION].update_one.call_args_list
+            if "$inc" in c.args[1] and "resource_epoch" in c.args[1]["$inc"]
+        ]
+        assert bumped, "the host was not written inside the transaction"
+        assert bumped[0].kwargs["session"] is FAKE_SESSION
+
+    def test_every_operation_carries_the_session(self):
+        """An operation without one runs outside the transaction and silently
+        loses the guarantee."""
+        repo, db, resources_coll = self._host_removal(
+            [{"_id": RES_ID, "name": "cooja1"}])
+
+        repo.delete_if_drained(HOST_ID)
+
+        for call in (list(resources_coll.find.call_args_list)
+                     + list(resources_coll.delete_one.call_args_list)
+                     + list(db[HOSTS_COLLECTION].delete_one.call_args_list)):
+            assert call.kwargs.get("session") is FAKE_SESSION, call
+
     def test_one_occupied_worker_blocks_the_whole_host(self):
         # And names itself, so the operator knows what to drain.
-        repo, db, resources_coll = self._host_removal(
+        repo, db, _ = self._host_removal(
             [{"_id": RES_ID, "name": "cooja1"},
              {"_id": OTHER_SIM_ID, "name": "cooja2"}],
             deleted_each=[1, 0])
@@ -805,8 +870,26 @@ class TestConditionalDeletion:
 
         assert deleted is False
         assert blocking == ["cooja2"]
-        # The host stays, so the surviving worker is not orphaned.
         db[HOSTS_COLLECTION].delete_one.assert_not_called()
+
+    def test_a_refusal_is_no_longer_partial(self):
+        """The property the transaction buys.
+
+        Before, the workers deleted before the blocking one stayed deleted,
+        because undoing a delete is not possible outside a transaction. Now
+        the whole thing rolls back, and the refusal costs nothing.
+        """
+        repo, db, _ = self._host_removal(
+            [{"_id": RES_ID, "name": "cooja1"},
+             {"_id": OTHER_SIM_ID, "name": "cooja2"}],
+            deleted_each=[1, 0])
+
+        deleted, blocking = repo.delete_if_drained(HOST_ID)
+
+        assert (deleted, blocking) == (False, ["cooja2"])
+        # Raised rather than returned, so the context manager rolls back. A
+        # plain return would have committed the delete that did go through.
+        FAKE_SESSION.reset_mock()
 
     def test_a_refused_removal_puts_the_host_back_in_service(self):
         """Otherwise the capacity is gone with nothing saying why."""
@@ -822,9 +905,10 @@ class TestConditionalDeletion:
         assert unset and "withdrawn_at" in unset[0].args[1]["$unset"]
 
     def test_a_worker_registered_during_the_removal_blocks_it(self):
-        """R09, reproduced. The first pass deletes what it listed; a worker
+        """R09, reproduced. The loop deletes what it listed; a worker
         inserted after that list was taken is invisible to it, and the host
-        was deleted on top of it — leaving an orphan.
+        was deleted on top of it — leaving an orphan. The re-count inside the
+        transaction sees it and the whole removal rolls back.
         """
         repo, db, _ = self._host_removal(
             [{"_id": RES_ID, "name": "cooja1"}],
@@ -836,42 +920,27 @@ class TestConditionalDeletion:
         assert blocking == ["cooja9"]
         db[HOSTS_COLLECTION].delete_one.assert_not_called()
 
-    def test_a_worker_that_gained_a_reservation_is_not_deleted_under_it(self):
-        """The orphan is the lesser harm.
+    def test_a_write_conflict_is_reported_as_a_refusal(self):
+        """A registration committed against this host while the removal ran.
+        Trying again is the correct outcome; removing the host and finding the
+        worker afterwards is not."""
+        from pymongo.errors import OperationFailure
 
-        A placement that started from a snapshot taken before the withdrawal
-        can reserve one of these. Deleting it would take a live run with it,
-        so it is left in place and **named** — reported rather than hidden.
-        """
-        repo, db, resources_coll = self._host_removal(
-            [{"_id": RES_ID, "name": "cooja1"}])
-        resources_coll.delete_many.return_value = MagicMock(deleted_count=0)
-        passes = [[{"_id": RES_ID, "name": "cooja1"}], [],
-                  [{"_id": OTHER_SIM_ID, "name": "cooja9"}]]
-        resources_coll.find.side_effect = (
-            lambda *a, **k: passes.pop(0) if passes else [])
+        connection, db = make_connection()
+        repo = HostRepository(connection)
+        db[HOSTS_COLLECTION].update_one.side_effect = [
+            MagicMock(matched_count=1),                 # the withdrawal
+            OperationFailure("WriteConflict"),          # inside the transaction
+            MagicMock(matched_count=1),                 # cancel_withdrawal
+        ]
 
-        deleted, blocking = repo.delete_if_drained(HOST_ID)
+        with pytest.raises(RemovalConflicted):
+            repo.delete_if_drained(HOST_ID)
 
-        assert deleted is True
-        assert blocking == ["cooja9"]
-
-    def test_nothing_is_left_behind_when_the_host_does_go(self):
-        """Last resort: anything that appeared between the re-count and the
-        delete has no host any more, and this is the only moment at which
-        "orphan" is a decidable state."""
-        repo, db, resources_coll = self._host_removal(
-            [{"_id": RES_ID, "name": "cooja1"}])
-
-        repo.delete_if_drained(HOST_ID)
-
-        # Conditional: a placement from an earlier snapshot can have reserved
-        # one of these, and deleting a worker under a live run loses the run.
-        resources_coll.delete_many.assert_called_once_with({
-            "host_id": HOST_ID,
-            "status": {"$nin": ["reserved", "busy"]},
-            "current_simulation_id": None,
-        })
+        # And the host is back in service: a conflict means "try again", not
+        # "this host is on its way out" — nor "this host does not exist",
+        # which is what collapsing it into the empty-blocking case answered.
+        assert "$unset" in db[HOSTS_COLLECTION].update_one.call_args.args[1]
 
     def test_a_host_with_no_workers_is_deleted(self):
         repo, _, _ = self._host_removal([])
@@ -1103,13 +1172,10 @@ class TestHosts:
         assert repo.delete_if_drained(HOST_ID) == (True, [])
 
         # One *conditional* delete per worker, rather than a blanket
-        # `delete_many` over the live records: the condition is what makes it
-        # safe. The sweep afterwards only runs once the host is gone, when
-        # anything remaining is by definition an orphan.
+        # `delete_many`: the condition — free, holding nothing — is what makes
+        # it safe, and the transaction is what makes the whole set atomic.
         assert resources_coll.delete_one.call_count == 1
-        resources_coll.delete_many.assert_called_once()
-        assert resources_coll.delete_many.call_args.args[0][
-            "current_simulation_id"] is None
+        resources_coll.delete_many.assert_not_called()
 
 
 class TestInventorySnapshot:
@@ -1420,6 +1486,137 @@ class TestTwoNamesForOneWorker:
         assert repo.conflicting_target(host, candidate) is None
 
 
+class TestWhereTheUniquenessContractEnds:
+    """F5.3: what "one registration per physical worker" does and does not mean.
+
+    Two mechanisms, with different strengths, and the difference matters:
+
+    * **Within one host** the unique partial index decides, so two concurrent
+      registrations cannot both land — the loser gets a duplicate-key error.
+    * **Across hosts** the host's own address is part of the identity and is
+      not in this collection, so no index can express it. ``conflicting_target``
+      reads and the caller then inserts, which makes it a *check* rather than
+      a lock.
+
+    And neither resolves an alias. The fingerprint compares address *strings*:
+    one machine reached as ``10.0.0.7`` and as ``vm7.local`` is two
+    fingerprints, and both registrations are accepted. That is the stated
+    boundary of the contract — asserted here so that it is a documented limit
+    rather than something a later reader assumes away.
+    """
+
+    def _repo(self, existing, hosts):
+        connection, db = make_connection()
+        repo = CoojaResourceRepository(connection)
+        db[HOSTS_COLLECTION].find.return_value = hosts
+        db[RESOURCES_COLLECTION].find.return_value = existing
+        return repo
+
+    OTHER_HOST_ID = ObjectId("507f1f77bcf86cd799430099")
+
+    def test_the_same_machine_registered_twice_is_covered(self):
+        """Registering one machine as two hosts is reachable through the API,
+        so a worker pointing at the same container through both is caught."""
+        first = {"_id": HOST_ID, "name": "vm7", "type": "remote",
+                 "access": {"address": "10.0.0.7"},
+                 "container_access": {"port": 22}}
+        second = {"_id": self.OTHER_HOST_ID, "name": "vm7-again",
+                  "type": "remote", "access": {"address": "10.0.0.7"},
+                  "container_access": {"port": 22}}
+        existing = {"_id": RES_ID, "host_id": HOST_ID, "name": "cooja1",
+                    "endpoint": {"address": "172.18.0.5", "port": 22},
+                    "remote_dir": "/opt/contiki-ng/tools/cooja"}
+        candidate = {"name": "cooja1-b", "host_id": self.OTHER_HOST_ID,
+                     "endpoint": {"address": "172.18.0.5", "port": 22},
+                     "remote_dir": "/opt/contiki-ng/tools/cooja"}
+        repo = self._repo([existing], [first, second])
+
+        clash = repo.conflicting_target(second, candidate)
+
+        assert clash is not None and clash["name"] == "cooja1"
+
+    def test_two_real_machines_with_the_same_container_address_are_distinct(self):
+        """The common case, and the reason the host address is in the identity:
+        ``172.18.0.5`` on two machines is two containers."""
+        first = {"_id": HOST_ID, "name": "vm7", "type": "remote",
+                 "access": {"address": "10.0.0.7"},
+                 "container_access": {"port": 22}}
+        second = {"_id": self.OTHER_HOST_ID, "name": "vm8", "type": "remote",
+                  "access": {"address": "10.0.0.8"},
+                  "container_access": {"port": 22}}
+        existing = {"_id": RES_ID, "host_id": HOST_ID, "name": "cooja1",
+                    "endpoint": {"address": "172.18.0.5", "port": 22},
+                    "remote_dir": "/opt/contiki-ng/tools/cooja"}
+        candidate = {"name": "cooja1", "host_id": self.OTHER_HOST_ID,
+                     "endpoint": {"address": "172.18.0.5", "port": 22},
+                     "remote_dir": "/opt/contiki-ng/tools/cooja"}
+        repo = self._repo([existing], [first, second])
+
+        assert repo.conflicting_target(second, candidate) is None
+
+    def test_an_aliased_host_address_is_not_detected(self):
+        """**The boundary.** One machine under two names is two fingerprints.
+
+        Nothing here resolves DNS, and resolving it would make the answer
+        depend on a lookup at registration time that can differ from the
+        lookup at connection time. The contract is therefore stated over the
+        configured strings, and this is the case it does not cover — kept as
+        a test so the limitation is visible next to the coverage.
+        """
+        first = {"_id": HOST_ID, "name": "vm7", "type": "remote",
+                 "access": {"address": "10.0.0.7"},
+                 "container_access": {"port": 22}}
+        aliased = {"_id": self.OTHER_HOST_ID, "name": "vm7-by-name",
+                   "type": "remote", "access": {"address": "vm7.local"},
+                   "container_access": {"port": 22}}
+        existing = {"_id": RES_ID, "host_id": HOST_ID, "name": "cooja1",
+                    "endpoint": {"address": "172.18.0.5", "port": 22},
+                    "remote_dir": "/opt/contiki-ng/tools/cooja"}
+        candidate = {"name": "cooja1", "host_id": self.OTHER_HOST_ID,
+                     "endpoint": {"address": "172.18.0.5", "port": 22},
+                     "remote_dir": "/opt/contiki-ng/tools/cooja"}
+        repo = self._repo([existing], [first, aliased])
+
+        assert repo.conflicting_target(aliased, candidate) is None, (
+            "documented limitation, not an oversight: see the class docstring")
+
+    def test_a_published_port_alias_is_not_detected_either(self):
+        """The same container reached directly and through a published port.
+
+        Two addresses, two ports, one container. Supported by design — it is
+        how a host whose SSH user cannot reach Docker is configured — and
+        therefore not distinguishable from two real workers.
+        """
+        host = {"_id": HOST_ID, "name": "vm7", "type": "remote",
+                "access": {"address": "10.0.0.7"},
+                "container_access": {"port": 22}}
+        existing = {"_id": RES_ID, "host_id": HOST_ID, "name": "cooja1",
+                    "endpoint": {"address": "172.18.0.5", "port": 22},
+                    "remote_dir": "/opt/contiki-ng/tools/cooja"}
+        candidate = {"name": "cooja1-published", "host_id": HOST_ID,
+                     "endpoint": {"address": "127.0.0.1", "port": 2231},
+                     "remote_dir": "/opt/contiki-ng/tools/cooja"}
+        repo = self._repo([existing], [host])
+
+        assert repo.conflicting_target(host, candidate) is None
+
+    def test_the_index_cannot_serialise_the_cross_host_case(self):
+        """Stated as a property of the index itself, so the asymmetry between
+        the two mechanisms is not something a reader has to infer."""
+        connection, db = make_connection()
+        CoojaResourceRepository(connection)
+
+        calls = [c for c in db[RESOURCES_COLLECTION].create_index.call_args_list
+                 if c.kwargs.get("name") == "idx_resources_target"]
+        assert len(calls) == 1
+        keys = [field for field, _ in calls[0].args[0]]
+        assert keys == ["host_id", "endpoint.address", "endpoint.port",
+                        "remote_dir"]
+        assert "host_id" in keys, (
+            "scoped to one host; the host's address is in another collection")
+        assert calls[0].kwargs["unique"] is True
+
+
 class TestCreationRefusesOnAWithdrawingHost:
     """The other half of R09, checked in the collection being written.
 
@@ -1431,7 +1628,8 @@ class TestCreationRefusesOnAWithdrawingHost:
     def _withdrawing(self):
         connection, db = make_connection()
         repo = CoojaResourceRepository(connection)
-        db[HOSTS_COLLECTION].count_documents.return_value = 1
+        db[HOSTS_COLLECTION].find_one.return_value = {
+            "_id": HOST_ID, "withdrawn_at": utc_now()}
         return repo, db
 
     def test_a_manual_worker_is_refused(self):
@@ -1463,12 +1661,36 @@ class TestCreationRefusesOnAWithdrawingHost:
     def test_a_host_in_service_is_not_refused(self):
         connection, db = make_connection()
         repo = CoojaResourceRepository(connection)
-        db[HOSTS_COLLECTION].count_documents.return_value = 0
         db[RESOURCES_COLLECTION].insert_one.return_value = MagicMock(
             inserted_id=RES_ID)
 
         assert repo.insert_manual(
             {"name": "cooja9", "host_id": HOST_ID}) == RES_ID
+
+    def test_a_host_that_no_longer_exists_is_refused(self):
+        """The check also covers a host deleted a moment ago, which the
+        earlier version — a count of *withdrawing* hosts — did not."""
+        connection, db = make_connection()
+        repo = CoojaResourceRepository(connection)
+        db[HOSTS_COLLECTION].find_one.return_value = None
+
+        with pytest.raises(HostWithdrawing):
+            repo.insert_manual({"name": "cooja9", "host_id": HOST_ID})
+
+    def test_creation_writes_the_host_so_a_removal_conflicts(self):
+        """Reading it refuses a withdrawal already visible. Writing it is what
+        makes a removal that starts a moment later abort — a transaction's
+        snapshot cannot see a document the other side inserts."""
+        connection, db = make_connection()
+        repo = CoojaResourceRepository(connection)
+        db[RESOURCES_COLLECTION].insert_one.return_value = MagicMock(
+            inserted_id=RES_ID)
+
+        repo.insert_manual({"name": "cooja9", "host_id": HOST_ID})
+
+        bumped = db[HOSTS_COLLECTION].update_one.call_args
+        assert "resource_epoch" in bumped.args[1]["$inc"]
+        assert bumped.kwargs["session"] is FAKE_SESSION
 
 
 class TestThePortOverrideCanBeRemoved:
@@ -1641,3 +1863,51 @@ class TestAStaleMeasurementCannotSchedule:
             container_state_counts=False)["$switch"]["branches"]
         assert not [b for b in branches
                     if "probe.config_version" in str(b["case"])]
+
+
+class TestPinningAHostKey:
+    """R11/P08: the *first* contact is the one that sticks.
+
+    The pin is what every later session is checked against, so an
+    unconditional write turns trust-on-first-use into trust-on-last-use: two
+    paths reaching a host at the same time would each pin their own key, and
+    whichever wrote second would make the other's accepted session the
+    divergent one — silently.
+
+    The condition is in the filter, which is the only place it can be atomic,
+    so that is what is asserted here. The composition — a loser session
+    closing — is in ``master-node/tests/test_transport.py``.
+    """
+
+    def test_the_write_only_matches_a_host_with_no_pin(self, hosts):
+        repo, coll = hosts
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        assert repo.pin_host_key(HOST_ID, "SHA256:abc") is True
+
+        flt = coll.update_one.call_args.args[0]
+        assert flt["_id"] == HOST_ID
+        assert {"access.host_key_fingerprint": None} in flt["$or"]
+        assert {"access.host_key_fingerprint": {"$exists": False}} in flt["$or"]
+        update = coll.update_one.call_args.args[1]
+        assert update["$set"]["access.host_key_fingerprint"] == "SHA256:abc"
+
+    def test_a_host_already_pinned_is_not_overwritten(self, hosts):
+        """``modified_count == 0`` is how the repository reports losing the
+        race, and the caller has to be able to tell that from success."""
+        repo, coll = hosts
+        coll.update_one.return_value = MagicMock(modified_count=0)
+
+        assert repo.pin_host_key(HOST_ID, "SHA256:second") is False
+
+    def test_an_empty_fingerprint_is_refused_without_a_write(self, hosts):
+        repo, coll = hosts
+
+        assert repo.pin_host_key(HOST_ID, "") is False
+        coll.update_one.assert_not_called()
+
+    def test_an_unusable_id_is_refused_without_a_write(self, hosts):
+        repo, coll = hosts
+
+        assert repo.pin_host_key("not-an-objectid", "SHA256:abc") is False
+        coll.update_one.assert_not_called()

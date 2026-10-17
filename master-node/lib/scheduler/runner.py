@@ -44,7 +44,21 @@ PRESERVED_PREFIX = "simlab-unfetched"
 # distinction matters: those two calls prove the reservation was ours at two
 # instants, while the sweep acts on what is true in between. A long upload sat
 # in that gap with no heartbeat at all.
+#
+# Derived from the reservation TTL by the entrypoint; this default matches a
+# TTL of 600s at a quarter of it.
 LEASE_HEARTBEAT_SEC = 60.0
+
+# How long a preparation may go on being renewed. A heartbeat that renews for
+# ever turns "the worker is not lost to a slow upload" into "the worker is
+# never lost", and those are different claims: a transfer that stops making
+# progress would hold its container until the simulation timeout, with the
+# reservation looking healthy the whole time.
+#
+# Generously above anything real — the slowest preparation measured in a
+# pilot was 22s — and well below SIM_TIMEOUT_SEC, so an abandoned preparation
+# resolves in minutes rather than hours.
+PREPARE_BUDGET_SEC = 1800.0
 
 
 @dataclass
@@ -220,6 +234,7 @@ class SimulationRunner:
         cleanup_local: Optional[Callable[[list[str]], None]] = None,
         on_learn_host_key: Optional[Callable[[Any, str], None]] = None,
         lease_heartbeat_sec: float = LEASE_HEARTBEAT_SEC,
+        prepare_budget_sec: float = PREPARE_BUDGET_SEC,
     ):
         self._mongo = mongo
         self._execute = execute
@@ -228,7 +243,12 @@ class SimulationRunner:
         self._on_release = on_release
         self._cleanup_local = cleanup_local
         self._on_learn_host_key = on_learn_host_key
-        self._lease_heartbeat = lease_heartbeat_sec
+        # Only guarded against zero or negative, which would spin. The
+        # operational floor belongs where the value is derived from the TTL,
+        # not here — a test that wants millisecond beats is not a
+        # misconfiguration.
+        self._lease_heartbeat = max(0.001, lease_heartbeat_sec)
+        self._prepare_budget = prepare_budget_sec
         # The attempts this process is following. Process-local on purpose:
         # it is the only honest answer to "is anyone watching this run?", and
         # nothing in the database can know it. The periodic reconciliation
@@ -301,7 +321,8 @@ class SimulationRunner:
             # GridFS, then up a tunnel — rather than renewed at its two ends.
             # While this beats, the sweep cannot expire the reservation; a
             # refusal sets `lost` and nothing further is sent.
-            with self._lease(resource, sim_oid, attempt_id) as lost:
+            with self._lease(
+                    resource, sim_oid, attempt_id, abort=transport.close) as lost:
                 success, local_files, remote_files = self._prepare(
                     sim, self._mongo)
                 if not success:
@@ -578,28 +599,30 @@ class SimulationRunner:
         try:
             held = self._mongo.resource_repo.is_held_by(
                 resource["_id"], sim_oid, attempt_id)
-        except Exception:
-            # Cannot tell. Carrying on is the old behaviour and the run is
-            # still guarded at launch by `mark_busy`.
-            log.exception(
-                "Could not confirm ownership of %s; continuing",
-                resource.get("name"),
-            )
-            return
+        except Exception as error:
+            # Unlike a failed PID write after launch, this is permission for
+            # destructive cleanup and upload. Unknown ownership cannot grant it.
+            raise LostOwnership(
+                f"could not confirm the reservation for attempt {attempt_id}") from error
         if not held:
             raise LostOwnership(
                 f"the reservation for attempt {attempt_id} is gone")
 
     @staticmethod
     def _refuse_if_lost(lost: threading.Event, attempt_id: str) -> None:
-        """Stop before the next remote effect if the lease was refused."""
+        """Stop before the next remote effect if the lease ended.
+
+        The heartbeat also closes the transport to interrupt an in-flight SCP
+        transfer. This check covers the intervals between remote operations.
+        """
         if lost.is_set():
             raise LostOwnership(
-                f"the reservation for attempt {attempt_id} expired while the "
+                f"the reservation for attempt {attempt_id} ended while the "
                 "simulation was being prepared")
 
     @contextmanager
-    def _lease(self, resource: dict, sim_oid: ObjectId, attempt_id: str):
+    def _lease(self, resource: dict, sim_oid: ObjectId, attempt_id: str,
+               *, abort: Callable[[], None]):
         """Keep the reservation alive for as long as this block runs.
 
         Yields an event that is set the moment a renewal is **refused** —
@@ -615,24 +638,45 @@ class SimulationRunner:
         """
         stop = threading.Event()
         lost = threading.Event()
+        abort_lock = threading.Lock()
+        deadline = time.monotonic() + self._prepare_budget
+
+        def interrupt() -> None:
+            # No delayed heartbeat may close the connection after this lease
+            # context has ended and the executor has begun using it.
+            with abort_lock:
+                if stop.is_set() or lost.is_set():
+                    return
+                lost.set()
+                try:
+                    abort()
+                except Exception:
+                    log.exception("Could not interrupt preparation of %s", sim_oid)
 
         def beat() -> None:
             while not stop.wait(self._lease_heartbeat):
+                if (not lost.is_set() and self._prepare_budget > 0
+                        and time.monotonic() >= deadline):
+                    log.error(
+                        "Preparing %s on %s exceeded %.0fs; interrupting upload",
+                        sim_oid, resource.get("name"), self._prepare_budget,
+                    )
+                    interrupt()
+                    # Continue renewing until the body actually unwinds. A
+                    # timer expiring is not proof that a writer has stopped.
                 try:
                     renewed = self._mongo.resource_repo.touch_reservation(
                         resource["_id"], sim_oid, attempt_id)
                 except Exception:
-                    # Cannot tell. Keep beating: a momentary database failure
-                    # is not evidence that the reservation is gone, and the
-                    # guarded writes ahead still refuse if it is.
                     log.exception(
                         "Could not renew the lease on %s", resource.get("name"))
+                    interrupt()
                     continue
                 if not renewed:
                     log.warning(
                         "The reservation for attempt %s is gone; stopping the "
                         "lease", attempt_id)
-                    lost.set()
+                    interrupt()
                     return
 
         thread = threading.Thread(
@@ -640,8 +684,13 @@ class SimulationRunner:
         thread.start()
         try:
             yield lost
+            self._refuse_if_lost(lost, attempt_id)
+        except Exception:
+            self._refuse_if_lost(lost, attempt_id)
+            raise
         finally:
-            stop.set()
+            with abort_lock:
+                stop.set()
 
     def _renew_lease(
         self, resource: dict, sim_oid: ObjectId, attempt_id: str
@@ -650,19 +699,16 @@ class SimulationRunner:
 
         A guarded write, so it answers two questions at once: it pushes the
         reservation's TTL out past a slow upload, and a *refusal* is a
-        definite statement that the reservation is gone. A write that **raises**
-        is neither — Mongo blinked — and is treated as before: logged, and the
-        run continues to be guarded at launch by ``mark_busy``.
+        definite statement that the reservation is gone. A failed write also
+        interrupts preparation: without renewal the sweep may hand the worker
+        to another attempt while an upload is still writing its inputs.
         """
         try:
             renewed = self._mongo.resource_repo.touch_reservation(
                 resource["_id"], sim_oid, attempt_id)
-        except Exception:
-            log.exception(
-                "Could not renew the lease on %s; continuing",
-                resource.get("name"),
-            )
-            return
+        except Exception as error:
+            raise LostOwnership(
+                f"could not renew the reservation for attempt {attempt_id}") from error
         if not renewed:
             raise LostOwnership(
                 f"the reservation for attempt {attempt_id} is gone")

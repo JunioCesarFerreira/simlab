@@ -23,6 +23,7 @@ from lib.detached import (
     DetachedRun,
     LaunchUnconfirmed,
     RunOutcome,
+    inspect_dir,
     inspect_run,
 )
 from lib.health import HealthMonitor
@@ -749,8 +750,16 @@ def build_liveness_probe(opener: SecretOpener) -> Callable:
         transport = build_transport(host, resource, opener)
         try:
             with transport:
-                return inspect_run(
-                    transport, pid, remote_dir=transport.plan.remote_dir)
+                if pid:
+                    return inspect_run(
+                        transport, pid, remote_dir=transport.plan.remote_dir)
+                # No pid in hand. That is *not* "nothing is running": a launch
+                # whose confirmation was lost before the pid could be read
+                # leaves a JVM with nobody holding its number. The directory
+                # is where it would have written one, so the directory is what
+                # gets asked.
+                return inspect_dir(
+                    transport, remote_dir=transport.plan.remote_dir)
         except TransportError:
             return None
 
@@ -806,6 +815,15 @@ def build_dispatcher(
         opener=opener,
         cleanup_local=_cleanup_local_files,
         on_learn_host_key=learn_host_key,
+        # Derived from the TTL rather than fixed: the heartbeat only means
+        # anything relative to the window the sweep acts on, and a deployment
+        # that shortens the TTL has to shorten this with it.
+        lease_heartbeat_sec=(min(60.0, SET.reservation_ttl_sec / 4.0)
+                             if SET.reservation_ttl_sec > 0 else 60.0),
+        # And bounded, so a preparation that stops progressing gives the
+        # worker up in minutes instead of holding it until SIM_TIMEOUT_SEC
+        # with a reservation that looks healthy.
+        prepare_budget_sec=SET.reservation_ttl_sec * 3.0,
     )
     dispatcher = Dispatcher(
         mongo,

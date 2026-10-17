@@ -1185,3 +1185,74 @@ class TestResolvingHeldWorkers:
 
         assert build_monitor(mongo).resolve_held_workers() == []
         mongo.resource_repo.clear_held_for.assert_not_called()
+
+    def _pending_collection(self, simulation=None):
+        doc = resource(name="cooja1", status="disabled", enabled=False)
+        doc["held_for"] = {
+            "kind": "collection_pending", "attempt_id": "A",
+            "simulation_id": SIM_ID, "remote_pid": 4242,
+            "remote_dir": "/opt/cooja",
+            "remote_file": "simlab-unfetched-A.testlog",
+        }
+        mongo = fake_mongo()
+        mongo.resource_repo.find_held.return_value = [doc]
+        mongo.resource_repo.clear_held_for.return_value = True
+        mongo.simulation_repo.get.return_value = simulation
+        monitor = build_monitor(
+            mongo,
+            inspect_run=lambda h, r, p: RunState(
+                alive=False, finished=True, exit_code=0, testlog_bytes=0),
+        )
+        return monitor, mongo
+
+    def test_a_preserved_result_nobody_decided_about_keeps_the_hold(self):
+        """The container cannot answer this one.
+
+        The checks above look at `COOJA.testlog`, and a preserved result has
+        been copied to a name the cleanup does not know — which is the point
+        of copying it. So the container says "nothing alive, nothing left
+        behind" and the worker would come back into the pool before anything
+        had looked at the result it was holding.
+
+        Found by running the recovery procedure, not by reading the code.
+        """
+        monitor, mongo = self._pending_collection(simulation={
+            "_id": SIM_ID, "status": "Error",
+            "unfetched_result": {"remote_file": "simlab-unfetched-A.testlog"},
+        })
+
+        assert monitor.resolve_held_workers() == []
+        mongo.resource_repo.clear_held_for.assert_not_called()
+
+    def test_a_published_recovery_lets_it_go(self):
+        monitor, mongo = self._pending_collection(simulation={
+            "_id": SIM_ID, "status": "Error",
+            "unfetched_result": {"remote_file": "simlab-unfetched-A.testlog"},
+            "recovered_result": {"by": "util/recover_result.py"},
+        })
+
+        assert monitor.resolve_held_workers() == ["cooja1"]
+
+    def test_an_explicit_discard_lets_it_go_too(self):
+        monitor, mongo = self._pending_collection(simulation={
+            "_id": SIM_ID, "status": "Error",
+            "unfetched_result": {
+                "remote_file": "simlab-unfetched-A.testlog",
+                "discarded": {"reason": "the testlog was truncated"},
+            },
+        })
+
+        assert monitor.resolve_held_workers() == ["cooja1"]
+
+    def test_a_deleted_simulation_does_not_hold_it_for_ever(self):
+        monitor, mongo = self._pending_collection(simulation=None)
+
+        assert monitor.resolve_held_workers() == ["cooja1"]
+
+    def test_a_termination_hold_is_not_affected(self):
+        """Only a pending *collection* waits on a decision. An unconfirmed
+        termination is answered by the container."""
+        monitor, mongo, _ = self._monitor(
+            RunState(alive=False, finished=True, exit_code=0, testlog_bytes=0))
+
+        assert monitor.resolve_held_workers() == ["cooja1"]

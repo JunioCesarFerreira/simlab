@@ -284,6 +284,11 @@ class HealthMonitor:
                 log.warning(
                     "Worker %s is held but its host is gone; leaving it", name)
                 continue
+            # May be ``None``, and that is passed through deliberately: the
+            # probe then asks the *directory*, because a launch whose
+            # confirmation was lost before the pid could be read leaves a JVM
+            # with nobody holding its number. Treating "no pid" as "nothing
+            # running" would clear exactly the hold that case created.
             pid = record.get("remote_pid") or resource.get("remote_pid")
             try:
                 state = self._inspect_run(host, resource, pid)
@@ -307,6 +312,8 @@ class HealthMonitor:
                     "testlog; leaving it so the result is not destroyed",
                     name, record.get("kind", "?"), state.testlog_bytes)
                 continue
+            if self._unresolved_result(record, name):
+                continue
             if self._mongo.resource_repo.clear_held_for(resource["_id"]):
                 log.warning(
                     "Worker %s was held for %s; the container answered with "
@@ -316,6 +323,52 @@ class HealthMonitor:
         if freed and self._on_capacity is not None:
             self._on_capacity()
         return freed
+
+    def _unresolved_result(self, record: dict, name: str) -> bool:
+        """Whether a held worker is still waiting on a decision about a result.
+
+        The checks above ask the *container*, and they look at
+        ``COOJA.testlog``. A result that was preserved has been copied to a
+        name the cleanup does not know — which is the point of copying it —
+        so the container answers "nothing alive, nothing left behind" and the
+        hold would be cleared while the bytes are still sitting there waiting
+        for somebody to decide what they are worth.
+
+        Found by running the recovery procedure: the worker came back into the
+        pool on its own, before anything had looked at the result it was
+        holding.
+
+        So for a collection that is pending, the simulation decides. Resolved
+        means published (``recovered_result``) or explicitly given up
+        (``unfetched_result.discarded``) — ``util/recover_result.py`` writes
+        both, and refuses to release in the wrong order.
+        """
+        if record.get("kind") != "collection_pending":
+            return False
+        simulation_id = record.get("simulation_id")
+        if not simulation_id:
+            return False
+        try:
+            simulation = self._mongo.simulation_repo.get(str(simulation_id))
+        except Exception:
+            log.exception(
+                "Could not re-read simulation %s; leaving %s held",
+                simulation_id, name)
+            return True
+        if simulation is None:
+            # The simulation is gone, so nothing is waiting on the bytes.
+            return False
+        pending = simulation.get("unfetched_result") or {}
+        if not pending or pending.get("discarded"):
+            return False
+        if simulation.get("recovered_result"):
+            return False
+        log.info(
+            "Worker %s is holding a result nobody has decided about yet "
+            "(simulation %s); leaving it. See util/recover_result.py",
+            name, simulation_id,
+        )
+        return True
 
     def close_finished_generations(self) -> list[str]:
         """Close generations whose simulations are all finished.

@@ -39,6 +39,7 @@ from lib.transport.plan import (
     build_plan,
 )
 from lib.transport.factory import build_transport
+from lib.transport.session import connect_host
 from lib.transport.ssh import (
     GENERATED_ARTIFACTS,
     JAVA_OK_MARK,
@@ -827,3 +828,152 @@ class TestProbeCommandAgainstARealShell:
         lines, _ = self._run(
             tmp_path, '#!/bin/sh\nexit 0\n', jar=False)
         assert not any(len(line) == 64 for line in lines), lines
+
+
+# ── Two paths reaching one host at the same time ─────────────────────────────
+
+class ConditionalPinStore:
+    """A host store with Mongo's *conditional* pin semantics and nothing else.
+
+    ``pin_host_key`` here does what the repository's filter does — write only
+    while the field is unset, and report whether this call was the one that
+    wrote — because that is the whole mechanism under test. The filter itself
+    is asserted in ``pylib/tests/test_infra_repository.py``; what this adds
+    is what the two callers do with the answer.
+    """
+
+    def __init__(self):
+        self.pins: dict[str, str] = {}
+        self.writes = 0
+
+    def pin_host_key(self, host_id, fingerprint_value: str) -> bool:
+        self.writes += 1
+        if host_id in self.pins:
+            return False
+        self.pins[host_id] = fingerprint_value
+        return True
+
+    def get(self, host_id):
+        pinned = self.pins.get(host_id)
+        return {"_id": host_id, "name": str(host_id),
+                "access": {"host_key_fingerprint": pinned}}
+
+
+def learner(store: ConditionalPinStore, host_id: str):
+    """The production learner, with only its repository substituted.
+
+    ``HealthMonitor._pin_host_key`` and the dispatcher's ``learn_host_key``
+    are the same rule written twice; this binds the health one, which is the
+    path that reaches a host first in practice.
+    """
+    from lib.health import HealthMonitor
+
+    monitor = object.__new__(HealthMonitor)
+    monitor._mongo = MagicMock(host_repo=store)
+    host = {"_id": host_id, "name": str(host_id)}
+    return lambda fp: HealthMonitor._pin_host_key(monitor, host, fp)
+
+
+class TestTwoPathsLearnDifferentKeys:
+    """P08/R11: one key wins and the divergent session ends.
+
+    The two halves were each tested and never composed: the policy refuses a
+    key that disagrees with *its own* pin, and the repository refuses to
+    overwrite one — but on a true first contact the policy has no pin, so it
+    accepts the key, reports it, and the refusal can only come from the
+    store. If that refusal is logged and swallowed, the losing session is
+    already open and is used.
+
+    Deterministic by construction: the two learners share one store, and the
+    order is the order of the calls. No sleeping, no threads, no chance.
+    """
+
+    HOST = "host-a"
+
+    def test_the_second_key_is_refused_through_the_callback(self):
+        store = ConditionalPinStore()
+        first = PinnedHostKeyPolicy(None, learner(store, self.HOST))
+        second = PinnedHostKeyPolicy(None, learner(store, self.HOST))
+
+        # Both believe they are the first contact, because both were built
+        # before either wrote.
+        first.missing_host_key(MagicMock(), "192.168.0.42", fake_key(b"k1"))
+
+        with pytest.raises(HostKeyMismatch) as exc:
+            second.missing_host_key(
+                MagicMock(), "192.168.0.42", fake_key(b"k2"))
+
+        assert store.pins[self.HOST] == fingerprint(fake_key(b"k1"))
+        assert fingerprint(fake_key(b"k1")) in str(exc.value)
+        assert fingerprint(fake_key(b"k2")) in str(exc.value)
+
+    def test_the_same_key_from_both_paths_is_not_a_conflict(self):
+        """Two paths agreeing is the ordinary case and must not refuse: only
+        the write loses, and losing a write you did not need is not an
+        event."""
+        store = ConditionalPinStore()
+        first = PinnedHostKeyPolicy(None, learner(store, self.HOST))
+        second = PinnedHostKeyPolicy(None, learner(store, self.HOST))
+
+        first.missing_host_key(MagicMock(), "192.168.0.42", fake_key(b"k1"))
+        second.missing_host_key(MagicMock(), "192.168.0.42", fake_key(b"k1"))
+
+        assert store.writes == 2, "both attempted it"
+        assert store.pins[self.HOST] == fingerprint(fake_key(b"k1"))
+
+    def test_the_losing_session_is_closed_and_the_error_reaches_the_caller(
+            self, ssh_clients):
+        """Through ``connect_host``, which is where a swallowed exception
+        would leave an open client in the pool."""
+        store = ConditionalPinStore()
+        store.pins[self.HOST] = fingerprint(fake_key(b"k1"))     # already won
+
+        def connect(address, **kwargs):
+            # Paramiko calls the installed policy from inside `connect`, which
+            # is why the exception has to travel out through it.
+            policy = ssh_clients[-1].set_missing_host_key_policy.call_args.args[0]
+            policy.missing_host_key(ssh_clients[-1], address, fake_key(b"k2"))
+
+        with pytest.raises(HostKeyMismatch):
+            client = MagicMock()
+            with patch("lib.transport.session.paramiko.SSHClient",
+                       side_effect=lambda: (ssh_clients.append(client)
+                                            or client)):
+                client.connect.side_effect = connect
+                connect_host(
+                    SSHEndpoint(address="192.168.0.42", port=22),
+                    SSHCredential(username="simlab", password="k"),
+                    pinned_host_key=None,
+                    on_learn_host_key=learner(store, self.HOST),
+                )
+
+        client.close.assert_called_once()
+
+    def test_another_host_is_unaffected(self):
+        """The refusal is about one host. A shared store must not let one
+        host's conflict stop the others being learned."""
+        store = ConditionalPinStore()
+        store.pins["host-a"] = fingerprint(fake_key(b"k1"))
+
+        with pytest.raises(HostKeyMismatch):
+            PinnedHostKeyPolicy(None, learner(store, "host-a")).missing_host_key(
+                MagicMock(), "192.168.0.42", fake_key(b"k2"))
+
+        PinnedHostKeyPolicy(None, learner(store, "host-b")).missing_host_key(
+            MagicMock(), "192.168.0.43", fake_key(b"k3"))
+
+        assert store.pins["host-b"] == fingerprint(fake_key(b"k3"))
+
+    def test_a_store_that_cannot_answer_does_not_refuse_the_session(self):
+        """A database failure says nothing about the host. Refusing here would
+        take the pool out for an unrelated reason — stated as a deliberate
+        choice, not an accident of the try block."""
+        store = ConditionalPinStore()
+
+        def explode(host_id, fp):
+            raise RuntimeError("mongo is down")
+
+        store.pin_host_key = explode                       # type: ignore[method-assign]
+
+        PinnedHostKeyPolicy(None, learner(store, self.HOST)).missing_host_key(
+            MagicMock(), "192.168.0.42", fake_key(b"k1"))

@@ -57,6 +57,16 @@ containers seeded as before.
   (`repeat`/`none`), `max_replica_retries` and `incomplete_objective`
   (`worst`/`accept`). A failed replica is run again with its own seed, as a
   new simulation document so the failure stays on the record.
+- **The completeness record names its own hole.** `reason` gives one phrase
+  for every state, `absent_seeds` lists the planned replicas that were never
+  created and `thin_metrics` the metrics a finished replica came back without.
+  The distinction is what the policy can act on: a failed replica has a
+  document to clone, while an absent seed and a missing metric have none and
+  reach the exhaustion branch on the first pass. Without it, an evaluation
+  could read `partial` with `missing_seeds: []` and 2 of 2 replicas, and
+  nothing in the document explained why. The engine states the same thing in
+  its log, once per generation, naming the evaluations it decided without ever
+  repeating them and where they went.
 - **A worker that may still be running something leaves the pool, and stays
   out until a container is asked.** Disabling it and letting go of the attempt
   is one write, so a failure of the protective step cannot be followed by a
@@ -91,6 +101,21 @@ containers seeded as before.
   the condition of the write, and each clone carries its round. The counter
   used to be written after the clones, so a failure of that write let the
   limit be exceeded.
+- **Interrupted retries resume their persisted work.** A `retry_plan` is stored
+  atomically with the budget claim. Restarting before the first clone or during
+  a partial enqueue resumes that same round, even while earlier clones run.
+  Atomic upserts and a unique partial index prevent concurrent duplicates;
+  existing results are preserved. All strategies replay `Error` generations
+  after restart so the replica policy can finish its work.
+- **Preparation deadlines interrupt SCP before releasing the worker.** Renewal
+  continues until the transfer unwinds. Ownership checks that fail stop remote
+  writes, and short configured TTLs now get a shorter heartbeat as well.
+- **Infrastructure forms use native modal dialogs**, with keyboard isolation
+  and focus restoration. The layout fits narrow screens, and status text and
+  buttons use accessible contrast in light and dark themes.
+- **Repeatable fault pilots** in `debug/validation`: real MongoDB process kills,
+  SSH/JVM confirmation loss, SCP expiry, conflicting SSH pins and a browser
+  workflow with accessibility checks.
 - **HTTPS through a reverse proxy**, with GUI, API and Grafana behind one
   entry point and the auxiliary ports bound to loopback.
 
@@ -121,6 +146,19 @@ containers seeded as before.
   compete on equal terms with a fully evaluated one. Set
   `incomplete_objective: accept` for the previous numbers, with the
   completeness recorded alongside.
+- **A generation whose replica was repeated closes as `Done`.** Its status
+  used to count simulation *documents*, and once a failed replica can be
+  repeated a terminal document no longer means the generation failed — the
+  original stays on the record with its message, by design, and the repeat is
+  a second document. So a generation whose every planned seed had a result,
+  and whose every individual read `complete`, still closed in error. The rule
+  now counts **seeds**, the same unit completeness uses, so the status and the
+  record cannot disagree. Two consequences worth knowing: a planned seed with
+  no simulation at all now closes the generation in error, where counting
+  documents reported `Done` because the one that existed had finished; and a
+  generation that never recorded a plan — every one created before
+  `expected_seeds` existed — keeps the old rule exactly, because
+  reinterpreting a historical generation is a different decision.
 - **A published result is never reclassified.** `mark_error` refuses to write
   over a simulation that reached `Done`: closing its generation is separate
   bookkeeping, and a failure of that write used to mark the finished
@@ -164,6 +202,14 @@ containers seeded as before.
 - **Editing a host's access takes its workers out of the pool** until they are
   measured again, and the measurement carries the configuration version it was
   taken under — so a probe that started before the edit cannot validate it.
+- **A pinned host key can be replaced administratively.**
+  `PUT /infra/hosts/{id}` with `access.host_key_fingerprint: null` puts the host
+  back to first contact; a string pins one known out of band. The field was
+  accepted, published as nullable and then silently dropped, so the request
+  answered 200 and changed nothing — which left no route at all for a
+  legitimate key change, because the pin is never overwritten by a connection.
+  A document or a boolean is refused with a 422, and the rest of the access
+  block, including the sealed credential, survives.
 
 ### Removed
 
@@ -183,8 +229,11 @@ containers seeded as before.
   machine, so a distributed generation under-reports CPU and memory.
 - A failed result collection is retried over a new session. If that also
   fails, the artifacts are copied aside and their location recorded on the
-  simulation — but **nothing goes back for them**: recovering one is a manual
-  operation.
+  simulation — but **nothing goes back for them automatically**. The manual
+  procedure is `util/recover_result.py`, documented in `util/README.md`: it
+  locates the bytes, brings them back without touching the database, publishes
+  or discards them, and only then lets the worker go. The order is enforced,
+  not advisory.
 - **No end-to-end *exactly once*,** and the earlier wording here was itself
   too strong. The attempt guard makes a publication by *another* attempt fail;
   it does not forbid the same attempt from publishing twice. What is
@@ -195,27 +244,39 @@ containers seeded as before.
   leaves blobs nothing references, and nothing collects them. The aggregation
   reads one result per seed, so a duplicate `Done` document cannot enter a
   mean twice — that is a property of the query, not of the writes.
-- **Removing a host can be partial, and says so.** Workers already deleted
-  stay deleted; a refusal leaves the host in service and names the worker that
-  blocked it. A worker that gained a reservation *during* the withdrawal is
-  left in place rather than deleted under a running simulation — the host is
-  removed and the response is a 200 naming what was stranded, because an
-  orphan is the lesser harm and hiding it is not an option. Closing that
-  window entirely would need a multi-document transaction.
+- **Removing a host is transactional.** A refusal rolls back all worker
+  deletions, cancels withdrawal and reports the blocking cause with 409.
+  A retained run/result blocks deletion of both worker and host even after
+  quarantine clears the reservation. Repeating removal after a process dies
+  during withdrawal completes it without leaving orphan workers.
 - **Two registrations for one worker on one host** are refused by a unique
   index as well as by the API check. The same container reached through two
   different *host* registrations is still only caught by the check, because
   the host's address is not in that collection.
 - **Repeating a replica reopens a terminal generation**, which touches the
-  optimisation loop. The cycle is covered by tests against the real handler
-  and the real gate; it has **not** yet run with Cooja, because no replica
-  failed in the pilots.
-- **A stalled upload holds its worker.** The lease heartbeat renews while the
-  thread is alive, which is correct for work in progress but means a transfer
-  that hangs keeps the worker until `SIM_TIMEOUT_SEC`. Detecting progress is a
-  different mechanism from detecting life.
-- **Nothing comes back for a preserved result.** `unfetched_result` records
-  the worker, directory and pid; recovering one is a manual operation.
+  optimisation loop. It has now run with Cooja: a JVM killed mid-run produced
+  `Error` with the run-process diagnosis, the gate claimed round 1, cloned the
+  same seed, the clone finished, the generation closed `Done` and the
+  individual recorded three attempts for two seeds with one result per seed.
+  The completion validation also kills a gate process against real MongoDB
+  immediately after claiming and after the first clone, then resumes it in a
+  new process without wasting or exceeding the round.
+- **A stalled local preparation can still hold its worker.** The preparation
+  budget interrupts SSH/SCP and keeps renewing until that operation unwinds.
+  Python cannot forcibly stop arbitrary local preparation code; a function
+  stuck outside SSH needs to return or the master needs to be restarted.
+- **Nothing comes back for a preserved result on its own.**
+  `unfetched_result` records the host, worker, container, attempt, directory,
+  file and pid, and the worker is held until a person decides. Automating the
+  collection is deliberately not done: deciding what a half-collected result
+  is worth is not a decision to take quietly.
+- **Two registrations for one physical worker are compared over configured
+  address strings.** One machine registered twice under the *same* address is
+  caught across hosts; the same machine under a DNS alias, through a tunnel,
+  or behind a published port is not, and cannot be without resolving names at
+  registration time — which can differ from the resolution at connection
+  time. The boundary is tested rather than described, so it stays a known
+  limit.
 
 ---
 

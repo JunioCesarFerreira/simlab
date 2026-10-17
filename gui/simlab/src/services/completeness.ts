@@ -95,7 +95,10 @@ export function completenessDetail(record?: CompletenessDto | null): string[] {
     lines.push(`missing seeds: ${record.missing_seeds.join(", ")}`);
   }
   if (record.absent) {
-    lines.push(`${record.absent} replica(s) were never created`);
+    // Named, not just counted: this is the hole a repeat cannot fill, so the
+    // reader needs to know which replica was decided without ever running.
+    const which = record.absent_seeds?.length ? ` (seeds ${record.absent_seeds.join(", ")})` : "";
+    lines.push(`${record.absent} replica(s) were never created${which}`);
   }
   if (record.attempts && record.expected && record.attempts > record.expected) {
     lines.push(`${record.attempts} runs for ${record.expected} replicas (repeated)`);

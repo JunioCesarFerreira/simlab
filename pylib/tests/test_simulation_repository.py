@@ -385,3 +385,46 @@ class TestTimestampsAreUtc:
             SIM_OID, host_id=SIM_OID, host_name="h", resource_id=SIM_OID,
             resource_name="w", attempt_id=ATTEMPT))
         assert sets["assigned_at"].tzinfo is not None
+
+
+class TestRetryIdentity:
+    def test_concurrent_retries_are_protected_by_a_unique_partial_index(self):
+        connection, db = make_connection()
+        SimulationRepository(connection)
+        indices = db["simulations"].create_index.call_args_list
+        retry_index = next(c for c in indices if c.kwargs.get("name") == "idx_simulations_retry_identity")
+        assert retry_index.kwargs["unique"] is True
+        assert retry_index.kwargs["partialFilterExpression"] == {"retry_round": {"$exists": True}}
+        assert retry_index.args[0] == [
+            ("generation_id", 1), ("individual_id", 1), ("random_seed", 1), ("retry_round", 1)]
+
+    def test_replaying_the_round_keeps_the_existing_clone_and_its_result(self, simulations):
+        repo, coll = simulations
+        generation_id, clone_id = ObjectId(), ObjectId()
+        coll.find_one.return_value = {
+            "_id": SIM_OID, "generation_id": generation_id,
+            "individual_id": IND_HASH, "random_seed": 42, "status": EnumStatus.ERROR,
+            "attempt_id": "old", "remote_pid": 123, "network_metrics": {"latency": 2},
+            "unfetched_result": {"remote_path": "old"},
+            "recovered_result": {"log_cooja_id": "old"},
+        }
+        coll.find_one_and_update.return_value = {"_id": clone_id}
+
+        assert repo.clone_for_retry(SIM_OID, retry_round=1) == clone_id
+
+        identity, update = coll.find_one_and_update.call_args.args
+        assert identity == {"generation_id": generation_id, "individual_id": IND_HASH,
+                            "random_seed": 42, "retry_round": 1}
+        assert set(update) == {"$setOnInsert"}, "an existing result must not be reset"
+        inserted = update["$setOnInsert"]
+        assert inserted["status"] == EnumStatus.WAITING
+        assert inserted["retry_of"] == SIM_OID
+        assert not {"attempt_id", "remote_pid", "network_metrics", "unfetched_result", "recovered_result"} & inserted.keys()
+        assert coll.find_one_and_update.call_args.kwargs["upsert"] is True
+
+    def test_successful_replicas_are_not_cloned(self, simulations):
+        repo, coll = simulations
+        coll.find_one.return_value = {"_id": SIM_OID, "status": EnumStatus.DONE}
+
+        assert repo.clone_for_retry(SIM_OID, retry_round=1) is None
+        coll.find_one_and_update.assert_not_called()

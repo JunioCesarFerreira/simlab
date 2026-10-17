@@ -29,6 +29,51 @@ class FakeDb:
         return self.collections.setdefault(name, MagicMock())
 
 
+class TestDurableRetryRound:
+    def test_claim_stores_work_and_budget_in_the_same_write(self, repo_and_sims):
+        repo, _, generations = repo_and_sims
+        replicas = [{"simulation_id": ObjectId(), "reason": "failed"}]
+        generations.find_one_and_update.return_value = {"replica_retries": 1}
+
+        assert repo.claim_retry_round(GEN_ID, 1, replicas) == 1
+
+        query, update = generations.find_one_and_update.call_args.args
+        assert query["retry_plan"] == {"$exists": False}
+        assert {"replica_retries": {"$lt": 1}} in query["$or"]
+        assert query["status"] == {"$ne": EnumStatus.CANCELLED}
+        assert update["$inc"] == {"replica_retries": 1}
+        assert update["$set"]["retry_plan"] == replicas
+
+    @pytest.mark.parametrize("limit,replicas", [(0, [{"simulation_id": ObjectId()}]), (1, [])])
+    def test_empty_or_disabled_round_does_not_write(self, repo_and_sims, limit, replicas):
+        repo, _, generations = repo_and_sims
+
+        assert repo.claim_retry_round(GEN_ID, limit, replicas) is None
+        generations.find_one_and_update.assert_not_called()
+
+    def test_finishing_cannot_retire_another_round_or_revive_cancellation(self, repo_and_sims):
+        repo, _, generations = repo_and_sims
+        generations.update_one.return_value.matched_count = 1
+
+        repo.finish_retry_round(GEN_ID, 2)
+
+        query, update = generations.update_one.call_args.args
+        assert query["replica_retries"] == 2
+        assert query["retry_plan"] == {"$exists": True}
+        assert query["status"] == {"$ne": EnumStatus.CANCELLED}
+        assert update["$unset"] == {"retry_plan": ""}
+        assert update["$set"]["status"] == EnumStatus.RUNNING
+
+    def test_resume_reads_manifest_even_if_budget_is_spent(self, repo_and_sims):
+        repo, _, generations = repo_and_sims
+        pending = {"replica_retries": 1, "retry_plan": [{"simulation_id": ObjectId()}]}
+        generations.find_one.return_value = pending
+
+        assert repo.pending_retry_round(GEN_ID) == pending
+        query = generations.find_one.call_args.args[0]
+        assert "replica_retries" not in query
+
+
 @pytest.fixture
 def repo_and_sims():
     db = FakeDb()
@@ -45,6 +90,10 @@ def repo_and_sims():
     generations = db["generations"]
     generations.reset_mock()
     generations.update_one.return_value = MagicMock(modified_count=1)
+    # No recorded plan unless a test says otherwise: that is what a generation
+    # created before ``expected_seeds`` existed looks like, and it is the
+    # branch where the closing rule still counts documents.
+    generations.find_one.return_value = {}
     return repo, sims, generations
 
 
@@ -112,6 +161,109 @@ class TestCloseIfFinished:
 
         assert repo.close_if_finished(GEN_ID) in (
             EnumStatus.DONE, EnumStatus.ERROR)
+
+
+class TestARepairedGenerationIsNotAFailedOne:
+    """The status and the completeness record must not contradict each other.
+
+    Found by running the pilot: one JVM killed mid-run, the failed replica
+    repeated by the gate and finished, both individuals recorded ``complete``
+    with three attempts for two seeds — and the generation still closed
+    ``Error``, because a terminal document was still there. It is there on
+    purpose: the failure keeps its message and the repeat is a separate
+    document.
+
+    So the rule had to stop counting documents and start counting seeds, the
+    same unit completeness uses. Generations with no recorded plan keep the
+    old rule, because reinterpreting a historical generation is a different
+    decision from fixing this one.
+    """
+
+    def _close(self, repo_and_sims, docs, plan, *, active=0):
+        repo, sims, gens = repo_and_sims
+        gens.find_one.return_value = (
+            {"expected_seeds": plan} if plan is not None else {})
+
+        def count(flt, *a, **k):
+            status = flt.get("status")
+            if isinstance(status, dict) and "$in" in status:
+                return active
+            if status == EnumStatus.DONE:
+                return sum(1 for d in docs if d["status"] == EnumStatus.DONE)
+            return len(docs)
+
+        sims.count_documents.side_effect = count
+        sims.find.return_value = docs
+        return repo.close_if_finished(GEN_ID)
+
+    def test_a_repeated_replica_closes_the_generation_done(self, repo_and_sims):
+        """Three documents, two seeds, every seed with a result."""
+        decision = self._close(repo_and_sims, [
+            {"individual_id": "ind-a", "random_seed": 1,
+             "status": EnumStatus.ERROR},
+            {"individual_id": "ind-a", "random_seed": 1,
+             "status": EnumStatus.DONE},
+            {"individual_id": "ind-a", "random_seed": 2,
+             "status": EnumStatus.DONE},
+        ], plan=[1, 2])
+
+        assert decision == EnumStatus.DONE
+
+    def test_a_seed_that_never_produced_a_result_still_closes_in_error(
+            self, repo_and_sims):
+        decision = self._close(repo_and_sims, [
+            {"individual_id": "ind-a", "random_seed": 1,
+             "status": EnumStatus.ERROR},
+            {"individual_id": "ind-a", "random_seed": 2,
+             "status": EnumStatus.DONE},
+        ], plan=[1, 2])
+
+        assert decision == EnumStatus.ERROR
+
+    def test_a_planned_seed_with_no_document_closes_in_error(
+            self, repo_and_sims):
+        """A replica whose creation failed is a plan that was not delivered.
+        Counting documents reported ``Done``, because the one that existed
+        had finished."""
+        decision = self._close(repo_and_sims, [
+            {"individual_id": "ind-a", "random_seed": 1,
+             "status": EnumStatus.DONE},
+        ], plan=[1, 2])
+
+        assert decision == EnumStatus.ERROR
+
+    def test_one_individual_failing_is_enough(self, repo_and_sims):
+        decision = self._close(repo_and_sims, [
+            {"individual_id": "ind-a", "random_seed": 1,
+             "status": EnumStatus.DONE},
+            {"individual_id": "ind-a", "random_seed": 2,
+             "status": EnumStatus.DONE},
+            {"individual_id": "ind-b", "random_seed": 1,
+             "status": EnumStatus.DONE},
+            {"individual_id": "ind-b", "random_seed": 2,
+             "status": EnumStatus.ERROR},
+        ], plan=[1, 2])
+
+        assert decision == EnumStatus.ERROR
+
+    def test_a_generation_with_no_plan_keeps_the_document_rule(
+            self, repo_and_sims):
+        """Historical generations read exactly as they did before."""
+        decision = self._close(repo_and_sims, [
+            {"individual_id": "ind-a", "random_seed": 1,
+             "status": EnumStatus.ERROR},
+            {"individual_id": "ind-a", "random_seed": 1,
+             "status": EnumStatus.DONE},
+        ], plan=None)
+
+        assert decision == EnumStatus.ERROR, (
+            "no plan means no way to tell a repeat from a hole")
+
+    def test_work_in_progress_is_still_decided_first(self, repo_and_sims):
+        assert self._close(repo_and_sims, [
+            {"individual_id": "ind-a", "random_seed": 1,
+             "status": EnumStatus.RUNNING},
+        ], plan=[1, 2], active=1) is None
 
 
 class TestReplicaCompleteness:
@@ -499,3 +651,122 @@ class TestOneResultPerSeedInTheAggregation:
         ])
 
         assert means["ind-a"]["latency"] == 15.0
+
+
+class TestTheRecordNamesItsOwnHole:
+    """F3.4: an absent seed and a missing metric need a stated destination.
+
+    Both were already handled correctly — neither can be repeated, so both
+    reach the policy's exhaustion branch on the first pass — and neither was
+    *legible*. A ``partial`` record with ``missing_seeds: []`` said only that
+    the mean rested on less than planned; nothing in it said why, nor whether
+    a run could still repair it. That distinction is the difference between
+    "wait for the repeat" and "the decision has been made", so it belongs in
+    the document rather than in the reader's head.
+    """
+
+    def _entry(self, repo_and_sims, docs, plan, metrics=("latency",)):
+        repo, sims, gens = repo_and_sims
+        sims.find.return_value = docs
+        gens.find_one.return_value = {"expected_seeds": plan}
+        return repo.replica_completeness(GEN_ID, list(metrics))["ind-a"]
+
+    def test_a_metric_missing_from_a_finished_replica_is_named(
+            self, repo_and_sims):
+        """The case with no other evidence in the record.
+
+        Every planned seed reached ``Done``, so ``missing_seeds``,
+        ``failed_seeds`` and ``absent_seeds`` are all empty and the counts
+        read 2 of 2. Only ``thin_metrics`` and ``reason`` distinguish this
+        from a complete evaluation.
+        """
+        entry = self._entry(repo_and_sims, [
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 1, "network_metrics": {"latency": 1.0,
+                                                   "energy": 2.0}},
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 2, "network_metrics": {"latency": 1.0}},
+        ], plan=[1, 2], metrics=("latency", "energy"))
+
+        assert entry["state"] == "partial"
+        assert entry["observed"] == 2 and entry["expected"] == 2
+        assert entry["missing_seeds"] == [] and entry["failed_seeds"] == []
+        assert entry["absent_seeds"] == []
+        assert entry["thin_metrics"] == ["energy"]
+        assert "energy" in entry["reason"]
+        assert "nothing to repeat" in entry["reason"]
+
+    def test_an_absent_seed_is_listed_and_marked_unrepeatable(
+            self, repo_and_sims):
+        entry = self._entry(repo_and_sims, [
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 1, "network_metrics": {"latency": 1.0}},
+        ], plan=[1, 2])
+
+        assert entry["absent_seeds"] == [2]
+        assert entry["failed_seeds"] == [], "there is no document to clone"
+        assert "never created" in entry["reason"]
+        assert "nothing to repeat" in entry["reason"]
+
+    def test_a_failed_seed_says_it_can_be_repeated(self, repo_and_sims):
+        """The other side of the distinction: this one does have a repair."""
+        entry = self._entry(repo_and_sims, [
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 1, "network_metrics": {"latency": 1.0}},
+            {"individual_id": "ind-a", "status": EnumStatus.ERROR,
+             "random_seed": 2, "network_metrics": {}},
+        ], plan=[1, 2])
+
+        assert entry["failed_seeds"] == [2] and entry["absent_seeds"] == []
+        assert "repeatable" in entry["reason"]
+
+    def test_both_holes_at_once_are_both_named(self, repo_and_sims):
+        entry = self._entry(repo_and_sims, [
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 1, "network_metrics": {"latency": 1.0}},
+            {"individual_id": "ind-a", "status": EnumStatus.ERROR,
+             "random_seed": 2, "network_metrics": {}},
+        ], plan=[1, 2, 3])
+
+        assert entry["failed_seeds"] == [2] and entry["absent_seeds"] == [3]
+        assert "repeatable" in entry["reason"]
+        assert "never created" in entry["reason"]
+
+    def test_a_complete_evaluation_says_so(self, repo_and_sims):
+        entry = self._entry(repo_and_sims, [
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": seed, "network_metrics": {"latency": 1.0}}
+            for seed in (1, 2)
+        ], plan=[1, 2])
+
+        assert entry["state"] == "complete"
+        assert entry["thin_metrics"] == []
+        assert entry["reason"] == "every planned replica finished with every metric"
+
+    def test_a_pending_evaluation_is_not_given_a_verdict(self, repo_and_sims):
+        entry = self._entry(repo_and_sims, [
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 1, "network_metrics": {"latency": 1.0}},
+            {"individual_id": "ind-a", "status": EnumStatus.RUNNING,
+             "random_seed": 2, "network_metrics": {}},
+        ], plan=[1, 2])
+
+        assert entry["state"] == "pending"
+        assert "still running" in entry["reason"]
+
+    def test_a_generation_with_no_plan_says_that_and_not_a_hole(
+            self, repo_and_sims):
+        """``unknown`` means the plan was never recorded. Naming a hole for a
+        historical experiment would invent evidence it does not have."""
+        repo, sims, gens = repo_and_sims
+        sims.find.return_value = [
+            {"individual_id": "ind-a", "status": EnumStatus.DONE,
+             "random_seed": 1, "network_metrics": {"latency": 1.0}},
+        ]
+        gens.find_one.return_value = {}
+
+        entry = repo.replica_completeness(GEN_ID, ["latency"])["ind-a"]
+
+        assert entry["state"] == "unknown"
+        assert entry["reason"] == (
+            "the generation did not record which seeds it planned")

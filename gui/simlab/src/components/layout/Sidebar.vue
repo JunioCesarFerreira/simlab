@@ -118,7 +118,7 @@ const { isDark, toggle } = useTheme();
 
 .nav-link.router-link-active {
   background: var(--color-primary-light);
-  color: var(--color-primary);
+  color: var(--color-text);
   font-weight: 600;
 }
 
@@ -171,5 +171,37 @@ const { isDark, toggle } = useTheme();
 
 .toggle-label {
   font-size: 13px;
+}
+@media (max-width: 760px) {
+  .sidebar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 8px 12px;
+  }
+
+  .brand {
+    border: 0;
+    margin: 0;
+    padding: 4px 8px;
+  }
+
+  .nav-section {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    flex-direction: row;
+    overflow-x: auto;
+  }
+
+  .nav-link {
+    flex-shrink: 0;
+  }
+
+  .sidebar-footer {
+    grid-column: 2;
+    grid-row: 1;
+    border: 0;
+    margin: 0;
+    padding: 0;
+  }
 }
 </style>

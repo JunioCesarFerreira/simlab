@@ -384,3 +384,17 @@ def test_pymoo_checkpoint_is_a_detached_snapshot():
     stored = BSON.encode(harness.generations[-1])
     restored._pymoo_survival.norm.ideal_point[:] = 0
     assert BSON.encode(harness.generations[-1]) == stored
+
+
+@pytest.mark.parametrize("cls", ALL_STRATEGIES, ids=lambda c: c.__name__)
+def test_error_generation_is_replayed_after_engine_restart(cls):
+    strategy = cls.__new__(cls)
+    strategy._exp_id = ObjectId()
+    strategy.mongo = MagicMock()
+    strategy._restore_population_state = MagicMock()
+    generation = {"_id": ObjectId(), "index": 0, "status": EnumStatus.ERROR,
+                  "replica_retries": 1, "retry_plan": [{"simulation_id": ObjectId()}]}
+
+    assert strategy._resume_existing_generation([generation]) is True
+    assert strategy._generation_id == generation["_id"]
+    strategy._restore_population_state.assert_called_once_with([generation], generation)

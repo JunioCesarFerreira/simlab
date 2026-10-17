@@ -257,20 +257,82 @@ class TestInterruptedSimulations:
         mongo.simulation_repo.mark_error.assert_called_once_with(
             SIM_1, RECOVERY_MESSAGE, attempt_id=None)
 
-    def test_a_finished_simulation_is_left_alone(self):
-        # The run completed and only the release was lost; there is nothing to
-        # correct, and overwriting its result would destroy the measurement.
+    def test_a_finished_simulations_result_is_never_overwritten(self):
+        # The run completed and only the release was lost. Whatever happens to
+        # the worker, the measurement is not touched.
         mongo = FakeMongo(occupied=[resource()], simulation=simulation("Done"))
-        report = reconcile_occupied_resources(mongo, probe=lambda *a: ALIVE)
-        assert report.released == ["cooja1"]
-        mongo.simulation_repo.mark_error.assert_not_called()
 
-    def test_a_finished_simulation_is_not_even_probed(self):
-        # Nothing is running, so there is no question to ask.
-        probed = []
+        reconcile_occupied_resources(mongo, probe=lambda *a: GONE)
+
+        assert mongo.simulation_repo.mark_error.call_count == 0
+
+    def test_a_finished_simulation_whose_process_is_gone_frees_the_worker(self):
+        mongo = FakeMongo(occupied=[resource()], simulation=simulation("Done"))
+
+        report = reconcile_occupied_resources(mongo, probe=lambda *a: GONE)
+
+        assert report.released == ["cooja1"]
+
+    def test_a_terminal_simulation_with_a_live_process_holds_the_worker(self):
+        """The assumption this used to make, stated and refused.
+
+        "Nothing is running, so there is no question to ask" is wrong, and it
+        is wrong in the one case that matters: a simulation marked in error
+        *because* nobody could confirm its process had stopped. If the write
+        that was meant to record that also failed, this is the only thing
+        between the database coming back and a worker with a live JVM going
+        into the pool.
+        """
         mongo = FakeMongo(occupied=[resource()], simulation=simulation("Error"))
-        reconcile_occupied_resources(mongo, probe=lambda *a: probed.append(a) or GONE)
+
+        report = reconcile_occupied_resources(mongo, probe=lambda *a: ALIVE)
+
+        assert report.released == []
+        assert report.held == ["cooja1"]
+        mongo.resource_repo.force_release.assert_not_called()
+        # And written down, so the next pass does not have to ask again.
+        mongo.resource_repo.hold.assert_called_once()
+
+    def test_leftover_artifacts_hold_it_too(self):
+        """A testlog is an uncollected result; the next run deletes it."""
+        mongo = FakeMongo(occupied=[resource()], simulation=simulation("Error"))
+
+        report = reconcile_occupied_resources(mongo, probe=lambda *a: FINISHED)
+
+        assert report.held == ["cooja1"]
+        mongo.resource_repo.force_release.assert_not_called()
+
+    def test_a_terminal_simulation_with_no_pid_is_not_probed(self):
+        """Nothing was ever started under this attempt, so there is genuinely
+        no question to ask."""
+        probed = []
+        mongo = FakeMongo(
+            occupied=[resource()],
+            simulation=simulation("Error", remote_pid=None))
+
+        report = reconcile_occupied_resources(
+            mongo, probe=lambda *a: probed.append(a) or GONE)
+
         assert probed == []
+        assert report.released == ["cooja1"]
+
+    def test_an_unreachable_container_holding_a_terminal_simulation_waits(self):
+        mongo = FakeMongo(occupied=[resource()], simulation=simulation("Error"))
+
+        report = reconcile_occupied_resources(mongo, probe=lambda *a: None)
+
+        assert report.released == []
+        assert report.unreachable == ["cooja1"]
+
+    def test_without_a_probe_it_refuses_rather_than_assumes(self):
+        """The conservative direction: a worker that waits for the next pass
+        costs less than one that takes a second simulation."""
+        mongo = FakeMongo(occupied=[resource()], simulation=simulation("Error"))
+
+        report = reconcile_occupied_resources(mongo)
+
+        assert report.released == []
+        assert report.held == ["cooja1"]
 
     def test_a_container_holding_nothing_is_still_freed(self):
         mongo = FakeMongo(occupied=[resource(simulation_id=None)])

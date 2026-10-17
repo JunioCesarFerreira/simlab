@@ -40,7 +40,7 @@ class RuntimeMetricsDto(TypedDict, total=False):
     """Computational telemetry summary of an experiment run.
 
     Only the summary and the GridFS artifact reference — the full time series
-    are served on demand by GET /experiments/{id}/runtime-metrics.
+    are served on demand by GET /experiments/{experiment_id}/runtime-metrics.
     """
     status: str
     started_at: Optional[datetime]

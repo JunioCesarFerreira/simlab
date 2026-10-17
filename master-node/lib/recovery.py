@@ -213,15 +213,21 @@ def _reconcile_one(
     host = mongo.host_repo.get(resource.get("host_id"))
 
     # The simulation is over, or gone. That is *not* the same as "nothing is
-    # running on the container": a quarantine whose write failed leaves a
-    # terminal simulation and a worker that may still have a JVM on it, and
-    # this branch used to free it with no probe and no guard — undoing the
-    # protection exactly when the database came back.
+    # running on the container", and treating the two as equivalent is the
+    # assumption this branch was built on.
     #
-    # Two things now stop that. The write insists on the attempt that was
-    # read, so a placement that landed in between is not erased; and the
-    # repository refuses outright while `held_for` is set, which is how the
-    # quarantine's decision outlives the process that made it.
+    # Three things stop it now, in order of how much they can be relied on:
+    #
+    # 1. `held_for` — a decision somebody wrote down. The repository refuses
+    #    to release while it is set, so a quarantine outlives the process that
+    #    made it.
+    # 2. **The container is asked**, whenever a pid was recorded. This is the
+    #    one that does not depend on a write having succeeded: if both the
+    #    quarantine and its fallback failed, there is no field to read, and the
+    #    database coming back would otherwise make this branch conclude the
+    #    worker is free purely from `Error` on the simulation.
+    # 3. The write insists on the attempt that was read, so a placement that
+    #    landed in between is not erased.
     if simulation is None or simulation.get("status") in TERMINAL_STATUSES:
         if resource.get("held_for"):
             log.warning(
@@ -230,6 +236,9 @@ def _reconcile_one(
                 (resource.get("held_for") or {}).get("kind", "?"),
             )
             report.held.append(name)
+            return
+        if not _terminal_is_free(mongo, resource, simulation, probe, name, host,
+                                 report):
             return
         if _release(
             mongo, resource, "recovered: no simulation was still running", host,
@@ -322,6 +331,93 @@ def _reconcile_one(
         "Simulation %s is no longer running on %s; marking it failed", sim_oid, name)
     if _fail_simulation(mongo, simulation, sim_oid, attempt_id):
         report.failed_simulations.append(str(sim_oid))
+
+
+def _terminal_is_free(
+    mongo: Any,
+    resource: dict,
+    simulation: Optional[dict],
+    probe: Optional[LivenessProbe],
+    name: str,
+    host: Optional[dict],
+    report: ReconcileReport,
+) -> bool:
+    """Whether a worker holding a *finished* simulation may be released.
+
+    Asked because a terminal status is not evidence about a remote process.
+    The run may have been marked in error precisely *because* nobody could
+    confirm it had stopped — and if the write that was supposed to record that
+    also failed, this branch is the only thing between the database coming
+    back and a worker with a live JVM going into the pool.
+
+    No pid recorded is the one case where releasing is safe without asking:
+    nothing was ever started on the container under this attempt.
+    """
+    pid = ((simulation or {}).get("remote_pid")
+           or resource.get("remote_pid"))
+    if not pid:
+        return True
+    if probe is None or host is None:
+        # Cannot ask. Refusing is the conservative direction: the cost is a
+        # worker that waits for the next pass, against a worker that takes a
+        # second simulation while the first is still running.
+        log.warning(
+            "Container %s holds a finished simulation with pid %s and cannot "
+            "be asked about it; leaving it", name, pid,
+        )
+        report.held.append(name)
+        return False
+    try:
+        state = probe(host, resource, int(pid))
+    except Exception as error:
+        log.warning(
+            "Could not ask %s about the process of its finished simulation: "
+            "%s; leaving it", name, error)
+        report.held.append(name)
+        return False
+    if state is None:
+        log.warning(
+            "Container %s holds a finished simulation and could not be "
+            "reached; leaving it", name)
+        report.unreachable.append(name)
+        return False
+    if state.alive:
+        # The simulation says it ended and the container says otherwise. The
+        # container wins: it is the one with the process.
+        log.error(
+            "Simulation on %s is terminal but pid %s is still running there. "
+            "Holding the worker instead of releasing it", name, pid,
+        )
+        _hold(mongo, resource, pid,
+              "the simulation is terminal and its process is still running")
+        report.held.append(name)
+        return False
+    if state.testlog_bytes > 0:
+        log.warning(
+            "Container %s holds %d bytes of testlog for a finished "
+            "simulation; leaving it so the next run does not delete them",
+            name, state.testlog_bytes,
+        )
+        _hold(mongo, resource, pid,
+              "a finished simulation left artifacts that were never collected")
+        report.held.append(name)
+        return False
+    return True
+
+
+def _hold(mongo: Any, resource: dict, pid: Any, reason: str) -> None:
+    """Record that this worker has something nobody accounted for."""
+    try:
+        mongo.resource_repo.hold(resource["_id"], reason, {
+            "kind": "termination_unknown",
+            "simulation_id": resource.get("current_simulation_id"),
+            "attempt_id": resource.get("attempt_id"),
+            "remote_pid": pid,
+            "remote_dir": resource.get("remote_dir"),
+        })
+    except Exception:
+        log.exception(
+            "Could not record the hold on %s", resource.get("name", "?"))
 
 
 def _ask_probe(

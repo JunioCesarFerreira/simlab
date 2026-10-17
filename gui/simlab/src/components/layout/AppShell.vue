@@ -11,19 +11,23 @@
 </template>
 
 <script setup lang="ts">
-import { useRoute } from 'vue-router'
+import { useRoute } from "vue-router";
 import Sidebar from "./Sidebar.vue";
 import Topbar from "./TopBar.vue";
 
-const route = useRoute()
+const route = useRoute();
 </script>
 
 <style scoped>
 .shell {
   display: grid;
-  grid-template-columns: 220px 1fr;
+  grid-template-columns: 220px minmax(0, 1fr);
   height: 100vh;
   background: var(--color-bg);
+}
+
+html.dark .shell {
+  --color-text-muted: #a6adc8;
 }
 
 .sidebar {
@@ -55,5 +59,28 @@ const route = useRoute()
 .content.full-screen {
   padding: 0;
   overflow: hidden;
+}
+@media (max-width: 760px) {
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100dvh;
+  }
+
+  .sidebar {
+    position: static;
+    height: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .main {
+    min-height: 0;
+    height: auto;
+  }
+
+  .content {
+    padding: 16px;
+  }
 }
 </style>

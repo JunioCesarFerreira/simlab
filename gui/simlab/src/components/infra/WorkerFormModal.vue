@@ -1,15 +1,13 @@
 <template>
   <Teleport to="body">
-    <div class="backdrop" @click.self="close">
-      <div
-        ref="dialogEl"
-        class="modal"
-        role="dialog"
-        aria-modal="true"
-        :aria-label="title"
-        tabindex="-1"
-        @keydown.esc="close"
-      >
+    <dialog
+      ref="dialogEl"
+      class="backdrop infra-dialog"
+      :aria-label="title"
+      @click.self="close"
+      @cancel.prevent="close"
+    >
+      <div class="modal">
         <header>
           <h2>{{ title }}</h2>
           <button class="icon-btn" aria-label="Close" @click="close">✕</button>
@@ -154,12 +152,12 @@
           </div>
         </footer>
       </div>
-    </div>
+    </dialog>
   </Teleport>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { createResource, getPublicKey, updateResourceConnection } from "../../api/infra";
 import { SealingError, sealSecret } from "../../services/secretEnvelope";
 import type {
@@ -225,7 +223,7 @@ const saving = ref(false);
 const error = ref("");
 const keyError = ref("");
 const publicKey = ref<PublicKeyDto | null>(null);
-const dialogEl = ref<HTMLElement | null>(null);
+const dialogEl = ref<HTMLDialogElement | null>(null);
 
 const hasStoredSecret = computed(() => props.worker?.connection?.secret?.has_secret ?? false);
 const storedKeyId = computed(() => props.worker?.connection?.secret?.key_id ?? "—");
@@ -238,9 +236,11 @@ const canSave = computed(() => {
   return true;
 });
 
+onBeforeUnmount(() => dialogEl.value?.close());
+
 onMounted(async () => {
   await nextTick();
-  dialogEl.value?.focus();
+  dialogEl.value?.showModal();
   try {
     publicKey.value = await getPublicKey();
   } catch (e) {
@@ -320,6 +320,13 @@ function close() {
 
 <style scoped>
 .backdrop {
+  border: 0;
+  margin: 0;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  color: inherit;
   position: fixed;
   inset: 0;
   z-index: 10000;
@@ -448,7 +455,7 @@ input:focus,
 select:focus,
 textarea:focus {
   outline: 2px solid var(--color-primary-light);
-  border-color: var(--color-primary);
+  border-color: var(--color-link, var(--color-primary));
 }
 
 .mono {
@@ -520,7 +527,7 @@ textarea:focus {
 .link-btn {
   background: none;
   border: none;
-  color: var(--color-primary);
+  color: var(--color-link, var(--color-primary));
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;

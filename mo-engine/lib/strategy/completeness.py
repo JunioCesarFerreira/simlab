@@ -167,6 +167,35 @@ def repeatable(
     return out
 
 
+def unrepairable(completeness: dict[str, dict]) -> dict[str, str]:
+    """Individuals whose incompleteness no repeat can fill, and why.
+
+    A failed replica has a document to clone, so it has a repair. Two holes
+    do not: a planned seed whose simulation was never created, and a metric
+    absent from a replica that finished. Both arrive at the exhaustion branch
+    of the policy on the first pass, without consuming a repetition round.
+
+    That destination was correct already and invisible: the gate proceeded,
+    :func:`is_usable` refused or accepted the vector, and nothing said which
+    individuals had been decided without ever being repeated. This is what
+    the log and the delivered record name, so that "not repeated" is a stated
+    outcome rather than an inference from an empty ``failed_seeds``.
+
+    ``pending`` is not here on purpose — it is not an outcome yet.
+    """
+    out: dict[str, str] = {}
+    for individual_id, record in completeness.items():
+        state = record.get("state")
+        if state in (STATE_COMPLETE, STATE_PENDING, STATE_UNKNOWN,
+                     STATE_ANALYTICAL, STATE_INFEASIBLE):
+            continue
+        if record.get("failed_seeds"):
+            continue  # repeatable, so its destination is a repeat
+        out[individual_id] = str(
+            record.get("reason") or "incomplete for an unrecorded reason")
+    return out
+
+
 def summarize(completeness: dict[str, dict]) -> str:
     """One line for the log: how many evaluations rest on what."""
     if not completeness:
@@ -295,6 +324,12 @@ class ReplicaGate:
 
     def evaluate(self, generation_id: Any) -> GateResult:
         """Decide whether this generation's objectives may be computed."""
+        pending = self._mongo.generation_repo.pending_retry_round(generation_id)
+        if pending:
+            return self._finish_round(
+                generation_id, pending["retry_plan"],
+                pending["replica_retries"], {})
+
         if self._mongo.generation_repo.any_simulation_active(generation_id):
             # A redelivered terminal event, or one that arrived for a
             # generation that has since been reopened for a repeat. Computing
@@ -315,6 +350,7 @@ class ReplicaGate:
 
         retries_used = self._mongo.generation_repo.retries_used(generation_id)
         missing = repeatable(completeness, self._policy, retries_used)
+        self._state_unrepairable(generation_id, completeness)
         if not missing:
             if self._policy.mode == MODE_REPEAT and retries_used:
                 logger.info(
@@ -323,105 +359,95 @@ class ReplicaGate:
                 )
             return GateResult(proceed=True, completeness=completeness)
 
-        # The budget is taken **before** anything is created, and the
-        # condition is in the write. The counter used to be incremented after
-        # the clones, and a failure of that write left clones that would run
-        # with a count that had not moved — so the next evaluation created
-        # another round. Reproduced with `max_retries=1`: two repetitions.
-        #
-        # Failing this way round costs a wasted round instead of an extra one,
-        # and `release_retry_round` gives it back when nothing was created.
+        replicas = self._plan_repeats(generation_id, missing)
+        if not replicas:
+            # A genuinely absent simulation cannot be cloned. Database errors
+            # propagate instead: they must not look like an absent replica.
+            return GateResult(proceed=True, completeness=completeness)
         round_number = self._mongo.generation_repo.claim_retry_round(
-            generation_id, self._policy.max_retries)
+            generation_id, self._policy.max_retries, replicas)
         if round_number is None:
-            logger.info(
-                "[%s] Generation %s has spent its repetition budget",
-                self._label, generation_id)
+            # Another evaluator may have claimed the same work since our read.
+            # Do not compute objectives while its enqueue is in progress.
+            if (self._mongo.generation_repo.pending_retry_round(generation_id)
+                    or self._mongo.generation_repo.any_simulation_active(generation_id)):
+                return GateResult(proceed=False, completeness={}, waiting=True)
             return GateResult(proceed=True, completeness=completeness)
+        return self._finish_round(
+            generation_id, replicas, round_number, completeness)
 
-        queued = self._queue_repeats(generation_id, missing, round_number)
-        if not queued:
-            # Nothing could be repeated: the holes are seeds whose simulation
-            # was never created, so there is no document to run again. The
-            # round goes back, and the policy decides from here — reopening a
-            # generation that nothing will ever close would be worse.
-            logger.warning(
-                "[%s] Generation %s is missing replicas that have no "
-                "simulation to repeat: %s", self._label, generation_id,
-                {k: v for k, v in missing.items()},
-            )
-            try:
-                self._mongo.generation_repo.release_retry_round(generation_id)
-            except Exception:
-                logger.exception(
-                    "[%s] Could not give back the unused repetition round of "
-                    "%s", self._label, generation_id)
-            return GateResult(proceed=True, completeness=completeness)
+    def _finish_round(self, generation_id: Any, replicas: list[dict],
+                      round_number: int, completeness: dict) -> GateResult:
+        """Replay a durable enqueue without spending another round.
 
-        # Reopened after the clones exist. The other order has a hole: a
-        # worker can finish a clone before the reopen lands, closing the
-        # generation again and leaving the reopen to set a finished generation
-        # back to Running with nothing to close it. The master-node's periodic
-        # pass covers that; this order makes it rare rather than routine.
-        self._mongo.generation_repo.reopen(generation_id)
-        logger.warning(
-            "[%s] Generation %s: queued %d replica(s) again (round %d of %d)",
-            self._label, generation_id, queued, round_number,
-            self._policy.max_retries,
-        )
-        return GateResult(
-            proceed=False, completeness=completeness, repeated=queued)
-
-    def _queue_repeats(
-        self, generation_id: Any, missing: dict[str, list[int]], round_number: int
-    ) -> int:
-        """Run the failed replicas again, with their own seeds.
-
-        Each repeat is a **new** simulation document cloned from the one that
-        failed, so the failure stays on the record with its message and the
-        repeat has its own placement and outcome. Only ``Done`` documents are
-        aggregated and completeness counts seeds, so a seed cannot contribute
-        twice.
-
-        ``round_number`` makes the creation idempotent: a pass that claimed a
-        round and failed part-way through can be run again without duplicating
-        the clones it already made.
+        Exceptions leave the manifest intact for the polling fallback or the
+        next engine process. In particular, a partial enqueue is resumed even
+        while its first clones are already running.
         """
-        try:
-            failed = self._mongo.simulation_repo.find_terminal_by_generation(
-                generation_id)
-        except Exception:
-            logger.exception(
-                "[%s] Could not read the failed replicas of generation %s",
-                self._label, generation_id)
-            return 0
-
         queued = 0
+        for replica in replicas:
+            clone = self._mongo.simulation_repo.clone_for_retry(
+                replica["simulation_id"], reason=replica["reason"],
+                retry_round=round_number)
+            queued += clone is not None
+        if self._mongo.generation_repo.finish_retry_round(
+                generation_id, round_number):
+            # Fast workers may have finished every clone before the reopen.
+            # Reconcile now; a crash here is also covered by the master's sweep.
+            self._mongo.generation_repo.close_if_finished(generation_id)
+        logger.info(
+            "[%s] Generation %s: recovered/enqueued %d replica(s), round %d",
+            self._label, generation_id, queued, round_number)
+        return GateResult(
+            proceed=False, completeness=completeness, repeated=queued,
+            waiting=not queued)
+
+    def _state_unrepairable(
+        self, generation_id: Any, completeness: dict[str, dict]
+    ) -> dict[str, str]:
+        """Say out loud which individuals are decided without being repeated.
+
+        A seed that was never created and a metric missing from a finished
+        replica both skip the repeat path — there is no document to clone —
+        and go straight to ``on_exhausted``. That was the behaviour before
+        this method existed; what was missing is the statement. Without it,
+        an operator reading the log saw ``1 partial`` and a generation that
+        proceeded, with no way to tell whether the repeat had been tried, had
+        failed, or had never applied.
+
+        Returns the map so the caller can test it; the side effect is the log.
+        """
+        holes = unrepairable(completeness)
+        if holes:
+            logger.warning(
+                "[%s] Generation %s: %d evaluation(s) cannot be repaired by a "
+                "repeat and go straight to %r: %s",
+                self._label, generation_id, len(holes),
+                self._policy.on_exhausted, holes,
+            )
+        return holes
+
+    def _plan_repeats(
+        self, generation_id: Any, missing: dict[str, list[int]]
+    ) -> list[dict]:
+        """Persist one source per missing seed, before creating any clones."""
+        failed = self._mongo.simulation_repo.find_terminal_by_generation(
+            generation_id)
+        replicas = []
+        seen = set()
         for simulation in failed:
             individual = str(simulation.get("individual_id") or "")
             seed = simulation.get("random_seed")
-            if individual not in missing or seed is None:
+            if seed is None or int(seed) not in missing.get(individual, []):
                 continue
-            if int(seed) not in missing[individual]:
+            identity = (individual, int(seed))
+            if identity in seen:
                 continue
-            try:
-                clone = self._mongo.simulation_repo.clone_for_retry(
-                    simulation["_id"],
-                    reason=(
-                        f"replica {seed} of {individual} failed: "
-                        f"{simulation.get('system_message') or 'no message'}"
-                    ),
-                    retry_round=round_number,
-                )
-            except Exception:
-                logger.exception(
-                    "[%s] Could not repeat replica %s of %s",
-                    self._label, seed, individual)
-                continue
-            if clone is not None:
-                queued += 1
-                # One seed, one repeat per pass: a second clone of the same
-                # seed in one pass would run the same replica twice.
-                missing[individual] = [
-                    s for s in missing[individual] if s != int(seed)]
-        return queued
+            seen.add(identity)
+            replicas.append({
+                "simulation_id": simulation["_id"],
+                "reason": (
+                    f"replica {seed} of {individual} failed: "
+                    f"{simulation.get('system_message') or 'no message'}"),
+            })
+        return replicas

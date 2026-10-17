@@ -6,6 +6,7 @@ would target a missing document (no-op) and the generation would hang at index 0
 This test locks the ordering invariant for every strategy that enqueues work.
 """
 import random
+from contextlib import contextmanager
 from unittest.mock import MagicMock
 
 from bson import ObjectId
@@ -16,6 +17,9 @@ from lib.strategy.nsga2 import NSGA2LoopStrategy
 from lib.strategy.random_search import RandomSearchStrategy
 from lib.strategy.batch import BatchStrategy
 from lib.strategy.completeness import ReplicaGate, ReplicaPolicy
+from pylib.db.models.enums import EnumStatus
+
+EXP_ID = ObjectId("507f1f77bcf86cd799460001")
 
 
 def _make_strategy(cls, enqueue_name):
@@ -148,3 +152,73 @@ def test_analytical_enqueue_skips_simulations(cls):
     assert genome in strat._map_genome_objectives
     mongo.generation_repo.mark_done.assert_called_once()
     assert strat._generation_id is not None
+
+
+# ── An engine restart must not abandon a running experiment ───────────────
+
+class TestResumingARunningExperiment:
+    """Only `Waiting` was picked up at startup.
+
+    So an experiment interrupted mid-generation stayed `Running` for ever: its
+    strategy state died with the process, and the change stream only fires on
+    new ones. Observed while validating this feature — an engine restart left
+    a finished generation with no evolution after it, and the experiment never
+    completed.
+    """
+
+    def test_the_claim_requires_the_experiment_to_be_running(self):
+        from pylib.db.repositories.experiment import ExperimentRepository
+
+        connection = MagicMock()
+        collection = MagicMock()
+        collection.update_one.return_value = MagicMock(modified_count=1)
+
+        @contextmanager
+        def connect():
+            yield {"experiments": collection}
+
+        connection.connect = connect
+        repo = ExperimentRepository(connection)
+
+        assert repo.claim_resume(str(EXP_ID)) is True
+
+        flt = collection.update_one.call_args.args[0]
+        assert flt["status"] == EnumStatus.RUNNING
+
+    def test_the_start_time_is_not_rewritten(self):
+        """It is the same run, continuing. Rewriting it would make the
+        duration of every resumed experiment wrong, and the telemetry window
+        with it."""
+        from pylib.db.repositories.experiment import ExperimentRepository
+
+        connection = MagicMock()
+        collection = MagicMock()
+        collection.update_one.return_value = MagicMock(modified_count=1)
+
+        @contextmanager
+        def connect():
+            yield {"experiments": collection}
+
+        connection.connect = connect
+
+        ExperimentRepository(connection).claim_resume(str(EXP_ID))
+
+        sets = collection.update_one.call_args.args[1]["$set"]
+        assert "start_time" not in sets
+        assert "status" not in sets
+        assert sets["resumed_at"].tzinfo is not None
+
+    def test_an_experiment_that_finished_meanwhile_is_not_resumed(self):
+        from pylib.db.repositories.experiment import ExperimentRepository
+
+        connection = MagicMock()
+        collection = MagicMock()
+        collection.update_one.return_value = MagicMock(modified_count=0)
+
+        @contextmanager
+        def connect():
+            yield {"experiments": collection}
+
+        connection.connect = connect
+
+        assert ExperimentRepository(connection).claim_resume(str(EXP_ID)) is False

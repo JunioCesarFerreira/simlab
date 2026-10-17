@@ -386,7 +386,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             })
             return False
 
-        if status == EnumStatus.DONE:
+        if status in (EnumStatus.DONE, EnumStatus.ERROR):
             logger.info(
                 "[NSGA-III] Replaying completed generation %s (index=%d) to continue the experiment.",
                 self._generation_id,

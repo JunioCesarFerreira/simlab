@@ -352,7 +352,7 @@ tbody tr:last-child td {
 .sim-link {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
-  color: var(--color-primary);
+  color: var(--color-link, var(--color-primary));
 }
 
 .sim-link:hover {
@@ -395,7 +395,7 @@ tbody tr:last-child td {
 
 .toggle input:checked + .toggle-track {
   background: var(--color-primary-light);
-  border-color: var(--color-primary);
+  border-color: var(--color-link, var(--color-primary));
 }
 
 .toggle input:checked + .toggle-track .toggle-knob {

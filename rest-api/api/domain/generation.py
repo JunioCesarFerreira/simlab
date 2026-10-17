@@ -24,6 +24,13 @@ class CompletenessDto(TypedDict, total=False):
     observed_seeds: list[int]
     missing_seeds: list[int]
     failed_seeds: list[int]
+    #: The holes a repeat cannot fill: ``absent_seeds`` were never created, so
+    #: there is no document to clone, and ``thin_metrics`` are missing from a
+    #: replica that *did* finish. Both reach the policy's exhaustion branch on
+    #: the first pass, and publishing them is what makes that legible rather
+    #: than inferred from an empty ``failed_seeds``.
+    absent_seeds: list[int]
+    thin_metrics: list[str]
     per_metric: dict[str, int]
     attempts: int
     objective_used: bool
@@ -33,7 +40,10 @@ class CompletenessDto(TypedDict, total=False):
     #: its own generation to count, which is why the record travels with it.
     reused: bool
     source: str
-    #: Why there were no replicas, for the states that never had any.
+    #: Why the state is what it is, in one phrase — for every state, not
+    #: only the ones with no replicas. ``partial`` in particular cannot be
+    #: read without it: a generation whose every planned seed finished can be
+    #: partial because one result came back without a metric.
     reason: str
 
 

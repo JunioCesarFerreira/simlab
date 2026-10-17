@@ -63,6 +63,7 @@ __all__ = [
     "DetachedRun", "DetachedRunError", "LaunchUnconfirmed", "RunHandle", "RunOutcome", "RunProgress",
     "build_launch_command", "build_poll_command", "build_inspect_command",
     "build_live_check_command", "assert_no_live_run", "LiveRunPresent",
+    "build_dir_inspect_command", "inspect_dir",
     "parse_poll_output", "parse_inspect_output", "inspect_run", "is_running",
     "RunState",
 ]
@@ -747,6 +748,42 @@ def assert_no_live_run(transport: Any, *, remote_dir: Optional[str] = None) -> N
             f"a process recorded in {target} is still running, so the "
             "directory must not be cleaned or written to"
         )
+
+
+def build_dir_inspect_command(
+    *,
+    remote_dir: str,
+    pid_file: str = PID_FILE,
+    exit_file: str = EXIT_FILE,
+    testlog: str = "COOJA.testlog",
+) -> str:
+    """Ask about whatever the *directory* holds, with no pid in hand.
+
+    Same status line as :func:`build_inspect_command`, but the pid is read
+    from ``run.pid`` instead of being supplied. That is the only question
+    available when a launch lost its confirmation before the pid could be
+    read — and "no pid recorded" is not the same as "nothing is running".
+    """
+    return (
+        f"cd {shlex.quote(remote_dir)} 2>/dev/null; "
+        f"P=$(cat {pid_file} 2>/dev/null); "
+        f'A=$(if [ -n "$P" ] && [ "$P" != - ] && kill -0 "$P" 2>/dev/null; '
+        f"then echo 1; else echo 0; fi); "
+        f"S=$([ -f {exit_file} ] && cat {exit_file} 2>/dev/null || echo -); "
+        f"N=$(wc -c < {testlog} 2>/dev/null || echo 0); "
+        f'echo "{STATUS_PREFIX} ${{S:--}} $A ${{N:-0}}"'
+    )
+
+
+def inspect_dir(transport: Any, *, remote_dir: str) -> RunState:
+    """What a run directory holds, when no pid was recorded.
+
+    Raises whatever the transport raises when the container cannot be
+    reached: unreachable is the absence of an answer, not an answer.
+    """
+    result = transport.exec_command(
+        build_dir_inspect_command(remote_dir=remote_dir), timeout=30)
+    return parse_inspect_output(result.stdout)
 
 
 def inspect_run(transport: Any, pid: Optional[int], *, remote_dir: str) -> RunState:

@@ -2,6 +2,7 @@ import logging
 from datetime import datetime
 from typing import Any, Callable, Optional
 from bson import ObjectId, errors
+from pymongo import ReturnDocument
 
 from pylib.db.models.simulation import Simulation
 from pylib.db.models.enums import EnumStatus
@@ -18,6 +19,12 @@ class SimulationRepository:
             db["simulations"].create_index([("status", 1)], name="idx_simulations_status")
             db["simulations"].create_index([("experiment_id", 1)], name="idx_simulations_experiment_id")
             db["simulations"].create_index([("generation_id", 1)], name="idx_simulations_generation_id")
+            db["simulations"].create_index(
+                [("generation_id", 1), ("individual_id", 1),
+                 ("random_seed", 1), ("retry_round", 1)],
+                name="idx_simulations_retry_identity", unique=True,
+                partialFilterExpression={"retry_round": {"$exists": True}},
+            )
 
     def insert(self, simulation: Simulation) -> ObjectId:
         with self.connection.connect() as db:
@@ -338,7 +345,7 @@ class SimulationRepository:
         "partial", "dodag", "attempt_id", "remote_pid", "assigned_at",
         "assigned_host_id", "assigned_host_name", "assigned_resource_id",
         "assigned_resource_name", "assigned_container_id", "unfetched_result",
-        "retry_round",
+        "retry_round", "recovered_result",
     )
 
     def clone_for_retry(
@@ -366,7 +373,8 @@ class SimulationRepository:
 
         **Idempotent per round.** ``retry_round`` is the repetition this clone
         belongs to, and a second call for the same
-        ``(generation, individual, seed, round)`` creates nothing. That is what
+        ``(generation, individual, seed, round)`` returns the existing id. A
+        unique index also excludes two concurrent inserts. That is what
         makes the whole repetition recoverable: a pass that claimed a round
         and then failed part-way can be run again without duplicating the
         clones it did manage to create.
@@ -380,19 +388,12 @@ class SimulationRepository:
                 log.info("Simulation %s already has a result; not repeating it", sim_id)
                 return None
             if retry_round is not None:
-                existing = db["simulations"].find_one({
+                identity = {
                     "generation_id": original.get("generation_id"),
                     "individual_id": original.get("individual_id"),
                     "random_seed": original.get("random_seed"),
                     "retry_round": int(retry_round),
-                }, {"_id": 1})
-                if existing is not None:
-                    log.info(
-                        "Replica %s of %s is already queued for round %s",
-                        original.get("random_seed"),
-                        original.get("individual_id"), retry_round,
-                    )
-                    return None
+                }
             clone = {k: v for k, v in original.items() if k not in self._RETRY_DROPS}
             clone["status"] = EnumStatus.WAITING
             clone["retry_of"] = sim_id
@@ -400,6 +401,11 @@ class SimulationRepository:
             clone["created_time"] = utc_now()
             if retry_round is not None:
                 clone["retry_round"] = int(retry_round)
+                doc = db["simulations"].find_one_and_update(
+                    identity, {"$setOnInsert": clone}, upsert=True,
+                    return_document=ReturnDocument.AFTER, projection={"_id": 1},
+                )
+                return doc["_id"]
             return db["simulations"].insert_one(clone).inserted_id
 
     def find_terminal_by_generation(

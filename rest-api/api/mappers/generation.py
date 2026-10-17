@@ -13,6 +13,7 @@ from api.mappers.helpers import oid_to_str, pop_id
 _COMPLETENESS_FIELDS = (
     "state", "expected", "observed", "failed", "pending", "absent",
     "expected_seeds", "observed_seeds", "missing_seeds", "failed_seeds",
+    "absent_seeds", "thin_metrics",
     "per_metric", "attempts", "objective_used", "policy",
     "reused", "source", "reason",
 )

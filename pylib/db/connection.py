@@ -46,6 +46,38 @@ class MongoDBConnection:
         finally:
             client.close()
 
+    @contextmanager
+    def transaction(self) -> Generator:
+        """Run a block of writes atomically, yielding ``(db, session)``.
+
+        Every operation inside has to be passed ``session=session`` or it
+        runs outside the transaction and silently loses the guarantee.
+
+        What this buys, and what it does not: MongoDB gives snapshot
+        isolation, so two transactions that write the **same document**
+        conflict and one aborts. It does *not* stop a document that did not
+        exist in the snapshot from being inserted by someone else. So a
+        composite operation that must exclude a concurrent insert has to make
+        both sides write one shared document — the host, in the case this was
+        added for — rather than merely read it.
+
+        Requires a replica set, which this deployment already requires for
+        change streams.
+        """
+        if self._client is not None:
+            client = self._client
+            with client.start_session() as session:
+                with session.start_transaction():
+                    yield client[self.db_name], session
+            return
+        client = MongoClient(self.uri, tz_aware=TZ_AWARE)
+        try:
+            with client.start_session() as session:
+                with session.start_transaction():
+                    yield client[self.db_name], session
+        finally:
+            client.close()
+
     def close(self) -> None:
         if self._client is not None:
             self._client.close()

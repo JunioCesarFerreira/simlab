@@ -10,6 +10,11 @@ class Generation(TypedDict):
     status: str
     start_time: datetime
     end_time: datetime
+    expected_seeds: NotRequired[list[int]]
+    replica_retries: NotRequired[int]
+    # Source simulation ids/reasons for a claimed round whose enqueue has not
+    # finished. Removed atomically with reopening after every clone exists.
+    retry_plan: NotRequired[list[dict]]
     # Chromosome hashes kept by environmental selection at the end of this
     # generation — the population P_t the search actually carries forward, as
     # opposed to the offspring Q_t stored as this generation's individuals.

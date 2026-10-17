@@ -76,18 +76,23 @@ A 409 on a delete is worth reading closely: the condition travels with the
 write, so it also means "it was free when you asked and taken by the time we
 deleted" — the record is intact.
 
-**Removing a host is the one operation that can be partial**, and it has two
-unhappy outcomes rather than one:
+**Removing a host is transactional.** A refusal preserves every worker,
+including free workers examined before the one that blocked the operation.
 
 | Response | What happened |
 |---|---|
-| **204** | The host and every worker are gone |
-| **409** | A worker could not be removed. The free ones *stay* deleted — undoing a delete is not possible — and the host is put **back in service** so its remaining capacity is not silently unschedulable |
-| **200** with `stranded` | The host is gone and the named workers are **not**: they gained a reservation during the withdrawal, and deleting a worker under a running simulation would lose the run. An orphan is the lesser harm, and it is reported rather than hidden |
+| **204** | The host and every worker were removed together |
+| **409** | Active work, a retained run/result, or a concurrent registration prevented removal. Nothing was removed; resolve the reported cause and retry |
+| **404** | The host no longer exists |
 
-It withdraws the host first — nothing can be created on it or placed on it
-from that moment — then deletes each free worker conditionally, and only
-removes the host once a re-count finds nothing left.
+The operation withdraws the host first, preventing new registrations and
+placements. Worker deletions and the final host deletion share one transaction;
+each delete also refuses `held_for`, even after quarantine cleared the active
+reservation. A conflict rolls back all deletions and cancels withdrawal. If the
+API process dies after marking withdrawal, repeating DELETE resumes it safely;
+to keep that host instead, an administrator can clear `withdrawn_at` after
+confirming no removal is still in progress. No `200/stranded` partial-success
+response exists in this implementation.
 
 **Two registrations may not point at one worker.** Address, port and directory
 are compared before a registration is accepted, and on a single host a unique
@@ -118,7 +123,7 @@ credential and the pinned host key with it.
 |---|---|
 | worker `connection` | `transport`, `username`, `port`, `auth_method`, `secret` |
 | host `container_access` | `secret` (and `remote_dir` as an empty string) |
-| host `access` | `secret` only — a host with no address or user is not a host |
+| host `access` | `secret`, `host_key_fingerprint`, `key_fingerprint` — a host with no address or user is not a host |
 
 Two other behaviours of an update are worth knowing:
 
@@ -128,6 +133,13 @@ Two other behaviours of an update are worth knowing:
   so without this an edit changed the endpoint, reported the new port, and
   went on connecting to the old one. A client that means to keep an override
   sends it in the same request.
+* **Replacing a pinned host key.** `access.host_key_fingerprint: null` puts
+  the host back to first contact, and a string pins one known out of band.
+  This is the *only* route for a legitimate key change — a rebuilt machine, a
+  rotated key — because the pin is written on first contact and never
+  overwritten: a connection presenting a different key has its session refused
+  instead. The field was accepted and then silently dropped, so the request
+  answered 200 and changed nothing. A document or a boolean is refused.
 * **Editing a host's access** clears what was measured about its workers,
   bumps the host's configuration version and takes the idle ones out of the
   pool until they are measured again. Workers holding a simulation are left

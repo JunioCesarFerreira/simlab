@@ -56,6 +56,21 @@ class ReplicaCompleteness(TypedDict):
     observed_seeds: list[int]
     missing_seeds: list[int]
     failed_seeds: list[int]
+    #: The subset of ``missing_seeds`` with no simulation at all. Listed and
+    #: not only counted because it is the one hole nothing can repair: the
+    #: repeat path clones a failed document, and here there is none. An
+    #: operator reading a ``partial`` evaluation needs to know which of its
+    #: holes are waiting on a decision rather than on a run.
+    absent_seeds: list[int]
+    #: Metrics carried by fewer seeds than were planned. Without this a
+    #: finished generation could read ``partial`` with ``missing_seeds: []``
+    #: and nothing explaining it — every planned replica reached ``Done``,
+    #: and one of them came back without this metric.
+    thin_metrics: list[str]
+    #: Why the state is what it is, in one phrase. Derived, never a decision:
+    #: it names the hole so that the policy's destination for it is legible
+    #: in the document itself.
+    reason: str
     #: Per metric, because a run can finish without carrying every one of
     #: them — two objectives of the same individual then rest on different
     #: numbers of replicas.
@@ -83,6 +98,52 @@ def _ended_after(candidate: dict, kept: dict) -> bool:
         return as_aware(new_end) > as_aware(old_end)
     except TypeError:
         return False
+
+
+def _reason_for(
+    state: str,
+    pending_seeds: list[int],
+    failed_seeds: list[int],
+    absent_seeds: list[int],
+    thin_metrics: list[str],
+) -> str:
+    """Name the hole behind a state, in the order a reader needs it.
+
+    Two states are ambiguous without this. ``partial`` says a mean rests on
+    fewer runs than planned but not whether a run can still repair it, and a
+    generation whose every planned seed reached ``Done`` can be ``partial``
+    purely because one result came back without a metric — with
+    ``missing_seeds`` empty, nothing in the record said why.
+
+    The phrases distinguish what the policy can act on (a failed replica has
+    a document to clone) from what it cannot (a seed that was never created,
+    a metric absent from a finished run). Both of the latter reach the
+    exhaustion branch directly, and this is what makes that visible instead
+    of inferred.
+    """
+    if state == STATE_UNKNOWN:
+        return "the generation did not record which seeds it planned"
+    if state == STATE_PENDING:
+        return f"{len(pending_seeds)} replica(s) still running"
+    if state == STATE_COMPLETE:
+        return "every planned replica finished with every metric"
+    parts: list[str] = []
+    if failed_seeds:
+        parts.append(f"{len(failed_seeds)} replica(s) failed (repeatable)")
+    if absent_seeds:
+        parts.append(
+            f"{len(absent_seeds)} planned replica(s) were never created "
+            "(nothing to repeat)")
+    if thin_metrics:
+        parts.append(
+            "finished replicas are missing "
+            + ", ".join(thin_metrics)
+            + " (nothing to repeat)")
+    if not parts:
+        # STATE_INVALID with no failures recorded: every planned seed is
+        # unaccounted for and none of them left a document behind.
+        parts.append("no replica produced a result")
+    return "; ".join(parts)
 
 
 def _completeness_of(
@@ -152,17 +213,18 @@ def _completeness_of(
     for metric in metrics:
         per_metric[metric] = len(metric_seeds[metric])
 
-    thin_metrics = any(per_metric[m] != expected for m in metrics)
+    thin = sorted(m for m in metrics if per_metric[m] != expected)
     if planned_seeds is None:
         state = STATE_UNKNOWN
     elif pending_seeds:
         state = STATE_PENDING
     elif not done_seeds:
         state = STATE_INVALID
-    elif missing or thin_metrics:
+    elif missing or thin:
         state = STATE_PARTIAL
     else:
         state = STATE_COMPLETE
+    reason = _reason_for(state, pending_seeds, failed_seeds, absent_seeds, thin)
 
     return {
         "expected": expected,
@@ -175,9 +237,12 @@ def _completeness_of(
         "missing_seeds": missing,
         #: The subset of ``missing_seeds`` that has a simulation to run again.
         "failed_seeds": failed_seeds,
+        "absent_seeds": absent_seeds,
+        "thin_metrics": thin,
         "per_metric": per_metric,
         "attempts": len(runs),
         "state": state,
+        "reason": reason,
     }
 
 
@@ -285,7 +350,9 @@ class GenerationRepository:
             return None
         if require_simulations and not self.count_simulations(generation_id):
             return None
-        if self.all_simulations_done(generation_id):
+        delivered = self.all_planned_replicas_done(generation_id)
+        if delivered if delivered is not None else self.all_simulations_done(
+                generation_id):
             self.mark_done(generation_id)
             return EnumStatus.DONE
         self.mark_error(generation_id)
@@ -325,34 +392,30 @@ class GenerationRepository:
             generation_id, {"expected_seeds": [int(s) for s in expected_seeds]})
 
     def claim_retry_round(
-        self, generation_id: ObjectId, max_retries: int
+        self, generation_id: ObjectId, max_retries: int,
+        replicas: list[dict],
     ) -> Optional[int]:
-        """Take the next repetition round, if the limit allows one.
+        """Atomically reserve the budget AND the work needed to use it.
 
-        Returns the round number, or ``None`` when the limit is spent.
-
-        **Claimed before anything is created.** The counter used to be
-        incremented after the clones were inserted, and the order was the
-        defect: a failure of that write — or a restart in the window — left
-        clones that would run and a count that had not moved, so the next
-        evaluation saw the old number and created another round. Reproduced
-        with ``max_retries=1``: two effective repetitions.
-
-        The condition is in the write, so two passes cannot both claim the
-        same round, and a crash after this point costs a *wasted* round rather
-        than an extra one. That is the direction to fail in: exceeding a
-        budget is worse than not using it.
+        An interrupted enqueue resumes this manifest before considering a new
+        round, even if some of its clones have already started or finished.
+        An empty plan must not consume a round.
         """
+        if not replicas or max_retries <= 0:
+            return None
         with self.connection.connect() as db:
             doc = db["generations"].find_one_and_update(
                 {
                     "_id": generation_id,
+                    "status": {"$ne": EnumStatus.CANCELLED},
+                    "retry_plan": {"$exists": False},
                     "$or": [
                         {"replica_retries": {"$lt": int(max_retries)}},
                         {"replica_retries": {"$exists": False}},
                     ],
                 },
-                {"$inc": {"replica_retries": 1}},
+                {"$inc": {"replica_retries": 1},
+                 "$set": {"retry_plan": replicas}},
                 return_document=ReturnDocument.AFTER,
                 projection={"replica_retries": 1},
             )
@@ -360,35 +423,32 @@ class GenerationRepository:
                 return None
             return int(doc.get("replica_retries") or 0)
 
-    def reopen(self, generation_id: ObjectId) -> bool:
-        """Put a generation back to ``Running`` so its repeats can close it.
+    def pending_retry_round(self, generation_id: ObjectId) -> Optional[dict]:
+        """Return the unfinished enqueue, including its already claimed round."""
+        with self.connection.connect() as db:
+            return db["generations"].find_one({
+                "_id": generation_id, "retry_plan": {"$exists": True},
+                "status": {"$ne": EnumStatus.CANCELLED},
+            }, {"retry_plan": 1, "replica_retries": 1})
 
-        Separate from claiming the round: the round is a budget decision and
-        this is a state change, and doing them in one write is what made the
-        budget unrecoverable.
+    def finish_retry_round(
+        self, generation_id: ObjectId, round_number: int
+    ) -> bool:
+        """Reopen and retire the manifest in one guarded write.
+
+        A delayed caller must not clear a newer round's plan or reopen a
+        cancelled generation. If this write fails, replaying the same manifest
+        finds the existing clones instead of creating them again.
         """
         with self.connection.connect() as db:
             res = db["generations"].update_one(
-                {"_id": generation_id},
-                {"$set": {"status": EnumStatus.RUNNING, "end_time": None}},
+                {"_id": generation_id, "replica_retries": round_number,
+                 "retry_plan": {"$exists": True},
+                 "status": {"$ne": EnumStatus.CANCELLED}},
+                {"$unset": {"retry_plan": ""},
+                 "$set": {"status": EnumStatus.RUNNING, "end_time": None}},
             )
             return res.matched_count > 0
-
-    def release_retry_round(self, generation_id: ObjectId) -> int:
-        """Give a claimed round back when nothing was created for it.
-
-        The budget is claimed before the clones precisely so that a failure
-        cannot exceed it; this is the other half, so a round that produced
-        nothing is not silently consumed.
-        """
-        with self.connection.connect() as db:
-            doc = db["generations"].find_one_and_update(
-                {"_id": generation_id, "replica_retries": {"$gt": 0}},
-                {"$inc": {"replica_retries": -1}},
-                return_document=ReturnDocument.AFTER,
-                projection={"replica_retries": 1},
-            )
-            return int((doc or {}).get("replica_retries") or 0)
 
     def retries_used(self, generation_id: ObjectId) -> int:
         with self.connection.connect() as db:
@@ -408,6 +468,59 @@ class GenerationRepository:
                 "status": EnumStatus.DONE
             })
             return done == total
+
+    def all_planned_replicas_done(
+        self, generation_id: ObjectId
+    ) -> Optional[bool]:
+        """Whether every planned replica produced a result, counted by seed.
+
+        ``None`` when the generation recorded no plan, which is every
+        generation created before ``expected_seeds`` existed: there the
+        caller keeps the document-based rule, because changing how a
+        historical generation reads would rewrite its meaning.
+
+        Why this is not ``all_simulations_done``: once a failed replica can
+        be **repeated**, a generation holding a terminal document is no
+        longer necessarily a generation that failed. The repeat is a second
+        document for the same seed, and the first one stays on the record
+        with its message on purpose — so counting documents reported
+        ``Error`` for a generation whose every planned seed had a result and
+        whose every individual read ``complete``. Observed in a pilot: one
+        JVM killed mid-run, the replica repeated and finished, the
+        generation still ``Error`` while both of its individuals were
+        ``complete`` with three attempts for two seeds.
+
+        Counted by seed, like completeness, so the status and the record
+        cannot disagree. Per-metric holes are deliberately *not* part of
+        this: a thin metric is reported in the completeness record, and a
+        status is too coarse a place to say it.
+        """
+        with self.connection.connect() as db:
+            generation = db["generations"].find_one(
+                {"_id": generation_id}, {"expected_seeds": 1}) or {}
+            planned = generation.get("expected_seeds")
+            if not planned:
+                return None
+            expected = {int(seed) for seed in planned}
+            runs = list(db["simulations"].find(
+                {"generation_id": generation_id},
+                {"individual_id": 1, "random_seed": 1, "status": 1}))
+        if not runs:
+            # Same answer as the document rule, and for the same reason: an
+            # empty generation is not evidence of a failure. ``close_if_
+            # finished`` decides whether it may be closed at all.
+            return True
+        done: dict[str, set[int]] = {}
+        seen: set[str] = set()
+        for run in runs:
+            individual = str(run.get("individual_id") or "")
+            seen.add(individual)
+            seed = run.get("random_seed")
+            if seed is None or run.get("status") != EnumStatus.DONE:
+                continue
+            done.setdefault(individual, set()).add(int(seed))
+        return all(expected <= done.get(individual, set())
+                   for individual in seen)
 
     def any_simulation_active(self, generation_id: ObjectId) -> bool:
         """Returns True if any simulation is still WAITING or RUNNING."""

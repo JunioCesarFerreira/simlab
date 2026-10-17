@@ -291,8 +291,8 @@ def get_experiment_runtime_metrics(
 
     Loads the raw telemetry artifact from GridFS, reconstructs every series
     and downsamples each one to at most ``max_points`` samples. The summary
-    block is returned by GET /experiments/{id}; this endpoint exists so the
-    heavy series are only transferred on demand.
+    block is returned by GET /experiments/{experiment_id}; this endpoint
+    exists so the heavy series are only transferred on demand.
     """
     from pylib.telemetry.artifact import deserialize_samples
 

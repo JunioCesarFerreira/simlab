@@ -96,10 +96,16 @@ Both were written as prose first and did not hold:
   walked documents, so two results for one seed weighed it twice in the mean
   while the record still said two of two. The later result wins; a seed whose
   repeat is in flight counts as pending rather than failed.
-* **A repetition budget is claimed before its effects.** The limit is in the
-  condition of the write that takes the round, so a failure costs a wasted
-  round instead of an extra one, and the clones carry their round number so a
-  retried pass cannot duplicate them.
+* **A repetition budget and its work are claimed atomically.** The generation's
+  `retry_plan` records source simulations/reasons together with the increment
+  of `replica_retries`. A restart resumes that manifest before checking active
+  simulations or the remaining budget. Completing the enqueue removes the plan
+  and reopens the generation in one write guarded by the round number.
+  Clones use `$setOnInsert` and a unique partial index on generation, individual,
+  seed and round: replay never resets an existing result. Historical simulations
+  without `retry_round` are outside that index. If an earlier deployment wrote
+  duplicate retry identities, index creation fails visibly; inspect and resolve
+  those records before upgrading, preserving their results and audit history.
 * **Completeness is measured against the plan.**
   `GenerationRepository.replica_completeness` compares the generation's
   recorded `expected_seeds` with the seeds that produced a result. Derived from
@@ -107,3 +113,17 @@ Both were written as prose first and did not hold:
   a generation configured for two seeds that enqueued one looked complete, with
   one replica. Counted by seed rather than by document, so a repeat shows up as
   an extra attempt instead of an extra replica.
+* **The record names its own hole.** `failed_seeds` can be repeated (there is a
+  document to clone); `absent_seeds` and `thin_metrics` cannot, and `reason`
+  says which of the three a state is. Without them an evaluation could read
+  `partial` with `missing_seeds: []` and 2 of 2 replicas, because every planned
+  seed finished and one came back without a metric, and nothing in the document
+  explained it.
+* **A generation's status uses the same unit as its completeness.**
+  `close_if_finished` counts seeds through `all_planned_replicas_done`, so a
+  generation whose failed replica was repeated closes `Done`: the failed
+  document stays on the record by design, and counting documents made a
+  repaired generation indistinguishable from a broken one. A generation with no
+  recorded plan — every one created before `expected_seeds` existed — keeps the
+  document rule, because reinterpreting a historical generation is a separate
+  decision.

@@ -16,13 +16,12 @@ sealed, and is opened exactly once, by the one process that runs simulations.
 import logging
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Response, status
-from fastapi.responses import JSONResponse
 from bson import errors as bson_errors
 
 from pylib.crypto import MalformedEnvelope
 from pylib.db import MongoRepository
 from pylib.db.models.infra import OCCUPIED_STATUSES, EnumAuthMethod
-from pylib.db.repositories.infra import HostWithdrawing
+from pylib.db.repositories.infra import HostWithdrawing, RemovalConflicted
 
 from api.dependencies import get_factory
 
@@ -39,6 +38,14 @@ from api.domain.infra import (
     OverviewDto,
     PublicKeyDto,
     ResourceDto,
+)
+from api.schemas.infra import (
+    HOST_CREATE,
+    HOST_UPDATE,
+    RESOURCE_CREATE,
+    RESOURCE_ENABLED,
+    RESOURCE_UPDATE,
+    request_body,
 )
 from api.mappers.infra import (
     PlaintextRefused,
@@ -123,9 +130,12 @@ def list_hosts(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/hosts", response_model=str, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/hosts", response_model=str, status_code=status.HTTP_201_CREATED,
+    openapi_extra=request_body(HOST_CREATE, "Register a remote host and how the master-node reaches it."),
+)
 def create_host(
-    host: dict = Body(..., description="See HostCreateDto for the accepted shape"),
+    host: dict = Body(...),
     factory: MongoRepository = Depends(get_factory),
 ) -> str:
     """Register a remote host. Returns its id.
@@ -184,10 +194,13 @@ def get_host(
     }
 
 
-@router.put("/hosts/{host_id}", response_model=HostDto)
+@router.put(
+    "/hosts/{host_id}", response_model=HostDto,
+    openapi_extra=request_body(HOST_UPDATE, "Change a host. Partial by field: see each field's description."),
+)
 def update_host(
     host_id: str,
-    updates: dict = Body(..., description="See HostUpdateDto for the accepted shape"),
+    updates: dict = Body(...),
     factory: MongoRepository = Depends(get_factory),
 ) -> HostDto:
     """Change a host's configuration.
@@ -285,42 +298,29 @@ def delete_host(
     # The condition travels with the write. Counting the busy ones here and
     # deleting afterwards left a window the scheduler could reserve in, and
     # then removed the host along with the record of a live run.
-    deleted, blocking = factory.host_repo.delete_if_drained(host["_id"])
-    if blocking and not deleted:
+    try:
+        deleted, blocking = factory.host_repo.delete_if_drained(host["_id"])
+    except RemovalConflicted as e:
+        # A registration or a discovery committed against this host while the
+        # removal was running. Nothing was removed and nothing is wrong, so
+        # this is neither a 404 nor a drain problem: it is "try again".
+        raise HTTPException(status_code=409, detail=f"{e}. Try again.")
+    if blocking:
+        # Nothing was removed. The deletions run in one transaction, so a
+        # worker that cannot go rolls the whole thing back — the refusal
+        # costs nothing, where it used to leave the free workers deleted.
         raise HTTPException(
             status_code=409,
             detail=(
-                f"host {host.get('name')!r} still has worker(s) that could "
-                f"not be removed: {', '.join(blocking)}. Any that were free "
-                "have been removed and the host has been left in service; "
-                "disable it, let the simulations drain, and try again."
+                f"host {host.get('name')!r} still has worker(s) holding an "
+                f"active simulation or unresolved run/result: {', '.join(blocking)}. "
+                "Nothing was removed and the host is still in service. Disable "
+                "it and let active simulations drain; recover retained results "
+                "or confirm termination of retained runs before removing it."
             ),
         )
     if not deleted:
         raise HTTPException(status_code=404, detail="host not found")
-    if blocking:
-        # The host is gone and these are not: they gained a reservation during
-        # the withdrawal, and deleting a worker under a live run would lose the
-        # run. Reported rather than hidden — a 200 with the names, because a
-        # 204 would say nothing happened that the operator should know about.
-        log.error(
-            "Host %s was removed, but %s gained a reservation during the "
-            "withdrawal and were left in place", host_id, blocking,
-        )
-        return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content={
-                "deleted": True,
-                "stranded": blocking,
-                "detail": (
-                    f"host {host.get('name')!r} was removed, but "
-                    f"{', '.join(blocking)} gained a reservation while it was "
-                    "being withdrawn and were left in place rather than "
-                    "deleted under a running simulation. Remove them once "
-                    "their simulations finish."
-                ),
-            },
-        )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -406,10 +406,13 @@ def get_resource(
     return resource_from_mongo(resource, host_name=host.get("name", ""), host=host)
 
 
-@router.put("/resources/{resource_id}", response_model=ResourceDto)
+@router.put(
+    "/resources/{resource_id}", response_model=ResourceDto,
+    openapi_extra=request_body(RESOURCE_ENABLED, "Take one worker in or out of the pool."),
+)
 def set_resource_enabled(
     resource_id: str,
-    body: dict = Body(..., description="See ResourceEnabledDto"),
+    body: dict = Body(...),
     factory: MongoRepository = Depends(get_factory),
 ) -> ResourceDto:
     """Take one container in or out of the pool.
@@ -493,10 +496,13 @@ def _refuse_duplicate_target(
     "/hosts/{host_id}/resources",
     response_model=ResourceDto,
     status_code=status.HTTP_201_CREATED,
+    openapi_extra=request_body(
+        RESOURCE_CREATE,
+        "Register one Cooja worker on this host, with its own SSH parameters."),
 )
 def create_resource(
     host_id: str,
-    body: dict = Body(..., description="See ResourceCreateDto"),
+    body: dict = Body(...),
     factory: MongoRepository = Depends(get_factory),
 ) -> ResourceDto:
     """Register one Cooja worker on this host, with its own SSH parameters.
@@ -529,10 +535,13 @@ def create_resource(
     return resource_from_mongo(created, host_name=host.get("name", ""), host=host)
 
 
-@router.put("/resources/{resource_id}/connection", response_model=ResourceDto)
+@router.put(
+    "/resources/{resource_id}/connection", response_model=ResourceDto,
+    openapi_extra=request_body(RESOURCE_UPDATE, "Change a worker's address or SSH parameters."),
+)
 def update_resource_connection(
     resource_id: str,
-    body: dict = Body(..., description="See ResourceUpdateDto"),
+    body: dict = Body(...),
     factory: MongoRepository = Depends(get_factory),
 ) -> ResourceDto:
     """Change a worker's address or SSH parameters.
@@ -648,8 +657,10 @@ def delete_resource(
         raise HTTPException(
             status_code=409,
             detail=(
-                f"worker {resource.get('name')!r} is running a simulation. "
-                "Disable it and let the simulation finish first."
+                f"worker {resource.get('name')!r} is running a simulation or "
+                "retaining an unresolved run/result. Disable it and let active "
+                "simulations finish; recover retained results or confirm "
+                "termination of retained runs before removing it."
             ),
         )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

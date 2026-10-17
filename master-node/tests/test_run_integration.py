@@ -19,6 +19,7 @@ of an SSH connection.
 import dataclasses
 import importlib.util
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -224,7 +225,8 @@ def wire(entry, monkeypatch, tmp_path):
         entry.statistics, "evaluate_config", lambda df, cfg, log: {"latency": 1.0})
     monkeypatch.setattr(entry.rpl_dodag, "analyze_dodag_full", lambda path: None)
 
-    def build(container: ScriptedContainer, *, heartbeat=3600.0, **repo):
+    def build(container: ScriptedContainer, *, heartbeat=3600.0,
+              budget=3600.0, **repo):
         mongo = MagicMock()
         mongo.simulation_repo.mark_running.return_value = True
         mongo.simulation_repo.mark_done.return_value = repo.pop("mark_done", True)
@@ -252,6 +254,7 @@ def wire(entry, monkeypatch, tmp_path):
             # Effectively off unless a test asks for it: a heartbeat firing
             # during an unrelated test would only add noise.
             lease_heartbeat_sec=heartbeat,
+            prepare_budget_sec=budget,
         )
         return runner, mongo
 
@@ -723,3 +726,114 @@ class TestTheLeaseIsHeldThroughout:
         assert container.launches == 0
         mongo.simulation_repo.requeue.assert_called_once()
         mongo.simulation_repo.mark_error.assert_not_called()
+
+
+class TestThePreparationBudget:
+    """A heartbeat that renews for ever claims more than it delivers.
+
+    "A slow upload does not lose its worker" and "the worker is never lost"
+    are different statements. A transfer that stopped making progress would
+    hold its container until the simulation timeout, with the reservation
+    looking healthy the whole time.
+    """
+
+    @pytest.mark.parametrize("ttl", [0.3, 4.0, 600.0])
+    def test_dispatcher_heartbeat_is_shorter_than_the_configured_ttl(self, entry, monkeypatch, ttl):
+        configured = dataclasses.replace(entry.SET, reservation_ttl_sec=ttl)
+        monkeypatch.setattr(entry, "SET", configured)
+        constructor = MagicMock()
+        monkeypatch.setattr(entry, "SimulationRunner", constructor)
+        monkeypatch.setattr(entry, "Dispatcher", MagicMock())
+        monkeypatch.setattr(entry, "Thread", MagicMock())
+
+        entry.build_dispatcher(MagicMock(), MagicMock(), MagicMock())
+
+        assert 0 < constructor.call_args.kwargs["lease_heartbeat_sec"] < ttl
+
+    def test_an_expired_upload_is_interrupted_before_the_worker_is_released(self, wire):
+        container = ScriptedContainer()
+        runner, mongo = wire(container, heartbeat=0.01, budget=0.05)
+        interrupted = threading.Event()
+        order = []
+
+        def close():
+            order.append("interrupt")
+            interrupted.set()
+
+        def upload(local, remote):
+            assert interrupted.wait(2), "budget did not close the transport"
+            # A transport may take time to unwind after cancellation. The
+            # reservation still needs to be protected during this interval.
+            before = mongo.resource_repo.touch_reservation.call_count
+            time.sleep(0.08)
+            assert mongo.resource_repo.touch_reservation.call_count > before
+            order.append("upload_stopped")
+            raise TransportError("channel closed")
+
+        container.close = close
+        container.put_files = upload
+        mongo.resource_repo.release.side_effect = lambda *a, **kw: order.append("release")
+
+        runner.run(sim(), HOST, RESOURCE, ATTEMPT)
+
+        assert order.index("upload_stopped") < order.index("release")
+        assert container.launches == 0
+        mongo.simulation_repo.requeue.assert_called_once()
+        mongo.simulation_repo.mark_error.assert_not_called()
+
+    def test_a_preparation_that_eventually_returns_gives_the_worker_up(self, wire):
+        container = ScriptedContainer()
+        runner, mongo = wire(container, heartbeat=0.01, budget=0.05)
+
+        def never_ending_upload(local, remote):
+            time.sleep(0.4)
+
+        container.put_files = never_ending_upload
+
+        runner.run(sim(), HOST, RESOURCE, ATTEMPT)
+
+        assert container.launches == 0
+        mongo.simulation_repo.requeue.assert_called_once()
+        # Released, not held: nothing was launched, so there is nothing
+        # unaccounted for on the container.
+        mongo.resource_repo.release.assert_called_once()
+
+    @pytest.mark.parametrize("operation", ["is_held_by", "touch_reservation"])
+    def test_unknown_ownership_does_not_allow_cleanup_or_upload(self, wire, operation):
+        container = ScriptedContainer()
+        runner, mongo = wire(container)
+        getattr(mongo.resource_repo, operation).side_effect = RuntimeError("database offline")
+
+        runner.run(sim(), HOST, RESOURCE, ATTEMPT)
+
+        assert container.cleanups == []
+        assert container.uploads == []
+        assert container.launches == 0
+        mongo.simulation_repo.requeue.assert_called_once()
+
+    def test_a_preparation_inside_the_budget_is_untouched(self, wire):
+        container = ScriptedContainer()
+        runner, mongo = wire(container, heartbeat=0.01, budget=5.0)
+
+        def slow_upload(local, remote):
+            time.sleep(0.08)
+
+        container.put_files = slow_upload
+
+        runner.run(sim(), HOST, RESOURCE, ATTEMPT)
+
+        assert container.launches == 1
+        mongo.simulation_repo.mark_done.assert_called_once()
+
+    def test_the_budget_can_be_switched_off(self, wire):
+        container = ScriptedContainer()
+        runner, mongo = wire(container, heartbeat=0.01, budget=0)
+
+        def slow_upload(local, remote):
+            time.sleep(0.08)
+
+        container.put_files = slow_upload
+
+        runner.run(sim(), HOST, RESOURCE, ATTEMPT)
+
+        assert container.launches == 1

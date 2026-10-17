@@ -243,6 +243,13 @@ export interface CompletenessDto {
   observed_seeds?: number[];
   missing_seeds?: number[];
   failed_seeds?: number[];
+  /**
+   * The holes no repeat can fill: `absent_seeds` were never created, so there
+   * is no run to clone, and `thin_metrics` are missing from a replica that did
+   * finish. Both are decided by the policy on the first pass.
+   */
+  absent_seeds?: number[];
+  thin_metrics?: string[];
   /** Observations per metric: two objectives can rest on different counts. */
   per_metric?: Record<string, number>;
   attempts?: number;
@@ -255,7 +262,11 @@ export interface CompletenessDto {
    */
   reused?: boolean;
   source?: string;
-  /** Why there were no replicas, for `analytical` and `infeasible`. */
+  /**
+   * Why the state is what it is, in one phrase — published for every state.
+   * `partial` cannot be read without it: a generation whose every planned seed
+   * finished can be partial because one result came back without a metric.
+   */
   reason?: string;
 }
 

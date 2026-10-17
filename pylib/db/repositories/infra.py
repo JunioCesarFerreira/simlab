@@ -20,6 +20,7 @@ from typing import Any, Callable, Iterable, Optional
 
 from bson import ObjectId, errors
 from pymongo import ReturnDocument
+from pymongo.errors import OperationFailure
 
 from pylib.crypto.envelope import SecretEnvelope
 from pylib.db.connection import MongoDBConnection
@@ -42,6 +43,31 @@ from pylib.db.models.infra import (
 )
 
 log = logging.getLogger(__name__)
+
+
+class _Abort(Exception):
+    """Roll the transaction back and report what stopped it.
+
+    Raised rather than returned because the transaction's context manager
+    aborts on an exception and commits on a normal return. A composite
+    operation that decides *not* to go ahead has to leave by this door, or the
+    writes it already made are committed.
+    """
+
+    def __init__(self, deleted: bool, blocking: list[str]):
+        super().__init__("transaction aborted")
+        self.deleted = deleted
+        self.blocking = blocking
+
+
+class RemovalConflicted(RuntimeError):
+    """A registration or a discovery committed while the removal was running.
+
+    Distinct from "the host is not there" and from "a worker is busy": nothing
+    was removed, nothing is wrong, and trying again is the correct response.
+    Collapsing it into the not-found branch answered 404 for a host that still
+    exists.
+    """
 
 
 class HostWithdrawing(RuntimeError):
@@ -383,80 +409,98 @@ class HostRepository:
            than trusting step 2. A worker that appears between them keeps the
            host alive and is reported.
 
-        A refusal is **partial by nature**: workers deleted in step 2 stay
-        deleted, because undoing a delete is not possible. That is why step 1
-        comes first — and when the removal cannot complete the host is put
-        **back in service** (``cancel_withdrawal``) rather than left
-        withdrawn, so its remaining capacity is not silently unschedulable.
-
-        The ``(deleted, blocking)`` pair says which happened. ``deleted`` with
-        a non-empty ``blocking`` is the one surprising combination: the host
-        is gone and the named workers are **not**, because they gained a
-        reservation during the withdrawal and deleting a worker under a live
-        run would lose the run. An orphan is the lesser harm, and it is
-        reported rather than hidden.
+        Steps 2 and 3 share a transaction: a refusal rolls back every worker
+        deletion and returns the host to service. A retained run/result also
+        blocks removal, even when quarantine cleared the active reservation.
+        ``deleted`` is true only when no worker remains.
         """
         oid = _oid(host_id)
         if oid is None:
             return False, []
         if not self.begin_withdrawal(oid):
             return False, []
-        with self.connection.connect() as db:
-            resources = list(db[RESOURCES_COLLECTION].find(
-                {"host_id": oid}, {"_id": 1, "name": 1}))
+        try:
+            return self._remove_withdrawn(oid)
+        except _Abort as abort:
+            self.cancel_withdrawal(oid)
+            return abort.deleted, abort.blocking
+        except OperationFailure as error:
+            # A write conflict means a registration or a discovery committed
+            # against this host while the removal was running. The withdrawal
+            # is given back and the caller is told to try again — which is the
+            # correct outcome: the alternative was removing the host and
+            # discovering the new worker afterwards.
+            log.warning(
+                "The removal of host %s conflicted with a concurrent "
+                "registration: %s", oid, error,
+            )
+            self.cancel_withdrawal(oid)
+            raise RemovalConflicted(
+                "a worker was registered on this host while it was being "
+                "removed; nothing was removed"
+            ) from error
+        except Exception:
+            # Anything else leaves the host withdrawn, which is the one state
+            # a half-finished removal must not be left in silently.
+            log.exception("The removal of host %s failed part-way", oid)
+            self.cancel_withdrawal(oid)
+            raise
+
+    def _remove_withdrawn(self, oid: ObjectId) -> tuple[bool, list[str]]:
+        """Phases two and three, atomically.
+
+        One transaction, and it writes the **host document** as well as the
+        workers. That is not incidental: a transaction gives snapshot
+        isolation, which detects a conflict on a document two transactions
+        both write but does *not* see a document inserted outside its
+        snapshot. Reading the host would therefore not exclude a concurrent
+        registration; writing it does, because every creation path bumps
+        ``resource_epoch`` on the host inside its own transaction. The two
+        conflict and one aborts.
+        """
+        with self.connection.transaction() as (db, session):
+            hosts = db[HOSTS_COLLECTION]
+            resources = db[RESOURCES_COLLECTION]
+
+            # Writing the host is what makes a concurrent registration
+            # conflict with this. It has to happen inside the transaction and
+            # before the counting.
+            hosts.update_one(
+                {"_id": oid}, {"$inc": {"resource_epoch": 1}}, session=session)
+
             blocking: list[str] = []
-            for resource in resources:
-                gone = db[RESOURCES_COLLECTION].delete_one({
+            for resource in resources.find(
+                {"host_id": oid}, {"_id": 1, "name": 1}, session=session
+            ):
+                gone = resources.delete_one({
                     "_id": resource["_id"],
                     "status": {"$nin": _OCCUPIED},
                     "current_simulation_id": None,
-                }).deleted_count
+                    "held_for": None,
+                }, session=session).deleted_count
                 if not gone:
                     blocking.append(str(resource.get("name", "?")))
+
             if not blocking:
-                # Re-counted, not inferred: step 2 only knows about the
-                # workers it listed, and the whole point of this phase is the
-                # one that was not in that list.
-                late = list(db[RESOURCES_COLLECTION].find(
-                    {"host_id": oid}, {"name": 1}))
-                blocking = [str(r.get("name", "?")) for r in late]
+                # Re-counted inside the same transaction: the loop above only
+                # knows about the workers it listed.
+                blocking = [
+                    str(r.get("name", "?"))
+                    for r in resources.find(
+                        {"host_id": oid}, {"name": 1}, session=session)
+                ]
             if blocking:
-                self.cancel_withdrawal(oid)
-                return False, blocking
-            res = db[HOSTS_COLLECTION].delete_one({"_id": oid})
-            if res.deleted_count == 0:
-                self.cancel_withdrawal(oid)
-                return False, []
-            # Anything that appeared between the count and the delete has no
-            # host any more. Removing it here is the only moment at which
-            # "orphan" is a decidable state — but **only if it is free**: a
-            # placement that started from an earlier snapshot can have
-            # reserved one of these, and deleting a worker that holds a live
-            # run loses the run with it. One that is occupied is left behind
-            # and named, which is worse than nothing and better than silent
-            # data loss.
-            orphaned = db[RESOURCES_COLLECTION].delete_many({
-                "host_id": oid,
-                "status": {"$nin": _OCCUPIED},
-                "current_simulation_id": None,
-            }).deleted_count
-            if orphaned:
-                log.warning(
-                    "Removed %d worker(s) registered on host %s while it was "
-                    "being withdrawn", orphaned, oid,
-                )
-            stranded = [
-                str(r.get("name", "?"))
-                for r in db[RESOURCES_COLLECTION].find(
-                    {"host_id": oid}, {"name": 1})
-            ]
-            if stranded:
-                log.error(
-                    "Host %s was removed and %s gained a reservation during "
-                    "the withdrawal; they are left in place rather than "
-                    "deleted under a running simulation", oid, stranded,
-                )
-            return True, stranded
+                # Raised, not returned: the transaction's context manager
+                # aborts on an exception, so the workers deleted above come
+                # back. That is the difference the transaction makes — the
+                # refusal is no longer partial.
+                raise _Abort(False, blocking)
+
+            if hosts.delete_one(
+                {"_id": oid}, session=session
+            ).deleted_count == 0:
+                raise _Abort(False, [])
+            return True, []
 
     # ── bootstrap ──────────────────────────────────────────────────────────
 
@@ -1426,12 +1470,43 @@ class CoojaResourceRepository:
         created: list[str] = []
         updated: list[str] = []
 
-        with self.connection.connect() as db:
-            # A discovery that started before the removal would otherwise
-            # re-create the very workers it is deleting. Checked here, in the
-            # same connection as the writes, because the pass may have read
-            # the host minutes ago.
-            self._refuse_if_withdrawing(db, host_id)
+        # One transaction, because this both creates and removes workers and a
+        # removal of the host may be running at the same time. A discovery
+        # that started before the withdrawal would otherwise re-create the
+        # very workers the removal is deleting: the pass may have read the
+        # host minutes ago, so the check has to be where the writes are, and
+        # it has to *write* the host to conflict with the other side.
+        try:
+            return self._sync_discovered(
+                host_id, containers, remote_dir=remote_dir,
+                endpoints=endpoints, now=now, seen=seen,
+                created=created, updated=updated)
+        except OperationFailure as error:
+            # A write conflict with a concurrent removal or registration. The
+            # pass does nothing this cycle and runs again in thirty seconds;
+            # reporting nothing missing is what keeps it from acting on a
+            # snapshot it could not complete.
+            log.warning(
+                "Discovery on host %s conflicted with a concurrent change: "
+                "%s", host_id, error,
+            )
+            return {"created": [], "updated": [], "missing": [],
+                    "missing_occupied": []}
+
+    def _sync_discovered(
+        self,
+        host_id: ObjectId,
+        containers: Iterable[ContainerInfo],
+        *,
+        remote_dir: str,
+        endpoints: dict[str, dict[str, Any]],
+        now: datetime,
+        seen: list[str],
+        created: list[str],
+        updated: list[str],
+    ) -> dict[str, list[str]]:
+        with self.connection.transaction() as (db, session):
+            self._claim_host_for_creation(db, host_id, session)
             coll = db[RESOURCES_COLLECTION]
             for container in containers:
                 name = container.get("name")
@@ -1471,6 +1546,7 @@ class CoojaResourceRepository:
                     known = coll.find_one(
                         {"host_id": host_id, "container.id": container_id},
                         {"_id": 1, "name": 1},
+                        session=session,
                     )
                 if known is not None:
                     if known.get("name") != name:
@@ -1479,13 +1555,14 @@ class CoojaResourceRepository:
                             "rename", container_id, known.get("name"),
                         )
                         set_fields["name"] = name
-                    result = coll.update_one({"_id": known["_id"]}, {"$set": set_fields})
+                    result = coll.update_one({"_id": known["_id"]}, {"$set": set_fields}, session=session)
                     identified_by = {"_id": known["_id"]}
                 else:
                     result = coll.update_one(
                         {"host_id": host_id, "name": name},
                         {"$set": set_fields, "$setOnInsert": set_on_insert},
                         upsert=True,
+                        session=session,
                     )
                     identified_by = {"host_id": host_id, "name": name}
 
@@ -1500,6 +1577,7 @@ class CoojaResourceRepository:
                     coll.update_one(
                         {**identified_by, "origin": {"$ne": "manual"}},
                         {"$set": {"endpoint": endpoint}},
+                        session=session,
                     )
                 (created if result.upserted_id else updated).append(name)
 
@@ -1511,7 +1589,7 @@ class CoojaResourceRepository:
                 "host_id": host_id,
                 "name": {"$nin": seen},
                 "origin": {"$ne": "manual"},
-            }))
+            }, session=session))
             missing = [d["name"] for d in gone]
             missing_occupied = [
                 d["name"] for d in gone if d.get("status") in _OCCUPIED
@@ -1527,6 +1605,7 @@ class CoojaResourceRepository:
                         "last_check_message": "container not reported by Docker",
                         "updated_time": now,
                     }},
+                    session=session,
                 )
                 # Only the unoccupied ones leave the pool here; an occupied one
                 # keeps its reservation for the reconciliation layer.
@@ -1537,6 +1616,7 @@ class CoojaResourceRepository:
                         "status": {"$in": _REASSIGNABLE},
                     },
                     {"$set": {"status": EnumResourceStatus.OFFLINE.value}},
+                    session=session,
                 )
 
         return {
@@ -1546,22 +1626,33 @@ class CoojaResourceRepository:
             "missing_occupied": missing_occupied,
         }
 
-    def _refuse_if_withdrawing(self, db: Any, host_id: Any) -> None:
-        """The other half of the two-phase host removal.
+    @staticmethod
+    def _claim_host_for_creation(db: Any, host_id: Any, session: Any) -> None:
+        """Refuse a withdrawn host, and make this creation conflict with one.
 
-        Checked in the collection that is about to be written, not only in the
-        API: the orphan this prevents came from a caller that had read the
-        host before the withdrawal began, so a check anywhere earlier than
-        this write is a check at the wrong time.
+        Two things, and the second is the one that was missing. Reading the
+        host refuses a withdrawal that is *already* visible; it does nothing
+        about a removal that starts a moment later, because a transaction's
+        snapshot does not see a document someone else inserts — so the
+        removal's own counting could not see this worker either.
+
+        Writing ``resource_epoch`` fixes that by making both sides write the
+        same document. MongoDB then detects the write conflict and one of the
+        two aborts, whichever order they arrive in.
         """
         if host_id is None:
             return
-        if db[HOSTS_COLLECTION].count_documents(
-            {"_id": host_id, "withdrawn_at": {"$ne": None}}, limit=1
-        ):
+        host = db[HOSTS_COLLECTION].find_one(
+            {"_id": host_id}, {"withdrawn_at": 1}, session=session)
+        if host is None:
+            raise HostWithdrawing(
+                f"host {host_id} no longer exists; no worker may be added to it")
+        if host.get("withdrawn_at") is not None:
             raise HostWithdrawing(
                 f"host {host_id} is being removed; no worker may be added to it"
             )
+        db[HOSTS_COLLECTION].update_one(
+            {"_id": host_id}, {"$inc": {"resource_epoch": 1}}, session=session)
 
     def conflicting_target(
         self, host: Host, resource: CoojaResource, exclude_id: Any = None
@@ -1624,9 +1715,10 @@ class CoojaResourceRepository:
             "id": "", "name": doc.get("name", ""), "image": "",
             "state": "", "labels": {}, "checked_at": None,
         })
-        with self.connection.connect() as db:
-            self._refuse_if_withdrawing(db, doc.get("host_id"))
-            return db[RESOURCES_COLLECTION].insert_one(doc).inserted_id
+        with self.connection.transaction() as (db, session):
+            self._claim_host_for_creation(db, doc.get("host_id"), session)
+            return db[RESOURCES_COLLECTION].insert_one(
+                doc, session=session).inserted_id
 
     def update_manual(self, resource_id: Any, updates: dict) -> bool:
         """Change a worker's own settings.
@@ -1747,6 +1839,7 @@ class CoojaResourceRepository:
                 "_id": oid,
                 "status": {"$nin": _OCCUPIED},
                 "current_simulation_id": None,
+                "held_for": None,
             })
             return res.deleted_count > 0
 
@@ -1769,27 +1862,28 @@ class CoojaResourceRepository:
         decides, and the loser simply makes no change.
         """
         document = {k: v for k, v in resource.items() if k not in ("host_id", "name")}
-        with self.connection.connect() as db:
-            # Not raised here, unlike the other two creation paths. This runs
-            # at every start-up, before anything else: a withdrawal left set
-            # by an interrupted removal would stop the master-node from
-            # starting at all, which is a worse failure than the orphan this
-            # guards against. Skipped and said out loud instead.
-            if db[HOSTS_COLLECTION].count_documents(
-                {"_id": resource.get("host_id"), "withdrawn_at": {"$ne": None}},
-                limit=1,
-            ):
-                log.warning(
-                    "Host %s is marked as being removed; not seeding %r",
-                    resource.get("host_id"), resource.get("name"),
+        try:
+            with self.connection.transaction() as (db, session):
+                self._claim_host_for_creation(
+                    db, resource.get("host_id"), session)
+                result = db[RESOURCES_COLLECTION].update_one(
+                    {"host_id": resource["host_id"], "name": resource["name"]},
+                    {"$setOnInsert": document},
+                    upsert=True,
+                    session=session,
                 )
-                return False
-            result = db[RESOURCES_COLLECTION].update_one(
-                {"host_id": resource["host_id"], "name": resource["name"]},
-                {"$setOnInsert": document},
-                upsert=True,
+                return result.upserted_id is not None
+        except (HostWithdrawing, OperationFailure) as error:
+            # The one creation path that must not raise. It runs at every
+            # start-up, before anything else: a withdrawal left set by an
+            # interrupted removal — or a conflict with one in progress —
+            # would stop the master-node from starting at all, which is a
+            # worse failure than the orphan this guards against.
+            log.warning(
+                "Not seeding %r on host %s: %s",
+                resource.get("name"), resource.get("host_id"), error,
             )
-            return result.upserted_id is not None
+            return False
 
     def delete_by_host(self, host_id: Any) -> int:
         oid = _oid(host_id)

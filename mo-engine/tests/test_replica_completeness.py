@@ -29,6 +29,7 @@ from lib.strategy.completeness import (
     repeatable,
     reused,
     summarize,
+    unrepairable,
 )
 
 GEN_ID = ObjectId("507f1f77bcf86cd799450001")
@@ -41,7 +42,12 @@ def record(**over) -> dict:
         "expected": 2, "observed": 2, "failed": 0, "pending": 0, "absent": 0,
         "expected_seeds": [1, 2], "observed_seeds": [1, 2],
         "missing_seeds": [], "failed_seeds": [],
+        # Kept in step with ``_completeness_of`` on purpose: a stand-in whose
+        # shape has drifted from the real record is how a field stops being
+        # read without any test noticing.
+        "absent_seeds": [], "thin_metrics": [],
         "per_metric": {"latency": 2}, "attempts": 2, "state": "complete",
+        "reason": "every planned replica finished with every metric",
     }
     base.update(over)
     return base
@@ -49,7 +55,22 @@ def record(**over) -> dict:
 
 PARTIAL = record(
     observed=1, failed=1, observed_seeds=[1], missing_seeds=[2],
-    failed_seeds=[2], per_metric={"latency": 1}, state="partial")
+    failed_seeds=[2], per_metric={"latency": 1}, state="partial",
+    reason="1 replica(s) failed (repeatable)")
+
+#: The hole a repeat cannot fill: the seed was planned and no simulation was
+#: ever created for it, so there is no document to clone.
+ABSENT = record(
+    observed=1, absent=1, observed_seeds=[1], missing_seeds=[2],
+    absent_seeds=[2], per_metric={"latency": 1}, state="partial",
+    reason="1 planned replica(s) were never created (nothing to repeat)")
+
+#: The other one: every planned seed finished, and one came back without a
+#: metric. ``missing_seeds`` is empty, so nothing else in the record explains
+#: why this evaluation is partial.
+THIN = record(
+    per_metric={"latency": 1}, thin_metrics=["latency"], state="partial",
+    reason="finished replicas are missing latency (nothing to repeat)")
 
 
 # ── The policy as configuration ─────────────────────────────────────────────
@@ -175,7 +196,8 @@ class FakeMongo:
         # in the write: `None` is how the repository says the limit is spent.
         self.generation_repo.claim_retry_round.return_value = (
             retries + 1 if claim and retries < max_retries else None)
-        self.generation_repo.reopen.return_value = True
+        self.generation_repo.pending_retry_round.return_value = None
+        self.generation_repo.finish_retry_round.return_value = True
         self.simulation_repo.find_terminal_by_generation.return_value = list(failed)
         self.cloned: list[ObjectId] = []
         self.rounds: list[Any] = []
@@ -206,7 +228,7 @@ class TestTheGate:
         result = gate(mongo).evaluate(GEN_ID)
 
         assert result.proceed is True
-        mongo.generation_repo.reopen.assert_not_called()
+        mongo.generation_repo.finish_retry_round.assert_not_called()
 
     def test_a_failed_replica_is_queued_again_with_its_own_seed(self):
         mongo = FakeMongo(
@@ -218,7 +240,7 @@ class TestTheGate:
         assert result.proceed is False, "evolution waits for the repeat"
         assert result.repeated == 1
         assert mongo.cloned == [SIM_A2]
-        mongo.generation_repo.reopen.assert_called_once_with(GEN_ID)
+        mongo.generation_repo.finish_retry_round.assert_called_once_with(GEN_ID, 1)
 
     def test_the_clones_are_queued_before_the_generation_reopens(self):
         """The other order has a hole: a worker can finish a clone before the
@@ -231,10 +253,10 @@ class TestTheGate:
         mongo.simulation_repo.clone_for_retry.side_effect = (
             lambda sim_id, reason="", retry_round=None:
             order.append("clone") or ObjectId())
-        mongo.generation_repo.reopen.side_effect = (
-            lambda gid: order.append("reopen") or True)
+        mongo.generation_repo.finish_retry_round.side_effect = (
+            lambda gid, round_number: order.append("reopen") or True)
         mongo.generation_repo.claim_retry_round.side_effect = (
-            lambda gid, limit: order.append("claim") or 1)
+            lambda gid, limit, replicas: order.append("claim") or 1)
 
         gate(mongo).evaluate(GEN_ID)
 
@@ -271,7 +293,7 @@ class TestTheGate:
 
         assert result.proceed is True, "the policy decides from here"
         assert mongo.cloned == []
-        mongo.generation_repo.reopen.assert_not_called()
+        mongo.generation_repo.finish_retry_round.assert_not_called()
 
     def test_a_generation_still_running_is_not_evaluated(self):
         """A redelivered terminal event, or one that arrived for a generation
@@ -291,7 +313,7 @@ class TestTheGate:
         result = gate(mongo).evaluate(GEN_ID)
 
         assert result.proceed is True
-        mongo.generation_repo.reopen.assert_not_called()
+        mongo.generation_repo.finish_retry_round.assert_not_called()
 
     def test_the_plan_is_recorded_with_the_generation(self):
         mongo = FakeMongo(completeness={})
@@ -436,9 +458,8 @@ class TestTheRepetitionBudget:
     old number and created another round. Measured with ``max_retries=1``:
     two effective repetitions.
 
-    The budget is now claimed first, with the limit in the condition of the
-    write. Failing that way round costs a wasted round instead of an extra
-    one, which is the direction to fail in.
+    Budget and replica manifest are claimed together. An interrupted enqueue
+    resumes the same round rather than wasting it or exceeding the limit.
     """
 
     def test_the_round_is_claimed_before_anything_is_created(self):
@@ -447,8 +468,9 @@ class TestTheRepetitionBudget:
 
         gate(mongo).evaluate(GEN_ID)
 
-        mongo.generation_repo.claim_retry_round.assert_called_once_with(
-            GEN_ID, 1)
+        args = mongo.generation_repo.claim_retry_round.call_args.args
+        assert args[:2] == (GEN_ID, 1)
+        assert args[2][0]["simulation_id"] == SIM_A2
 
     def test_a_spent_budget_creates_nothing(self):
         """The limit is enforced by the repository refusing the claim, not by
@@ -461,7 +483,7 @@ class TestTheRepetitionBudget:
 
         assert result.proceed is True
         assert mongo.cloned == []
-        mongo.generation_repo.reopen.assert_not_called()
+        mongo.generation_repo.finish_retry_round.assert_not_called()
 
     def test_the_clones_carry_their_round(self):
         """Which is what makes a repeated pass idempotent: the same round
@@ -473,20 +495,57 @@ class TestTheRepetitionBudget:
 
         assert mongo.rounds == [1]
 
-    def test_an_unused_round_is_given_back(self):
-        """Claimed, nothing to clone: the budget must not be consumed."""
+    def test_no_round_is_claimed_without_a_simulation_to_repeat(self):
         mongo = FakeMongo(completeness={"a": PARTIAL}, failed=[])
-
-        gate(mongo).evaluate(GEN_ID)
-
-        mongo.generation_repo.release_retry_round.assert_called_once_with(GEN_ID)
-
-    def test_giving_the_round_back_failing_does_not_stop_the_evaluation(self):
-        mongo = FakeMongo(completeness={"a": PARTIAL}, failed=[])
-        mongo.generation_repo.release_retry_round.side_effect = RuntimeError(
-            "mongo gone")
 
         assert gate(mongo).evaluate(GEN_ID).proceed is True
+        mongo.generation_repo.claim_retry_round.assert_not_called()
+
+    def test_a_read_failure_is_not_interpreted_as_no_work(self):
+        mongo = FakeMongo(completeness={"a": PARTIAL})
+        mongo.simulation_repo.find_terminal_by_generation.side_effect = RuntimeError("offline")
+
+        with pytest.raises(RuntimeError, match="offline"):
+            gate(mongo).evaluate(GEN_ID)
+        mongo.generation_repo.claim_retry_round.assert_not_called()
+
+    @pytest.mark.parametrize("active", [False, True])
+    def test_an_interrupted_round_resumes_even_with_clones_already_running(self, active):
+        mongo = FakeMongo(completeness={"a": PARTIAL}, retries=1, active=active)
+        mongo.generation_repo.pending_retry_round.return_value = {
+            "replica_retries": 1,
+            "retry_plan": [{"simulation_id": SIM_A1, "reason": "failed"},
+                           {"simulation_id": SIM_A2, "reason": "failed"}],
+        }
+
+        result = gate(mongo).evaluate(GEN_ID)
+
+        assert result.proceed is False
+        assert mongo.cloned == [SIM_A1, SIM_A2]
+        assert mongo.rounds == [1, 1]
+        mongo.generation_repo.claim_retry_round.assert_not_called()
+        mongo.generation_repo.finish_retry_round.assert_called_once_with(GEN_ID, 1)
+        mongo.generation_repo.close_if_finished.assert_called_once_with(GEN_ID)
+
+    def test_a_partial_enqueue_keeps_its_manifest(self):
+        mongo = FakeMongo(completeness={"a": PARTIAL})
+        mongo.generation_repo.pending_retry_round.return_value = {
+            "replica_retries": 1,
+            "retry_plan": [{"simulation_id": SIM_A1, "reason": "failed"},
+                           {"simulation_id": SIM_A2, "reason": "failed"}],
+        }
+        mongo.simulation_repo.clone_for_retry.side_effect = [ObjectId(), RuntimeError("offline")]
+
+        with pytest.raises(RuntimeError, match="offline"):
+            gate(mongo).evaluate(GEN_ID)
+        mongo.generation_repo.finish_retry_round.assert_not_called()
+
+    def test_another_evaluator_claiming_the_round_defers_objectives(self):
+        mongo = FakeMongo(completeness={"a": PARTIAL}, claim=False,
+                          failed=[failed_doc(SIM_A2, "a", 2)])
+        mongo.generation_repo.pending_retry_round.side_effect = [None, {"retry_plan": []}]
+
+        assert gate(mongo).evaluate(GEN_ID).waiting is True
 
 
 # ── R19: a seed being repeated is pending, not failed ─────────────────────
@@ -783,3 +842,108 @@ class TestTheHandlerDoesNotOverwriteWhatTheEnqueueWrote:
         carried = strat._genome_completeness_cache["a"]
         assert carried["state"] == "complete"
         assert carried["observed"] == 2
+
+
+class TestTheDestinationOfAHoleNoRepeatCanFill:
+    """F3.4: an absent seed and a missing metric are decided, not awaited.
+
+    Neither has a document to clone, so neither reaches ``_plan_repeats``,
+    and the gate proceeds straight to the policy. That was already true. What
+    was missing is that nothing said so: the log showed ``1 partial`` and a
+    generation that carried on, which reads the same whether the repeat was
+    tried and failed, was out of budget, or never applied at all.
+
+    These assert the two properties the plan asks for — such an evaluation
+    must not look complete, and must not wait for work nobody enqueued — and
+    the statement that distinguishes them.
+    """
+
+    def test_an_absent_seed_does_not_spend_a_repetition_round(self):
+        mongo = FakeMongo(completeness={"a": ABSENT})
+
+        result = gate(mongo).evaluate(GEN_ID)
+
+        assert result.proceed is True, "nothing will arrive on its own"
+        assert result.repeated == 0
+        mongo.generation_repo.claim_retry_round.assert_not_called()
+        # Reopening for a seed with no simulation would leave a generation
+        # nothing can close.
+        mongo.generation_repo.finish_retry_round.assert_not_called()
+
+    def test_a_missing_metric_does_not_spend_a_repetition_round(self):
+        mongo = FakeMongo(completeness={"a": THIN})
+
+        result = gate(mongo).evaluate(GEN_ID)
+
+        assert result.proceed is True and result.repeated == 0
+        mongo.generation_repo.claim_retry_round.assert_not_called()
+
+    def test_neither_is_usable_under_the_default_policy(self):
+        """The destination itself: refused, with the evidence kept."""
+        policy = ReplicaPolicy()
+
+        assert is_usable(ABSENT, policy) is False
+        assert is_usable(THIN, policy) is False
+        assert annotate(ABSENT, usable=False, policy=policy)[
+            "objective_used"] is False
+
+    def test_accepting_the_partial_mean_is_the_configured_alternative(self):
+        policy = ReplicaPolicy(on_exhausted=EXHAUSTED_ACCEPT)
+
+        assert is_usable(ABSENT, policy) is True, "one replica did finish"
+        assert is_usable(THIN, policy) is True
+
+    def test_the_gate_names_the_evaluations_it_decided_without_repeating(self):
+        mongo = FakeMongo(completeness={"a": ABSENT, "b": THIN, "c": PARTIAL,
+                                        "d": record()})
+
+        holes = gate(mongo)._state_unrepairable(GEN_ID, mongo.
+                                                generation_repo.
+                                                replica_completeness(GEN_ID, []))
+
+        assert set(holes) == {"a", "b"}, (
+            "c has a document to clone; d is complete")
+        assert "never created" in holes["a"]
+        assert "latency" in holes["b"]
+
+    def test_it_is_logged_once_with_the_policy_destination(self, caplog):
+        mongo = FakeMongo(completeness={"a": ABSENT})
+
+        with caplog.at_level("WARNING"):
+            gate(mongo).evaluate(GEN_ID)
+
+        messages = [r.getMessage() for r in caplog.records]
+        unrepairable_lines = [m for m in messages if "cannot be repaired" in m]
+        assert len(unrepairable_lines) == 1
+        assert EXHAUSTED_WORST in unrepairable_lines[0], (
+            "the destination, not only the diagnosis")
+
+    def test_a_repeatable_hole_is_not_reported_as_decided(self):
+        """It has a repair, so its destination is the repeat — reporting it
+        here would say a decision had been made while a clone was running."""
+        mongo = FakeMongo(completeness={"a": PARTIAL},
+                          failed=[failed_doc(SIM_A2, "a", 2)])
+
+        result = gate(mongo).evaluate(GEN_ID)
+
+        assert result.proceed is False and result.repeated == 1
+        assert unrepairable({"a": PARTIAL}) == {}
+
+    def test_a_pending_evaluation_is_not_a_decided_one(self):
+        pending = record(observed=1, pending=1, observed_seeds=[1],
+                         missing_seeds=[2], state="pending",
+                         reason="1 replica(s) still running")
+
+        assert unrepairable({"a": pending}) == {}
+
+    def test_an_exhausted_budget_still_reports_the_unrepairable_hole(self):
+        """The two reasons an evaluation is decided without a repeat are
+        different, and both have to be visible: one spent its budget, the
+        other never had a repair available."""
+        mongo = FakeMongo(completeness={"a": ABSENT, "b": PARTIAL}, retries=1)
+
+        result = gate(mongo).evaluate(GEN_ID)
+
+        assert result.proceed is True, "the budget is spent"
+        assert unrepairable(result.completeness) == {
+            "a": ABSENT["reason"]}, "b is repeatable in principle"

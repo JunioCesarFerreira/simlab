@@ -326,11 +326,27 @@ is detached.
 stateDiagram-v2
     [*] --> WAITING : inserted by mo-engine
     WAITING --> RUNNING : the dispatcher places its simulations
-    RUNNING --> DONE : all simulations DONE
-    RUNNING --> ERROR : no active simulations left\nbut at least one ERROR
+    RUNNING --> DONE : every planned seed has a result
+    RUNNING --> ERROR : nothing active left\nand a planned seed has none
     DONE --> RUNNING : a failed replica is repeated (mo-engine)
     ERROR --> RUNNING : idem
 ```
+
+The decision is **by seed, not by document**, and that distinction only
+appeared once a failed replica could be repeated. The repeat is a second
+document for the same seed and the failed one stays on the record with its
+message, so counting documents reported `ERROR` for a generation whose every
+planned seed had a result — and whose every individual read `complete`. The
+status and the completeness record now use the same unit and cannot disagree.
+
+Two consequences:
+
+- A planned seed with **no simulation at all** closes the generation in
+  `ERROR`. Counting documents reported `DONE`, because the one document that
+  existed had finished.
+- A generation that recorded **no plan** — every one created before
+  `expected_seeds` existed — keeps the old document rule exactly. Changing how
+  a historical generation reads is a different decision from fixing this one.
 
 Closing a generation is **idempotent and recoverable**: `close_if_finished`
 re-reads its simulations every time, and the health cycle repeats it for any
@@ -386,10 +402,15 @@ than the code:
   losing contact all say the same thing about the JVM. A stop that *is*
   confirmed makes it an ordinary failure again.
 * **The reservation is held for the whole of the preparation**, by a heartbeat
-  rather than by renewals at its two ends. While that thread lives the sweep
-  cannot expire the reservation. A thread that is alive but *stalled* keeps
-  renewing — correct for work in progress, and the reason a hung transfer
-  holds its worker until `SIM_TIMEOUT_SEC`.
+  rather than by renewals at its two ends. The interval is at most a quarter
+  of `RESERVATION_TTL_SEC` (capped at 60 seconds). After three TTLs without a
+  launch, the preparation budget closes the SSH transport to interrupt SCP.
+  Renewal continues until the upload actually unwinds; an expired timer alone
+  never authorizes releasing a worker that is still being written to. Failed
+  ownership reads/renewals also stop preparation. A local preparation function
+  stuck outside SSH cannot be forcibly interrupted by Python; its worker stays
+  held until it returns or the master is restarted. A zero TTL disables both
+  expiry and this budget.
 * A result that cannot be fetched is retried over a new session. If that also
   fails, the artifacts are **preserved** and their location recorded — nothing
   goes back for them automatically. When the copy *cannot* be made, because
@@ -413,6 +434,121 @@ than the code:
 The thread counts in the overview are per role; the live total is higher,
 because each placed simulation gets a follower of its own and each adopted run
 another.
+
+---
+
+## Operational Procedures
+
+Six situations the system deliberately does **not** resolve on its own, because
+each one needs a decision rather than a default.
+
+### A worker is held and stays held
+
+```
+docker exec master_node python /tmp/recover_result.py list
+```
+
+`held_for.kind` says why, and there are two:
+
+- **`termination_unknown`** — a launch, a stop or an ownership check that could
+  not be confirmed, which all say the same thing about the remote JVM. Cleared
+  by `resolve_held_workers()` as soon as the container answers with nothing
+  alive and nothing left behind, usually within one health cycle. A hold that
+  persists therefore means the container is still unreachable, still running
+  something, or still holding bytes — and the resolver logs which.
+- **`collection_pending`** — a result was produced and could not be brought
+  back. This one is **never** cleared by the health cycle, even when the
+  container is healthy and idle, because its bytes may be the only copy of a
+  result. Follow the next procedure.
+
+### A result was produced and never collected
+
+`util/recover_result.py`, documented in [util/README.md](../util/README.md).
+The short version: `list` to find it, `fetch` to look at the bytes without
+touching the database, then `publish` or `discard`, and only then `release`.
+The order is enforced — `release` refuses while the simulation still carries an
+unresolved `unfetched_result`, because releasing the worker first lets the next
+run delete the bytes.
+
+`publish` does not compute metrics and does not change the simulation's status.
+Whether a result collected by hand should feed the optimiser is a question
+about the experiment.
+
+### A host withdrawal was interrupted
+
+A withdrawal marks the host with `withdrawn_at` first, so nothing can be
+created on it or placed on it while the removal runs. Every failure path inside
+the operation gives that marker back — a refusal, a write conflict, an
+unexpected error — so finding it still set means the **process died** in that
+window. The host is then unschedulable and refuses new workers, with nothing in
+the interface explaining why.
+
+Two ways out, and the first is usually right:
+
+- repeat the `DELETE /api/v1/infra/hosts/{id}`. Withdrawing is idempotent, so
+  it withdraws again and removes whatever is left;
+- if the host should stay in service, clear the marker:
+  `db.hosts.updateOne({_id: …}, {$unset: {withdrawn_at: ""}})`.
+
+A 409 is not an interrupted withdrawal: it means a worker is holding a
+simulation, or a registration committed against the host while the removal was
+running, and **nothing was removed** — the transaction rolled back and the host
+is back in service. Try again.
+
+A worker with `held_for` also blocks both its own deletion and its host's
+removal, even if quarantine cleared the active reservation. Resolve the run or
+recover the retained result first. The transaction rolls back every deletion;
+there is no partial-success `200/stranded` response.
+
+### A host key has to be replaced
+
+The pin is written on first contact and never overwritten — a second path
+reaching the host with a different key has its session refused, not the pin
+rewritten. So a legitimate key change (a rebuilt machine, a rotated key) is an
+**administrative** act:
+
+```
+PUT /api/v1/infra/hosts/{id}   {"access": {"host_key_fingerprint": null}}
+```
+
+Clearing it puts the host back to first contact, and the next connection pins
+what it sees. Until it is cleared, every session is refused with the stored and
+the presented fingerprint in the message — which is the intended behaviour when
+the change was *not* legitimate.
+
+An operator who knows the new fingerprint out of band can send it as a string
+instead of a null: that is a stronger position than trust-on-first-use, so it
+is allowed. A document or a boolean is refused with a 422.
+
+Either way the request touches `access`, so the host's configuration version is
+bumped and its workers' probes are cleared — they leave the pool until the next
+health cycle measures them against the new configuration. That is deliberate: a
+key change is a reason to re-verify the path, not to keep trusting the last
+measurement.
+
+### A worker carries old port data
+
+An older version of the worker form wrote the port into `connection.port` as
+well as `endpoint.port`, and the override wins in the connection plan. Editing
+such a worker through the current form removes the override, so the port the
+page shows is the port `build_plan()` uses. To keep an override on purpose,
+send it in the same body as the endpoint; to drop one explicitly, send
+`connection.port: null`.
+
+The effective precedence, in `build_plan()` and in the form, is the same:
+`connection.port` → `endpoint.port` → the host's `container_access.port` → 22.
+
+### A timestamp looks wrong
+
+Everything is stored and read as **aware UTC** (`tz_aware=True`), and the API
+serialises with an offset. A naive value already in the database is read as
+UTC, which is correct for the data that exists: every process that wrote one
+ran with its clock on UTC. **No data was migrated**, and importing timestamps
+from another origin or timezone is a separate problem that needs its own
+policy — do not assume this one covers it.
+
+If a measurement appears to be in the future, the first thing to check is the
+browser's clock against the server's: the GUI resolves offsets locally.
 
 ---
 

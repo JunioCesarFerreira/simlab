@@ -120,6 +120,7 @@
 </template>
 
 <script setup lang="ts">
+import "../components/infra/infra.css";
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import HostCard from "../components/infra/HostCard.vue";
 import HostFormModal from "../components/infra/HostFormModal.vue";
@@ -306,13 +307,10 @@ async function onRemove(host: HostDto) {
       await deleteHost(host.id);
       notice.value = `${host.name} removed.`;
     } catch (e) {
-      // 409 is a normal outcome worth explaining, not a failure to hide: the
-      // host is still running work and has to drain first.
+      // Preserve the server's distinction between active work, retained
+      // results and a concurrent registration. Each needs a different action.
       const message = describe(e);
-      error.value = message.includes("409")
-        ? `${host.name} still has simulations running. Disable it, let them ` +
-          `finish, then remove it.`
-        : message;
+      error.value = message;
       throw new Error(message);
     }
   });
@@ -382,11 +380,9 @@ async function onRemoveWorker(worker: ResourceDto) {
       await deleteResource(worker.id);
     } catch (e) {
       const message = describe(e);
-      // 409 means a simulation is on it: a normal outcome to explain.
-      error.value = message.includes("409")
-        ? `${worker.name} is running a simulation. Take it out of the pool ` +
-          `and let the simulation finish first.`
-        : message;
+      // A retained result also refuses removal; waiting for a run to finish
+      // cannot resolve it. Keep the actionable diagnosis from the API.
+      error.value = message;
       throw new Error(message);
     }
   });
@@ -475,7 +471,7 @@ function describe(e: unknown): string {
 
 .refresh-btn {
   background: var(--color-primary-light);
-  color: var(--color-primary);
+  color: var(--color-link, var(--color-primary));
   border: 1px solid #bfdbfe;
 }
 
@@ -507,7 +503,7 @@ function describe(e: unknown): string {
 
 .notice-banner {
   background: var(--color-primary-light);
-  color: var(--color-primary);
+  color: var(--color-link, var(--color-primary));
   border: 1px solid #bfdbfe;
 }
 

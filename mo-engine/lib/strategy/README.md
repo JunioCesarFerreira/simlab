@@ -148,6 +148,34 @@ will not arrive and has nothing to repeat, whereas one with an unfinished
 simulation is merely slow. Collapsing them made a generation whose second
 replica was never created look like one that was waiting.
 
+The record also **names its own hole**, because a state alone cannot be read:
+
+| Field | Meaning |
+|---|---|
+| `failed_seeds` | ran and ended without a result — there is a document to clone, so a repeat can repair it |
+| `absent_seeds` | planned and never created — nothing to clone |
+| `thin_metrics` | metrics a *finished* replica came back without |
+| `reason` | one phrase for the state, naming which of the above it is |
+
+The distinction is the one the policy acts on. A `partial` evaluation with
+`failed_seeds` is waiting for a repeat; one whose holes are only `absent_seeds`
+or `thin_metrics` has already been decided, because neither can be repeated and
+both reach `on_exhausted` on the first pass without consuming a round. That was
+always the behaviour; what was missing is that nothing said so. An evaluation
+could read `partial` with `missing_seeds: []`, `failed_seeds: []` and 2 of 2
+replicas — every planned seed finished, and one came back without a metric —
+and the document gave no clue.
+
+`completeness.unrepairable()` returns exactly those individuals and why, and
+the gate logs it once per generation with the destination the policy gives
+them. `pending` is deliberately excluded: it is not an outcome yet.
+
+A generation's own **status** uses the same unit. `close_if_finished` counts
+seeds, not documents, so a generation whose failed replica was repeated closes
+`Done` rather than `Error` — the failed document is still there by design, and
+counting documents made a repaired generation indistinguishable from a broken
+one. Generations with no recorded plan keep the old document rule.
+
 ### The policy
 
 Read from the experiment's `simulation` configuration, because "use a mean over
@@ -201,15 +229,21 @@ The order of those four steps is load-bearing in two places:
   condition of the write. It used to be counted *after* the clones, and a
   failure of that write left clones that would run and a count that had not
   moved — so the next evaluation created another round. Measured with
-  `max_replica_retries: 1`: two effective repetitions. Failing this way round
-  costs a wasted round instead of an extra one, and an unused round is given
-  back. Each clone carries its round, so a pass that claimed one and failed
-  part-way can be repeated without duplicating what it already created.
+  `max_replica_retries: 1`: two effective repetitions. The same atomic write
+  now stores `retry_plan`, the source simulations and reasons for the round.
+  The gate resumes this plan before checking active clones or budget, including
+  after a process dies before the first insert or part-way through the enqueue.
+  An empty plan never claims a round; database errors remain retryable instead
+  of being interpreted as missing work. Clone creation is an atomic upsert
+  protected by a unique index, preserving completed clones on replay.
 * **The clones are queued before the generation reopens.** In the other order
   a worker can finish a clone before the reopen lands, closing the generation
   again and leaving the reopen to put a finished generation back into
-  `Running` with nothing to close it. The master-node's periodic pass covers
-  that; this order makes it rare rather than routine.
+  `Running` with nothing to close it. Finishing the manifest atomically reopens
+  the generation and immediately reconciles its status. The master-node's
+  periodic pass also covers a crash between those operations. All strategies
+  replay both `Done` and `Error` generations on engine restart, so the normal
+  replica policy can finish a retry interrupted by that restart.
 
 ### Reuse keeps its evidence
 

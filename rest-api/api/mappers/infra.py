@@ -605,6 +605,35 @@ def _access_to_mongo(access: dict, *, for_update: bool = False) -> dict:
             allowed=[m.value for m in EnumAuthMethod])
     if "secret" in access:
         out["secret"] = _secret_to_mongo(access.get("secret"))
+    if "host_key_fingerprint" in access:
+        # The one administrative way to replace a pinned host key.
+        #
+        # The pin is written on first contact and never overwritten — that is
+        # what trust-on-first-use means, and a second path presenting a
+        # different key has its session refused rather than the pin rewritten.
+        # So a *legitimate* key change (a rebuilt machine, a rotated key) has
+        # to be an explicit act, and there is no other route for it.
+        #
+        # This field was in `_ACCESS_FIELDS`, published in the OpenAPI schema
+        # as nullable, and then **silently dropped** here: the request
+        # answered 200 and changed nothing, which is the exact failure mode
+        # this mapper's own `_refuse_unknown` exists to prevent. Found by
+        # following the documented procedure.
+        #
+        # `None` is stored as null rather than unset: `pin_host_key` matches
+        # null and missing alike, and `build_plan`/the transport read a null
+        # as "no pin", so the host is back to first contact either way.
+        value = access.get("host_key_fingerprint")
+        out["host_key_fingerprint"] = (
+            None if value is None
+            else _as_text(value, field="access.host_key_fingerprint"))
+    if "key_fingerprint" in access:
+        # Display-only and produced by whoever registered the key; accepted
+        # for the same reason, and never used to decide anything.
+        value = access.get("key_fingerprint")
+        out["key_fingerprint"] = (
+            None if value is None
+            else _as_text(value, field="access.key_fingerprint"))
     return out
 
 

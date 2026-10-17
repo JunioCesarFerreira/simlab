@@ -178,3 +178,68 @@ Two limits worth knowing in automation: `--limit` applies *before* the
 eligibility filters, so a small limit can examine a batch and change nothing;
 and an individual log that fails to parse is reported but does not change the
 exit status.
+
+---
+
+### `recover_result.py` — Recover a result that was produced and never collected
+
+When a run finishes and its result cannot be fetched — twice, over two
+sessions — the master-node stops rather than losing it. The testlog is copied
+on the container to a name the next run's cleanup does not know (where the copy
+could be made), the simulation records `unfetched_result`, and the worker is
+**held** out of the pool until something resolves it. Nothing comes back for it
+automatically. This is the other half of that contract.
+
+```bash
+python util/recover_result.py list
+python util/recover_result.py show <simulation_id>
+python util/recover_result.py fetch <simulation_id> [--out DIR] [--original]
+python util/recover_result.py publish <simulation_id> [--out DIR]
+python util/recover_result.py discard <simulation_id> --reason "..."
+python util/recover_result.py release <worker_name>
+```
+
+| Command | What it does | What it changes |
+|---|---|---|
+| `list` | the simulations carrying an uncollected result, and the workers held, so the two can be matched | nothing |
+| `show` | one record in full: host, worker, container, attempt, pid, directory, file, stage, reason | nothing |
+| `fetch` | opens a session to the worker and brings the preserved testlog back | nothing in the database |
+| `publish` | fetches, converts to CSV, stores both in GridFS and records them as a **recovered** result | the simulation |
+| `discard` | records the decision to give up, with a reason | the simulation |
+| `release` | clears the hold so the health cycle measures the worker again | the worker |
+
+| Env var | Default | Description |
+|---|---|---|
+| `MONGO_URI` | `mongodb://localhost:27017/?replicaSet=rs0` | MongoDB connection URI |
+| `DB_NAME` | `simlab` | Database name |
+| `INFRA_KEY_PATH` | the master-node's keystore path | the key that opens the host credential |
+
+**The order is enforced, not advisory.** `release` refuses while the simulation
+still carries an unresolved `unfetched_result`: releasing the worker first lets
+the next run delete the bytes, and that is exactly the loss the hold exists to
+prevent. Resolve it — `publish` or `discard` — and then release.
+
+**`publish` does not decide anything about the experiment.** It stores the
+artifacts and records `recovered_result` with the time, the remote path and the
+tool's name. It does **not** compute the metrics and does **not** change the
+simulation's status: whether a result collected by hand after the fact should
+feed the optimiser is a decision about the experiment, and the point of the
+hold is that it is taken by a person. A simulation already in `Done` is refused
+outright, because recovering over it would replace a measurement.
+
+Three things to know before using it:
+
+- **It is an operator tool, not an API.** It reads and writes MongoDB directly
+  and opens SSH to the worker, so it needs the private key the master-node
+  holds: run it where the master-node runs. `docker cp util/recover_result.py
+  master_node:/tmp/` and `docker exec master_node python /tmp/recover_result.py`
+  works, and is how the procedure was exercised.
+- **It cannot recover what was never preserved.** If `remote_file` is null the
+  second session never opened, so no copy was made. The original may still be
+  under `COOJA.testlog` and `fetch --original` will try it — but any run that
+  has since used the worker has deleted it. The worker being held is what makes
+  that unlikely rather than impossible.
+- **The health cycle will not release the worker for you.** A
+  `collection_pending` hold is kept until the simulation records
+  `recovered_result` or `unfetched_result.discarded`, so a resolver that finds
+  the container healthy and idle still leaves the hold in place.
