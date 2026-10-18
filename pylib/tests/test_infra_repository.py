@@ -29,6 +29,7 @@ from pylib.db.models.infra import (
     HOSTS_COLLECTION,
 )
 from pylib.db.repositories.infra import (
+    _REASSIGNABLE as _REASSIGNABLE_FOR_TEST,
     CoojaResourceRepository,
     HostWithdrawing,
     RemovalConflicted,
@@ -1330,6 +1331,9 @@ def _evaluate(expression, resource):
         return _evaluate(operand[0], resource) != _evaluate(operand[1], resource)
     if operator == "$in":
         return _evaluate(operand[0], resource) in operand[1]
+    if operator == "$ifNull":
+        value = _evaluate(operand[0], resource)
+        return _evaluate(operand[1], resource) if value is None else value
     raise AssertionError(f"unsupported operator in this test: {operator}")
 
 
@@ -2012,3 +2016,169 @@ class TestOrderingTheFreeContainersOfAHost:
             assert flt == {
                 "host_id": HOST_ID, "enabled": True,
                 "status": EnumResourceStatus.AVAILABLE.value}
+
+
+class TestTheToggleAndTheBarAgree:
+    """The reported bug: switching a worker back on left the bar saying
+    *disabled*.
+
+    Two facts were being conflated. ``enabled`` is the operator's **decision**
+    and changes the instant the toggle is used; ``status`` is a
+    **measurement** and only changes when the next health cycle reaches the
+    container. The occupancy partition keyed its administrative bucket on
+    both — `enabled == False` **or** `status == disabled` — so a worker
+    switched back on stayed in the grey "disabled" segment for up to a cycle,
+    next to a toggle that said it was on.
+    """
+
+    def _counters(self, hosts) -> dict:
+        repo, coll = hosts
+        coll.aggregate.return_value = []
+        repo.inventory_snapshot()
+        for stage in coll.aggregate.call_args.args[0]:
+            if "$set" in stage and "active" in stage["$set"]:
+                return stage["$set"]
+        raise AssertionError("no counter stage found")
+
+    def _bucket(self, counters: dict, resource: dict) -> str:
+        landed = [name for name in ("active", "disabled", "unavailable", "free")
+                  if _evaluate(counters[name]["$size"]["$filter"]["cond"],
+                               resource)]
+        assert len(landed) == 1, f"{resource} landed in {landed}"
+        return landed[0]
+
+    def test_a_worker_switched_back_on_is_no_longer_counted_disabled(
+            self, hosts):
+        """The defect, stated as the state it leaves behind."""
+        counters = self._counters(hosts)
+
+        assert self._bucket(counters, {"status": "disabled",
+                                       "enabled": True}) == "unavailable"
+
+    def test_a_worker_switched_off_is(self, hosts):
+        counters = self._counters(hosts)
+
+        assert self._bucket(counters, {"status": "disabled",
+                                       "enabled": False}) == "disabled"
+
+    def test_the_bucket_follows_the_decision_not_the_measurement(self, hosts):
+        """Whatever the stale status says, the flag decides."""
+        counters = self._counters(hosts)
+
+        for status in ("available", "offline", "error", "disabled"):
+            assert self._bucket(
+                counters, {"status": status, "enabled": False}) == "disabled"
+
+    def test_a_document_with_no_flag_is_treated_as_in_the_pool(self, hosts):
+        """Written before the flag existed. A missing value compares equal to
+        neither true nor false, so without this it would fall out of every
+        bucket and the segments would stop adding up."""
+        counters = self._counters(hosts)
+
+        assert self._bucket(counters, {"status": "available"}) == "free"
+        assert self._bucket(counters, {"status": "offline"}) == "unavailable"
+
+    def test_an_unanticipated_status_still_lands_somewhere(self, hosts):
+        """``unavailable`` is the complement, not a list. Written as a list,
+        a status nobody enumerated falls into no bucket and the bar's
+        denominator stops matching the inventory."""
+        counters = self._counters(hosts)
+
+        assert self._bucket(
+            counters, {"status": "something-new", "enabled": True}
+        ) == "unavailable"
+
+
+class TestReEnablingLeavesTheAdministrativeStatus:
+    """``status`` is not a second copy of ``enabled``.
+
+    Re-enabling used to set the flag and leave the status at ``disabled``,
+    with whatever message the last check had written — so the worker read as
+    *enabled, disabled, ready* all at once until the next cycle.
+    """
+
+    @staticmethod
+    def _counted(coll):
+        coll.update_one.return_value = MagicMock(
+            matched_count=1, modified_count=1)
+        return coll
+
+    def test_a_disabled_worker_moves_to_offline(self, resources):
+        repo, coll = resources
+        self._counted(coll)
+
+        repo.set_enabled(RES_ID, True)
+
+        flt, update = coll.update_one.call_args_list[0].args
+        assert flt == {"_id": RES_ID,
+                       "status": EnumResourceStatus.DISABLED.value}
+        assert update["$set"]["status"] == EnumResourceStatus.OFFLINE.value
+        assert "waiting to be measured" in update["$set"]["last_check_message"]
+
+    def test_a_worker_measured_offline_or_broken_is_left_alone(self, resources):
+        """Re-enabling says nothing about what was measured, so it must not
+        overwrite a measurement."""
+        repo, coll = resources
+        self._counted(coll)
+
+        repo.set_enabled(RES_ID, True)
+
+        flt = coll.update_one.call_args_list[0].args[0]
+        assert flt["status"] == EnumResourceStatus.DISABLED.value, (
+            "scoped to the administrative status alone")
+
+    def test_disabling_still_parks_it(self, resources):
+        repo, coll = resources
+        self._counted(coll)
+
+        repo.set_enabled(RES_ID, False)
+
+        flt, update = coll.update_one.call_args_list[0].args
+        assert flt["status"] == {"$in": _REASSIGNABLE_FOR_TEST}
+        assert update["$set"]["status"] == EnumResourceStatus.DISABLED.value
+
+    def test_disabling_does_not_evict_a_running_simulation(self, resources):
+        """``busy`` and ``reserved`` are absent from the reassignable set, so
+        the status write cannot touch a container that is working."""
+        repo, coll = resources
+        self._counted(coll)
+
+        repo.set_enabled(RES_ID, False)
+
+        allowed = coll.update_one.call_args_list[0].args[0]["status"]["$in"]
+        assert EnumResourceStatus.BUSY.value not in allowed
+        assert EnumResourceStatus.RESERVED.value not in allowed
+
+    def test_the_flag_itself_is_always_written(self, resources):
+        repo, coll = resources
+
+        for enabled in (True, False):
+            coll.reset_mock()
+            self._counted(coll)
+            repo.set_enabled(RES_ID, enabled)
+            last = coll.update_one.call_args_list[-1].args[1]["$set"]
+            assert last["enabled"] is enabled
+
+
+class TestReEnablingAHostLeavesItToo:
+    def test_a_disabled_host_moves_to_offline(self, hosts):
+        repo, coll = hosts
+        coll.update_one.return_value = MagicMock(
+            matched_count=1, modified_count=1)
+
+        repo.set_enabled(HOST_ID, True)
+
+        flt, update = coll.update_one.call_args_list[0].args
+        assert flt == {"_id": HOST_ID, "status": EnumHostStatus.DISABLED.value}
+        assert update["$set"]["status"] == EnumHostStatus.OFFLINE.value
+
+    def test_disabling_a_host_still_parks_it(self, hosts):
+        repo, coll = hosts
+        coll.update_one.return_value = MagicMock(
+            matched_count=1, modified_count=1)
+
+        repo.set_enabled(HOST_ID, False)
+
+        update = coll.update_one.call_args_list[-1].args[1]["$set"]
+        assert update["status"] == EnumHostStatus.DISABLED.value
+        assert update["enabled"] is False

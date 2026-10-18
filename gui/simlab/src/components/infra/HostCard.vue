@@ -45,6 +45,10 @@
     <p v-if="!schedulable && hasCapacity" class="warn">
       {{ occupancy?.free }} container(s) are free but nothing will be placed here:
       <template v-if="!host.enabled">the host is out of the pool.</template>
+      <!-- The status alone does not explain a host that was just switched
+           back on: it reads “offline” until the next check measures it, and
+           the message is the part that says so. -->
+      <template v-else-if="host.last_check_message"> {{ host.last_check_message }}. </template>
       <template v-else>its status is “{{ host.status }}”.</template>
     </p>
 

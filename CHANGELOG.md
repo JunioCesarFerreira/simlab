@@ -219,6 +219,17 @@ containers seeded as before.
 - **Editing a worker's port removes a conflicting override** left by an older
   version of the form, which used to win silently over the port the page
   showed.
+- **A worker switched back on no longer reads as disabled.** The occupancy
+  bar's administrative segment was keyed on the *status* as well as on the
+  `enabled` flag, and the status only leaves `disabled` when the next health
+  cycle measures the container — so the bar contradicted the toggle beside it
+  for up to a cycle. The bucket now follows the flag, which is the operator's
+  decision; `unavailable` became the complement rather than a list of
+  statuses, so a state nobody enumerated still lands in a segment instead of
+  vanishing from the total; and re-enabling a worker or a host moves it off
+  `disabled` to `offline` with *"back in the pool; waiting to be measured"*
+  instead of leaving a stale "ready". The bar also says so when its counts
+  stop adding up to the inventory, rather than drawing a bar past 100%.
 - **Editing a host's access takes its workers out of the pool** until they are
   measured again, and the measurement carries the configuration version it was
   taken under — so a probe that started before the edit cannot validate it.

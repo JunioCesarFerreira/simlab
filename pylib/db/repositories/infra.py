@@ -91,6 +91,13 @@ _SCHEDULABLE = [s.value for s in SCHEDULABLE_HOST_STATUSES]
 # are absent by design: losing contact with a host says nothing about whether
 # the simulation on it is still running, so its reservation stands until the
 # reconciliation layer decides otherwise.
+#: ``enabled`` as a boolean, whatever the document holds. A registration
+#: written before the flag existed has no field, and a missing value compares
+#: equal to neither ``True`` nor ``False`` — so a worker would fall out of
+#: every bucket of the inventory partition. Absent means *in the pool*, which
+#: is what those documents meant.
+_ENABLED = {"$ne": [{"$ifNull": ["$$r.enabled", True]}, False]}
+
 _REASSIGNABLE = [
     EnumResourceStatus.AVAILABLE.value,
     EnumResourceStatus.OFFLINE.value,
@@ -325,6 +332,12 @@ class HostRepository:
         Disabling only stops new placements; running simulations are left to
         finish, which is what drains the host. The resources follow when they
         are released, not now.
+
+        Re-enabling moves the status off ``disabled``, for the same reason as
+        the worker's: ``disabled`` is not a second copy of the flag, and a
+        host switched back on stayed unschedulable *and labelled disabled*
+        until the next health cycle contradicted its own toggle. ``offline``
+        says what is true — in the pool, not yet measured.
         """
         oid = _oid(host_id)
         if oid is None:
@@ -333,6 +346,15 @@ class HostRepository:
         if not enabled:
             updates["status"] = EnumHostStatus.DISABLED.value
         with self.connection.connect() as db:
+            if enabled:
+                db[HOSTS_COLLECTION].update_one(
+                    {"_id": oid, "status": EnumHostStatus.DISABLED.value},
+                    {"$set": {
+                        "status": EnumHostStatus.OFFLINE.value,
+                        "last_check_message":
+                            "back in the pool; waiting to be measured",
+                    }},
+                )
             res = db[HOSTS_COLLECTION].update_one({"_id": oid}, {"$set": updates})
             return res.modified_count > 0
 
@@ -653,34 +675,45 @@ class HostRepository:
                     "resource_total": {"$size": "$_res"},
                     "free": count_where({
                         "$and": [
-                            {"$eq": ["$$r.enabled", True]},
+                            {"$eq": [_ENABLED, True]},
                             {"$eq": ["$$r.status", available]},
                         ]
                     }),
                     # The four below are a *partition* of resource_total, in
                     # this precedence: doing work, administratively out,
-                    # measured unusable, free. They used to overlap — a
+                    # enabled but not usable, free. They used to overlap — a
                     # container that was busy and disabled for draining
                     # counted in both, so one worker appeared twice and the
                     # bar's denominator exceeded the inventory.
+                    #
+                    # The administrative bucket follows **`enabled`**, which
+                    # is the operator's intent, and not the status. Keying it
+                    # on `status == disabled` as well put a worker that had
+                    # just been switched back **on** into the "disabled"
+                    # segment: the status only leaves that value when the next
+                    # health cycle re-measures the container, so the bar
+                    # contradicted the toggle next to it for as long as a
+                    # cycle. The two are different facts — one is a decision,
+                    # the other a measurement — and only the decision belongs
+                    # in this bucket.
+                    #
+                    # `unavailable` is therefore the **complement** rather
+                    # than a list of statuses: enabled, not occupied, not
+                    # available. Written as a list, a status nobody
+                    # anticipated — or the one above — falls into no bucket at
+                    # all and the segments stop adding up to the inventory.
                     "active": count_where({"$in": ["$$r.status", _OCCUPIED]}),
                     "disabled": count_where({
                         "$and": [
                             {"$not": {"$in": ["$$r.status", _OCCUPIED]}},
-                            {"$or": [
-                                {"$eq": ["$$r.enabled", False]},
-                                {"$eq": ["$$r.status",
-                                         EnumResourceStatus.DISABLED.value]},
-                            ]},
+                            {"$eq": [_ENABLED, False]},
                         ]
                     }),
                     "unavailable": count_where({
                         "$and": [
-                            {"$eq": ["$$r.enabled", True]},
-                            {"$in": ["$$r.status", [
-                                EnumResourceStatus.OFFLINE.value,
-                                EnumResourceStatus.ERROR.value,
-                            ]]},
+                            {"$not": {"$in": ["$$r.status", _OCCUPIED]}},
+                            {"$eq": [_ENABLED, True]},
+                            {"$ne": ["$$r.status", available]},
                         ]
                     }),
                     # Subsets, reported rather than summed. Draining is an
@@ -691,7 +724,7 @@ class HostRepository:
                     "draining": count_where({
                         "$and": [
                             {"$in": ["$$r.status", _OCCUPIED]},
-                            {"$eq": ["$$r.enabled", False]},
+                            {"$eq": [_ENABLED, False]},
                         ]
                     }),
                     "running": count_where({
@@ -1481,6 +1514,18 @@ class CoojaResourceRepository:
 
         Disabling an occupied container lets it finish and leaves the pool when
         released, which is why the status is not forced here.
+
+        Re-enabling moves the status **off** ``disabled``, to ``offline`` with
+        a message. It used to leave it, and the status is not a second copy of
+        the flag: a worker switched back on sat at ``disabled`` — with a stale
+        "ready" from its last check — until the next health cycle, so the
+        interface showed a toggle that was on next to a bar segment that said
+        otherwise. ``offline`` is the honest reading of *enabled, and nothing
+        has measured it since*; the next cycle promotes it, usually in
+        seconds.
+
+        Only from ``disabled``: a container that was offline or in error stays
+        where it is, because re-enabling says nothing about what was measured.
         """
         oid = _oid(resource_id)
         if oid is None:
@@ -1492,6 +1537,15 @@ class CoojaResourceRepository:
                 db[RESOURCES_COLLECTION].update_one(
                     {"_id": oid, "status": {"$in": _REASSIGNABLE}},
                     {"$set": {"status": EnumResourceStatus.DISABLED.value}},
+                )
+            else:
+                db[RESOURCES_COLLECTION].update_one(
+                    {"_id": oid, "status": EnumResourceStatus.DISABLED.value},
+                    {"$set": {
+                        "status": EnumResourceStatus.OFFLINE.value,
+                        "last_check_message":
+                            "back in the pool; waiting to be measured",
+                    }},
                 )
             res = db[RESOURCES_COLLECTION].update_one({"_id": oid}, {"$set": updates})
             return res.matched_count > 0
