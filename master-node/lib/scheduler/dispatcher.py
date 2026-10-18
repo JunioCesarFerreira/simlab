@@ -361,7 +361,11 @@ class Dispatcher:
         # status filter alone cannot see that.
         config_version = int(host.get("config_version") or 0)
 
-        for candidate in self._mongo.resource_repo.find_free_by_host(chosen.host_id):
+        # The two halves of one decision: a policy that picked the host
+        # finishing soonest must not then be handed its slowest container.
+        prefer_fastest = bool(getattr(self._policy, "prefers_fastest", False))
+        for candidate in self._mongo.resource_repo.find_free_by_host(
+                chosen.host_id, prefer_fastest=prefer_fastest):
             attempt_id = uuid.uuid4().hex
             reserved = self._mongo.resource_repo.reserve(
                 candidate["_id"], sim_oid, attempt_id,

@@ -20,6 +20,17 @@ containers seeded as before.
   workers are either discovered through Docker or listed by hand, which is
   what makes a shared machine usable where the SSH user cannot reach the
   Docker daemon.
+- **An optional speed-aware placement policy**, `SCHED_POLICY=fastest_then_least_loaded`.
+  It restricts the candidate hosts to those within 10% of the fastest measured
+  free container and then applies the default rule inside that set, so it is
+  identical under saturation and on a uniform pool and differs only where a
+  batch loses time: slack on a pool whose hosts differ in speed. Each
+  successful run records how long its container was *held* — connection,
+  upload, run, collection — as an exponentially weighted mean on the worker.
+  Measured on a three-host pool, the same genome with the same seed took
+  1.22–1.25x longer on the remote hosts. The trade is stated rather than
+  hidden: a genuinely slower host is left idle while a faster one has room,
+  which is why the default is unchanged.
 - **Placement by absolute load.** Each simulation goes to the host carrying
   the fewest active simulations — a count, not a utilisation ratio, so a host
   with eight containers is not kept saturated while one with two sits idle.

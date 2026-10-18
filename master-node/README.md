@@ -366,7 +366,7 @@ documents — and a failure of the second used to propagate back and mark the
 | `IS_DOCKER` | `false` | If `true`, seeded hostnames are `cooja1..coojaN` on port 22; otherwise `localhost` on ports `2231+i` |
 | `NUMBER_OF_CONTAINERS` | `8` | How many local containers to **seed** on first start. Not a thread count any more: the pool comes from the inventory, and discovery maintains it |
 | `SIM_TIMEOUT_SEC` | `3600` | How long one simulation may run, and the cutoff for recovering one left `RUNNING` with no container holding it. `0` disables both |
-| `SCHED_POLICY` | `least_loaded_host` | Placement policy. The load is the **absolute count** of active simulations per host, not a utilisation ratio |
+| `SCHED_POLICY` | `least_loaded_host` | Placement policy — see *Placement policies* below. `least_loaded_host` or `fastest_then_least_loaded` |
 | `RUN_POLL_INTERVAL_SEC` | `5` | How often a running simulation is checked on. One cheap round trip each time |
 | `INFRA_CHECK_INTERVAL_SEC` | `30` | Health cycle interval |
 | `INFRA_FAILURE_THRESHOLD` | `3` | Consecutive failures before a host leaves the pool. Capacity is slow to lose and quick to regain |
@@ -434,6 +434,87 @@ than the code:
 The thread counts in the overview are per role; the live total is higher,
 because each placed simulation gets a follower of its own and each adopted run
 another.
+
+---
+
+## Placement Policies
+
+`SCHED_POLICY` chooses one. Both balance by **host**, and the primary rule is
+the same in both: the host with the fewest **active placements** — an absolute
+count, not a utilisation ratio. The difference matters in the specification's
+own example: 8, 4 and 2 free containers and six simulations give 2/2/2 by
+count and 3/2/1 by ratio, and the second lets the biggest machine quietly
+absorb most of every run.
+
+Worth knowing before choosing: **the absolute count is already speed-aware.**
+Counting outstanding work is a closed loop — a slower host holds its
+containers longer, so its count stays high, so it stops being selected.
+Measured on a three-host pool (8+2+2 containers, 111/139/141 s per
+simulation), the resulting split was 71.7/14.6/13.7% against a prediction
+from measured throughput of 71.5/14.4/14.1%. No ranking produced that; the
+queue did.
+
+### `least_loaded_host` (default)
+
+Ties broken by rotation, so a pool of idle hosts does not queue behind
+whichever id sorts first.
+
+### `fastest_then_least_loaded`
+
+The candidate set is first restricted to the hosts that are **not
+meaningfully slower** — within `SPEED_TOLERANCE` (10%) of the best measured
+free container — and the rule above then decides inside that set, unchanged.
+
+It exists for the one thing the count cannot do: leave a slow host *unused*
+while a fast one is free. That is the tail of every generation, and a
+generation closes only when its last simulation does, so the batch pays it
+once per generation. Measured over 111 generations, the last simulation to
+finish ran 12% longer than the median of its own generation on average — but
+p90 was +40 s and the worst +1022 s, and the remote hosts were last in 52% of
+generations while holding 33% of the capacity.
+
+Breaking the *tie* by speed — the obvious design — does nothing, and the
+test that asserts so is kept: after one placement the fast host is strictly
+more loaded, so the count sends the next job to a slow host before any tie
+can occur. Four jobs on 8+2+2 free containers go 2/1/1 either way.
+
+| | `least_loaded_host` | `fastest_then_least_loaded` |
+|---|---|---|
+| Pool saturated | identical — the host that releases a container is the only candidate | identical |
+| Uniform pool | 2/2/2 on the 8/4/2 example | identical: every host is inside the tolerance |
+| No measurements yet | normal | identical — an unmeasured host is sampled first |
+| Slack, mixed speeds | spreads one per host; the batch waits for the slowest | keeps the batch on the fast host |
+| A genuinely slower host | always gets a share | **left idle while a faster host has room** |
+
+That last row is the whole trade and the reason this is not the default: it
+is right for finishing a batch soonest and wrong for spreading work across
+machines. The *Work distribution* card on the experiment page shows which one
+you got.
+
+### Where the estimate comes from
+
+Each successful run records how long the container was **held** — connection,
+upload, run, collection — into `mean_duration_sec` on the worker, as an
+exponentially weighted mean (`DURATION_ALPHA = 0.2`, roughly the last ten
+runs). Three deliberate choices:
+
+- **Held time, not the simulation's own `start_time`/`end_time`.** The two
+  transfers are most of what makes a remote worker slower, and the simulation
+  timestamps exclude them.
+- **Successful runs only.** A failure that aborted in five seconds would make
+  the worst worker look like the best.
+- **Not `resume`.** Adopting a JVM that was already running measures the
+  remainder of somebody else's run.
+
+What the estimate cannot separate is a slow worker from a worker that happened
+to receive harder simulations — duration varies more between individuals than
+between machines. It converges anyway, because placement is uncorrelated with
+difficulty and the differences worth acting on are large: on the same pool,
+the same genome with the same seed took 1.22–1.25x longer on the remote hosts
+(283 paired observations) against a few per cent of residual noise.
+
+Writing it is advisory and isolated: a failure is logged and the simulation is
+unaffected, because the number only chooses between equally loaded hosts.
 
 ---
 

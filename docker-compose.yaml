@@ -335,7 +335,12 @@ services:
       - NUMBER_OF_CONTAINERS=8
       - COOJA_JVM_XMS=4g
       - COOJA_JVM_XMX=4g
-      - SCHED_POLICY=least_loaded_host
+      # least_loaded_host          — fewest active placements, ties by rotation
+      # fastest_then_least_loaded  — the same, restricted to the hosts that are
+      #   not meaningfully slower. Identical under saturation and on a uniform
+      #   pool; it stops a batch's tail from waiting on a slow host while a
+      #   fast one is free, at the cost of leaving that host idle.
+      - SCHED_POLICY=fastest_then_least_loaded
       - INFRA_KEY_PATH=/run/secrets/simlab-infra/x25519.json
       # Synthetic benchmark mode (global fallback — prefer per-experiment config via GUI)
       # ENABLE_DATA_SYNTHETIC=True  → bypass Cooja and evaluate BENCH analytically

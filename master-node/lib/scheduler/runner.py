@@ -286,6 +286,24 @@ class SimulationRunner:
         with self._following_lock:
             self._following.add(attempt_id)
 
+    def _record_duration(self, resource: dict, seconds: float) -> None:
+        """Feed one completed run into the worker's occupancy estimate.
+
+        Advisory, and isolated for that reason: this number only chooses
+        between equally loaded hosts, so losing it costs a slightly worse
+        placement and nothing else. Letting it raise here would turn a failed
+        statistics write into a failed simulation, which is not a trade worth
+        making.
+        """
+        try:
+            self._mongo.resource_repo.record_duration(resource["_id"], seconds)
+        except Exception:
+            log.warning(
+                "Could not record the duration of %s (%.1fs); the estimate "
+                "is stale, the result is not affected",
+                resource.get("name"), seconds, exc_info=True,
+            )
+
     def forget_attempt(self, attempt_id: str) -> None:
         """Drop a registration whose thread will never run.
 
@@ -374,7 +392,7 @@ class SimulationRunner:
             self._clear_remote(transport, remote_files)
 
         self._on_container(sim, host, resource, attempt_id, body,
-                           cleanup=lambda: local_files)
+                           cleanup=lambda: local_files, measure=True)
 
     def resume(
         self,
@@ -411,11 +429,19 @@ class SimulationRunner:
         attempt_id: str,
         body: Callable[[Any], None],
         cleanup: Optional[Callable[[], list[str]]] = None,
+        measure: bool = False,
     ) -> None:
         """Open the container, run ``body``, and always give it back.
 
         Shared by starting and resuming so the release — the contract with the
         dispatcher — exists once and cannot drift between the two paths.
+
+        ``measure`` times how long the container was held and feeds it to the
+        worker's occupancy estimate, which a speed-aware scheduling policy
+        reads. Off for ``resume``: adopting a JVM that was already running
+        measures the remainder of someone else's run, and recording that as
+        this worker's cost would make a container look fast for finishing
+        work it did not start.
         """
         sim_oid = _oid(sim["_id"])
         resource_id = resource["_id"]
@@ -434,8 +460,14 @@ class SimulationRunner:
                 host, resource, self._opener,
                 on_learn_host_key=self._host_key_sink(host),
             )
+            started_at = time.monotonic()
             with transport:
                 body(transport)
+            if measure:
+                # Only here: a run that reached this line produced a result
+                # and published it. Timing a failure that aborted in five
+                # seconds would make the worst worker look like the best.
+                self._record_duration(resource, time.monotonic() - started_at)
         except _PrepareFailed:
             log.warning("[%s] Skipping simulation %s (prepare failed)", where, sim_oid)
             self._fail(sim, sim_oid, "Failed to prepare simulation files", attempt_id)

@@ -106,6 +106,13 @@ Both were written as prose first and did not hold:
   without `retry_round` are outside that index. If an earlier deployment wrote
   duplicate retry identities, index creation fails visibly; inspect and resolve
   those records before upgrading, preserving their results and audit history.
+* **A worker's occupancy is measured, not assumed.** `record_duration` folds
+  each completed run into an exponentially weighted mean on the worker, and
+  `inventory_snapshot` publishes the fastest free container per host. Only a
+  speed-aware scheduling policy reads it, so it is advisory: a stale or
+  missing value costs a slightly worse placement and nothing else. A missing
+  value is *unknown*, never "infinitely slow" — a pool that has just been
+  registered has no measurements at all.
 * **Completeness is measured against the plan.**
   `GenerationRepository.replica_completeness` compares the generation's
   recorded `expected_seeds` with the seeds that produced a result. Derived from

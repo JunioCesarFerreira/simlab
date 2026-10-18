@@ -1911,3 +1911,104 @@ class TestPinningAHostKey:
 
         assert repo.pin_host_key("not-an-objectid", "SHA256:abc") is False
         coll.update_one.assert_not_called()
+
+
+class TestTheOccupancyEstimate:
+    """How long a worker holds a container, as a scheduling input.
+
+    Only a *speed-aware* policy reads it, so it is advisory by construction:
+    a stale or missing value costs a slightly worse placement and nothing
+    else. What it must not do is lie in the direction that makes a bad worker
+    look good.
+    """
+
+    def test_the_first_sample_becomes_the_mean(self, resources):
+        repo, coll = resources
+        coll.find_one.return_value = {"_id": RES_ID}
+
+        assert repo.record_duration(RES_ID, 120.0) == 120.0
+
+        update = coll.update_one.call_args.args[1]["$set"]
+        assert update["mean_duration_sec"] == 120.0
+        assert update["duration_samples"] == 1
+
+    def test_later_samples_are_weighted(self, resources):
+        """Exponentially, not a lifetime average: a host's speed changes with
+        the load on the machine it shares, and an average over every run it
+        ever did would keep reporting last month's."""
+        repo, coll = resources
+        coll.find_one.return_value = {
+            "_id": RES_ID, "mean_duration_sec": 100.0, "duration_samples": 9}
+
+        result = repo.record_duration(RES_ID, 200.0)
+
+        assert result == pytest.approx(120.0), "0.8 * 100 + 0.2 * 200"
+        assert coll.update_one.call_args.args[1]["$set"][
+            "duration_samples"] == 10
+
+    def test_one_slow_run_does_not_move_it_far(self, resources):
+        """A simulation's duration varies more between individuals than
+        between machines, so a single outlier must not decide a placement."""
+        repo, coll = resources
+        coll.find_one.return_value = {
+            "_id": RES_ID, "mean_duration_sec": 111.0, "duration_samples": 40}
+
+        result = repo.record_duration(RES_ID, 1100.0)
+
+        assert result < 310.0, "one 10x outlier moves it by a fifth, not to it"
+
+    def test_a_nonsensical_duration_is_refused(self, resources):
+        repo, coll = resources
+
+        assert repo.record_duration(RES_ID, 0) is None
+        assert repo.record_duration(RES_ID, -5.0) is None
+        coll.update_one.assert_not_called()
+
+    def test_an_unknown_worker_writes_nothing(self, resources):
+        repo, coll = resources
+        coll.find_one.return_value = None
+
+        assert repo.record_duration(RES_ID, 120.0) is None
+        coll.update_one.assert_not_called()
+
+    def test_an_unusable_id_writes_nothing(self, resources):
+        repo, coll = resources
+
+        assert repo.record_duration("not-an-objectid", 120.0) is None
+        coll.update_one.assert_not_called()
+
+
+class TestOrderingTheFreeContainersOfAHost:
+    """Which container of the chosen host takes the next job.
+
+    Two orderings for two policies, and the dispatcher picks between them
+    from the policy — because choosing the host that finishes soonest and
+    then handing it the slowest container would undo half the decision.
+    """
+
+    def test_by_default_it_spreads_over_the_containers(self, resources):
+        repo, coll = resources
+
+        repo.find_free_by_host(HOST_ID)
+
+        assert coll.find.call_args.kwargs["sort"] == [
+            ("last_check", 1), ("name", 1)]
+
+    def test_a_speed_aware_policy_asks_for_the_fastest_first(self, resources):
+        repo, coll = resources
+
+        repo.find_free_by_host(HOST_ID, prefer_fastest=True)
+
+        assert coll.find.call_args.kwargs["sort"] == [
+            ("mean_duration_sec", 1), ("name", 1)]
+
+    def test_either_way_only_free_enabled_containers_are_offered(
+            self, resources):
+        repo, coll = resources
+
+        for prefer in (False, True):
+            repo.find_free_by_host(HOST_ID, prefer_fastest=prefer)
+            flt = coll.find.call_args.args[0]
+            assert flt == {
+                "host_id": HOST_ID, "enabled": True,
+                "status": EnumResourceStatus.AVAILABLE.value}

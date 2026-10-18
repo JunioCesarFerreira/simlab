@@ -837,3 +837,62 @@ class TestThePreparationBudget:
         runner.run(sim(), HOST, RESOURCE, ATTEMPT)
 
         assert container.launches == 1
+
+
+class TestTheOccupancyIsMeasuredOnTheRealPath:
+    """What a speed-aware policy is given, measured where it is produced.
+
+    The number is how long the *container* was held — connection, upload,
+    run, collection — because that is what decides throughput. Measuring the
+    simulation's own ``start_time``/``end_time`` would leave out the two
+    transfers, which is most of what makes a remote worker slower.
+
+    Advisory by construction: it only chooses between equally loaded hosts,
+    so every failure of it has to be survivable.
+    """
+
+    def test_a_successful_run_records_how_long_the_container_was_held(
+            self, wire):
+        runner, mongo = wire(ScriptedContainer())
+
+        runner.run(sim(), HOST, RESOURCE, ATTEMPT)
+
+        mongo.resource_repo.record_duration.assert_called_once()
+        resource_id, seconds = mongo.resource_repo.record_duration.call_args.args
+        assert resource_id == RES_ID
+        assert seconds > 0
+
+    def test_a_failed_run_records_nothing(self, wire):
+        """A run that aborted in five seconds would otherwise make the worst
+        worker look like the best."""
+        # The launch is never confirmed, so nothing is published.
+        runner, mongo = wire(ScriptedContainer(
+            fail_on=f"cat {PID_FILE}", group_alive=False))
+
+        runner.run(sim(), HOST, RESOURCE, ATTEMPT)
+
+        mongo.simulation_repo.mark_done.assert_not_called()
+        mongo.resource_repo.record_duration.assert_not_called()
+
+    def test_a_resumed_run_records_nothing(self, wire):
+        """Adopting a JVM that was already running measures the remainder of
+        somebody else's run; recording it would make a container look fast
+        for finishing work it did not start."""
+        runner, mongo = wire(ScriptedContainer(alive=False, exit_code=0))
+
+        runner.resume(sim(), HOST, RESOURCE, ATTEMPT, pid=4242)
+
+        mongo.simulation_repo.mark_done.assert_called_once()
+        mongo.resource_repo.record_duration.assert_not_called()
+
+    def test_a_failure_to_record_it_does_not_fail_the_simulation(self, wire):
+        """The trade stated as a test: losing the statistic costs a slightly
+        worse placement, and must never cost a result."""
+        runner, mongo = wire(ScriptedContainer())
+        mongo.resource_repo.record_duration.side_effect = RuntimeError(
+            "mongo is down")
+
+        runner.run(sim(), HOST, RESOURCE, ATTEMPT)
+
+        mongo.simulation_repo.mark_done.assert_called_once()
+        mongo.resource_repo.release.assert_called()

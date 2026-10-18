@@ -79,6 +79,11 @@ class HostWithdrawing(RuntimeError):
     """
 
 
+#: How fast the occupancy estimate forgets. At 0.2 a worker's mean is
+#: effectively the last ~10 runs: slow enough that one unlucky simulation does
+#: not move it, fast enough to follow a machine that got busier.
+DURATION_ALPHA = 0.2
+
 _OCCUPIED = [s.value for s in OCCUPIED_STATUSES]
 _SCHEDULABLE = [s.value for s in SCHEDULABLE_HOST_STATUSES]
 
@@ -639,7 +644,8 @@ class HostRepository:
                     "localField": "_id",
                     "foreignField": "host_id",
                     "as": "_res",
-                    "pipeline": [{"$project": {"status": 1, "enabled": 1}}],
+                    "pipeline": [{"$project": {
+                        "status": 1, "enabled": 1, "mean_duration_sec": 1}}],
                 }
             },
             {
@@ -694,6 +700,28 @@ class HostRepository:
                     "reserved": count_where({
                         "$eq": ["$$r.status", EnumResourceStatus.RESERVED.value]
                     }),
+                    # What the *next* placement on this host would cost: the
+                    # estimate of the container `find_free_by_host` would
+                    # pick. A host mean would be wrong here — the slow
+                    # containers of a host whose fast one is free do not
+                    # affect the job being placed now.
+                    #
+                    # Null when no free container has been measured yet, which
+                    # a speed-aware policy must read as "unknown", not as
+                    # "infinitely slow".
+                    "fastest_free_sec": {"$min": {"$map": {
+                        "input": {"$filter": {
+                            "input": "$_res", "as": "r",
+                            "cond": {"$and": [
+                                {"$eq": ["$$r.enabled", True]},
+                                {"$eq": ["$$r.status", available]},
+                                {"$ne": [
+                                    {"$ifNull": ["$$r.mean_duration_sec", None]},
+                                    None]},
+                            ]},
+                        }},
+                        "as": "r", "in": "$$r.mean_duration_sec",
+                    }}},
                     "schedulable": {
                         "$and": [
                             {"$eq": ["$enabled", True]},
@@ -802,15 +830,35 @@ class CoojaResourceRepository:
         with self.connection.connect() as db:
             return list(db[RESOURCES_COLLECTION].find({"host_id": oid}, sort=[("name", 1)]))
 
-    def find_free_by_host(self, host_id: Any) -> list[CoojaResource]:
-        """Candidates for placement on one host, oldest check first.
+    def find_free_by_host(
+        self, host_id: Any, *, prefer_fastest: bool = False
+    ) -> list[CoojaResource]:
+        """Candidates for placement on one host.
 
-        Ordering by ``last_check`` spreads work across a host's containers
-        instead of hammering whichever one sorts first.
+        Two orderings, for two different scheduling policies:
+
+        * by ``last_check`` (the default) spreads work across a host's
+          containers instead of hammering whichever one sorts first;
+        * by ``mean_duration_sec`` puts the container that *finishes* soonest
+          first. Under saturation this changes nothing — every container is
+          busy and the list has one entry — and when there is slack it is the
+          whole point: an idle fast container should take the work before an
+          idle slow one.
+
+        A container with no measurement sorts **first** either way. It is the
+        optimistic reading, and it is self-limiting: one run gives it a real
+        number. The pessimistic one would leave a newly registered worker
+        last for as long as the pool has slack, which is exactly when it
+        would otherwise be getting its first samples.
         """
         oid = _oid(host_id)
         if oid is None:
             return []
+        # MongoDB sorts missing before any value ascending, which is the
+        # optimistic placement the docstring promises — stated here because it
+        # is a property of the database, not of this code.
+        sort = ([("mean_duration_sec", 1), ("name", 1)] if prefer_fastest
+                else [("last_check", 1), ("name", 1)])
         with self.connection.connect() as db:
             return list(db[RESOURCES_COLLECTION].find(
                 {
@@ -818,8 +866,52 @@ class CoojaResourceRepository:
                     "enabled": True,
                     "status": EnumResourceStatus.AVAILABLE.value,
                 },
-                sort=[("last_check", 1), ("name", 1)],
+                sort=sort,
             ))
+
+    def record_duration(self, resource_id: Any, seconds: float) -> Optional[float]:
+        """Fold one completed run into this worker's occupancy estimate.
+
+        How long a container is *held* — connection, upload, run, collection —
+        is what decides throughput, so that is what is measured, rather than
+        the simulation's own ``start_time``/``end_time``.
+
+        An exponentially weighted mean, not a lifetime average: a host's speed
+        changes with the load on the machine it shares, and an average over
+        every run it ever did would keep reporting last month's. ``ALPHA``
+        below sets how fast it forgets.
+
+        What this estimate **cannot** separate is a slow worker from a worker
+        that happened to receive harder simulations: duration varies more
+        between individuals than between machines. It converges anyway,
+        because placement is uncorrelated with difficulty and the differences
+        worth acting on are large — measured on a three-host pool, the same
+        genome with the same seed took 1.22–1.25x longer on the remote hosts,
+        against a residual noise of a few per cent after a dozen samples.
+
+        Only a run that *succeeded* is recorded. A failure that aborted in
+        five seconds would otherwise make the worst worker look like the best.
+
+        Returns the new mean, or ``None`` when nothing was written.
+        """
+        oid = _oid(resource_id)
+        if oid is None or not seconds or seconds <= 0:
+            return None
+        with self.connection.connect() as db:
+            current = db[RESOURCES_COLLECTION].find_one(
+                {"_id": oid}, {"mean_duration_sec": 1, "duration_samples": 1})
+            if current is None:
+                return None
+            previous = current.get("mean_duration_sec")
+            updated = (float(seconds) if previous is None
+                       else (1 - DURATION_ALPHA) * float(previous)
+                       + DURATION_ALPHA * float(seconds))
+            db[RESOURCES_COLLECTION].update_one({"_id": oid}, {"$set": {
+                "mean_duration_sec": round(updated, 3),
+                "duration_samples": int(current.get("duration_samples") or 0) + 1,
+                "duration_measured_at": utc_now(),
+            }})
+            return updated
 
     def find_occupied(self) -> list[CoojaResource]:
         """Resources holding a simulation — the input to startup reconciliation."""

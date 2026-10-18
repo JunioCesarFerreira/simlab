@@ -23,6 +23,12 @@ def snapshot_loads(host_repo: Any) -> list[HostLoad]:
             free=int(document.get("free") or 0),
             active=int(document.get("active") or 0),
             schedulable=bool(document.get("schedulable")),
+            # Absent on a pool nothing has run on yet, and on a host whose
+            # free containers have no measurement. `None` is the honest value
+            # and the policies read it as unknown.
+            fastest_free_sec=(
+                float(document["fastest_free_sec"])
+                if document.get("fastest_free_sec") is not None else None),
         ))
     return loads
 
@@ -33,6 +39,7 @@ def describe_loads(loads: list[HostLoad]) -> str:
         return "no hosts registered"
     return " ".join(
         f"{load.name}[{load.active}a/{load.free}f"
+        f"{'' if load.fastest_free_sec is None else f' {load.fastest_free_sec:.0f}s'}"
         f"{'' if load.schedulable else ' off'}]"
         for load in loads
     )

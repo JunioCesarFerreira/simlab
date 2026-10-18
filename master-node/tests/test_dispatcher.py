@@ -18,7 +18,11 @@ import pytest
 from bson import ObjectId
 
 from lib.scheduler.dispatcher import Dispatcher
-from lib.scheduler.policy import HostLoad, LeastLoadedHostPolicy
+from lib.scheduler.policy import (
+    FastestThenLeastLoadedPolicy,
+    HostLoad,
+    LeastLoadedHostPolicy,
+)
 
 SIM_ID = "507f1f77bcf86cd799430003"
 SIM_OID = ObjectId(SIM_ID)
@@ -74,7 +78,7 @@ def make_dispatcher(mongo, **kwargs) -> tuple[Dispatcher, list]:
     dispatcher = Dispatcher(
         mongo,
         runner=MagicMock(),
-        policy=LeastLoadedHostPolicy(),
+        policy=kwargs.pop("policy", None) or LeastLoadedHostPolicy(),
         idle_tick_sec=0.01,
         thread_factory=thread_factory,
         **kwargs,
@@ -612,3 +616,51 @@ class TestTheAttemptIsClaimedOnThisThread:
 
         attempt = mongo.resource_repo.reserve.call_args.args[2]
         assert not runner.is_following(attempt)
+
+
+# ── The policy also decides the order inside the host ────────────────────────
+
+class TestTheOrderingInsideTheHostFollowsThePolicy:
+    """Two halves of one decision.
+
+    A speed-aware policy that picked the host finishing soonest and was then
+    handed that host's *slowest* free container would undo half of its own
+    choice, so the ordering is asked for by the policy rather than fixed in
+    the repository.
+    """
+
+    def test_the_default_policy_does_not_ask_for_the_fastest(self):
+        mongo = FakeMongo()
+        dispatcher, _ = make_dispatcher(mongo)
+        dispatcher.submit(SIM_ID)
+        dispatcher.step()
+
+        assert mongo.resource_repo.find_free_by_host.call_args.kwargs == {
+            "prefer_fastest": False}
+
+    def test_a_speed_aware_policy_does(self):
+        mongo = FakeMongo()
+        dispatcher, _ = make_dispatcher(
+            mongo, policy=FastestThenLeastLoadedPolicy())
+        dispatcher.submit(SIM_ID)
+
+        assert dispatcher.step() is True
+        assert mongo.resource_repo.find_free_by_host.call_args.kwargs == {
+            "prefer_fastest": True}
+
+    def test_a_policy_that_does_not_declare_it_is_treated_as_not_wanting_it(
+            self):
+        """A third-party policy predating the attribute must still work."""
+        class Old:
+            name = "old"
+
+            def select(self, loads, rr_cursor):
+                return loads[0]
+
+        mongo = FakeMongo()
+        dispatcher, _ = make_dispatcher(mongo, policy=Old())
+        dispatcher.submit(SIM_ID)
+        dispatcher.step()
+
+        assert mongo.resource_repo.find_free_by_host.call_args.kwargs == {
+            "prefer_fastest": False}
