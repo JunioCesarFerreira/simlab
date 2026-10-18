@@ -226,6 +226,48 @@ export interface FirmwareSnapshotDto {
  * counts are the evidence; `objective_used` says whether the experiment's
  * configured policy let this evaluation reach the algorithm.
  */
+/**
+ * One Cooja container's share of an experiment's simulations.
+ *
+ * `share` is a percentage of the **placed** simulations, not of every
+ * simulation: a run that never reached a container belongs to no worker, and
+ * those are counted in `unplaced` instead.
+ */
+export interface PlacementWorkerDto {
+  resource_id?: string | null;
+  resource_name: string;
+  total: number;
+  done: number;
+  failed: number;
+  active: number;
+  share: number;
+}
+
+export interface PlacementHostDto {
+  host_id?: string | null;
+  host_name: string;
+  total: number;
+  done: number;
+  failed: number;
+  active: number;
+  share: number;
+  workers: PlacementWorkerDto[];
+}
+
+/**
+ * Where an experiment's simulations actually ran.
+ *
+ * Counted per simulation, so a replica that was repeated counts on both
+ * containers that ran it — the question is how much work each machine did,
+ * not how many distinct replicas an evaluation rests on.
+ */
+export interface PlacementDistributionDto {
+  total: number;
+  placed: number;
+  unplaced: number;
+  hosts: PlacementHostDto[];
+}
+
 export interface CompletenessDto {
   /**
    * `analytical` and `infeasible` exist so that `unknown` keeps meaning one

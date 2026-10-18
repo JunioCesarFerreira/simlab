@@ -422,6 +422,96 @@ class SimulationRepository:
                 "status": {"$in": [EnumStatus.ERROR, EnumStatus.CANCELLED]},
             }))
 
+    def placement_distribution(self, experiment_id: ObjectId) -> dict:
+        """How an experiment's work was spread over the containers that ran it.
+
+        The placement is denormalized onto each simulation at reservation
+        time, which is what makes this answerable at all: a worker can be
+        renamed, re-registered or removed after the run, and the finished
+        simulation still says where it executed.
+
+        Counted **per simulation document**, not per seed. A replica that was
+        repeated ran twice, on two placements, and both occupied a container —
+        so for "how much work did this container do", both count. (The
+        *evaluation* side deduplicates by seed; that is a different question,
+        answered by ``replica_completeness``.)
+
+        Simulations that were never placed are reported separately rather than
+        dropped. A run that is still waiting, or that failed before a
+        reservation, belongs to no container, and silently excluding it would
+        make the percentages describe a smaller experiment than the one that
+        exists.
+        """
+        with self.connection.connect() as db:
+            rows = list(db["simulations"].aggregate([
+                {"$match": {"experiment_id": experiment_id}},
+                {"$group": {
+                    "_id": {
+                        "host_id": "$assigned_host_id",
+                        "host": "$assigned_host_name",
+                        "resource_id": "$assigned_resource_id",
+                        "resource": "$assigned_resource_name",
+                    },
+                    "total": {"$sum": 1},
+                    "done": {"$sum": {
+                        "$cond": [{"$eq": ["$status", EnumStatus.DONE]}, 1, 0]}},
+                    "failed": {"$sum": {"$cond": [
+                        {"$in": ["$status", [EnumStatus.ERROR,
+                                             EnumStatus.CANCELLED]]}, 1, 0]}},
+                    "active": {"$sum": {"$cond": [
+                        {"$in": ["$status", [EnumStatus.WAITING,
+                                             EnumStatus.RUNNING]]}, 1, 0]}},
+                }},
+            ]))
+
+        unplaced = 0
+        hosts: dict[str, dict] = {}
+        placed = 0
+        for row in rows:
+            key = row["_id"]
+            resource_name = key.get("resource")
+            if not resource_name:
+                unplaced += row["total"]
+                continue
+            placed += row["total"]
+            # The name is the label; the id is the identity, because two hosts
+            # may legitimately carry a worker of the same name.
+            host_key = str(key.get("host_id") or key.get("host") or "?")
+            host = hosts.setdefault(host_key, {
+                "host_id": str(key["host_id"]) if key.get("host_id") else None,
+                "host_name": key.get("host") or "(unregistered host)",
+                "total": 0, "done": 0, "failed": 0, "active": 0,
+                "workers": [],
+            })
+            host["total"] += row["total"]
+            host["done"] += row["done"]
+            host["failed"] += row["failed"]
+            host["active"] += row["active"]
+            host["workers"].append({
+                "resource_id": (str(key["resource_id"])
+                                if key.get("resource_id") else None),
+                "resource_name": resource_name,
+                "total": row["total"], "done": row["done"],
+                "failed": row["failed"], "active": row["active"],
+            })
+
+        def share(count: int) -> float:
+            return round(100.0 * count / placed, 2) if placed else 0.0
+
+        for host in hosts.values():
+            host["share"] = share(host["total"])
+            host["workers"].sort(key=lambda w: (-w["total"], w["resource_name"]))
+            for worker in host["workers"]:
+                worker["share"] = share(worker["total"])
+
+        return {
+            "placed": placed,
+            "unplaced": unplaced,
+            "total": placed + unplaced,
+            "hosts": sorted(hosts.values(),
+                            key=lambda h: (-h["total"], h["host_name"])),
+        }
+
     def find_assigned_to_resource(self, resource_id: ObjectId) -> list[Simulation]:
         with self.connection.connect() as db:
             return list(db["simulations"].find({"assigned_resource_id": resource_id}))

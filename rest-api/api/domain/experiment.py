@@ -78,6 +78,47 @@ class FirmwareSnapshotDto(TypedDict, total=False):
     error: str
 
 
+class PlacementWorkerDto(TypedDict, total=False):
+    """One Cooja container's share of an experiment's simulations."""
+    resource_id: Optional[str]
+    resource_name: str
+    total: int
+    done: int
+    failed: int
+    active: int
+    #: Percentage of the *placed* simulations, not of every simulation: a run
+    #: that never reached a container belongs to no worker.
+    share: float
+
+
+class PlacementHostDto(TypedDict, total=False):
+    host_id: Optional[str]
+    host_name: str
+    total: int
+    done: int
+    failed: int
+    active: int
+    share: float
+    workers: list[PlacementWorkerDto]
+
+
+class PlacementDistributionDto(TypedDict, total=False):
+    """Where an experiment's simulations actually ran.
+
+    Counted per simulation document, so a replica that was repeated counts on
+    both containers that ran it — the question here is how much work each
+    machine did, not how many distinct replicas the evaluation rests on.
+
+    ``unplaced`` is published rather than hidden: a simulation still waiting,
+    or one that failed before a reservation, has no container, and leaving it
+    out would make the shares describe a smaller experiment than the real one.
+    """
+    total: int
+    placed: int
+    unplaced: int
+    hosts: list[PlacementHostDto]
+
+
 class ExperimentDto(TypedDict):
     id: Optional[str]
     name: str

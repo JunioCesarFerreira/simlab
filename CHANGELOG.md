@@ -44,6 +44,15 @@ containers seeded as before.
   are recorded at reservation time and published with the simulation, so the
   chain experiment → generation → individual → simulation now reaches the
   machine — and the distribution of work can be audited from the results.
+- **Work distribution on the experiment page.** A card after *Firmware* shows
+  what share of a run each host and each Cooja container carried, with the
+  outcome split out — a container that took work and returned nothing is the
+  case a single count cannot show. Served by
+  `GET /experiments/{experiment_id}/placement`, derived from the placement
+  each simulation recorded when it was reserved, so it still answers after a
+  worker is renamed or removed. The shares are of the **placed** simulations
+  and anything never placed is reported separately, so a queue does not
+  silently shrink every container's percentage.
 - **Replica completeness, from the plan to the page.** Each generation records
   the seeds it intends to run, and the completeness of an individual's
   evaluation is measured against *that* — not against the simulation documents

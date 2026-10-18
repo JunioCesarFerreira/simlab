@@ -37,7 +37,7 @@ is not published directly; see [nginx/README.md](../nginx/README.md).
 
 | Prefix | What it covers |
 |---|---|
-| `/experiments` | Experiments, their generations and individuals, Pareto fronts, analysis files |
+| `/experiments` | Experiments, their generations and individuals, Pareto fronts, analysis files, firmware snapshots and the distribution of work over hosts/workers |
 | `/simulations` | One simulation's record, including **where it ran** — host, worker, container, attempt |
 | `/generations`, `/individuals` | Reading the optimisation's structure |
 | `/files` | GridFS: upload, download, conversion to PNG |

@@ -428,3 +428,167 @@ class TestRetryIdentity:
 
         assert repo.clone_for_retry(SIM_OID, retry_round=1) is None
         coll.find_one_and_update.assert_not_called()
+
+
+HOST_A = ObjectId("507f1f77bcf86cd799441001")
+HOST_B = ObjectId("507f1f77bcf86cd799441002")
+RES_1 = ObjectId("507f1f77bcf86cd799442001")
+RES_2 = ObjectId("507f1f77bcf86cd799442002")
+RES_3 = ObjectId("507f1f77bcf86cd799442003")
+
+
+def group(host_id, host, resource_id, resource, total,
+          done=0, failed=0, active=0):
+    """One row as the ``$group`` stage returns it."""
+    return {
+        "_id": {"host_id": host_id, "host": host,
+                "resource_id": resource_id, "resource": resource},
+        "total": total, "done": done, "failed": failed, "active": active,
+    }
+
+
+class TestPlacementDistribution:
+    """Where an experiment's work actually ran.
+
+    The placement is denormalized onto each simulation at reservation time,
+    which is the only reason this is answerable after the fact: a worker can
+    be renamed, re-registered or removed, and the finished simulation still
+    says which container executed it.
+
+    What is asserted here is the shaping — the aggregation itself is one
+    ``$group`` and MongoDB's job. The shaping is where the two decisions
+    live: what a percentage is a percentage *of*, and what happens to a
+    simulation that never reached a container.
+    """
+
+    def _distribution(self, simulations, rows):
+        repo, coll = simulations
+        coll.aggregate.return_value = iter(rows)
+        return repo.placement_distribution(EXP_ID)
+
+    def test_it_is_scoped_to_the_experiment(self, simulations):
+        repo, coll = simulations
+        coll.aggregate.return_value = iter([])
+
+        repo.placement_distribution(EXP_ID)
+
+        pipeline = coll.aggregate.call_args.args[0]
+        assert pipeline[0] == {"$match": {"experiment_id": EXP_ID}}
+
+    def test_each_worker_gets_its_share_of_the_placed_simulations(
+            self, simulations):
+        out = self._distribution(simulations, [
+            group(HOST_A, "local", RES_1, "cooja1", 6, done=6),
+            group(HOST_A, "local", RES_2, "cooja2", 2, done=2),
+            group(HOST_B, "vm7", RES_3, "vm7-cooja1", 2, done=2),
+        ])
+
+        assert out["placed"] == 10 and out["total"] == 10
+        by_host = {h["host_name"]: h for h in out["hosts"]}
+        assert by_host["local"]["share"] == 80.0
+        assert by_host["vm7"]["share"] == 20.0
+        shares = {w["resource_name"]: w["share"]
+                  for h in out["hosts"] for w in h["workers"]}
+        assert shares == {"cooja1": 60.0, "cooja2": 20.0, "vm7-cooja1": 20.0}
+
+    def test_the_shares_of_the_workers_add_up_to_the_host(self, simulations):
+        out = self._distribution(simulations, [
+            group(HOST_A, "local", RES_1, "cooja1", 1, done=1),
+            group(HOST_A, "local", RES_2, "cooja2", 2, done=2),
+        ])
+
+        host = out["hosts"][0]
+        assert host["total"] == 3
+        assert sum(w["total"] for w in host["workers"]) == host["total"]
+
+    def test_a_simulation_that_never_reached_a_container_is_reported_apart(
+            self, simulations):
+        """Not dropped: a run still waiting, or one that failed before its
+        reservation, belongs to no worker — and excluding it would make the
+        percentages describe a smaller experiment than the real one."""
+        out = self._distribution(simulations, [
+            group(HOST_A, "local", RES_1, "cooja1", 3, done=3),
+            group(None, None, None, None, 2, failed=1, active=1),
+        ])
+
+        assert out["placed"] == 3
+        assert out["unplaced"] == 2
+        assert out["total"] == 5
+        assert out["hosts"][0]["workers"][0]["share"] == 100.0, (
+            "the share is of what was placed, so one worker that ran "
+            "everything placed reads 100% even with work still unplaced")
+
+    def test_outcomes_are_kept_per_worker(self, simulations):
+        """A container that took work and produced nothing is the case worth
+        seeing, and a single count cannot show it."""
+        out = self._distribution(simulations, [
+            group(HOST_A, "local", RES_1, "cooja1", 5,
+                  done=2, failed=2, active=1),
+        ])
+
+        worker = out["hosts"][0]["workers"][0]
+        assert (worker["done"], worker["failed"], worker["active"]) == (2, 2, 1)
+        assert out["hosts"][0]["done"] == 2
+
+    def test_two_hosts_may_carry_a_worker_of_the_same_name(self, simulations):
+        """The name is the label; the id is the identity. Grouping by name
+        would merge two different containers into one row."""
+        out = self._distribution(simulations, [
+            group(HOST_A, "local", RES_1, "cooja1", 3, done=3),
+            group(HOST_B, "vm7", RES_2, "cooja1", 1, done=1),
+        ])
+
+        assert len(out["hosts"]) == 2
+        assert all(len(h["workers"]) == 1 for h in out["hosts"])
+
+    def test_a_worker_whose_host_was_removed_still_appears(self, simulations):
+        """The point of denormalizing the placement. Reporting nothing would
+        lose the record of a machine that did the work."""
+        out = self._distribution(simulations, [
+            group(None, None, RES_1, "cooja1", 4, done=4),
+        ])
+
+        assert out["placed"] == 4
+        assert out["hosts"][0]["host_name"] == "(unregistered host)"
+        assert out["hosts"][0]["workers"][0]["resource_name"] == "cooja1"
+
+    def test_hosts_and_workers_come_back_busiest_first(self, simulations):
+        out = self._distribution(simulations, [
+            group(HOST_A, "local", RES_1, "cooja1", 1, done=1),
+            group(HOST_A, "local", RES_2, "cooja2", 5, done=5),
+            group(HOST_B, "vm7", RES_3, "vm7-cooja1", 9, done=9),
+        ])
+
+        assert [h["host_name"] for h in out["hosts"]] == ["vm7", "local"]
+        assert [w["resource_name"] for w in out["hosts"][1]["workers"]] == [
+            "cooja2", "cooja1"]
+
+    def test_an_experiment_that_placed_nothing_is_an_empty_distribution(
+            self, simulations):
+        """Not an error and not a division by zero: "nothing ran yet" is the
+        honest answer for a run that has not started."""
+        out = self._distribution(simulations, [])
+
+        assert out == {"placed": 0, "unplaced": 0, "total": 0, "hosts": []}
+
+    def test_nothing_placed_but_work_waiting_does_not_divide_by_zero(
+            self, simulations):
+        out = self._distribution(simulations, [
+            group(None, None, None, None, 8, active=8),
+        ])
+
+        assert out["placed"] == 0 and out["unplaced"] == 8
+        assert out["hosts"] == []
+
+    def test_a_repeated_replica_counts_on_both_containers_that_ran_it(
+            self, simulations):
+        """Per document, not per seed. Both occupied a container, and this
+        question is about occupancy — the evaluation side deduplicates by
+        seed, which is a different question."""
+        out = self._distribution(simulations, [
+            group(HOST_A, "local", RES_1, "cooja1", 1, failed=1),
+            group(HOST_B, "vm7", RES_2, "vm7-cooja1", 1, done=1),
+        ])
+
+        assert out["placed"] == 2
+        assert {h["host_name"] for h in out["hosts"]} == {"local", "vm7"}

@@ -981,3 +981,77 @@ class TestExperimentCarriesFirmwareSnapshot:
         resp = client.get(f"{BASE}/{EXP_ID}")
         assert resp.status_code == 200
         assert resp.json()["firmware_snapshot"] is None
+
+
+# ── GET /{experiment_id}/placement ───────────────────────────────────────────
+class TestGetExperimentPlacement:
+    """Where this experiment's simulations actually ran.
+
+    The route is a pass-through over the repository's aggregation, so what
+    matters here is the contract around it: the experiment has to exist, an
+    experiment that placed nothing is an answer rather than a 404, and a bad
+    id is a 400 rather than a traceback.
+    """
+
+    DISTRIBUTION = {
+        "total": 10, "placed": 8, "unplaced": 2,
+        "hosts": [{
+            "host_id": "507f1f77bcf86cd799441001", "host_name": "local",
+            "total": 6, "done": 5, "failed": 1, "active": 0, "share": 75.0,
+            "workers": [{
+                "resource_id": "507f1f77bcf86cd799442001",
+                "resource_name": "cooja1",
+                "total": 6, "done": 5, "failed": 1, "active": 0,
+                "share": 75.0,
+            }],
+        }],
+    }
+
+    def test_it_returns_the_distribution(self, client, mock_factory):
+        mock_factory.experiment_repo.get.return_value = sample_experiment()
+        mock_factory.simulation_repo.placement_distribution.return_value = \
+            self.DISTRIBUTION
+
+        resp = client.get(f"{BASE}/{EXP_ID}/placement")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["placed"] == 8 and body["unplaced"] == 2
+        assert body["hosts"][0]["workers"][0]["share"] == 75.0
+
+    def test_it_is_asked_for_this_experiment(self, client, mock_factory):
+        mock_factory.experiment_repo.get.return_value = sample_experiment()
+        mock_factory.simulation_repo.placement_distribution.return_value = \
+            self.DISTRIBUTION
+
+        client.get(f"{BASE}/{EXP_ID}/placement")
+
+        assert mock_factory.simulation_repo.placement_distribution.call_args \
+            .args[0] == ObjectId(EXP_ID)
+
+    def test_an_experiment_that_placed_nothing_is_not_a_404(
+            self, client, mock_factory):
+        """"Nothing ran yet" is a valid answer, and the only honest one for a
+        run that has not started."""
+        mock_factory.experiment_repo.get.return_value = sample_experiment()
+        mock_factory.simulation_repo.placement_distribution.return_value = {
+            "total": 0, "placed": 0, "unplaced": 0, "hosts": []}
+
+        resp = client.get(f"{BASE}/{EXP_ID}/placement")
+
+        assert resp.status_code == 200
+        assert resp.json()["hosts"] == []
+
+    def test_an_unknown_experiment_is_a_404(self, client, mock_factory):
+        mock_factory.experiment_repo.get.return_value = None
+
+        resp = client.get(f"{BASE}/{EXP_ID}/placement")
+
+        assert resp.status_code == 404
+        mock_factory.simulation_repo.placement_distribution.assert_not_called()
+
+    def test_a_malformed_id_is_a_400(self, client, mock_factory):
+        resp = client.get(f"{BASE}/not-an-objectid/placement")
+
+        assert resp.status_code == 400
+        mock_factory.simulation_repo.placement_distribution.assert_not_called()

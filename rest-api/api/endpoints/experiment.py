@@ -27,6 +27,7 @@ from api.domain.experiment import (
     ExperimentFullDto,
     ExperimentInfoDto,
     FirmwareSnapshotDto,
+    PlacementDistributionDto,
 )
 from api.mappers.experiment import (
     experiment_from_mongo,
@@ -203,6 +204,32 @@ async def attach_analysis_file(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Where the work actually ran ──────────────────────────────────────────────
+
+@router.get("/{experiment_id}/placement", response_model=PlacementDistributionDto)
+def get_experiment_placement(
+    experiment_id: str,
+    factory: MongoRepository = Depends(get_factory),
+) -> PlacementDistributionDto:
+    """How this experiment's simulations were spread over hosts and workers.
+
+    Derived from the placement each simulation recorded when it was reserved,
+    so it stays answerable after a worker is renamed or removed — and it
+    describes what *happened*, not what the inventory looks like now.
+
+    Returns an empty distribution rather than a 404 for an experiment that
+    never placed anything: "nothing ran yet" is a valid answer to this
+    question, and the only honest one for a run that has not started.
+    """
+    try:
+        oid = ObjectId(experiment_id)
+    except bson_errors.InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid experiment_id")
+    if factory.experiment_repo.get(experiment_id) is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    return factory.simulation_repo.placement_distribution(oid)
 
 
 # ── Firmware traceability ────────────────────────────────────────────────────

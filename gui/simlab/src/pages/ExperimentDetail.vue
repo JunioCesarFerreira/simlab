@@ -395,6 +395,11 @@
         :started="!!store.experiment.start_time"
       />
 
+      <!-- Which container on which host carried how much of this run. Derived
+           from the placement each simulation recorded when it was reserved, so
+           it still answers after a worker is renamed or removed. -->
+      <PlacementSection :experiment-id="props.id" />
+
       <!-- Problem visualization modal (Teleport renders to body) -->
       <ProblemVizModal
         v-if="showProblemViz"
@@ -422,6 +427,7 @@ import ParetoParallelChart from "../components/charts/ParetoParallelChart.vue";
 import IndividualDetailPanel from "../components/detail/IndividualDetailPanel.vue";
 import RuntimeMetricsSection from "../components/detail/RuntimeMetricsSection.vue";
 import FirmwareSnapshotSection from "../components/detail/FirmwareSnapshotSection.vue";
+import PlacementSection from "../components/detail/PlacementSection.vue";
 import ProblemVizModal from "../components/detail/ProblemVizModal.vue";
 import { downloadAnalysisZip, downloadTopologiesZip } from "../api/files";
 import {

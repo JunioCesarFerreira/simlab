@@ -10,7 +10,12 @@
  * Extracted as a module so the rules are testable without mounting a
  * component, the same way `resourceLevels` is.
  */
-import type { PlacementDto, SimulationDto } from "../types/simlab";
+import type {
+  PlacementDistributionDto,
+  PlacementDto,
+  PlacementWorkerDto,
+  SimulationDto,
+} from "../types/simlab";
 
 /** Host and worker, as `host/worker` — what the card shows. */
 export function placementLabel(placement?: PlacementDto | null): string {
@@ -43,4 +48,84 @@ export function countByHost(simulations: SimulationDto[]): Map<string, number> {
     counts.set(host, (counts.get(host) ?? 0) + 1);
   }
   return counts;
+}
+
+/* ── An experiment's distribution over the machines that ran it ───────────
+ *
+ * The functions above read *one* run's placement. These read the aggregate
+ * the API publishes for a whole experiment, and they exist because three of
+ * its decisions are easy to get wrong in a template:
+ *
+ * 1. **What a percentage is a percentage of.** The share is over the
+ *    *placed* simulations. A run still queued belongs to no container, so
+ *    counting it would make every container's share shrink as the queue
+ *    grows.
+ * 2. **What a bar is scaled against.** The busiest container, not the total:
+ *    with twelve workers every bar would otherwise be a sliver, and the
+ *    question is which of them carried more.
+ * 3. **When a rounded number lies.** `0.0%` reads as "none", which is wrong
+ *    for a container that did run something.
+ */
+
+/** How many containers appear in the distribution, across every host. */
+export function workerCount(data?: PlacementDistributionDto | null): number {
+  return data?.hosts.reduce((n, host) => n + host.workers.length, 0) ?? 0;
+}
+
+/**
+ * The scale for the bars: the busiest container's simulation count.
+ *
+ * Never zero, so a caller can divide by it. An empty distribution gives 1,
+ * which renders nothing because every count is already 0.
+ */
+export function busiestWorker(data?: PlacementDistributionDto | null): number {
+  const totals = data?.hosts.flatMap((host) => host.workers.map((w) => w.total)) ?? [];
+  return Math.max(1, ...totals);
+}
+
+/** One segment's width, as a percentage of the busiest container's bar. */
+export function segmentWidth(count: number, busiest: number): number {
+  if (busiest <= 0) return 0;
+  return (100 * count) / busiest;
+}
+
+/**
+ * A share, with the one rounding that would otherwise mislead called out.
+ *
+ * A container holding 1 of 4000 simulations is 0.025%, and `0.0%` is read as
+ * "this one did nothing" — the opposite of what it did.
+ */
+export function formatShare(share: number): string {
+  if (share > 0 && share < 0.1) return "<0.1%";
+  return `${share.toFixed(1)}%`;
+}
+
+/**
+ * What a container produced, not just how much it was given.
+ *
+ * `done` is always shown — including as `0 done`, which is the case worth
+ * seeing: a container that took work and returned nothing. The other two
+ * appear only when non-zero, so the common line stays short.
+ */
+export function describeOutcome(worker: PlacementWorkerDto): string {
+  const parts = [`${worker.done} done`];
+  if (worker.failed) parts.push(`${worker.failed} failed`);
+  if (worker.active) parts.push(`${worker.active} running`);
+  return parts.join(", ");
+}
+
+/**
+ * The sentence shown instead of the bars, or an empty string when there are
+ * bars to show.
+ *
+ * Three different "nothing here" states, and they are not interchangeable:
+ * work is queued and none placed yet, nothing ever ran, and no record at all.
+ */
+export function emptyMessage(data?: PlacementDistributionDto | null): string {
+  if (!data) return "No record of where this experiment ran.";
+  if (data.placed > 0) return "";
+  if (data.unplaced > 0) {
+    return `No simulation has been placed on a container yet (${data.unplaced} waiting).`;
+  }
+  return "No simulation of this experiment ran on a container.";
 }
