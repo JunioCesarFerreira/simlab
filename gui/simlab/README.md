@@ -32,17 +32,28 @@ algorithm (MOEA) experiments, and analysing the resulting Pareto fronts.
 
 ### Prerequisites
 
-- Node.js ≥ 18
-- SimLab REST API running (default `http://localhost:8000`)
+- Node.js ≥ 20. Vite 7 and Vitest 4 require it; 18 is no longer enough, and
+  the build fails on it rather than warning.
+- SimLab stack running behind the reverse proxy (default `https://localhost`)
 
 ### Environment
 
-Copy `.env` and adjust if needed:
+The REST API no longer publishes a host port — it is reachable only through
+the nginx reverse proxy. Point the dev server at the proxy:
 
 ```
-VITE_API_BASE_URL=http://localhost:8000/api/v1
-VITE_API_KEY=api-password
+VITE_API_BASE_URL=https://localhost/api/v1
+VITE_API_KEY=simlab-api-key42
 ```
+
+The proxy's certificate is self-signed, so open `https://localhost/` once and
+accept the warning; the browser then trusts the same origin for the XHR calls
+`npm run dev` makes from `http://localhost:5173`. Those are cross-origin
+requests, which work because the API still sends
+`Access-Control-Allow-Origin: *`.
+
+In production the SPA is served *by* the proxy, so it uses the relative base
+`/api/v1` (set as a build arg in `docker-compose.yaml`) and no CORS is involved.
 
 ### Development server
 
@@ -78,11 +89,15 @@ src/
 ├── components/
 │   ├── charts/          # All ECharts chart components
 │   ├── detail/          # Individual detail panel, generation rows
+│   ├── infra/           # Host cards, worker table, occupancy, the two forms
 │   ├── layout/          # Sidebar navigation, theme toggle
 │   └── problem-editor/  # Canvas editor + 5-step launch wizard
 ├── composables/         # useEChart, useResizable, useExperimentViewState, useTheme
 ├── pages/               # One file per top-level route
-├── services/            # Import/export helpers, validators
+├── services/            # Import/export helpers, validators, and the pure
+│                        # modules that mirror a decision the backend makes:
+│                        # resourceLevels, placement, completeness,
+│                        # secretEnvelope
 ├── types/               # TypeScript types (simlab.ts, problem.ts)
 └── utils/               # Comparison quality indicators (comparisonMetrics.ts)
 ```
@@ -97,6 +112,8 @@ src/
 | Problems | `/problems` | WSN problem editor (full-screen canvas) |
 | Sources | `/sources` | Firmware source-code repositories |
 | Compare | `/compare` | Side-by-side comparison of two finished experiments |
+| Synthetic | `/synthetic` | Analytical benchmark instances (P0), evaluated in-process |
+| Infrastructure | `/infrastructure` | Hosts and their Cooja workers: register a machine, discover or hand-configure its containers, see which level of availability failed, take one in or out of the pool |
 
 ---
 
@@ -158,8 +175,8 @@ runs. It shows:
 - **Parameters card** with the full algorithm and simulation configuration.
 - **Pareto Front** chart — switchable between 2-D scatter (coloured by
   non-domination rank) and 3-D WebGL scatter (when ≥ 3 objectives).
-- **HV & GD per generation** — hypervolume and generational distance tracked
-  generation by generation.
+- **HV, GD & IGD per generation** — hypervolume, generational distance and
+  inverted generational distance tracked generation by generation.
 - **Objectives evolution** — normalised best-per-generation line chart for each
   objective.
 - **Parallel coordinates** — each Pareto solution as a poly-line across all
@@ -221,11 +238,39 @@ WebGL scatter (echarts-gl). Controls:
 The camera position is preserved across data refreshes (polling) so the user's
 viewpoint is not reset while the experiment runs.
 
-### HV & GD per generation
+### HV, GD & IGD per generation
 
-Dual-axis line chart: hypervolume (higher = better) on the left axis, generational
-distance (lower = better) on the right. One line per objective pair /
-normalisation used.
+Three side-by-side line charts, all read from `GET /experiments/{id}/hv-gd` —
+none of these numbers are computed in the browser.
+
+| Panel | Reads | Lower/higher is better |
+|---|---|---|
+| **HV** | Hypervolume of each generation's own front, toggleable to the cumulative (best-so-far) curve | higher |
+| **GD** | Mean distance from the front to the nearest reference point — *convergence* | lower |
+| **IGD / IGD+** | Mean distance from each reference point to the nearest solution — *convergence **and** spread*. IGD+ is the Pareto-compliant variant (Ishibuchi et al., 2015) and bounds IGD from below | lower |
+
+GD and IGD sit on separate axes on purpose: a population that converged onto a
+single corner of the front scores a near-zero GD and a large IGD, which is
+exactly the failure mode the pair is there to expose.
+
+GD/IGD/IGD+ distances are normalised by the reference front's ideal-nadir range,
+so objectives of different magnitudes (a latency in ms next to a throughput in
+kbps) weigh comparably. Hypervolume keeps its own reference point in raw units
+and is unaffected.
+
+A caption under the charts names the reference front. When it is the run's own
+final front — every non-synthetic experiment — GD and IGD are self-referential:
+they track progress towards *this run's own* result rather than convergence to
+the true optimum, so they are not comparable across runs. The caption says so,
+because otherwise the curves read as a quality claim they do not support.
+
+They do **not** collapse to zero on the last generation, which is the intuitive
+guess. The engine builds the stored front from the merged pool (surviving
+parents ∪ last offspring, `_final_pareto_front` in `mo-engine`), while a
+generation document records only that generation's offspring. So the last
+generation's front holds points dominated by a surviving parent (absent from
+the reference → GD > 0), and the reference holds surviving parents that never
+appear as individuals of the last generation (→ IGD > 0).
 
 ### Objectives evolution
 
@@ -283,5 +328,5 @@ The composable reads from and deep-watches to `sessionStorage` automatically.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `VITE_API_BASE_URL` | `http://localhost:8000/api/v1` | REST API base URL |
+| `VITE_API_BASE_URL` | `/api/v1` in the container build; `https://localhost/api/v1` for `npm run dev` | REST API base URL |
 | `VITE_API_KEY` | `api-password` | `X-API-Key` header sent with every request |

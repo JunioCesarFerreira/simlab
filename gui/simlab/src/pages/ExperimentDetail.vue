@@ -1,17 +1,14 @@
 <template>
   <div class="detail-page">
     <!-- Loading / error states -->
-    <div v-if="store.loading && !store.experiment" class="loading">
-      Loading experiment…
-    </div>
-    <div v-else-if="store.error" class="error-banner">
-      Error: {{ store.error }}
-    </div>
+    <div v-if="store.loading && !store.experiment" class="loading">Loading experiment…</div>
+    <div v-else-if="store.error" class="error-banner">Error: {{ store.error }}</div>
 
     <!-- Individual detail panel — fixed overlay, rendered on top of main content -->
     <IndividualDetailPanel
       v-if="selectedIndividual"
       :individual="selectedIndividual"
+      :experiment-id="props.id"
       :objective-names="store.objectiveNames"
       :metric-columns="metricColumns"
       :is-synthetic="isSynthetic"
@@ -37,8 +34,16 @@
                   @keydown.enter="saveEdit"
                   @keydown.escape="cancelEdit"
                 />
-                <button class="edit-confirm-btn" :disabled="savingName || !draftName.trim()" @click="saveEdit">✓</button>
-                <button class="edit-cancel-btn" :disabled="savingName" @click="cancelEdit">✕</button>
+                <button
+                  class="edit-confirm-btn"
+                  :disabled="savingName || !draftName.trim()"
+                  @click="saveEdit"
+                >
+                  ✓
+                </button>
+                <button class="edit-cancel-btn" :disabled="savingName" @click="cancelEdit">
+                  ✕
+                </button>
               </template>
             </div>
             <div class="header-meta">
@@ -59,13 +64,25 @@
             <button
               v-if="has3Objectives"
               class="action-btn pareto-btn"
-              :class="{ 'pareto-running': plotParetoState === 'running', 'pareto-done': plotParetoState === 'done', 'pareto-error': plotParetoState === 'error' }"
+              :class="{
+                'pareto-running': plotParetoState === 'running',
+                'pareto-done': plotParetoState === 'done',
+                'pareto-error': plotParetoState === 'error',
+              }"
               :disabled="plotParetoState === 'running'"
               :title="plotParetoState === 'error' ? plotParetoError : undefined"
               @click="doPlotPareto"
             >
               <span v-if="plotParetoState === 'running'" class="spinner" />
-              {{ plotParetoState === 'running' ? 'Running analysis…' : plotParetoState === 'done' ? '✓ Analysis done' : plotParetoState === 'error' ? '✗ Analysis failed' : 'Plot Pareto results' }}
+              {{
+                plotParetoState === "running"
+                  ? "Running analysis…"
+                  : plotParetoState === "done"
+                    ? "✓ Analysis done"
+                    : plotParetoState === "error"
+                      ? "✗ Analysis failed"
+                      : "Plot Pareto results"
+              }}
             </button>
             <button
               v-if="hasAnalysisFiles"
@@ -91,11 +108,7 @@
             >
               {{ cancelling ? "Cancelling…" : "Cancel experiment" }}
             </button>
-            <button
-              class="action-btn danger-btn"
-              :disabled="deleting"
-              @click="doDelete"
-            >
+            <button class="action-btn danger-btn" :disabled="deleting" @click="doDelete">
               {{ deleting ? "Deleting…" : "Delete experiment" }}
             </button>
           </div>
@@ -170,18 +183,12 @@
               <div v-if="simulationSeeds.length > 0" class="param-row seeds-row">
                 <span class="pk">seeds</span>
                 <span class="pv seeds-list mono">
-                  <span
-                    v-for="seed in simulationSeeds"
-                    :key="seed"
-                    class="seed-pill"
-                  >{{ seed }}</span>
+                  <span v-for="seed in simulationSeeds" :key="seed" class="seed-pill">{{
+                    seed
+                  }}</span>
                 </span>
               </div>
-              <div
-                v-for="(val, key) in simulationOtherParams"
-                :key="key"
-                class="param-row"
-              >
+              <div v-for="(val, key) in simulationOtherParams" :key="key" class="param-row">
                 <span class="pk">{{ key }}</span>
                 <span class="pv mono">{{ formatParamVal(val) }}</span>
               </div>
@@ -244,21 +251,29 @@
                   <button
                     :class="['vt-btn', { active: paretoScope === 'all' }]"
                     @click="paretoScope = 'all'"
-                  >All solutions</button>
+                  >
+                    All solutions
+                  </button>
                   <button
                     :class="['vt-btn', { active: paretoScope === 'last' }]"
                     @click="paretoScope = 'last'"
-                  >Last generation</button>
+                  >
+                    Last generation
+                  </button>
                 </div>
                 <div v-if="has3Objectives" class="view-toggle">
                   <button
                     :class="['vt-btn', { active: chartView === '2d' }]"
                     @click="chartView = '2d'"
-                  >2D</button>
+                  >
+                    2D
+                  </button>
                   <button
                     :class="['vt-btn', { active: chartView === '3d' }]"
                     @click="chartView = '3d'"
-                  >3D</button>
+                  >
+                    3D
+                  </button>
                 </div>
               </div>
             </div>
@@ -296,12 +311,13 @@
               @axis-change="on3dAxisChange"
             />
           </ResizableChartCard>
-          <ResizableChartCard v-model="hvgdH" label="HV and GD chart">
-            <div class="section-title">HV &amp; GD per generation</div>
+          <ResizableChartCard v-model="hvgdH" label="HV, GD and IGD chart">
+            <div class="section-title">HV, GD &amp; IGD per generation</div>
             <HvGdChart
               :experiment-id="props.id"
               :objective-names="store.objectiveNames"
               :objective-goals="store.objectiveGoals"
+              :revision="store.revision"
             />
           </ResizableChartCard>
           <ResizableChartCard v-model="evolutionH" label="Objectives evolution chart">
@@ -325,11 +341,17 @@
         </div>
       </div>
 
-      <!-- Runtime (computational) metrics of the execution -->
+      <!-- Runtime (computational) metrics of the execution. Rendered for any
+           finished run — even without a block — so a missing/failed collection
+           surfaces an alert and a manual Prometheus retry. -->
       <RuntimeMetricsSection
-        v-if="store.experiment.runtime_metrics"
+        v-if="showRuntimeMetrics"
         :experiment-id="props.id"
         :metrics="store.experiment.runtime_metrics"
+        :start-time="store.experiment.start_time"
+        :end-time="store.experiment.end_time"
+        :pending="telemetryPending"
+        @collected="store.refresh(props.id)"
       />
 
       <!-- Progress bar for running experiments -->
@@ -349,10 +371,7 @@
           Generations
           <span class="gen-count">({{ store.experiment.generations.length }})</span>
         </div>
-        <div
-          v-if="store.experiment.generations.length === 0"
-          class="empty-state"
-        >
+        <div v-if="store.experiment.generations.length === 0" class="empty-state">
           No generations started yet.
         </div>
         <div v-else class="gen-list">
@@ -367,6 +386,19 @@
           />
         </div>
       </div>
+
+      <!-- Firmware actually used by this run, copied to GridFS at start time.
+           Always rendered: "no record" is itself relevant to traceability. -->
+      <FirmwareSnapshotSection
+        :experiment-id="props.id"
+        :snapshot="store.experiment.firmware_snapshot"
+        :started="!!store.experiment.start_time"
+      />
+
+      <!-- Which container on which host carried how much of this run. Derived
+           from the placement each simulation recorded when it was reserved, so
+           it still answers after a worker is renamed or removed. -->
+      <PlacementSection :experiment-id="props.id" />
 
       <!-- Problem visualization modal (Teleport renders to body) -->
       <ProblemVizModal
@@ -394,16 +426,24 @@ import HvGdChart from "../components/charts/HvGdChart.vue";
 import ParetoParallelChart from "../components/charts/ParetoParallelChart.vue";
 import IndividualDetailPanel from "../components/detail/IndividualDetailPanel.vue";
 import RuntimeMetricsSection from "../components/detail/RuntimeMetricsSection.vue";
+import FirmwareSnapshotSection from "../components/detail/FirmwareSnapshotSection.vue";
+import PlacementSection from "../components/detail/PlacementSection.vue";
 import ProblemVizModal from "../components/detail/ProblemVizModal.vue";
 import { downloadAnalysisZip, downloadTopologiesZip } from "../api/files";
-import { updateExperiment, updateExperimentStatus, plotParetoResults, deleteExperiment } from "../api/experiments";
+import {
+  updateExperiment,
+  updateExperimentStatus,
+  plotParetoResults,
+  deleteExperiment,
+} from "../api/experiments";
 import { useRouter } from "vue-router";
 import ResizableChartCard from "../components/common/ResizableChartCard.vue";
 import { confirmDialog } from "../composables/useConfirm";
 import { reportRuntimeError } from "../composables/useRuntimeError";
 import type { IndividualDto, JsonObject, ParetoFrontItemDto } from "../types/simlab";
 import { isPenalized } from "../types/simlab";
-import { computeRanks, computeRanksWithDuplicates } from "../utils/nonDominatedSort";
+import { computeRanks } from "../utils/nonDominatedSort";
+import { useParetoRanks } from "../composables/useParetoRanks";
 
 const props = defineProps<{ id: string }>();
 const store = useExperimentDetailStore();
@@ -438,9 +478,7 @@ async function doDelete() {
 // leaves it in the Cancelled state (already-computed results are kept).
 const cancelling = ref(false);
 const canCancel = computed(
-  () =>
-    store.experiment?.status === "Waiting" ||
-    store.experiment?.status === "Running",
+  () => store.experiment?.status === "Waiting" || store.experiment?.status === "Running",
 );
 async function doCancel() {
   const name = store.experiment?.name ?? "this experiment";
@@ -485,7 +523,9 @@ const viewState = useExperimentViewState(props.id);
 function persisted<K extends keyof typeof viewState.value>(key: K) {
   return computed({
     get: () => viewState.value[key],
-    set: (v: (typeof viewState.value)[K]) => { viewState.value[key] = v; },
+    set: (v: (typeof viewState.value)[K]) => {
+      viewState.value[key] = v;
+    },
   });
 }
 
@@ -494,7 +534,9 @@ const chartView = persisted("chartView");
 // Pareto front scope: over all explored solutions, or only the last generation
 const paretoScope = persisted("paretoScope");
 // Reset to 2D if objectives data loads and turns out there aren't 3
-watch(has3Objectives, (has3) => { if (!has3 && chartView.value === '3d') chartView.value = '2d'; });
+watch(has3Objectives, (has3) => {
+  if (!has3 && chartView.value === "3d") chartView.value = "2d";
+});
 
 // Per-card resizable height
 const paretoH = persisted("paretoH");
@@ -553,17 +595,11 @@ const paretoGenerations = computed(() => {
   return store.experiment?.generations ?? [];
 });
 
-// Non-dominated rank per individual (0 = best front), over the FULL objective
-// vector, computed from `paretoGenerations` (so it respects the all/last-gen
-// scope toggle above). This is O(n²) and used to be recomputed independently
-// inside BOTH ParetoFrontChart and ParetoFront3DChart — every poll tick while
-// the experiment is running, and again every time the user toggled between
-// the 2D/3D views (which unmounts one and throws its cached result away).
-// Computing it once here, in the parent that never unmounts across that
-// toggle, means it's shared by whichever chart is currently visible.
-const individualRankMap = computed<Map<string, number>>(() => {
+// Rank the selected scope in a worker so large populations do not block
+// painting the other charts, scrolling, or receiving metric responses.
+const rankInput = computed(() => {
   const goals = store.objectiveGoals;
-  if (goals.length === 0) return new Map();
+  if (goals.length === 0) return { points: [], minimize: [] };
   const minimize = goals.map((g) => g === "min");
   const seen = new Set<string>();
   const points: { id: string; objectives: number[] }[] = [];
@@ -572,11 +608,12 @@ const individualRankMap = computed<Map<string, number>>(() => {
       if (seen.has(ind.individual_id)) continue;
       seen.add(ind.individual_id);
       if (isPenalized(ind.objectives)) continue;
-      points.push({ id: ind.individual_id, objectives: ind.objectives });
+      points.push({ id: ind.individual_id, objectives: [...ind.objectives] });
     }
   }
-  return computeRanksWithDuplicates(points, minimize);
+  return { points, minimize };
 });
+const individualRankMap = useParetoRanks(rankInput);
 
 // Pareto front points passed to the charts. For "all" this is the global front
 // computed server-side; for "last" it is the non-dominated set of the last
@@ -592,9 +629,7 @@ const displayedParetoFront = computed<ParetoFrontItemDto[] | null | undefined>((
 
   const toItem = (ind: IndividualDto): ParetoFrontItemDto => ({
     chromosome: ind.chromosome,
-    objectives: Object.fromEntries(
-      ind.objectives.map((v, i) => [names[i] ?? `obj${i}`, v]),
-    ),
+    objectives: Object.fromEntries(ind.objectives.map((v, i) => [names[i] ?? `obj${i}`, v])),
   });
 
   const valid = gen.population.filter((ind) => !isPenalized(ind.objectives));
@@ -610,8 +645,7 @@ const displayedParetoFront = computed<ParetoFrontItemDto[] | null | undefined>((
 });
 
 const finishedCount = computed(
-  () =>
-    sortedGenerations.value.filter((g) => g.status === "Done").length,
+  () => sortedGenerations.value.filter((g) => g.status === "Done").length,
 );
 
 const totalGenerations = computed(
@@ -631,8 +665,8 @@ const hasAnalysisFiles = computed(
 );
 
 // Metric columns used in objective computation
-const metricColumns = computed(() =>
-  store.experiment?.data_conversion_config?.metrics?.map((m) => m.column) ?? [],
+const metricColumns = computed(
+  () => store.experiment?.data_conversion_config?.metrics?.map((m) => m.column) ?? [],
 );
 
 // Simulation parameters derived view
@@ -692,7 +726,7 @@ async function saveEdit() {
   savingName.value = true;
   try {
     await updateExperiment(props.id, { name: draftName.value.trim() });
-    store.experiment!.name = draftName.value.trim();
+    store.experiment = { ...store.experiment!, name: draftName.value.trim() };
     editing.value = false;
   } catch (e) {
     reportRuntimeError(e, "Failed to rename experiment");
@@ -717,16 +751,24 @@ const downloading = reactive({ analysis: false, topologies: false });
 
 async function doDownloadAnalysis() {
   downloading.analysis = true;
-  try { await downloadAnalysisZip(props.id); }
-  catch (e) { console.error("Error downloading analyses:", e); }
-  finally { downloading.analysis = false; }
+  try {
+    await downloadAnalysisZip(props.id);
+  } catch (e) {
+    console.error("Error downloading analyses:", e);
+  } finally {
+    downloading.analysis = false;
+  }
 }
 
 async function doDownloadTopologies() {
   downloading.topologies = true;
-  try { await downloadTopologiesZip(props.id); }
-  catch (e) { console.error("Error downloading topologies:", e); }
-  finally { downloading.topologies = false; }
+  try {
+    await downloadTopologiesZip(props.id);
+  } catch (e) {
+    console.error("Error downloading topologies:", e);
+  } finally {
+    downloading.topologies = false;
+  }
 }
 
 const plotParetoState = ref<"idle" | "running" | "done" | "error">("idle");
@@ -743,11 +785,15 @@ async function doPlotPareto() {
     await plotParetoResults(props.id, objectives, minimize);
     plotParetoState.value = "done";
     await store.refresh(props.id);
-    setTimeout(() => { plotParetoState.value = "idle"; }, 4000);
+    setTimeout(() => {
+      plotParetoState.value = "idle";
+    }, 4000);
   } catch (e) {
     plotParetoError.value = e instanceof Error ? e.message : String(e);
     plotParetoState.value = "error";
-    setTimeout(() => { plotParetoState.value = "idle"; }, 6000);
+    setTimeout(() => {
+      plotParetoState.value = "idle";
+    }, 6000);
   }
 }
 
@@ -759,6 +805,15 @@ async function doPlotPareto() {
 // predate the feature (and will never get metrics) don't poll forever.
 const TELEMETRY_WAIT_WINDOW_MS = 10 * 60 * 1000;
 let telemetryTimer: ReturnType<typeof setInterval> | null = null;
+
+// Finished runs always show the Runtime Metrics section: with a block it renders
+// the summary/charts, without one it offers a manual Prometheus collection.
+const FINISHED_STATUSES = ["Done", "Error", "Cancelled"];
+const showRuntimeMetrics = computed(() => {
+  const exp = store.experiment;
+  if (!exp) return false;
+  return !!exp.runtime_metrics || FINISHED_STATUSES.includes(exp.status ?? "");
+});
 
 const telemetryPending = computed(() => {
   const exp = store.experiment;
@@ -799,8 +854,7 @@ onBeforeUnmount(() => {
 const totalDuration = computed(() => {
   const exp = store.experiment;
   if (!exp?.start_time || !exp?.end_time) return null;
-  const ms =
-    new Date(exp.end_time).getTime() - new Date(exp.start_time).getTime();
+  const ms = new Date(exp.end_time).getTime() - new Date(exp.start_time).getTime();
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
@@ -924,7 +978,10 @@ onBeforeUnmount(() => {
   border: none;
 }
 
-.edit-confirm-btn:disabled { opacity: 0.5; cursor: default; }
+.edit-confirm-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 
 .edit-cancel-btn {
   font-size: 13px;
@@ -934,8 +991,13 @@ onBeforeUnmount(() => {
   color: var(--color-text-muted);
 }
 
-.edit-cancel-btn:hover:not(:disabled) { background: var(--color-border); }
-.edit-cancel-btn:disabled { opacity: 0.5; cursor: default; }
+.edit-cancel-btn:hover:not(:disabled) {
+  background: var(--color-border);
+}
+.edit-cancel-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 
 .header-meta {
   display: flex;
@@ -974,8 +1036,13 @@ onBeforeUnmount(() => {
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
 }
 
 .sys-message {
@@ -1000,7 +1067,9 @@ onBeforeUnmount(() => {
   font-size: 13px;
   font-weight: 500;
   color: var(--color-text);
-  transition: background 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
   white-space: nowrap;
 }
 
@@ -1010,18 +1079,55 @@ onBeforeUnmount(() => {
   color: var(--color-primary);
 }
 
-.danger-btn { color: var(--status-error); border-color: #fecaca; background: #fee2e2; }
-.danger-btn:hover:not(:disabled) { background: #fecaca; border-color: var(--status-error); color: var(--status-error); }
-.danger-btn:disabled { opacity: 0.5; cursor: default; }
+.danger-btn {
+  color: var(--status-error);
+  border-color: #fecaca;
+  background: #fee2e2;
+}
+.danger-btn:hover:not(:disabled) {
+  background: #fecaca;
+  border-color: var(--status-error);
+  color: var(--status-error);
+}
+.danger-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 
-.cancel-btn { color: var(--status-waiting); border-color: #fde68a; background: #fef3c7; }
-.cancel-btn:hover:not(:disabled) { background: #fde68a; border-color: var(--status-waiting); color: #b45309; }
-.cancel-btn:disabled { opacity: 0.5; cursor: default; }
+.cancel-btn {
+  color: var(--status-waiting);
+  border-color: #fde68a;
+  background: #fef3c7;
+}
+.cancel-btn:hover:not(:disabled) {
+  background: #fde68a;
+  border-color: var(--status-waiting);
+  color: #b45309;
+}
+.cancel-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 
-.pareto-btn { display: flex; align-items: center; gap: 6px; }
-.pareto-btn.pareto-running { border-color: var(--color-primary); color: var(--color-primary); opacity: 0.8; cursor: wait; }
-.pareto-btn.pareto-done { border-color: #16a34a; color: #16a34a; }
-.pareto-btn.pareto-error { border-color: #dc2626; color: #dc2626; }
+.pareto-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pareto-btn.pareto-running {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  opacity: 0.8;
+  cursor: wait;
+}
+.pareto-btn.pareto-done {
+  border-color: #16a34a;
+  color: #16a34a;
+}
+.pareto-btn.pareto-error {
+  border-color: #dc2626;
+  color: #dc2626;
+}
 
 .spinner {
   width: 12px;
@@ -1033,7 +1139,11 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
 }
 
-@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 
 /* Timeline */
 .timeline-bar {
@@ -1048,8 +1158,13 @@ onBeforeUnmount(() => {
   border-radius: var(--radius-md);
 }
 
-.sep { opacity: 0.4; }
-.duration { font-weight: 600; color: var(--color-text); }
+.sep {
+  opacity: 0.4;
+}
+.duration {
+  font-weight: 600;
+  color: var(--color-text);
+}
 
 /* Overview grid */
 .overview-grid {
@@ -1168,8 +1283,12 @@ onBeforeUnmount(() => {
   text-transform: uppercase;
 }
 
-.goal--min { color: var(--status-running); }
-.goal--max { color: var(--status-done); }
+.goal--min {
+  color: var(--status-running);
+}
+.goal--max {
+  color: var(--status-done);
+}
 
 .muted-inline {
   color: var(--color-text-muted);
@@ -1242,7 +1361,9 @@ onBeforeUnmount(() => {
   cursor: pointer;
   color: var(--color-text-muted);
   background: transparent;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
   letter-spacing: 0.03em;
 }
 

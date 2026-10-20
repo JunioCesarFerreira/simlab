@@ -7,6 +7,7 @@ from bson import ObjectId, errors
 from pylib.db.models.experiment import Experiment, DataConversionConfig
 from pylib.db.models.enums import EnumStatus
 from pylib.db.connection import MongoDBConnection
+from pylib.timeutil import utc_now
 
 log = logging.getLogger(__name__)
 
@@ -83,10 +84,71 @@ class ExperimentRepository:
                 {"$set": {
                     "id": experiment_id,
                     "status": EnumStatus.RUNNING,
-                    "start_time": datetime.now()
+                    "start_time": utc_now()
                 }}
             )
             return result.modified_count > 0
+
+    def claim_resume(self, experiment_id: str) -> bool:
+        """Take over an experiment left ``Running`` by a process that stopped.
+
+        ``update_starting`` cannot do this: it claims ``Waiting`` and moves to
+        ``Running``, which is the right guard for a *new* experiment and
+        matches nothing for one already under way. So an engine restart picked
+        up nothing, and an experiment interrupted mid-generation stayed
+        ``Running`` for ever — its strategy state died with the process, and
+        nothing came back for it. Observed while validating this feature: an
+        engine restart left a finished generation with no evolution after it.
+
+        Records when the takeover happened, so the history shows that this
+        run was resumed rather than started.
+        """
+        with self.connection.connect() as db:
+            result = db["experiments"].update_one(
+                {"_id": ObjectId(experiment_id), "status": EnumStatus.RUNNING},
+                {"$set": {"id": experiment_id, "resumed_at": utc_now()}},
+            )
+            return result.modified_count > 0
+
+    # ------------------------------
+    # Firmware traceability
+    # ------------------------------
+    def claim_firmware_snapshot(self, experiment_id: str, claimed_at: datetime) -> bool:
+        """Atomically claim the firmware capture for an experiment.
+
+        Only succeeds when no ``firmware_snapshot`` block exists yet, so a
+        restarted engine (or a concurrent trigger) never copies the same
+        firmware twice into GridFS.
+        """
+        with self.connection.connect() as db:
+            result = db["experiments"].update_one(
+                {"_id": ObjectId(experiment_id), "firmware_snapshot": {"$exists": False}},
+                {"$set": {"firmware_snapshot": {
+                    "status": "capturing",
+                    "claimed_at": claimed_at,
+                }}}
+            )
+            return result.modified_count > 0
+
+    def set_firmware_snapshot(self, experiment_id: str, block: dict) -> bool:
+        with self.connection.connect() as db:
+            result = db["experiments"].update_one(
+                {"_id": ObjectId(experiment_id)},
+                {"$set": {"firmware_snapshot": block}}
+            )
+            return result.modified_count > 0
+
+    def get_firmware_snapshot(self, experiment_id: str) -> Optional[dict]:
+        try:
+            oid = ObjectId(experiment_id)
+        except errors.InvalidId:
+            log.error("Invalid ID: %s", experiment_id)
+            return None
+        with self.connection.connect() as db:
+            doc = db["experiments"].find_one({"_id": oid}, {"firmware_snapshot": 1})
+            if doc is None:
+                return None
+            return doc.get("firmware_snapshot") or {}
 
     # ------------------------------
     # Runtime (computational) telemetry
@@ -106,6 +168,7 @@ class ExperimentRepository:
                     "status": "collecting",
                     "started_at": started_at,
                     "finished_at": finished_at,
+                    "claimed_at": utc_now(),
                 }}}
             )
             return result.modified_count > 0
@@ -130,31 +193,51 @@ class ExperimentRepository:
                 return None
             return doc.get("runtime_metrics") or {}
 
-    def release_stale_runtime_metrics_claims(self) -> int:
+    def release_stale_runtime_metrics_claims(self, claimed_before: datetime) -> int:
         """Drop 'collecting' blocks left behind by a crashed collector.
 
-        Startup-only: a single mo-engine instance owns telemetry collection,
-        so at process start no collection can legitimately be in flight and
-        any remaining claim is stale. Releasing it lets the backfill sweep
-        retry the experiment.
+        Only claims older than ``claimed_before`` are released, so this is safe
+        to call from the periodic sweep without racing a collection that is
+        legitimately in flight. Releasing a stale claim lets the sweep retry the
+        experiment. Legacy claims without a ``claimed_at`` are treated as stale.
         """
         with self.connection.connect() as db:
             result = db["experiments"].update_many(
-                {"runtime_metrics.status": "collecting"},
+                {
+                    "runtime_metrics.status": "collecting",
+                    "$or": [
+                        {"runtime_metrics.claimed_at": {"$lt": claimed_before}},
+                        {"runtime_metrics.claimed_at": {"$exists": False}},
+                    ],
+                },
                 {"$unset": {"runtime_metrics": ""}}
             )
             return result.modified_count
 
-    def find_finished_missing_runtime_metrics(self, finished_after: datetime) -> list[dict[str, Any]]:
-        """Finished experiments (Done/Error) still lacking telemetry — used by
-        the startup backfill sweep, bounded to recent runs."""
+    # Terminal states that must never be reprocessed automatically: a completed
+    # collection is done, and 'no_data' means Prometheus answered but the window
+    # held no matching series (a configuration issue a blind retry won't fix —
+    # use the manual endpoint after correcting the filter/interval).
+    _RETRYABLE_RUNTIME_METRICS_STATUS = ("unavailable", "failed")
+
+    def find_finished_runtime_metrics_to_collect(self, finished_after: datetime) -> list[dict[str, Any]]:
+        """Finished experiments (Done/Error) whose telemetry still needs a pass.
+
+        Used by the backfill sweep, bounded to recent runs. Picks experiments
+        with no ``runtime_metrics`` block yet, plus those left in a transient
+        ``unavailable``/``failed`` state (e.g. Prometheus was down at finish
+        time and has since come back)."""
         with self.connection.connect() as db:
             return list(db["experiments"].find(
                 {
                     "status": {"$in": [EnumStatus.DONE, EnumStatus.ERROR]},
                     "start_time": {"$ne": None},
                     "end_time": {"$gte": finished_after},
-                    "runtime_metrics": {"$exists": False},
+                    "$or": [
+                        {"runtime_metrics": {"$exists": False}},
+                        {"runtime_metrics.status":
+                            {"$in": list(self._RETRYABLE_RUNTIME_METRICS_STATUS)}},
+                    ],
                 },
                 {"_id": 1, "start_time": 1, "end_time": 1}
             ))
@@ -252,12 +335,16 @@ class ExperimentRepository:
 
             exp_doc = db["experiments"].find_one(
                 {"_id": exp_oid},
-                {"analysis_files": 1, "runtime_metrics.artifact.file_id": 1},
+                {"analysis_files": 1, "runtime_metrics.artifact.file_id": 1,
+                 "firmware_snapshot": 1},
             )
             if exp_doc:
                 file_ids.extend((exp_doc.get("analysis_files") or {}).values())
                 file_ids.append(
                     ((exp_doc.get("runtime_metrics") or {}).get("artifact") or {}).get("file_id")
+                )
+                file_ids.extend(
+                    self._collect_firmware_file_ids(exp_doc.get("firmware_snapshot"))
                 )
 
             files_deleted = self._delete_files(fs, file_ids)
@@ -268,6 +355,13 @@ class ExperimentRepository:
             cache_deleted = db["genome_cache"].delete_many({"experiment_id": exp_oid}).deleted_count
             exp_deleted = db["experiments"].delete_one({"_id": exp_oid}).deleted_count
 
+            # Drop the now dangling reference from every campaign that held it,
+            # otherwise the campaign listing keeps counting a deleted experiment.
+            db["campaigns"].update_many(
+                {"experiment_ids": exp_oid},
+                {"$pull": {"experiment_ids": exp_oid}},
+            )
+
             return {
                 "deleted_experiments": int(exp_deleted),
                 "deleted_generations": int(gens_deleted),
@@ -276,6 +370,21 @@ class ExperimentRepository:
                 "deleted_genome_cache": int(cache_deleted),
                 "deleted_files": files_deleted,
             }
+
+    @staticmethod
+    def _collect_firmware_file_ids(snapshot: Optional[dict]) -> list[ObjectId]:
+        """GridFS ids of the firmware copies owned by a single experiment.
+
+        Only the copies (``file_id``) are returned: ``origin_file_id`` points
+        into a shared source repository and must survive the experiment.
+        """
+        ids: list[ObjectId] = []
+        for repo in (snapshot or {}).get("repositories") or []:
+            for entry in (repo or {}).get("files") or []:
+                fid = (entry or {}).get("file_id")
+                if fid is not None:
+                    ids.append(fid)
+        return ids
 
     @staticmethod
     def _delete_files(fs: gridfs.GridFS, file_ids: Iterable[Optional[ObjectId]]) -> int:

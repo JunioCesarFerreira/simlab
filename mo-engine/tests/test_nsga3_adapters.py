@@ -7,6 +7,8 @@ MongoDB connection. They verify that:
   3. Class name encoding supports multiple n_obj in one process (no global clash).
 """
 import math
+import random
+
 import pytest
 
 
@@ -83,6 +85,7 @@ class TestNSGA3DeapSelectNextParents:
         s._objective_keys = ["m0", "m1"]
         s._divisions = 4
         s._pop_size = 10
+        s._ga_rng = random.Random(42)
         _, s._deap_ind_class = _ensure_deap_classes(2)
         s._deap_ref_points = tools.uniform_reference_points(nobj=2, p=4)
         return s
@@ -95,6 +98,7 @@ class TestNSGA3DeapSelectNextParents:
         s._objective_keys = ["m0", "m1", "m2"]
         s._divisions = 4
         s._pop_size = 10
+        s._ga_rng = random.Random(42)
         _, s._deap_ind_class = _ensure_deap_classes(3)
         s._deap_ref_points = tools.uniform_reference_points(nobj=3, p=4)
         return s
@@ -136,6 +140,7 @@ class TestNSGA3PymooSelectNextParents:
         s._objective_keys = ["m0", "m1"]
         s._divisions = 4
         s._pop_size = 10
+        s._ga_rng = random.Random(42)
         ref_dirs = get_reference_directions("das-dennis", 2, n_partitions=4)
         s._pymoo_survival = ReferenceDirectionSurvival(ref_dirs)
         s._pymoo_problem = Problem(n_var=1, n_obj=2)
@@ -151,6 +156,7 @@ class TestNSGA3PymooSelectNextParents:
         s._objective_keys = ["m0", "m1", "m2"]
         s._divisions = 4
         s._pop_size = 10
+        s._ga_rng = random.Random(42)
         ref_dirs = get_reference_directions("das-dennis", 3, n_partitions=4)
         s._pymoo_survival = ReferenceDirectionSurvival(ref_dirs)
         s._pymoo_problem = Problem(n_var=1, n_obj=3)

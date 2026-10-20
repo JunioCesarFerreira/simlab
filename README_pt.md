@@ -173,30 +173,37 @@ git clone https://github.com/JunioCesarFerreira/simlab.git
 cd simlab
 ```
 
-#### 3. Ajustar o arquivo `docker-compose.yaml`
+#### 3. Ajustar as configurações do ambiente
 
-Abra o arquivo e configure os seguintes parâmetros:
+Apenas o proxy reverso nginx publica portas para fora da máquina (`80` e
+`443`); todos os demais serviços são internos ou estão presos a `127.0.0.1`.
+Copie o arquivo de exemplo e edite:
 
-* **Portas:** verifique se as portas não entram em conflito com serviços já em execução (por exemplo, REST API ou MongoDB).
-* **Número de simuladores Cooja:** altere o número de réplicas ou serviços (por exemplo, sob `mo-engine` ou `simulators`) para definir quantas instâncias do Cooja serão lançadas.
-* **Variáveis de ambiente (opcional):** ajuste diretórios de dados, volumes e configurações de rede conforme necessário.
-
-Exemplo de trecho configurável:
-
-```yaml
-services:
-  mo-engine:
-    replicas: 3       # número de instâncias do Cooja
-    ports:
-      - "5001:5001"
-    environment:
-      - COOJAS_PER_NODE=3
-  rest-api:
-    ports:
-      - "8080:8080"
+```bash
+cp .env.example .env
 ```
 
-Após as modificações, salve o arquivo.
+| Variável | Finalidade |
+| --- | --- |
+| `SIMLAB_PUBLIC_URL` | URL base que os usuários digitam. **Precisa incluir a porta** quando o HTTPS não estiver na 443. |
+| `SIMLAB_HTTP_PORT` / `SIMLAB_HTTPS_PORT` | Portas do host usadas pelo proxy — altere se 80/443 já estiverem ocupadas. |
+| `SIMLAB_TLS_CN` / `SIMLAB_TLS_SAN` | Hostname gravado no certificado autoassinado gerado na primeira execução. |
+| `SIMLAB_API_KEY`, `GRAFANA_ADMIN_PASSWORD` | Credenciais. Troque as duas antes de expor o SimLab fora do localhost. |
+
+Todas as variáveis têm um valor padrão funcional, então a pilha também sobe sem
+o arquivo `.env`. Veja [nginx/README.md](nginx/README.md) para a configuração
+completa do proxy, incluindo como instalar um certificado emitido por uma CA.
+
+No próprio `docker-compose.yaml` ainda se define o **número de simuladores
+Cooja desta máquina**: adicione ou remova serviços `cooja*` e mantenha a
+variável `NUMBER_OF_CONTAINERS` do master node sincronizada.
+
+Essa variável agora **semeia** os workers do host local no primeiro start, em
+vez de dimensionar um pool. A capacidade vem de um inventário de hosts e
+workers no banco, mantido pela descoberta Docker e pelo ciclo de saúde, e
+outras máquinas são acrescentadas pela página **Infraestrutura** sem tocar no
+compose — ver
+[Recursos computacionais distribuídos](docs/markdown/RECURSOS_DISTRIBUIDOS.md).
 
 #### 4. Inicializar a pilha completa com Docker Compose
 
@@ -225,7 +232,8 @@ docker-compose ps
 Você deverá ver a lista de containers com seus estados (`Up`, `Exited`, etc.) e portas mapeadas.
 Verifique que:
 
-* O container **rest_api** está ativo na porta configurada (ex.: `8080`)
+* O container **simlab_proxy** está ativo publicando `80` e `443` — é a única entrada da pilha
+* O container **rest_api** está ativo (sem porta publicada: o acesso é via proxy)
 * O **mo_engine** está em execução
 * O **master_node** está em execução
 * Todos os serviços auxiliares (ex.: banco de dados, cooja) estão ativos
@@ -242,19 +250,38 @@ Após tudo estar em execução, o ambiente estará pronto para receber requisiç
 
 ## Uso
 
-> Esta seção será atualizada futuramente conforme a GUI for desenvolvida.
+Uma vez que o ambiente esteja em execução (conforme descrito nas **Instruções
+de Configuração**), o sistema é operado pela **WebGUI** — experimentos,
+instâncias sintéticas, resultados e a página de **Infraestrutura**. A
+**Swagger UI** da REST API continua disponível e é o caminho para o que a
+interface ainda não cobre.
 
-Uma vez que o ambiente esteja em execução (conforme descrito nas **Instruções de Configuração**), o sistema pode ser operado principalmente pela interface **Swagger UI** exposta pela REST API.
+### 1. Acessar o SimLab
 
-### 1. Acessar a Interface da API
+Tudo é servido sobre HTTPS pelo proxy reverso nginx; nenhum outro container é
+alcançável de fora da máquina. Com as configurações padrão:
 
-Abra um navegador e acesse:
+| Interface | URL |
+| --- | --- |
+| GUI Web | `https://localhost/` |
+| Swagger UI | `https://localhost/docs` |
+| REST API | `https://localhost/api/v1/` |
+| Grafana | `https://localhost/grafana/` |
 
+O certificado gerado na primeira execução é autoassinado, então o navegador
+exibe um aviso no primeiro acesso — aceite-o, ou instale um certificado emitido
+por uma CA conforme descrito em [nginx/README.md](nginx/README.md).
+
+Acesse `https://localhost/docs` para abrir a **Swagger UI**, interface
+interativa que lista todos os endpoints disponíveis.
+
+As ferramentas de linha de comando apontam para o mesmo proxy e validam o TLS
+contra `nginx/certs/simlab.crt`, dispensando qualquer flag a partir de um
+clone do repositório:
+
+```bash
+curl --cacert nginx/certs/simlab.crt https://localhost/api/v1/experiments
 ```
-http://localhost:8000/docs
-```
-
-Isso abrirá a **Swagger UI**, uma interface interativa que lista todos os endpoints disponíveis.
 
 ### 2. Enviar os Arquivos de Origem
 
@@ -307,6 +334,9 @@ Todos os arquivos e metadados permanecem armazenados no MongoDB/GridFS, garantin
   Um guia detalhado para execução de benchmarks sintéticos (DTLZ2, ZDT1, SCH1) sem necessidade do Cooja está disponível em:
   [docs/markdown/SYNTHETIC_MODE.md](./docs/markdown/SYNTHETIC_MODE.md).
   As instâncias sintéticas são definidas visualmente na página **Synthetic Instances** da GUI (menu lateral → *Synthetic*) e codificadas como o problema analítico P0, avaliado **no próprio processo do mo-engine** — nenhuma simulação é criada e o master-node não participa (o master-node mantém um fallback sintético para a estratégia `batch`, experimentos legados e a variável `ENABLE_DATA_SYNTHETIC`).
+
+* **Guia de Rastreabilidade de Firmware**
+  Cada experimento guarda uma cópia imutável do firmware com que foi executado, armazenada no GridFS e pertencente apenas a ele — veja [docs/markdown/FIRMWARE_TRACEABILITY.md](./docs/markdown/FIRMWARE_TRACEABILITY.md). A cópia é feita no início do experimento, sobrevive a edições ou à exclusão do repositório de fontes compartilhado, e pode ser visualizada e baixada na página do experimento na GUI.
 
 * **Changelog**
   Atualizações e novas funcionalidades estão documentadas em [`CHANGELOG.md`](./CHANGELOG.md).

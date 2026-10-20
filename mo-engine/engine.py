@@ -6,6 +6,7 @@ if project_path not in sys.path:
     sys.path.insert(0, project_path)
 
 from pylib.db import create_mongo_repository_factory, EnumStatus
+from pylib.firmware_snapshot import capture_firmware_snapshot
 from pylib.telemetry import start_runtime_metrics_watcher
 from lib.strategy.base import EngineStrategy
 from lib.strategy.nsga3 import NSGA3LoopStrategy
@@ -63,6 +64,10 @@ def select_strategy(exp_doc: dict) -> EngineStrategy:
 def process_experiment(exp_doc: dict) -> bool:
     exp_id = str(exp_doc["_id"])
     log.info(f"Processing experiment id: {exp_id}")
+    # Freeze the firmware before any simulation is queued: source repositories
+    # stay editable, so this copy is the only evidence of what actually ran.
+    # Best-effort by design — it records its own failures and never raises.
+    capture_firmware_snapshot(mongo, exp_doc)
     try:
         strategy = select_strategy(exp_doc)
         strategy.start()
@@ -85,6 +90,21 @@ def on_experiment_event(change: dict):
     if mongo.experiment_repo.update_starting(exp_id):
         if process_experiment(exp_doc) == False:
             mongo.experiment_repo.update_status(exp_id, EnumStatus.ERROR)
+
+
+def resume_experiment(exp_doc: dict) -> None:
+    """Pick up an experiment that was already running.
+
+    Separate from ``run_pending_experiment`` because the claim is different:
+    there is no ``Waiting`` to transition from, and the start time must not be
+    rewritten — it is the same run, continuing.
+    """
+    exp_id = str(exp_doc["_id"])
+    if not mongo.experiment_repo.claim_resume(exp_id):
+        log.info("Experiment %s is no longer running; not resuming it", exp_id)
+        return
+    if process_experiment(exp_doc) is False:
+        mongo.experiment_repo.update_status(exp_id, EnumStatus.ERROR)
 
 
 def run_pending_experiment(change: dict):
@@ -112,6 +132,25 @@ def main() -> None:
 
     while (len(pending) > 0):
         run_pending_experiment(pending.pop())
+
+    # And the ones a previous process left in flight. Only `Waiting` was
+    # picked up here, so an experiment interrupted mid-generation stayed
+    # `Running` for ever: its strategy state died with the process and the
+    # change stream only fires on new ones. Observed in practice — an engine
+    # restart left a finished generation with no evolution after it, and the
+    # experiment never completed.
+    #
+    # The strategies already know how to come back: `start()` resumes the
+    # latest persisted generation, and processing a generation that is already
+    # terminal is a path they handle. The firmware capture is idempotent, so
+    # re-entering it costs nothing.
+    resumable = exp_repo.find_startable_by_status(EnumStatus.RUNNING)
+    if resumable:
+        log.info(
+            "Resuming %d experiment(s) left running by a previous process",
+            len(resumable))
+    for exp_doc in resumable:
+        resume_experiment(exp_doc)
 
     Thread(
         target=exp_repo.watch_status_waiting, 

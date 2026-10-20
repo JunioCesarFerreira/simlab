@@ -63,8 +63,8 @@ class Problem1ContinuousMobilityAdapter(ProblemAdapter):
             region=self.problem.region,
         )
         log.info(
-            "[P1] Trajectory coverage constraint built: %d sampled points, R=%.2f",
-            self._trajectory_constraint.n_points, R,
+            "[P1] Trajectory coverage constraint built: %d sampled points, R=%.2f, alpha=%.2f%%",
+            self._trajectory_constraint.n_points, R, self.problem.min_coverage_percentage,
         )
 
     def coverage_score(self, relays: list[Position]) -> float:

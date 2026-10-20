@@ -87,9 +87,9 @@
     <!-- File viewer -->
     <SourceFileViewer
       v-if="viewerFile"
-      :repository-id="id"
       :file-id="viewerFile.id"
       :file-name="viewerFile.name"
+      :load="loadFileContent"
       @close="viewerFile = null"
     />
 
@@ -192,6 +192,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   getRepository,
+  getFileContent,
   updateRepository,
   addFilesToRepository,
   removeFileFromRepository,
@@ -337,6 +338,10 @@ async function removeFile(fileId: string) {
 // ── File viewer ───────────────────────────────────────────────────────────────
 
 const viewerFile = ref<{ id: string; name: string } | null>(null)
+
+function loadFileContent(fileId: string): Promise<string> {
+  return getFileContent(props.id, fileId)
+}
 
 function openViewer(fileId: string, fileName: string) {
   viewerFile.value = { id: fileId, name: fileName }

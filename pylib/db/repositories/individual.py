@@ -1,4 +1,6 @@
 import logging
+from typing import Optional
+
 from bson import ObjectId, errors
 
 from pylib.db.models.individual import Individual
@@ -36,6 +38,42 @@ class IndividualRepository:
         with self.connection.connect() as db:
             return list(db["individuals"].find({"generation_id": generation_id}))
 
+    def find_grouped_by_experiment(
+        self, experiment_id: ObjectId, *, objectives_only: bool = False,
+    ) -> dict[ObjectId, list[Individual]]:
+        """Read all generations in one indexed query, omitting heavy chart-irrelevant data."""
+        projection = (
+            {"_id": 0, "generation_id": 1, "individual_id": 1, "objectives": 1}
+            if objectives_only else None
+        )
+        grouped: dict[ObjectId, list[Individual]] = {}
+        with self.connection.connect() as db:
+            for individual in db["individuals"].find(
+                {"experiment_id": experiment_id}, projection,
+            ):
+                grouped.setdefault(individual["generation_id"], []).append(individual)
+        return grouped
+
+    def find_by_experiment_and_ids(
+        self,
+        experiment_id: ObjectId,
+        individual_ids: list[str],
+    ) -> list[Individual]:
+        """Individuals of one experiment, looked up by chromosome hash.
+
+        Survivor sets are hashes and a survivor may have been evaluated several
+        generations earlier, so they cannot be resolved against a single
+        generation's documents. The same hash can appear in more than one
+        generation; callers that need one document per hash keep the first.
+        """
+        if not individual_ids:
+            return []
+        with self.connection.connect() as db:
+            return list(db["individuals"].find({
+                "experiment_id": experiment_id,
+                "individual_id": {"$in": list(individual_ids)},
+            }))
+
     def update_objectives(
         self,
         individual_id: str,
@@ -46,6 +84,33 @@ class IndividualRepository:
             result = db["individuals"].update_one(
                 {"generation_id": generation_id, "individual_id": individual_id},
                 {"$set": {"objectives": objectives}}
+            )
+            return result.modified_count > 0
+
+    def update_evaluation(
+        self,
+        individual_id: str,
+        generation_id: ObjectId,
+        objectives: list[float],
+        completeness: Optional[dict] = None,
+    ) -> bool:
+        """Persist an objective vector **with** the evidence behind it.
+
+        The two belong in one write. Stored separately, a reader could see
+        objectives whose completeness had not been written yet and would have
+        no way to know that — which is the state the whole invariant is about.
+
+        ``completeness`` is the record from
+        ``GenerationRepository.replica_completeness``, plus whatever the
+        engine's policy decided to do about it.
+        """
+        fields: dict = {"objectives": objectives}
+        if completeness is not None:
+            fields["completeness"] = completeness
+        with self.connection.connect() as db:
+            result = db["individuals"].update_one(
+                {"generation_id": generation_id, "individual_id": individual_id},
+                {"$set": fields},
             )
             return result.modified_count > 0
 

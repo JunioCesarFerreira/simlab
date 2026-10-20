@@ -12,6 +12,7 @@ function createDefaultDraft(): ProblemDraft {
     radiusOfInter: 200,
     radiusOfCover: 90,
     kRequired: 1,
+    minCoveragePercentage: 100,
     region: [-150, -150, 150, 150],
     sink: null,
     candidates: [],
@@ -45,10 +46,13 @@ export const useProblemStore = defineStore('problem', () => {
   }
 
   function loadDraft(incoming: ProblemDraft) {
-    draft.value = incoming
+    // Shallow-merge over the defaults: server-side saved problems predating a
+    // newly added top-level field (e.g. minCoveragePercentage) would otherwise
+    // land as `undefined` and trip validation for a field the user never set.
+    draft.value = { ...createDefaultDraft(), ...incoming }
   }
 
-  function updateMeta(fields: Partial<Pick<ProblemDraft, 'name' | 'radiusOfReach' | 'radiusOfInter' | 'radiusOfCover' | 'kRequired' | 'region' | 'numSensors'>>) {
+  function updateMeta(fields: Partial<Pick<ProblemDraft, 'name' | 'radiusOfReach' | 'radiusOfInter' | 'radiusOfCover' | 'kRequired' | 'minCoveragePercentage' | 'region' | 'numSensors'>>) {
     const nameChanging = fields.name && fields.name !== draft.value.name
     Object.assign(draft.value, fields)
     if (nameChanging) {

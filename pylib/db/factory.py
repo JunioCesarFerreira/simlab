@@ -12,6 +12,11 @@ from pylib.db.repositories.genome_cache import GenomeCacheRepository
 from pylib.db.repositories.campaign import CampaignRepository
 from pylib.db.repositories.problem import ProblemRepository
 from pylib.db.repositories.adaptive_evaluation import AdaptiveEvaluationRepository
+from pylib.db.repositories.infra import (
+    HostRepository,
+    CoojaResourceRepository,
+    InfraCryptoRepository,
+)
 
 
 class MongoRepository(NamedTuple):
@@ -25,11 +30,16 @@ class MongoRepository(NamedTuple):
     genome_cache_repo: GenomeCacheRepository
     campaign_repo: CampaignRepository
     problem_repo: ProblemRepository
+    host_repo: HostRepository
+    resource_repo: CoojaResourceRepository
+    infra_crypto_repo: InfraCryptoRepository
     adaptive_repo: AdaptiveEvaluationRepository
 
 
-def create_mongo_repository_factory(mongo_uri: str, db_name: str) -> MongoRepository:
-    connection = MongoDBConnection(mongo_uri, db_name)
+def create_mongo_repository_factory(
+    mongo_uri: str, db_name: str, *, reuse_client: bool = False,
+) -> MongoRepository:
+    connection = MongoDBConnection(mongo_uri, db_name, reuse_client=reuse_client)
     fs_handler = MongoGridFSHandler(connection)
     experiment_repo = ExperimentRepository(connection)
     simulation_repo = SimulationRepository(connection)
@@ -40,6 +50,9 @@ def create_mongo_repository_factory(mongo_uri: str, db_name: str) -> MongoReposi
     genome_cache_repo = GenomeCacheRepository(connection)
     campaign_repo = CampaignRepository(connection)
     problem_repo = ProblemRepository(connection)
+    host_repo = HostRepository(connection)
+    resource_repo = CoojaResourceRepository(connection)
+    infra_crypto_repo = InfraCryptoRepository(connection)
     adaptive_repo = AdaptiveEvaluationRepository(connection)
     return MongoRepository(
         experiment_repo=experiment_repo,
@@ -52,5 +65,8 @@ def create_mongo_repository_factory(mongo_uri: str, db_name: str) -> MongoReposi
         genome_cache_repo=genome_cache_repo,
         campaign_repo=campaign_repo,
         problem_repo=problem_repo,
+        host_repo=host_repo,
+        resource_repo=resource_repo,
+        infra_crypto_repo=infra_crypto_repo,
         adaptive_repo=adaptive_repo,
     )

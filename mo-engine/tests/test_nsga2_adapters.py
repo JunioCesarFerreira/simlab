@@ -8,6 +8,8 @@ MongoDB connection. They verify that:
   4. Results are stable across 2-objective and 3-objective problems.
 """
 import math
+import random
+
 import pytest
 
 
@@ -86,6 +88,7 @@ class TestNSGA2DeapSelectNextParents:
         s = NSGA2DeapStrategy.__new__(NSGA2DeapStrategy)
         s._objective_keys = ["m0", "m1"]
         s._pop_size = 10
+        s._ga_rng = random.Random(42)
         _, s._deap_ind_class = _ensure_deap_classes_nsga2(2)
         return s
 
@@ -95,6 +98,7 @@ class TestNSGA2DeapSelectNextParents:
         s = NSGA2DeapStrategy.__new__(NSGA2DeapStrategy)
         s._objective_keys = ["m0", "m1", "m2"]
         s._pop_size = 10
+        s._ga_rng = random.Random(42)
         _, s._deap_ind_class = _ensure_deap_classes_nsga2(3)
         return s
 
@@ -158,6 +162,7 @@ class TestNSGA2PymooSelectNextParents:
         s = NSGA2PymooStrategy.__new__(NSGA2PymooStrategy)
         s._objective_keys = ["m0", "m1"]
         s._pop_size = 10
+        s._ga_rng = random.Random(42)
         s._pymoo_survival = RankAndCrowding()
         s._pymoo_problem = Problem(n_var=1, n_obj=2)
         return s
@@ -170,6 +175,7 @@ class TestNSGA2PymooSelectNextParents:
         s = NSGA2PymooStrategy.__new__(NSGA2PymooStrategy)
         s._objective_keys = ["m0", "m1", "m2"]
         s._pop_size = 10
+        s._ga_rng = random.Random(42)
         s._pymoo_survival = RankAndCrowding()
         s._pymoo_problem = Problem(n_var=1, n_obj=3)
         return s
@@ -232,11 +238,13 @@ class TestCrossLibraryConsistency:
         s_deap = NSGA2DeapStrategy.__new__(NSGA2DeapStrategy)
         s_deap._objective_keys = ["m0", "m1"]
         s_deap._pop_size = 10
+        s_deap._ga_rng = random.Random(42)
         _, s_deap._deap_ind_class = _ensure_deap_classes_nsga2(2)
 
         s_pymoo = NSGA2PymooStrategy.__new__(NSGA2PymooStrategy)
         s_pymoo._objective_keys = ["m0", "m1"]
         s_pymoo._pop_size = 10
+        s_pymoo._ga_rng = random.Random(42)
         s_pymoo._pymoo_survival = RankAndCrowding()
         s_pymoo._pymoo_problem = Problem(n_var=1, n_obj=2)
 

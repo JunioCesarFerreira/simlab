@@ -13,6 +13,7 @@ instantiation will fail with a clear ImportError.
 """
 
 from .nsga3 import NSGA3LoopStrategy
+from .library_rng import numpy_global_seed
 
 
 def _ensure_deap_classes(n_obj: int) -> tuple[str, str]:
@@ -84,6 +85,7 @@ class NSGA3DeapStrategy(NSGA3LoopStrategy):
             deap_inds.append(ind)
 
         # DEAP's selNSGA3: non-dominated sorting + niching with ref points.
-        selected = tools.selNSGA3(deap_inds, self._pop_size, self._deap_ref_points)
+        with numpy_global_seed(self._ga_rng):
+            selected = tools.selNSGA3(deap_inds, self._pop_size, self._deap_ref_points)
 
         return [R_population[ind._orig_idx] for ind in selected]

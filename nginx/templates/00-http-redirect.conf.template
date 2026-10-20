@@ -1,0 +1,19 @@
+# Rendered by the nginx image entrypoint into /etc/nginx/generated/ at
+# container start. NGINX_ENVSUBST_FILTER limits substitution to ${SIMLAB_*},
+# so nginx's own $variables below survive envsubst untouched.
+server {
+    listen 80 default_server;
+    server_name _;
+
+    # Kept on plain HTTP so the compose healthcheck can probe the proxy
+    # without dealing with the self-signed certificate.
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location / {
+        return 301 ${SIMLAB_PUBLIC_URL}$request_uri;
+    }
+}

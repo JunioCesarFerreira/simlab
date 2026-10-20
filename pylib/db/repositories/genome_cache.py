@@ -1,5 +1,5 @@
 import logging
-from typing import Any
+from typing import Any, Optional
 from bson import ObjectId
 
 from pylib.db.models.genome_cache import GenomeCache
@@ -50,22 +50,38 @@ class GenomeCacheRepository:
         experiment_id: ObjectId,
         genome_hash: str,
         objectives: list[float],
-        evaluation_source: str | None = None,
+        completeness: Optional[dict] = None,
+        evaluation_source: Optional[str] = None,
     ) -> bool:
         """Persist computed objectives for a previously registered genome.
+
+        ``completeness`` is the evidence the vector came from, and it belongs
+        here for the same reason it belongs on the individual: the objectives
+        alone cannot say how many replicas they rest on.
+
+        Caching only the vector had a specific cost. A genome reused in a
+        later generation has no simulations of its own there, so nothing
+        computed a completeness for it — the individual was written with
+        ``unknown`` and ``objective_used = true``, even when the original
+        evaluation was a *partial* mean that the policy had refused. The
+        evidence was known and then discarded. Observed in a 344-simulation
+        pilot: 38 of 210 individuals reported ``unknown`` purely through
+        reuse.
 
         ``evaluation_source`` is optional and records how the objectives were
         obtained ("simulated", "cache", "analytical", "penalty").  Only ground
         truth may be written here: strategies that also produce *estimated*
         objectives must keep them out of this collection.
         """
-        updates: dict[str, Any] = {"objectives": objectives}
+        fields: dict[str, Any] = {"objectives": objectives}
+        if completeness is not None:
+            fields["completeness"] = completeness
         if evaluation_source is not None:
-            updates["evaluation_source"] = evaluation_source
+            fields["evaluation_source"] = evaluation_source
         with self.connection.connect() as db:
             result = db["genome_cache"].update_one(
                 {"experiment_id": experiment_id, "genome_hash": genome_hash},
-                {"$set": updates},
+                {"$set": fields},
             )
             return result.modified_count > 0
 
@@ -77,7 +93,8 @@ class GenomeCacheRepository:
         with self.connection.connect() as db:
             return list(db["genome_cache"].find(
                 {"experiment_id": experiment_id},
-                {"_id": 0, "genome_hash": 1, "objectives": 1},
+                {"_id": 0, "genome_hash": 1, "objectives": 1,
+                 "completeness": 1},
             ))
 
     def get_all_full_by_experiment(self, experiment_id: ObjectId) -> list[dict]:
@@ -92,7 +109,7 @@ class GenomeCacheRepository:
             return list(db["genome_cache"].find(
                 {"experiment_id": experiment_id},
                 {"_id": 0, "genome_hash": 1, "chromosome": 1,
-                 "objectives": 1, "evaluation_source": 1},
+                 "objectives": 1, "completeness": 1, "evaluation_source": 1},
             ))
 
     def delete_by_experiment(self, experiment_id: ObjectId) -> int:

@@ -1,8 +1,11 @@
+import json
 import os
+import re
 import shutil
 import tempfile
 import zipfile
 import mimetypes
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
@@ -10,9 +13,16 @@ from bson import ObjectId, errors as bson_errors
 from gridfs.errors import NoFile
 
 from pylib.db import MongoRepository
+from pylib.firmware_snapshot import iter_snapshot_files
 from api.dependencies import get_factory
 
 router = APIRouter()
+
+
+def _safe_name(name: str, fallback: str) -> str:
+    """Flatten an arbitrary name into a single, safe archive path segment."""
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", (name or "").strip()).strip("._")
+    return cleaned or fallback
 
 
 @router.get("/{file_id}/as/{extension}", response_class=FileResponse)
@@ -210,3 +220,97 @@ def download_experiment_topologies_zip(
     background_tasks.add_task(shutil.rmtree, work_dir, True)
     return FileResponse(zip_path, filename=f"{experiment_id}_topologies.zip", media_type="application/zip",
                         background=background_tasks)
+
+
+@router.get("/experiments/{experiment_id}/firmware/zip", response_class=FileResponse)
+def download_experiment_firmware_zip(
+    experiment_id: str,
+    background_tasks: BackgroundTasks,
+    factory: MongoRepository = Depends(get_factory)
+):
+    """
+    Download the firmware captured for an experiment as a ZIP.
+    Structure: {repository_name}/{file_name}, plus a MANIFEST.json recording
+    the GridFS ids and sha256 of every file — the evidence of what ran.
+    """
+    try:
+        ObjectId(experiment_id)
+    except bson_errors.InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid experiment_id")
+
+    snapshot = factory.experiment_repo.get_firmware_snapshot(experiment_id)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="No firmware snapshot for this experiment")
+
+    try:
+        entries = list(iter_snapshot_files(snapshot))
+    except Exception as e:  # malformed snapshot document
+        raise HTTPException(status_code=500, detail=str(e))
+    if not entries:
+        raise HTTPException(status_code=404, detail="Firmware snapshot has no captured files")
+
+    work_dir = tempfile.mkdtemp(prefix="simlab_firmware_")
+    files_dir = os.path.join(work_dir, "files")
+    os.makedirs(files_dir, exist_ok=True)
+    zip_path = os.path.join(work_dir, f"{experiment_id}_firmware.zip")
+
+    manifest: dict = {
+        "experiment_id": experiment_id,
+        "status": snapshot.get("status", ""),
+        "captured_at": _iso(snapshot.get("captured_at")),
+        "schema_version": snapshot.get("schema_version"),
+        "repositories": [],
+    }
+
+    try:
+        for index, repo in enumerate(snapshot.get("repositories") or []):
+            repo_name = _safe_name(repo.get("name", ""), f"repository_{index}")
+            manifest["repositories"].append({
+                "name": repo.get("name", ""),
+                "folder": repo_name,
+                "option_keys": [str(k) for k in (repo.get("option_keys") or [])],
+                "source_repository_id": str(repo.get("source_repository_id") or ""),
+                "files": [
+                    {"file_name": f.get("file_name", ""),
+                     "file_id": str(f.get("file_id") or ""),
+                     "origin_file_id": str(f.get("origin_file_id") or ""),
+                     "size_bytes": f.get("size_bytes"),
+                     "sha256": f.get("sha256", "")}
+                    for f in (repo.get("files") or [])
+                ],
+                "missing_files": [
+                    {"file_name": f.get("file_name", ""),
+                     "origin_file_id": str(f.get("origin_file_id") or "")}
+                    for f in (repo.get("missing_files") or [])
+                ],
+            })
+
+        for position, (repo_name, entry) in enumerate(entries):
+            folder = os.path.join(files_dir, _safe_name(repo_name, "repository"))
+            os.makedirs(folder, exist_ok=True)
+            file_name = _safe_name(entry.get("file_name", ""), f"file_{position}")
+            try:
+                factory.fs_handler.download_file(entry.get("file_id"),
+                                                 os.path.join(folder, file_name))
+            except Exception:
+                continue
+
+        with open(os.path.join(files_dir, "MANIFEST.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+            for dirpath, _, filenames in os.walk(files_dir):
+                for fname in filenames:
+                    fpath = os.path.join(dirpath, fname)
+                    zipf.write(fpath, arcname=os.path.relpath(fpath, files_dir))
+    except Exception as e:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    background_tasks.add_task(shutil.rmtree, work_dir, True)
+    return FileResponse(zip_path, filename=f"{experiment_id}_firmware.zip",
+                        media_type="application/zip", background=background_tasks)
+
+
+def _iso(value) -> str:
+    return value.isoformat() if isinstance(value, datetime) else str(value or "")

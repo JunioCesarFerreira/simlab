@@ -1,13 +1,14 @@
 {
   "name": "simlab",
   "private": true,
-  "version": "0.1.6",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint . --max-warnings=0",
+    "type-check": "vue-tsc -p tsconfig.app.json --noEmit",
     "format": "prettier . --write",
     "test": "vitest run"
   },
@@ -16,6 +17,7 @@
     "echarts": "^6.0.0",
     "echarts-gl": "^2.1.0",
     "highlight.js": "^11.11.1",
+    "libsodium-wrappers": "^0.8.4",
     "nanoid": "^5.1.15",
     "pinia": "^3.0.4",
     "vue": "^3.5.24",

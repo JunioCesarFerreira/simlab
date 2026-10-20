@@ -15,8 +15,16 @@ const routes: RouteRecordRaw[] = [
     component: () => import("../../pages/ExperimentDetail.vue"),
     props: true,
   },
-  { path: "/problems", component: () => import("../../pages/ProblemEditor.vue"), meta: { fullScreen: true } },
-  { path: "/synthetic", component: () => import("../../pages/SyntheticEditor.vue"), meta: { fullScreen: true } },
+  {
+    path: "/problems",
+    component: () => import("../../pages/ProblemEditor.vue"),
+    meta: { fullScreen: true },
+  },
+  {
+    path: "/synthetic",
+    component: () => import("../../pages/SyntheticEditor.vue"),
+    meta: { fullScreen: true },
+  },
   { path: "/sources", component: () => import("../../pages/SourceRepositoriesList.vue") },
   {
     path: "/sources/:id",
@@ -24,6 +32,7 @@ const routes: RouteRecordRaw[] = [
     props: true,
   },
   { path: "/compare", component: () => import("../../pages/ExperimentsComparison.vue") },
+  { path: "/infrastructure", component: () => import("../../pages/Infrastructure.vue") },
   // Catch-all: unknown URLs render a 404 page instead of a blank shell
   { path: "/:pathMatch(.*)*", component: () => import("../../pages/NotFound.vue") },
 ];

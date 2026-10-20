@@ -1,11 +1,15 @@
-"""Regression: the reported Pareto front must be the non-dominated set of the
-FINAL population (parents ∪ last offspring), NOT the whole archive of every
-genome ever evaluated.
+"""Regression: the reported Pareto front must be the non-dominated set of
+P_final — the population environmental selection SELECTED — and nothing else.
 
-The archive front accumulates near-front points from early, poorly-converged
-generations, producing a thick/noisy front that does not match a standard
-reference plot. This test locks the clean final-population behaviour for both
-NSGA-II and NSGA-III.
+Two ways the front gets polluted, both locked here for NSGA-II and NSGA-III:
+
+  * the whole archive of every genome ever evaluated, whose non-dominated set
+    accumulates near-front points from early, poorly-converged generations and
+    produces a thick/noisy front that matches no reference plot;
+  * ``parents ∪ last offspring``, up to 2·pop_size candidates that no selection
+    ever ran on. ``_evolution`` runs the final environmental selection before
+    the stop condition, so ``self._parents`` is already the selected P_final and
+    the last offspring are folded into it.
 """
 import pytest
 
@@ -37,19 +41,25 @@ def test_final_front_uses_final_population_only(cls):
     strat._objective_keys = ["f1", "f2"]
     strat._objective_goals = [1, 1]  # both minimize
 
-    # Final population: two clean, non-dominated points.
+    # P_final: the survivors of the last environmental selection.
     fp1 = _FakeChromosome("final-1")
     fp2 = _FakeChromosome("final-2")
-    strat._parents = [fp1]
-    strat._current_population = [fp2]
+    strat._parents = [fp1, fp2]
 
-    # An archive-only genome that is non-dominated (extreme in f1) but NOT in the
-    # final population — it must NOT appear in the reported front.
+    # Last offspring still in _current_population. fp2 survived and is in both;
+    # "rejected" lost the selection despite being non-dominated in the union,
+    # and must NOT reappear in the reported front.
+    rejected = _FakeChromosome("rejected")
+    strat._current_population = [fp2, rejected]
+
+    # An archive-only genome that is non-dominated (extreme in f1) but in
+    # neither set — it must NOT appear in the reported front either.
     archive_only = _FakeChromosome("archive-only")
 
     strat._map_genome_objectives = {
         fp1: [0.1, 0.9],
         fp2: [0.9, 0.1],
+        rejected: [0.5, 0.5],        # non-dominated vs the finals, but not selected
         archive_only: [0.05, 2.0],   # non-dominated vs the finals, but stale
     }
 
@@ -57,6 +67,7 @@ def test_final_front_uses_final_population_only(cls):
     tags = {item["chromosome"]["tag"] for item in front}
 
     assert "archive-only" not in tags, "archive-only genome leaked into the reported front"
+    assert "rejected" not in tags, "unselected offspring leaked into the reported front"
     assert tags == {"final-1", "final-2"}
     # objectives echoed in original space (all-min → unchanged), keyed by name
     by_tag = {item["chromosome"]["tag"]: item["objectives"] for item in front}

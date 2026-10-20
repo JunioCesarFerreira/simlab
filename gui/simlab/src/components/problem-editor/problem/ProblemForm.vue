@@ -21,6 +21,12 @@
         <input v-model.number="kRequired" type="number" min="1" />
       </label>
     </template>
+    <label v-if="hasCoverageConstraint(name)" :class="{ error: hasError('min_coverage_percentage') }">
+      Coverage Level α (%)
+      <input v-model.number="minCoveragePercentage" type="number" min="0" max="100" step="1" />
+      <span class="hint">Minimum share of the sampled trajectory that must stay connected to the sink.</span>
+      <span v-if="hasError('min_coverage_percentage')" class="err-msg">{{ errorFor('min_coverage_percentage') }}</span>
+    </label>
     <label :class="{ error: hasError('radius_of_reach') }">
       Radius of Reach
       <input v-model.number="radiusOfReach" type="number" min="1" />
@@ -73,7 +79,7 @@
 import { computed } from 'vue'
 import { useProblemStore } from '../../../app/stores/problemStore'
 import { useValidation } from '../../../composables/useValidation'
-import { PROBLEM_NAMES, hasCandidates } from '../../../types/problem'
+import { PROBLEM_NAMES, hasCandidates, hasCoverageConstraint } from '../../../types/problem'
 import type { Region } from '../../../types/problem'
 
 const problemStore = useProblemStore()
@@ -94,6 +100,10 @@ const radiusOfCover = computed({
 const kRequired = computed({
   get: () => problemStore.draft.kRequired,
   set: v => problemStore.updateMeta({ kRequired: v }),
+})
+const minCoveragePercentage = computed({
+  get: () => problemStore.draft.minCoveragePercentage,
+  set: v => problemStore.updateMeta({ minCoveragePercentage: v }),
 })
 const radiusOfReach = computed({
   get: () => problemStore.draft.radiusOfReach,
@@ -139,6 +149,7 @@ fieldset.error { border-color: #ef4444; }
 legend { font-size: 11px; color: var(--color-text-muted); }
 .region-row { display: grid; grid-template-columns: 14px 60px 60px; gap: 4px; align-items: center; }
 .axis-label { font-size: 10px; color: #9ca3af; text-align: center; }
+.hint { font-size: 10px; color: var(--color-text-muted); line-height: 1.3; }
 .err-msg { font-size: 10px; color: #ef4444; }
 .sink-warn { font-size: 11px; color: #f97316; background: var(--color-surface); border: 1px solid #f9731666; border-radius: 4px; padding: 3px 6px; }
 .danger { background: #ef4444; color: var(--color-surface); border: none; padding: 5px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; margin-top: 4px; }

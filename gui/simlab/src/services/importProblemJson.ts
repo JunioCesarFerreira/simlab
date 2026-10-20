@@ -36,6 +36,9 @@ export function importProblemJson(json: string): ImportResult {
     radiusOfInter: p.radius_of_inter,
     radiusOfCover: p.radius_of_cover ?? 90,
     kRequired: p.k_required ?? 1,
+    // alpha defaults to 100% (full trajectory coverage), matching
+    // ProblemP1/ProblemP2.cast in pylib/config/problems.py.
+    minCoveragePercentage: p.min_coverage_percentage ?? 100,
     region: p.region as [number, number, number, number],
     sink: { x: p.sink[0], y: p.sink[1] },
     candidates: hasCandidates(p.name)

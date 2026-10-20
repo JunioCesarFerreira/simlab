@@ -1,5 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from contextlib import asynccontextmanager
 
 import os, sys
 project_path = os.path.abspath(os.path.join(os.getcwd(), ".."))
@@ -8,15 +10,27 @@ if project_path not in sys.path:
 
 from api.router import api_router
 from api.responses import SafeJSONResponse
+from api.dependencies import close_factory
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        yield
+    finally:
+        close_factory()
 
 app = FastAPI(
     title="Simulation Management API",
-    version="2.0.0",
+    version="2.1.0",
     openapi_version="3.0.3",
     # Tolerate non-finite floats (inf/nan) in stored objectives so reading an
     # experiment never fails with HTTP 500 during JSON serialization.
     default_response_class=SafeJSONResponse,
+    lifespan=lifespan,
 )
+
+app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=4)
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,4 +48,7 @@ def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    # Auto-reload is opt-in: without watchfiles uvicorn falls back to StatReload,
+    # which polls every file under /app and pins a CPU core indefinitely.
+    reload = os.getenv("UVICORN_RELOAD") == "1"
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=reload)

@@ -181,6 +181,102 @@ def true_front(bench: Bench, M: int, n_points: int = 500, seed: int = 0):
     raise ValueError(f"Unknown benchmark '{bench}'. Valid: {', '.join(_KNOWN)}.")
 
 
+def ideal(bench: Bench, M: int) -> list[float]:
+    """Best-corner (ideal) point of the true front.
+
+    Together with :func:`nadir` it gives the benchmark's THEORETICAL
+    ideal-nadir range. Normalising indicators by that range instead of by the
+    extremes of a sampled reference front makes the numbers independent of how
+    the reference happened to be drawn, and comparable across runs.
+    """
+    b = bench.upper()
+    if b in ("DTLZ2",):
+        return [0.0] * M
+    if b in ("ZDT1", "SCH1"):
+        return [0.0, 0.0]
+    raise ValueError(f"Unknown benchmark '{bench}'. Valid: {', '.join(_KNOWN)}.")
+
+
+def _nearest_on_curve(points, to_point, t_lo: float, t_hi: float,
+                      grid: int = 2048, iterations: int = 60):
+    """Distance from each row of *points* to a 1-D parametric curve.
+
+    Bracket the minimiser on a coarse grid, then ternary-search inside the
+    bracket. The bracket shrinks by a third each iteration, so 60 rounds take a
+    ~1e-3 interval down to machine precision. Vectorised over all points.
+    """
+    import numpy as np
+
+    ts = np.linspace(t_lo, t_hi, grid)
+    distances = np.linalg.norm(points[:, None, :] - to_point(ts)[None, :, :], axis=2)
+    step = (t_hi - t_lo) / (grid - 1)
+    closest = ts[np.argmin(distances, axis=1)]
+    lo = np.clip(closest - step, t_lo, t_hi)
+    hi = np.clip(closest + step, t_lo, t_hi)
+
+    for _ in range(iterations):
+        left = lo + (hi - lo) / 3.0
+        right = hi - (hi - lo) / 3.0
+        left_is_better = (
+            np.linalg.norm(points - to_point(left), axis=1)
+            < np.linalg.norm(points - to_point(right), axis=1)
+        )
+        hi = np.where(left_is_better, right, hi)
+        lo = np.where(left_is_better, lo, left)
+
+    return np.linalg.norm(points - to_point(0.5 * (lo + hi)), axis=1)
+
+
+def front_distance(bench: Bench, points, M: int):
+    """Exact distance from each row of *points* to the true Pareto front.
+
+    This is what a sampled reference front only approximates, and the
+    approximation is poor exactly where it matters. Generational distance is the
+    mean of these values, so with a sampled reference its floor is the sample's
+    fill distance — which shrinks as ``N**(-1/(M-1))``. Measured on points lying
+    EXACTLY on the DTLZ2 front, a 500-point reference reports GD 0.0016 at M=2,
+    0.030 at M=3 and 0.194 at M=6; raising it to 200 000 points still leaves
+    0.051 at M=6. No practical sample fixes that. These closed forms do: the
+    same points come back at ~5e-17.
+
+    * DTLZ2 — the front is the unit hypersphere in the first orthant, so for any
+      point of that orthant the nearest front point is ``f/‖f‖`` and the
+      distance is exactly ``|‖f‖₂ − 1|``.
+    * ZDT1 / SCH1 — plane curves, solved by parametric minimisation to machine
+      precision.
+
+    Only the distance is closed-form. IGD and IGD+ average over the REFERENCE
+    set, so they still need one and keep the discretisation floor; swapping in
+    this distance would not measure coverage.
+    """
+    import numpy as np
+
+    pts = np.asarray(points, dtype=float)
+    if pts.ndim != 2:
+        raise ValueError(f"points must be 2-D, got shape {pts.shape}.")
+
+    b = bench.upper()
+    if b == "DTLZ2":
+        if pts.shape[1] != M:
+            raise ValueError(f"points have width {pts.shape[1]}, expected M={M}.")
+        return np.abs(np.linalg.norm(pts, axis=1) - 1.0)
+    if pts.shape[1] != 2:
+        raise ValueError(f"{b} is a two-objective benchmark; points have width {pts.shape[1]}.")
+    if b == "ZDT1":
+        # Parametrised by u with f1 = u², not by f1 directly: 1 - sqrt(f1) has a
+        # vertical tangent at the origin, so equal steps in f1 are wildly uneven
+        # steps along the curve and the search stalls there. In u the curve is
+        # polynomial and evenly conditioned end to end.
+        return _nearest_on_curve(
+            pts, lambda u: np.column_stack([u ** 2, 1.0 - u]), 0.0, 1.0
+        )
+    if b == "SCH1":
+        return _nearest_on_curve(
+            pts, lambda t: np.column_stack([t ** 2, (t - 2.0) ** 2]), 0.0, 2.0
+        )
+    raise ValueError(f"Unknown benchmark '{bench}'. Valid: {', '.join(_KNOWN)}.")
+
+
 def nadir(bench: Bench, M: int) -> list[float]:
     """Worst-corner (nadir) of the true front — a FIXED hypervolume reference,
     making HV comparable across runs/experiments of the same benchmark."""

@@ -56,6 +56,7 @@ from lib.nsga import fast_nondominated_sort, niching_selection
 from lib.problem.adapter import Chromosome
 from lib.problem.chromosomes import chromosome_from_dict
 
+from .completeness import STATE_INFEASIBLE, annotate, is_usable, reused, without_simulations
 from .nsga3 import NSGA3LoopStrategy
 
 logger = logging.getLogger(__name__)
@@ -289,6 +290,7 @@ class NSGA3AdaptiveSimulationStrategy(NSGA3LoopStrategy):
 
         first_seed = self._sim_rand_seeds[0] if self._sim_rand_seeds else 123456
         self._count_sims_inserted = 0
+        self._generation_completeness = {}
         sims_inserted = 0
         seen: set[str] = set()
         pending: list[tuple[int, Chromosome, str]] = []
@@ -390,7 +392,7 @@ class NSGA3AdaptiveSimulationStrategy(NSGA3LoopStrategy):
                 self._estimated_hashes.add(genome_hash)
                 decision.evaluation_source = "estimated"
                 self._insert_individual_document(
-                    exp_oid, gen_oid, genome, genome_hash,
+                    exp_oid, gen_oid, genome, genome_hash, ind_idx,
                     objectives_min=[float(v) for v in conservative],
                     evaluation_source="estimated",
                 )
@@ -405,7 +407,7 @@ class NSGA3AdaptiveSimulationStrategy(NSGA3LoopStrategy):
         self._estimated_hashes.discard(genome_hash)
         decision.evaluation_source = "simulated"
         self._insert_individual_document(
-            exp_oid, gen_oid, genome, genome_hash, evaluation_source="simulated"
+            exp_oid, gen_oid, genome, genome_hash, ind_idx, evaluation_source="simulated"
         )
         self._inserted_genomes.add(genome_hash)
         self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
@@ -432,9 +434,13 @@ class NSGA3AdaptiveSimulationStrategy(NSGA3LoopStrategy):
         cached = self._genome_objectives_cache[genome_hash]
         self._map_genome_objectives[genome] = cached
         self._estimated_hashes.discard(genome_hash)
+        # The replay carries the evidence of the original evaluation, as in
+        # the base strategy.
+        carried = reused(self._genome_completeness_cache.get(genome_hash))
+        self._generation_completeness[genome_hash] = carried
         self._insert_individual_document(
-            exp_oid, gen_oid, genome, genome_hash,
-            objectives_min=cached, evaluation_source="cache",
+            exp_oid, gen_oid, genome, genome_hash, ind_idx,
+            objectives_min=cached, evaluation_source="cache", completeness=carried,
         )
         self._upload_topology_for(
             exp_oid, gen_oid, gen_index, ind_idx, genome, genome_hash, first_seed
@@ -467,14 +473,19 @@ class NSGA3AdaptiveSimulationStrategy(NSGA3LoopStrategy):
         assert self._gen_metrics is not None
         self._map_genome_objectives[genome] = penalty
         self._estimated_hashes.discard(genome_hash)
+        penalty_record = without_simulations(
+            STATE_INFEASIBLE,
+            "the individual violates a constraint; no simulation was run")
+        self._generation_completeness[genome_hash] = penalty_record
         self._insert_individual_document(
-            exp_oid, gen_oid, genome, genome_hash,
-            objectives_min=penalty, evaluation_source="penalty",
+            exp_oid, gen_oid, genome, genome_hash, ind_idx,
+            objectives_min=penalty, evaluation_source="penalty", completeness=penalty_record,
         )
         self._inserted_genomes.add(genome_hash)
         self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
-        self.mongo.genome_cache_repo.set_objectives(exp_oid, genome_hash, penalty)
+        self.mongo.genome_cache_repo.set_objectives(exp_oid, genome_hash, penalty, penalty_record)
         self._genome_objectives_cache[genome_hash] = penalty
+        self._genome_completeness_cache[genome_hash] = penalty_record
         self._upload_topology_for(
             exp_oid, gen_oid, gen_index, ind_idx, genome, genome_hash, first_seed
         )
@@ -504,8 +515,16 @@ class NSGA3AdaptiveSimulationStrategy(NSGA3LoopStrategy):
 
         logger.info("EVENT GENERATION TERMINAL gen_id=%s phase=%s", gen_oid, self._phase.value)
 
-        self._collect_generation_objectives()
-        self._ingest_ground_truth()
+        # Same replica gate as the base strategy, in both phases: a failed
+        # replica is repeated before anything is read from the generation, and
+        # the phase is left untouched so the next close resumes where it was.
+        gate = self._replica_gate.evaluate(gen_oid)
+        if not gate.proceed:
+            return
+        completeness = gate.completeness
+
+        self._collect_generation_objectives(completeness)
+        self._ingest_ground_truth(completeness)
 
         if self._phase == GenerationPhase.SCREENING:
             promoted = self._select_promotions()
@@ -514,7 +533,7 @@ class NSGA3AdaptiveSimulationStrategy(NSGA3LoopStrategy):
                 return
 
         self._finalize_generation_metrics()
-        self._update_individual_objectives()
+        self._update_individual_objectives(completeness)
         self._evolution()
 
     def _has_active_simulations(self, gen_oid: ObjectId) -> bool:
@@ -525,11 +544,15 @@ class NSGA3AdaptiveSimulationStrategy(NSGA3LoopStrategy):
             logger.exception("[adaptive-eval] Could not check for active simulations.")
             return False
 
-    def _ingest_ground_truth(self) -> None:
+    def _ingest_ground_truth(self, completeness: dict[str, dict]) -> None:
         """Fold the freshly measured individuals into the knowledge base.
 
         Only real measurements are ingested — never an estimate — so the
-        estimator can never train on its own output.
+        estimator can never train on its own output.  ``completeness`` is the
+        replica gate's record: a vector the replica policy refused is the
+        worst-objective placeholder, which the knowledge base keeps out of
+        training by its sentinel magnitude and which is never scored against
+        a prediction.
         """
         for genome in self._current_population:
             genome_hash = genome.get_hash()
@@ -541,6 +564,10 @@ class NSGA3AdaptiveSimulationStrategy(NSGA3LoopStrategy):
 
             decision = self._gen_decisions.get(genome_hash)
             evaluation_type = _evaluation_type_of(decision, objectives)
+            replica_record = completeness.get(genome_hash)
+            if replica_record is None:
+                replica_record = self._generation_completeness.get(genome_hash)
+            usable = is_usable(replica_record, self._replica_policy)
             try:
                 descriptors = self._problem_adapter.descriptors(genome)
             except Exception:
@@ -562,10 +589,14 @@ class NSGA3AdaptiveSimulationStrategy(NSGA3LoopStrategy):
                 continue
             if record.is_measurement:
                 self._problem_adapter.observe_simulated(genome, key=genome_hash)
-            self._persist_ground_truth(genome_hash, objectives, evaluation_type)
+            self._persist_ground_truth(
+                genome_hash, objectives, evaluation_type,
+                annotate(replica_record, usable=usable, policy=self._replica_policy),
+            )
 
             if decision is not None:
-                self._score_prediction(decision, objectives)
+                if usable:
+                    self._score_prediction(decision, objectives)
                 decision.actual_objectives = [float(v) for v in objectives]
                 decision.evaluation_source = evaluation_type if evaluation_type == "cached" else "simulated"
                 self._persist_decision(decision)
@@ -573,25 +604,32 @@ class NSGA3AdaptiveSimulationStrategy(NSGA3LoopStrategy):
         self._policy.refit()
 
     def _persist_ground_truth(
-        self, genome_hash: str, objectives: list[float], evaluation_type: str
+        self,
+        genome_hash: str,
+        objectives: list[float],
+        evaluation_type: str,
+        completeness: dict,
     ) -> None:
         """Cache a measurement as soon as it exists, not at generation end.
 
         A generation that enters a promotion round returns before
         ``_update_individual_objectives`` runs, so persisting here is what makes
         the knowledge base restorable at *any* interruption point — including
-        between the screening and the promotion simulations.
+        between the screening and the promotion simulations.  The replica
+        evidence is cached with the vector, so a later reuse keeps it.
         """
         if genome_hash in self._genome_objectives_cache:
             return
         try:
             self.mongo.genome_cache_repo.set_objectives(
-                self._exp_id, genome_hash, objectives, evaluation_type
+                self._exp_id, genome_hash, objectives, completeness,
+                evaluation_source=evaluation_type,
             )
         except Exception:
             logger.warning("genome_cache write failed for %s; continuing.", genome_hash)
             return
         self._genome_objectives_cache[genome_hash] = objectives
+        self._genome_completeness_cache[genome_hash] = completeness
 
     def _score_prediction(self, decision: DecisionRecord, actual: Sequence[float]) -> None:
         """Record the (prediction, ground truth) pair of an audit or promotion."""
@@ -668,7 +706,8 @@ class NSGA3AdaptiveSimulationStrategy(NSGA3LoopStrategy):
                 if remaining > 0:
                     selected.extend(
                         niching_selection(
-                            front, objectives, self._ref_points, remaining, self._ga_rng
+                            front, objectives, self._ref_points, remaining, self._ga_rng,
+                            accepted=selected,
                         )
                     )
                 break
@@ -841,16 +880,19 @@ class NSGA3AdaptiveSimulationStrategy(NSGA3LoopStrategy):
         return selected
 
     def _final_pareto_front(self) -> list[dict]:
-        """Published front — estimated individuals are excluded by construction."""
+        """Published front — estimated individuals are excluded by construction.
+
+        The base front is ND(P_final), read from ``_parents``; an estimate can
+        only be there when ``require_simulated_survivors`` is off or selection
+        had to admit one to avoid starvation, and it is filtered out here.
+        """
         estimated = self._estimated_hashes
-        original_population = self._current_population
-        self._current_population = [
-            g for g in original_population if g.get_hash() not in estimated
-        ]
+        original_parents = self._parents
+        self._parents = [g for g in original_parents if g.get_hash() not in estimated]
         try:
             return super()._final_pareto_front()
         finally:
-            self._current_population = original_population
+            self._parents = original_parents
 
     def _finalize_experiment(
         self,

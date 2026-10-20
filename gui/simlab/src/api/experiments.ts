@@ -5,7 +5,11 @@ import type {
   ExperimentFullDto,
   ExperimentInfoDto,
   ExperimentStatus,
+  FirmwareSnapshotDto,
+  PlacementDistributionDto,
+  RuntimeMetricsDto,
   RuntimeMetricsSeriesResponseDto,
+  RuntimeMetricsStatus,
 } from "../types/simlab";
 
 type BackendExperimentInfo = Omit<ExperimentInfoDto, "status">;
@@ -13,9 +17,7 @@ type BackendExperimentInfo = Omit<ExperimentInfoDto, "status">;
 export async function getExperimentsByStatus(
   status: ExperimentStatus,
 ): Promise<ExperimentInfoDto[]> {
-  const { data } = await client.get<BackendExperimentInfo[]>(
-    `/experiments/by-status/${status}`,
-  );
+  const { data } = await client.get<BackendExperimentInfo[]>(`/experiments/by-status/${status}`);
   return data.map((e) => ({ ...e, status }));
 }
 
@@ -33,17 +35,13 @@ export async function getExperiment(id: string): Promise<ExperimentDto> {
 
 export async function getExperimentFull(
   id: string,
+  signal?: AbortSignal,
 ): Promise<ExperimentFullDto> {
-  const { data } = await client.get<ExperimentFullDto>(
-    `/experiments/${id}/full`,
-  );
+  const { data } = await client.get<ExperimentFullDto>(`/experiments/${id}/full`, { signal });
   return data;
 }
 
-export async function updateExperiment(
-  id: string,
-  updates: { name?: string },
-): Promise<boolean> {
+export async function updateExperiment(id: string, updates: { name?: string }): Promise<boolean> {
   const { data } = await client.put<boolean>(`/experiments/${id}`, updates);
   return data;
 }
@@ -57,17 +55,13 @@ export async function updateExperimentStatus(
   id: string,
   status: ExperimentStatus,
 ): Promise<boolean> {
-  const { data } = await client.patch<boolean>(
-    `/experiments/${id}/status`,
-    null,
-    { params: { new_status: status } },
-  );
+  const { data } = await client.patch<boolean>(`/experiments/${id}/status`, null, {
+    params: { new_status: status },
+  });
   return data;
 }
 
-export async function createExperiment(
-  payload: ExperimentCreateDto,
-): Promise<string> {
+export async function createExperiment(payload: ExperimentCreateDto): Promise<string> {
   const { data } = await client.post<string>("/experiments/", payload);
   return data;
 }
@@ -83,6 +77,27 @@ export async function getRuntimeMetricsSeries(
   return data;
 }
 
+export interface CollectRuntimeMetricsResponse {
+  status: RuntimeMetricsStatus;
+  runtime_metrics: RuntimeMetricsDto | null;
+}
+
+/**
+ * Manually (re)collect runtime metrics from Prometheus for an experiment.
+ * Optionally overrides the [start, end] window (naive ISO strings, no timezone
+ * suffix — interpreted in the server's local time, matching stored timestamps).
+ */
+export async function collectRuntimeMetrics(
+  id: string,
+  interval?: { start?: string; end?: string },
+): Promise<CollectRuntimeMetricsResponse> {
+  const { data } = await client.post<CollectRuntimeMetricsResponse>(
+    `/experiments/${id}/runtime-metrics/collect`,
+    { start: interval?.start ?? null, end: interval?.end ?? null },
+  );
+  return data;
+}
+
 export async function plotParetoResults(
   id: string,
   objectives: string[],
@@ -92,5 +107,43 @@ export async function plotParetoResults(
     `/experiments/${id}/plot-pareto`,
     { objectives, minimize },
   );
+  return data;
+}
+
+/**
+ * Firmware captured when the experiment started. Rejects with a 404 for runs
+ * that predate firmware tracking — snapshots are never backfilled.
+ */
+export async function getFirmwareSnapshot(id: string): Promise<FirmwareSnapshotDto> {
+  const { data } = await client.get<FirmwareSnapshotDto>(`/experiments/${id}/firmware`);
+  return data;
+}
+
+/**
+ * Raw text of one firmware file, scoped to this experiment's snapshot.
+ * The default transform is disabled so a source file that happens to be valid
+ * JSON still comes back as text rather than a parsed object.
+ */
+export async function getFirmwareFileContent(
+  experimentId: string,
+  fileId: string,
+): Promise<string> {
+  const { data } = await client.get<string>(
+    `/experiments/${experimentId}/firmware/files/${fileId}/content`,
+    { responseType: "text", transformResponse: [(v) => v] },
+  );
+  return data;
+}
+
+/**
+ * How this experiment's simulations were spread over hosts and workers.
+ *
+ * Served on demand rather than carried on the experiment document: it is an
+ * aggregation over the simulations, and only the detail page asks for it.
+ * An experiment that placed nothing answers with an empty distribution, not
+ * a 404 — "nothing ran yet" is a valid answer.
+ */
+export async function getExperimentPlacement(id: string): Promise<PlacementDistributionDto> {
+  const { data } = await client.get<PlacementDistributionDto>(`/experiments/${id}/placement`);
   return data;
 }

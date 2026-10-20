@@ -7,6 +7,34 @@ from typing import Any
 # Alias para coordenadas 2D (Ω ⊂ R²)
 Position = tuple[float, float]
 
+# Nível de cobertura padrão (α) quando o problema não o declara: 100% dos
+# pontos amostrados das trajetórias devem permanecer cobertos.
+DEFAULT_MIN_COVERAGE_PERCENTAGE = 100.0
+
+
+def parse_min_coverage_percentage(map: dict[str, Any]) -> float:
+    """
+    Lê e valida α (`min_coverage_percentage`), o nível mínimo de cobertura de
+    trajetória exigido pelos problemas P1 e P2, em porcentagem.
+
+    O campo é opcional: ausente, assume 100% (cobertura total). Valores fora
+    de [0, 100] são rejeitados aqui — na borda de desserialização — para que
+    um experimento mal configurado falhe antes de qualquer simulação, e não
+    silenciosamente penalize toda a população.
+    """
+    raw = map.get("min_coverage_percentage", DEFAULT_MIN_COVERAGE_PERCENTAGE)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"problem['min_coverage_percentage'] must be a number, got {raw!r}."
+        )
+    if not 0.0 <= value <= 100.0:
+        raise ValueError(
+            f"problem['min_coverage_percentage'] must be in [0, 100], got {value}."
+        )
+    return value
+
 
 class MobileNode:
     # Trajetória parametrizada de forma simbólica
@@ -48,7 +76,8 @@ class ProblemP1(HomogeneousProblem):
     sink: Position                  # σ
     mobile_nodes: list[MobileNode]  # Γ
     number_of_relays: int           # n
-    min_coverage_percentage: float = 100.0  # p (opcional, default 100%)
+    # α: nível mínimo de cobertura das trajetórias, em % (opcional, default 100%)
+    min_coverage_percentage: float = DEFAULT_MIN_COVERAGE_PERCENTAGE
 
     def cast(map: dict[str, Any]) -> "ProblemP1":
         obj = ProblemP1()
@@ -58,7 +87,7 @@ class ProblemP1(HomogeneousProblem):
         obj.region = map["region"]
         obj.sink = tuple(map["sink"])
         obj.number_of_relays = map["number_of_relays"]
-        obj.min_coverage_percentage = float(map.get("min_coverage_percentage", 100.0))
+        obj.min_coverage_percentage = parse_min_coverage_percentage(map)
         obj.mobile_nodes = []
         for mn in map["mobile_nodes"]:
             mobile_node = MobileNode()
@@ -81,7 +110,8 @@ class ProblemP2(HomogeneousProblem):
     sink: Position                  # σ
     mobile_nodes: list[MobileNode]  # Γ
     candidates: list[Position]      # Q
-    min_coverage_percentage: float = 100.0  # p (opcional, default 100%)
+    # α: nível mínimo de cobertura das trajetórias, em % (opcional, default 100%)
+    min_coverage_percentage: float = DEFAULT_MIN_COVERAGE_PERCENTAGE
 
     def cast(map: dict[str, Any]) -> "ProblemP2":
         obj = ProblemP2()
@@ -91,7 +121,7 @@ class ProblemP2(HomogeneousProblem):
         obj.region = map["region"]
         obj.sink = Position(map["sink"])
         obj.candidates = [Position(cand) for cand in map["candidates"]]
-        obj.min_coverage_percentage = float(map.get("min_coverage_percentage", 100.0))
+        obj.min_coverage_percentage = parse_min_coverage_percentage(map)
         obj.mobile_nodes = []
         for mn in map["mobile_nodes"]:
             mobile_node = MobileNode()

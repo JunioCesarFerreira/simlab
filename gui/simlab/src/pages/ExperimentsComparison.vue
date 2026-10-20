@@ -221,29 +221,28 @@
         label="Convergence charts"
       >
         <div class="section-title">Convergence</div>
+        <p v-if="result.hvgdA" class="population-caption">
+          {{ result.expA.name }}: {{ populationCaption(result.hvgdA) }}
+        </p>
+        <p v-if="result.hvgdB" class="population-caption">
+          {{ result.expB.name }}: {{ populationCaption(result.hvgdB) }}
+        </p>
         <div class="evo-row">
           <div class="evo-block">
             <div class="evo-label-row">
               <div class="evo-label-group">
                 <span class="evo-label">Hypervolume (HV)</span>
-                <div class="view-toggle" role="group" aria-label="Hypervolume mode">
+                <div class="view-toggle" role="group" aria-label="Measured population">
                   <button
+                    v-for="opt in POPULATION_OPTIONS"
+                    :key="opt.value"
                     type="button"
-                    :class="['vt-btn', { active: hvMode === 'perGen' }]"
-                    :aria-pressed="hvMode === 'perGen'"
-                    title="Hypervolume of each generation's own Pareto front"
-                    @click="hvMode = 'perGen'"
+                    :class="['vt-btn', { active: population === opt.value }]"
+                    :aria-pressed="population === opt.value"
+                    :title="opt.hint"
+                    @click="population = opt.value"
                   >
-                    Per gen
-                  </button>
-                  <button
-                    type="button"
-                    :class="['vt-btn', { active: hvMode === 'cumulative' }]"
-                    :aria-pressed="hvMode === 'cumulative'"
-                    title="Best-so-far hypervolume over every generation up to each point"
-                    @click="hvMode = 'cumulative'"
-                  >
-                    Cumulative
+                    {{ opt.label }}
                   </button>
                 </div>
               </div>
@@ -276,6 +275,8 @@ import ChartExportButton from '../components/charts/ChartExportButton.vue';
 import { getAllCampaigns, getCampaignFull } from '../api/campaigns';
 import { getExperiment } from '../api/experiments';
 import client from '../api/client';
+import type { HvGdData, Population } from '../api/metrics';
+import { populationCaption, populationLabel } from '../lib/metricPopulation';
 import type { CampaignInfoDto, ExperimentDto, ObjectiveItem } from '../types/simlab';
 import { extractFront, coverage, epsilonIndicator, igdPlus, spacing } from '../utils/comparisonMetrics';
 import { chartExportFilename } from '../utils/chartExport';
@@ -285,14 +286,6 @@ const ParetoFront3DComparisonChart = defineAsyncComponent(
 );
 
 // ── Types ────────────────────────────────────────────────────────────────────
-
-interface HvGdData {
-  generations: number[];
-  hv: number[];
-  hv_cumulative: number[];
-  gd: number[];
-  worst_point: Record<string, number>;
-}
 
 interface ComparisonResult {
   expA: ExperimentDto;
@@ -499,6 +492,8 @@ async function fetchHvGd(id: string, objectives: ObjectiveItem[]): Promise<HvGdD
   const params = new URLSearchParams();
   objectives.forEach(o => params.append('objectives', o.metric_name));
   objectives.forEach(o => params.append('minimize', o.goal === 'min' ? 'true' : 'false'));
+  params.append('population', population.value);
+  params.append('include_cumulative', 'false');
   try {
     const { data } = await client.get<HvGdData>(`/experiments/${id}/hv-gd?${params}`);
     return data.generations?.length ? data : null;
@@ -552,10 +547,27 @@ const paretoChart = useEChart(paretoEl);
 const hvChart = useEChart(hvEl);
 const gdChart = useEChart(gdEl);
 
-// HV curve: per generation (each gen's own front) or cumulative (best-so-far).
-// Both arrays arrive in one fetch, so switching only re-renders — no refetch.
-type HvMode = 'perGen' | 'cumulative';
-const hvMode = ref<HvMode>('perGen');
+// Which set each generation is measured on — HV *and* GD alike. The previous
+// HV-only "per gen / cumulative" toggle left GD on the offspring whatever the
+// user picked. Switching refetches: the backend resolves the survivor set.
+const POPULATION_OPTIONS: { value: Population; label: string; hint: string }[] = [
+  {
+    value: 'survivors',
+    label: 'Survivors',
+    hint: 'The population environmental selection kept (P_t) — what the search carries forward',
+  },
+  {
+    value: 'offspring',
+    label: 'Offspring',
+    hint: 'Only the children evaluated in that generation (Q_t) — swings with each batch',
+  },
+  {
+    value: 'archive',
+    label: 'Archive',
+    hint: 'Best-so-far: the non-dominated set of everything evaluated up to that generation',
+  },
+];
+const population = ref<Population>('survivors');
 
 function handleExportParetoImage() {
   paretoChart.exportImage(chartExportFilename('pareto-front-comparison'), {
@@ -651,8 +663,8 @@ function renderParetoChart() {
 function buildEvoOption(
   nameA: string,
   nameB: string,
-  dataA: [number, number][],
-  dataB: [number, number][],
+  dataA: [number, number | null][],
+  dataB: [number, number | null][],
   seriesName: string,
   dark: boolean,
 ): echarts.EChartsOption {
@@ -718,23 +730,23 @@ function renderEvolutionCharts() {
   if (!result.value) return;
   const { expA, expB, hvgdA, hvgdB } = result.value;
   const dark = isDark.value;
-  const nameA = expA.name;
-  const nameB = expB.name;
-
-  const hvKey = hvMode.value === 'cumulative' ? 'hv_cumulative' : 'hv';
-  const hvLabel = hvMode.value === 'cumulative' ? 'HV (cumulative)' : 'HV';
-  const hvA: [number, number][] = hvgdA
-    ? hvgdA.generations.map((g, i) => [g, hvgdA[hvKey][i]!])
+  // Each experiment can have a different fallback history. Identify both
+  // measured populations in the legend instead of labeling both from A alone.
+  const nameA = `${expA.name} (${populationLabel(hvgdA?.population_source)})`;
+  const nameB = `${expB.name} (${populationLabel(hvgdB?.population_source)})`;
+  const hvLabel = 'HV';
+  const hvA: [number, number | null][] = hvgdA
+    ? hvgdA.generations.map((g, i) => [g, hvgdA.hv[i]!])
     : [];
-  const hvB: [number, number][] = hvgdB
-    ? hvgdB.generations.map((g, i) => [g, hvgdB[hvKey][i]!])
+  const hvB: [number, number | null][] = hvgdB
+    ? hvgdB.generations.map((g, i) => [g, hvgdB.hv[i]!])
     : [];
   hvChart.setOption(buildEvoOption(nameA, nameB, hvA, hvB, hvLabel, dark), true);
 
-  const gdA: [number, number][] = hvgdA
+  const gdA: [number, number | null][] = hvgdA
     ? hvgdA.generations.map((g, i) => [g, hvgdA.gd[i]!])
     : [];
-  const gdB: [number, number][] = hvgdB
+  const gdB: [number, number | null][] = hvgdB
     ? hvgdB.generations.map((g, i) => [g, hvgdB.gd[i]!])
     : [];
   gdChart.setOption(buildEvoOption(nameA, nameB, gdA, gdB, 'GD', dark), true);
@@ -777,9 +789,10 @@ watch(isDark, () => {
   renderEvolutionCharts();
 });
 
-// Per-generation ↔ cumulative HV — reuse the already-fetched data, no refetch.
-watch(hvMode, () => {
-  if (result.value) renderEvolutionCharts();
+// GD over the survivors or the archive cannot be recomputed from the offspring
+// series already in hand, so changing the measured set re-runs the comparison.
+watch(population, () => {
+  if (result.value) runComparison();
 });
 
 watch(chartView, async (view) => {
@@ -791,6 +804,12 @@ watch(chartView, async (view) => {
 </script>
 
 <style scoped>
+.population-caption {
+  margin: 2px 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
 /* ── Page layout ──────────────────────────────────────────────────────────── */
 
 .compare-page {

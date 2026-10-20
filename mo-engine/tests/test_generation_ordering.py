@@ -5,6 +5,8 @@ the generation document did not exist yet, master-node's generation mark_done()
 would target a missing document (no-op) and the generation would hang at index 0.
 This test locks the ordering invariant for every strategy that enqueues work.
 """
+import random
+from contextlib import contextmanager
 from unittest.mock import MagicMock
 
 from bson import ObjectId
@@ -14,6 +16,10 @@ from lib.strategy.nsga3 import NSGA3LoopStrategy
 from lib.strategy.nsga2 import NSGA2LoopStrategy
 from lib.strategy.random_search import RandomSearchStrategy
 from lib.strategy.batch import BatchStrategy
+from lib.strategy.completeness import ReplicaGate, ReplicaPolicy
+from pylib.db.models.enums import EnumStatus
+
+EXP_ID = ObjectId("507f1f77bcf86cd799460001")
 
 
 def _make_strategy(cls, enqueue_name):
@@ -24,12 +30,19 @@ def _make_strategy(cls, enqueue_name):
     strat._exp_id = ObjectId()
     strat._gen_index = 0
     strat._sim_rand_seeds = [42]
+    # The enqueue snapshots this onto the generation document, for resume.
+    strat._ga_rng = random.Random(42)
     strat._genome_objectives_cache = {}
+    strat._genome_completeness_cache = {}
+    strat._generation_completeness = {}
     strat._inserted_genomes = set()
     strat._sim_done_count = 0
     strat._count_sims_inserted = 0
     strat._objective_keys = ["f1"]
     strat._map_genome_objectives = {}
+    # The enqueue records what the generation plans to run, which is what the
+    # completeness of its evaluations is later measured against.
+    strat._replica_policy = ReplicaPolicy()
     # Feasible genome (no penalty) so the enqueue reaches the simulation path.
     strat._problem_adapter = MagicMock()
     strat._problem_adapter.penalty_objectives.return_value = None
@@ -42,6 +55,10 @@ def _make_strategy(cls, enqueue_name):
     mongo.generation_repo.insert.side_effect = lambda doc: (order.append("generation"), doc["_id"])[1]
     mongo.simulation_repo.insert.side_effect = lambda doc: (order.append("simulation"), ObjectId())[1]
     strat.mongo = mongo
+    # Through the strategy's own repositories: the plan is written with the
+    # generation, and what completeness is later measured against.
+    strat._replica_gate = ReplicaGate(
+        mongo, objective_keys=["f1"], policy=strat._replica_policy)
 
     genome = MagicMock()
     genome.get_hash.return_value = "hash-1"
@@ -90,12 +107,17 @@ def test_analytical_enqueue_skips_simulations(cls):
     strat._exp_id = ObjectId()
     strat._gen_index = 0
     strat._sim_rand_seeds = [42]
+    # The enqueue snapshots this onto the generation document, for resume.
+    strat._ga_rng = random.Random(42)
     strat._genome_objectives_cache = {}
+    strat._genome_completeness_cache = {}
+    strat._generation_completeness = {}
     strat._inserted_genomes = set()
     strat._count_sims_inserted = 0
     strat._objective_keys = ["f1", "f2"]
     strat._objective_goals = [1, 1]
     strat._map_genome_objectives = {}
+    strat._replica_policy = ReplicaPolicy()
 
     strat._problem_adapter = MagicMock()
     strat._problem_adapter.is_analytical = True
@@ -109,6 +131,9 @@ def test_analytical_enqueue_skips_simulations(cls):
     mongo.generation_repo.insert.side_effect = lambda doc: (order.append("generation"), doc["_id"])[1]
     mongo.simulation_repo.insert.side_effect = lambda doc: (order.append("simulation"), ObjectId())[1]
     strat.mongo = mongo
+    strat._replica_gate = ReplicaGate(
+        mongo, objective_keys=strat._objective_keys,
+        policy=strat._replica_policy)
 
     genome = MagicMock()
     genome.get_hash.return_value = "hash-1"
@@ -127,3 +152,73 @@ def test_analytical_enqueue_skips_simulations(cls):
     assert genome in strat._map_genome_objectives
     mongo.generation_repo.mark_done.assert_called_once()
     assert strat._generation_id is not None
+
+
+# ── An engine restart must not abandon a running experiment ───────────────
+
+class TestResumingARunningExperiment:
+    """Only `Waiting` was picked up at startup.
+
+    So an experiment interrupted mid-generation stayed `Running` for ever: its
+    strategy state died with the process, and the change stream only fires on
+    new ones. Observed while validating this feature — an engine restart left
+    a finished generation with no evolution after it, and the experiment never
+    completed.
+    """
+
+    def test_the_claim_requires_the_experiment_to_be_running(self):
+        from pylib.db.repositories.experiment import ExperimentRepository
+
+        connection = MagicMock()
+        collection = MagicMock()
+        collection.update_one.return_value = MagicMock(modified_count=1)
+
+        @contextmanager
+        def connect():
+            yield {"experiments": collection}
+
+        connection.connect = connect
+        repo = ExperimentRepository(connection)
+
+        assert repo.claim_resume(str(EXP_ID)) is True
+
+        flt = collection.update_one.call_args.args[0]
+        assert flt["status"] == EnumStatus.RUNNING
+
+    def test_the_start_time_is_not_rewritten(self):
+        """It is the same run, continuing. Rewriting it would make the
+        duration of every resumed experiment wrong, and the telemetry window
+        with it."""
+        from pylib.db.repositories.experiment import ExperimentRepository
+
+        connection = MagicMock()
+        collection = MagicMock()
+        collection.update_one.return_value = MagicMock(modified_count=1)
+
+        @contextmanager
+        def connect():
+            yield {"experiments": collection}
+
+        connection.connect = connect
+
+        ExperimentRepository(connection).claim_resume(str(EXP_ID))
+
+        sets = collection.update_one.call_args.args[1]["$set"]
+        assert "start_time" not in sets
+        assert "status" not in sets
+        assert sets["resumed_at"].tzinfo is not None
+
+    def test_an_experiment_that_finished_meanwhile_is_not_resumed(self):
+        from pylib.db.repositories.experiment import ExperimentRepository
+
+        connection = MagicMock()
+        collection = MagicMock()
+        collection.update_one.return_value = MagicMock(modified_count=0)
+
+        @contextmanager
+        def connect():
+            yield {"experiments": collection}
+
+        connection.connect = connect
+
+        assert ExperimentRepository(connection).claim_resume(str(EXP_ID)) is False

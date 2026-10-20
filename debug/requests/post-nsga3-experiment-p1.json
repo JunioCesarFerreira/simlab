@@ -64,6 +64,7 @@
                 150,
                 150
             ],
+            "min_coverage_percentage": 100,
             "sink": [0, 0],
             "mobile_nodes": [
                 {

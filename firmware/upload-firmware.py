@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # pip install requests
+import os
+
 import requests
 from pathlib import Path
 from typing import List
@@ -8,8 +10,22 @@ from typing import List
 # CONFIG
 # ============================================================
 
-API_URL = "http://localhost:8000/api/v1/sources/"
-API_KEY = "simlab-api-key42"  # set same value in .env of rest-api/ and here
+# SimLab is served only through the nginx reverse proxy over TLS - the REST API
+# no longer publishes a host port. Override for a real deployment:
+#   SIMLAB_API_BASE=https://simlab.example.org/api/v1
+API_BASE = os.getenv("SIMLAB_API_BASE", "https://localhost/api/v1")
+
+# Trust anchor for the proxy's self-signed certificate. It lives in the
+# checkout, so verification stays ON by default; set SIMLAB_CA_BUNDLE for a
+# different bundle, or SIMLAB_TLS_VERIFY=false to skip verification.
+_CA = Path(__file__).resolve().parents[1] / "nginx" / "certs" / "simlab.crt"
+VERIFY_TLS = (
+    False if os.getenv("SIMLAB_TLS_VERIFY", "true").lower() in ("0", "false", "no", "off")
+    else os.getenv("SIMLAB_CA_BUNDLE") or (str(_CA) if _CA.is_file() else True)
+)
+
+API_URL = f"{API_BASE}/sources/"
+API_KEY = os.getenv("SIMLAB_API_KEY", "simlab-api-key42")  # keep in sync with SIMLAB_API_KEY in .env
 FIRMWARE_DIR = Path(".")  # run in firmware/ directory containing rpl-udp-csma/ and rpl-udp-tsch/
 
 # ============================================================
@@ -65,6 +81,7 @@ def create_repository(name: str, description: str, directory: Path):
             data=data,
             files=files,
             timeout=120,
+            verify=VERIFY_TLS,
         )
 
         response.raise_for_status()

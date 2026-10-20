@@ -69,11 +69,11 @@ export interface AlgorithmParamsDto {
   prob_cx?: number;
   prob_mt?: number;
   per_gene_prob?: number;
-  crossover_method?: string;       // P1 only
-  eta_cx?: number;                 // P0/P1: SBX distribution index
-  eta_mt?: number;                 // P0/P1: polynomial mutation index
-  pm_tau?: number;                 // P4: tau mutation probability
-  sigma_tau?: number;              // P4: tau mutation std. dev.
+  crossover_method?: string; // P1 only
+  eta_cx?: number; // P0/P1: SBX distribution index
+  eta_mt?: number; // P0/P1: polynomial mutation index
+  pm_tau?: number; // P4: tau mutation probability
+  sigma_tau?: number; // P4: tau mutation std. dev.
   apply_coverage_repair?: boolean; // P1/P2
   repair_coverage_budget?: number; // P1/P2
   /** @deprecated the engine ignores these; kept for reading old experiments */
@@ -127,7 +127,8 @@ export type RuntimeMetricsStatus =
   | "collecting"
   | "completed"
   | "no_data"
-  | "failed";
+  | "failed"
+  | "unavailable";
 
 export interface RuntimeMetricsSummaryDto {
   duration_seconds?: number;
@@ -176,16 +177,153 @@ export interface RuntimeMetricsSeriesResponseDto {
 }
 
 /* -------------------------------------------------------
+ * Firmware snapshot (traceability)
+ * Captured when the experiment starts: an immutable copy of
+ * every source file, owned by the experiment alone.
+ * ----------------------------------------------------- */
+
+export type FirmwareSnapshotStatus = "captured" | "partial" | "skipped" | "failed" | "capturing";
+
+export interface FirmwareFileDto {
+  file_name: string;
+  /** GridFS id of the copy owned by the experiment. Absent for missing files. */
+  file_id?: ID;
+  /** GridFS id in the shared source repository. */
+  origin_file_id?: ID;
+  size_bytes?: number;
+  sha256?: string;
+}
+
+export interface FirmwareRepositorySnapshotDto {
+  option_keys: string[];
+  source_repository_id: ID;
+  name: string;
+  description: string;
+  files: FirmwareFileDto[];
+  missing_files: FirmwareFileDto[];
+}
+
+export interface FirmwareSnapshotDto {
+  status: FirmwareSnapshotStatus;
+  captured_at?: ISODateTime | null;
+  schema_version?: number;
+  repositories: FirmwareRepositorySnapshotDto[];
+  /** Why nothing was captured (skipped). */
+  reason?: string;
+  /** Why the capture failed. */
+  error?: string;
+}
+
+/* -------------------------------------------------------
  * Individual (within a generation)
  * ----------------------------------------------------- */
 
+/**
+ * What an individual's objectives rest on.
+ *
+ * Published because the objectives alone cannot say: a mean over one replica
+ * and a mean over five look identical. `state` is the short answer and the
+ * counts are the evidence; `objective_used` says whether the experiment's
+ * configured policy let this evaluation reach the algorithm.
+ */
+/**
+ * One Cooja container's share of an experiment's simulations.
+ *
+ * `share` is a percentage of the **placed** simulations, not of every
+ * simulation: a run that never reached a container belongs to no worker, and
+ * those are counted in `unplaced` instead.
+ */
+export interface PlacementWorkerDto {
+  resource_id?: string | null;
+  resource_name: string;
+  total: number;
+  done: number;
+  failed: number;
+  active: number;
+  share: number;
+}
+
+export interface PlacementHostDto {
+  host_id?: string | null;
+  host_name: string;
+  total: number;
+  done: number;
+  failed: number;
+  active: number;
+  share: number;
+  workers: PlacementWorkerDto[];
+}
+
+/**
+ * Where an experiment's simulations actually ran.
+ *
+ * Counted per simulation, so a replica that was repeated counts on both
+ * containers that ran it — the question is how much work each machine did,
+ * not how many distinct replicas an evaluation rests on.
+ */
+export interface PlacementDistributionDto {
+  total: number;
+  placed: number;
+  unplaced: number;
+  hosts: PlacementHostDto[];
+}
+
+export interface CompletenessDto {
+  /**
+   * `analytical` and `infeasible` exist so that `unknown` keeps meaning one
+   * thing — *the plan was not recorded*. Neither of those had replicas to
+   * count in the first place.
+   */
+  state: "complete" | "partial" | "pending" | "invalid" | "unknown" | "analytical" | "infeasible";
+  expected?: number;
+  observed?: number;
+  failed?: number;
+  pending?: number;
+  /** Planned seeds with no simulation at all — nothing to repeat. */
+  absent?: number;
+  expected_seeds?: number[];
+  observed_seeds?: number[];
+  missing_seeds?: number[];
+  failed_seeds?: number[];
+  /**
+   * The holes no repeat can fill: `absent_seeds` were never created, so there
+   * is no run to clone, and `thin_metrics` are missing from a replica that did
+   * finish. Both are decided by the policy on the first pass.
+   */
+  absent_seeds?: number[];
+  thin_metrics?: string[];
+  /** Observations per metric: two objectives can rest on different counts. */
+  per_metric?: Record<string, number>;
+  attempts?: number;
+  objective_used?: boolean;
+  policy?: string;
+  /**
+   * Carried over from an earlier evaluation of the same genome, with that
+   * evaluation's decision intact. A reused individual has no simulations in
+   * its own generation to count.
+   */
+  reused?: boolean;
+  source?: string;
+  /**
+   * Why the state is what it is, in one phrase — published for every state.
+   * `partial` cannot be read without it: a generation whose every planned seed
+   * finished can be partial because one result came back without a metric.
+   */
+  reason?: string;
+}
+
 export interface IndividualDto {
   id: ID;
-  individual_id: string;       // chromosome hash
+  individual_id: string; // chromosome hash
   chromosome: JsonObject;
-  objectives: number[];        // indexed; use parameters.objectives[i].metric_name for the name
+  objectives: number[]; // indexed; use parameters.objectives[i].metric_name for the name
   topology_picture_id: ID | null;
   simulations_ids?: ID[];
+  /**
+   * `null` when the evaluation predates the record, **not** when it is
+   * complete. The two are different states and the panel says which.
+   */
+  completeness?: CompletenessDto | null;
 }
 
 /* -------------------------------------------------------
@@ -231,6 +369,7 @@ export interface ExperimentDto {
   pareto_front?: ParetoFrontItemDto[] | null;
   analysis_files?: Record<string, ID>;
   runtime_metrics?: RuntimeMetricsDto | null;
+  firmware_snapshot?: FirmwareSnapshotDto | null;
 }
 
 export interface ExperimentFullDto extends ExperimentDto {
@@ -284,6 +423,31 @@ export interface DodagInfo {
   convergence: DodagConvergence;
 }
 
+/**
+ * Where one simulation ran.
+ *
+ * Recorded by the master-node when it reserves the container, before anything
+ * starts, so a finished simulation still says where it executed even after
+ * the host registration is edited or removed — which is why the names travel
+ * alongside the ids.
+ *
+ * `null` on a simulation that was never placed, and on those recorded before
+ * the master-node began writing this down: that is different from one that
+ * ran somewhere unknown.
+ */
+export interface PlacementDto {
+  host_id?: ID | null;
+  host_name: string;
+  resource_id?: ID | null;
+  resource_name: string;
+  /** Docker's id, when the worker was discovered rather than configured. */
+  container_id?: string | null;
+  /** The placement attempt; two attempts ran in different conditions. */
+  attempt_id?: string | null;
+  assigned_at?: ISODateTime | null;
+  remote_pid?: number | null;
+}
+
 export interface SimulationDto {
   id: ID;
   experiment_id: ID;
@@ -303,6 +467,7 @@ export interface SimulationDto {
   csv_log_id?: ID | null;
   network_metrics: FloatMap;
   dodag?: DodagInfo | null;
+  placement?: PlacementDto | null;
 }
 
 /* -------------------------------------------------------

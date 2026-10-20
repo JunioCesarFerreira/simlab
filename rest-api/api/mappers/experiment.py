@@ -7,6 +7,9 @@ from api.domain.experiment import (
     ExperimentDto,
     ExperimentFullDto,
     ExperimentInfoDto,
+    FirmwareFileDto,
+    FirmwareRepositorySnapshotDto,
+    FirmwareSnapshotDto,
     ParetoFrontItemDto,
     RuntimeMetricsDto,
 )
@@ -56,6 +59,52 @@ def _runtime_metrics_from_mongo(rm: Optional[dict]) -> Optional[RuntimeMetricsDt
     return dto
 
 
+def _firmware_file_from_mongo(f: dict) -> FirmwareFileDto:
+    dto: FirmwareFileDto = {
+        "file_name": f.get("file_name", ""),
+        "file_id": oid_to_str(f.get("file_id")),
+        "origin_file_id": oid_to_str(f.get("origin_file_id")),
+    }
+    if f.get("size_bytes") is not None:
+        dto["size_bytes"] = int(f["size_bytes"])
+    if f.get("sha256"):
+        dto["sha256"] = f["sha256"]
+    return dto
+
+
+def firmware_snapshot_from_mongo(fw: Optional[dict]) -> Optional[FirmwareSnapshotDto]:
+    """Expose the firmware snapshot with GridFS ids as strings.
+
+    The internal ``claimed_at`` marker is not part of the contract: it only
+    exists to make the capture idempotent while it is in flight.
+    """
+    if not fw:
+        return None
+    repositories: list[FirmwareRepositorySnapshotDto] = []
+    for repo in fw.get("repositories") or []:
+        repositories.append({
+            "option_keys": [str(k) for k in (repo.get("option_keys") or [])],
+            "source_repository_id": oid_to_str(repo.get("source_repository_id")),
+            "name": repo.get("name", ""),
+            "description": repo.get("description", ""),
+            "files": [_firmware_file_from_mongo(f) for f in (repo.get("files") or [])],
+            "missing_files": [
+                _firmware_file_from_mongo(f) for f in (repo.get("missing_files") or [])
+            ],
+        })
+    dto: FirmwareSnapshotDto = {
+        "status": fw.get("status", ""),
+        "captured_at": fw.get("captured_at"),
+        "schema_version": int(fw.get("schema_version", 0) or 0),
+        "repositories": repositories,
+    }
+    if fw.get("reason"):
+        dto["reason"] = fw["reason"]
+    if fw.get("error"):
+        dto["error"] = fw["error"]
+    return dto
+
+
 def experiment_from_mongo(doc: dict) -> ExperimentDto:
     id_str, d = pop_id(doc)
     return {
@@ -72,6 +121,7 @@ def experiment_from_mongo(doc: dict) -> ExperimentDto:
         "pareto_front": _pareto_from_mongo(d.get("pareto_front")),
         "analysis_files": _analysis_files_to_str(d.get("analysis_files", {})),
         "runtime_metrics": _runtime_metrics_from_mongo(d.get("runtime_metrics")),
+        "firmware_snapshot": firmware_snapshot_from_mongo(d.get("firmware_snapshot")),
     }
 
 

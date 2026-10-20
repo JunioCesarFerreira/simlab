@@ -11,10 +11,17 @@
       Failed to load: {{ store.error }}
     </div>
 
-    <FilterBar
-      v-model="store.selectedStatus"
-      :counts="store.countByStatus"
-    />
+    <div class="toolbar">
+      <FilterBar
+        v-model="store.selectedStatus"
+        :counts="store.searchCountByStatus"
+      />
+      <SearchInput
+        v-model="store.searchQuery"
+        class="search"
+        placeholder="Search experiments by name…"
+      />
+    </div>
 
     <div v-if="store.loading && store.experiments.length === 0" class="loading">
       Loading experiments…
@@ -22,7 +29,8 @@
 
     <div v-else-if="store.filtered.length === 0 && !store.loading" class="empty-state">
       No experiments
-      <span v-if="store.selectedStatus"> with status "{{ store.selectedStatus }}"</span>.
+      <span v-if="store.selectedStatus"> with status "{{ store.selectedStatus }}"</span>
+      <span v-if="store.searchQuery.trim()"> matching "{{ store.searchQuery.trim() }}"</span>.
     </div>
 
     <div v-else class="exp-list">
@@ -41,6 +49,7 @@
 import { onMounted, ref } from "vue";
 import { useExperimentsStore } from "../app/stores/experimentsStore";
 import FilterBar from "../components/experiments/FilterBar.vue";
+import SearchInput from "../components/common/SearchInput.vue";
 import ExperimentCard from "../components/experiments/ExperimentCard.vue";
 import { confirmDialog } from "../composables/useConfirm";
 import { reportRuntimeError } from "../composables/useRuntimeError";
@@ -114,6 +123,19 @@ onMounted(load);
 .refresh-btn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.search {
+  width: 260px;
+  max-width: 100%;
 }
 
 .error-banner {

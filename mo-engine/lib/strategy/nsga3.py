@@ -27,8 +27,20 @@ from lib.genetic_operators.selection import tournament_selection, compute_indivi
 from lib.problem.adapter import ProblemAdapter, Chromosome
 from lib.problem.chromosomes import chromosome_from_dict
 from lib.problem.resolve import build_adapter
+from .library_rng import dump_random_state, load_random_state
 from .analytical import analytical_objectives
 from pylib import benchmarks
+from pylib.timeutil import utc_now
+from lib.strategy.completeness import (
+    STATE_ANALYTICAL,
+    STATE_INFEASIBLE,
+    ReplicaGate,
+    ReplicaPolicy,
+    annotate,
+    is_usable,
+    reused,
+    without_simulations,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -106,6 +118,32 @@ class NSGA3LoopStrategy(EngineStrategy):
 
         obj = params.get("objectives", []) or []
         self._objective_keys: list[str] = [o["metric_name"] for o in obj]
+        # What an objective vector is allowed to rest on. The policy is
+        # read from the experiment rather than assumed, because "use a
+        # mean over whichever replicas happened to finish" is a
+        # decision about the experiment and it used to be made in
+        # silence.
+        #: Hash -> the completeness of the evaluation its cached
+        #: objectives came from. Parallel to
+        #: `_genome_objectives_cache` because the two are written and
+        #: read together, and separating them is what lost the
+        #: evidence.
+        self._genome_completeness_cache: dict[str, Optional[dict]] = {}
+        #: What was written onto an individual **at enqueue time**,
+        #: for the genomes this generation has no simulations for.
+        #: The generation-done handler writes objectives for every
+        #: genome it has a vector for, including the ones it skipped,
+        #: and without this it overwrote their evidence with nothing:
+        #: the enqueue recorded `complete, 2/2` and the handler
+        #: replaced it with `unknown`. Observed in a run of this
+        #: code, which is how it was found.
+        self._generation_completeness: dict[str, dict] = {}
+        self._replica_policy = ReplicaPolicy.from_config(simulation_config)
+        self._replica_gate = ReplicaGate(
+            self.mongo,
+            objective_keys=self._objective_keys,
+            policy=self._replica_policy, label="NSGA-III",
+        )
         self._objective_goals: list[int] = [1 if o["goal"] == 'min' else -1 for o in obj]
         if len(self._objective_keys) != len(self._objective_goals):
             raise ValueError(
@@ -222,21 +260,33 @@ class NSGA3LoopStrategy(EngineStrategy):
 
         logger.info("EVENT GENERATION TERMINAL gen_id=%s", self._generation_id)
 
-        self._collect_generation_objectives()
+        # Before anything is aggregated: are the replicas this
+        # generation planned actually there? A missing one can be run
+        # again, and until that is settled there is nothing to
+        # evaluate.
+        gate = self._replica_gate.evaluate(self._generation_id)
+        if not gate.proceed:
+            return
+        completeness = gate.completeness
+
+        self._collect_generation_objectives(completeness)
 
         # Persist objectives to individual documents before evolving
-        self._update_individual_objectives()
+        self._update_individual_objectives(completeness)
 
         self._evolution()
 
 
-    def _collect_generation_objectives(self) -> None:
+    def _collect_generation_objectives(self, completeness: dict[str, dict]) -> None:
         """Read the simulation metrics of the current generation into
         ``_map_genome_objectives`` (minimization space).
 
         Genomes that already carry objectives are left untouched — that covers
         cache hits, penalised individuals, the analytical fast path, and any
         provisional value a subclass may have assigned.
+
+        ``completeness`` is the replica gate's record for this generation; an
+        individual the replica policy refuses gets the worst objectives.
         """
         assert self._generation_id is not None
         map_ind_metrics = self.mongo.generation_repo.get_simulations_metrics_by_individual(
@@ -254,6 +304,21 @@ class NSGA3LoopStrategy(EngineStrategy):
                 continue
 
             ind_metrics = map_ind_metrics.get(ind.get_hash())
+            record = completeness.get(ind.get_hash())
+            if not is_usable(record, self._replica_policy):
+                # Fewer replicas than the design called for, and the
+                # policy says an under-replicated individual must not
+                # compete as though it were fully evaluated. The
+                # evidence is persisted either way.
+                logger.warning(
+                    "[NSGA-III] Genome %s rests on %s of %s replicas; "
+                    "assigning worst objectives (%s)",
+                    ind.get_hash(), (record or {}).get("observed"),
+                    (record or {}).get("expected"),
+                    self._replica_policy.describe(),
+                )
+                self._map_genome_objectives[ind] = worst_objectives
+                continue
             if ind_metrics is None:
                 logger.warning("No metrics for genome %s; assigning worst objectives.", ind.get_hash())
                 self._map_genome_objectives[ind] = worst_objectives
@@ -296,6 +361,13 @@ class NSGA3LoopStrategy(EngineStrategy):
             self._inserted_genomes.add(h)
             if entry.get("objectives") is not None:
                 self._genome_objectives_cache[h] = entry["objectives"]
+                # Reused later with its own evidence rather than with
+                # none: a genome that reappears has no simulations in
+                # the new generation to count, and an absent record
+                # read as "unknown, used" even for an evaluation the
+                # policy had refused.
+                self._genome_completeness_cache[h] = entry.get(
+                    "completeness")
         if entries:
             logger.info(
                 "[NSGA-III] Genome cache loaded: %d registered, %d with objectives.",
@@ -329,7 +401,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             })
             return False
 
-        if status == EnumStatus.DONE:
+        if status in (EnumStatus.DONE, EnumStatus.ERROR):
             logger.info(
                 "[NSGA-III] Replaying completed generation %s (index=%d) to continue the experiment.",
                 self._generation_id,
@@ -350,11 +422,20 @@ class NSGA3LoopStrategy(EngineStrategy):
         current_generation: Generation,
     ) -> None:
         current_index = int(current_generation["index"])
+        self._restore_selection_state(current_generation)
         self._current_population, current_map, pending_individuals = self._load_generation_population(
             current_generation["_id"]
         )
         self._map_genome_objectives.update(current_map)
         self._count_sims_inserted = pending_individuals * len(self._sim_rand_seeds)
+
+        if not load_random_state(self._ga_rng, current_generation.get("rng_state")):
+            logger.warning(
+                "[NSGA-III] Generation %s carries no usable RNG snapshot; resuming on a "
+                "fresh stream. The run stays valid but no longer reproduces the "
+                "uninterrupted one.",
+                current_index,
+            )
 
         if current_index == 0:
             self._parents = []
@@ -369,8 +450,68 @@ class NSGA3LoopStrategy(EngineStrategy):
                 f"Cannot resume generation {current_index}: previous generation {current_index - 1} not found."
             )
 
-        self._parents, parent_map, _ = self._load_generation_population(previous_generation["_id"])
+        # P_{t-1} is the SURVIVING population of the previous generation, not the
+        # offspring stored there. Selection keeps individuals from older
+        # generations too, and loading the offspring silently drops them — the
+        # audit measured 4 of 10 parents lost on a checkpoint of population 10.
+        survivors = previous_generation.get("survivors")
+        if survivors:
+            self._parents, parent_map = self._load_survivor_population(survivors)
+        else:
+            logger.warning(
+                "[NSGA-III] Generation %s predates survivor sets; falling back to its "
+                "offspring as parents. Any parent selection had kept from an older "
+                "generation is lost.",
+                current_index - 1,
+            )
+            self._parents, parent_map, _ = self._load_generation_population(
+                previous_generation["_id"]
+            )
         self._map_genome_objectives.update(parent_map)
+
+    def _load_survivor_population(
+        self,
+        survivor_ids: list[str],
+    ) -> "tuple[list[Chromosome], dict[Chromosome, list[float]]]":
+        """Rebuild P_t from the chromosome hashes environmental selection kept.
+
+        Resolved experiment-wide, and returned in the stored order — the
+        selection order the live run had, repeats included. Restoring the list
+        verbatim is what makes the resumed offspring identical.
+        """
+        assert self._exp_id is not None
+        documents = self.mongo.individual_repo.find_by_experiment_and_ids(
+            self._exp_id, list(dict.fromkeys(survivor_ids))
+        )
+        by_hash: dict[str, dict] = {}
+        for document in documents:
+            by_hash.setdefault(document["individual_id"], document)
+
+        missing = [h for h in survivor_ids if h not in by_hash]
+        if missing:
+            raise RuntimeError(
+                f"Cannot resume: {len(missing)} survivor(s) have no individual document "
+                f"in experiment {self._exp_id} (first: {missing[0]})."
+            )
+
+        population: list[Chromosome] = []
+        objectives_map: dict[Chromosome, list[float]] = {}
+        for individual_id in survivor_ids:
+            document = by_hash[individual_id]
+            chromosome = chromosome_from_dict(self._problem_name, document["chromosome"])
+            population.append(chromosome)
+
+            stored = document.get("objectives")
+            if stored:
+                objectives_map[chromosome] = self._objectives_list_to_minimization(
+                    [float(value) for value in stored]
+                )
+                continue
+            cached = self._genome_objectives_cache.get(individual_id)
+            if cached:
+                objectives_map[chromosome] = [float(value) for value in cached]
+
+        return population, objectives_map
 
     def _load_generation_population(
         self,
@@ -384,7 +525,15 @@ class NSGA3LoopStrategy(EngineStrategy):
         objectives_map: dict[Chromosome, list[float]] = {}
         pending_individuals = 0
 
-        for ind in sorted(individuals, key=lambda item: item["individual_id"]):
+        # Population order, not hash order: the mating tournament draws by index,
+        # so a differently ordered population is a different search. ``index``
+        # is absent on documents written before it existed, and those fall back
+        # to the previous hash ordering rather than to Mongo's natural order.
+        ordered = sorted(
+            individuals,
+            key=lambda item: (item.get("index") is None, item.get("index", 0), item["individual_id"]),
+        )
+        for ind in ordered:
             chromosome = chromosome_from_dict(self._problem_name, ind["chromosome"])
             population.append(chromosome)
 
@@ -528,6 +677,13 @@ class NSGA3LoopStrategy(EngineStrategy):
 # ------------------------------
 # Generation / Queuing
 # ------------------------------
+    def _dump_selection_state(self) -> dict | None:
+        """Optional backend state, captured before selection of this generation."""
+        return None
+
+    def _restore_selection_state(self, generation: Generation) -> None:
+        """Native/DEAP selection has no history beyond the population and RNG."""
+
     def _generation_enqueue(self) -> None:
         """Create generation ``t`` and queue whatever work its genomes need."""
         assert self._exp_id is not None
@@ -542,6 +698,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         seen_generation_hashes: set[str] = set()
 
         self._count_sims_inserted = 0
+        self._generation_completeness = {}
 
         for i, genome in enumerate(population):
             genome_hash = genome.get_hash()
@@ -585,8 +742,15 @@ class NSGA3LoopStrategy(EngineStrategy):
         if genome_hash in self._genome_objectives_cache:
             cached_obj = self._genome_objectives_cache[genome_hash]
             self._map_genome_objectives[genome] = cached_obj
+            # The evidence of the evaluation this vector came from, with its
+            # original decision. Written as the generation is enqueued, because
+            # nothing later in this generation will have anything to count for
+            # this genome.
+            carried = reused(self._genome_completeness_cache.get(genome_hash))
+            self._generation_completeness[genome_hash] = carried
             self._insert_individual_document(
-                exp_oid, gen_oid, genome, genome_hash, objectives_min=cached_obj
+                exp_oid, gen_oid, genome, genome_hash, ind_idx,
+                objectives_min=cached_obj, completeness=carried,
             )
             self._upload_topology_for(
                 exp_oid, gen_oid, gen_index, ind_idx, genome, genome_hash, first_seed
@@ -612,14 +776,23 @@ class NSGA3LoopStrategy(EngineStrategy):
                 objective_goals=self._objective_goals,
             )
             self._map_genome_objectives[genome] = obj_min
+            # `unknown` means "the plan was not recorded". There was no plan to
+            # record here, which is a different thing.
+            analytical_record = without_simulations(
+                STATE_ANALYTICAL,
+                "the problem is analytical; no simulation was run")
+            self._generation_completeness[genome_hash] = analytical_record
             self._insert_individual_document(
-                exp_oid, gen_oid, genome, genome_hash, objectives_min=obj_min
+                exp_oid, gen_oid, genome, genome_hash, ind_idx,
+                objectives_min=obj_min, completeness=analytical_record,
             )
             self._inserted_genomes.add(genome_hash)
             self._genome_objectives_cache[genome_hash] = obj_min
+            self._genome_completeness_cache[genome_hash] = analytical_record
             try:
                 self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
-                self.mongo.genome_cache_repo.set_objectives(self._exp_id, genome_hash, obj_min)
+                self.mongo.genome_cache_repo.set_objectives(
+                    self._exp_id, genome_hash, obj_min, analytical_record)
             except Exception:
                 logger.warning("genome_cache write failed for %s; continuing without cache.", genome_hash)
             self._upload_topology_for(
@@ -635,13 +808,20 @@ class NSGA3LoopStrategy(EngineStrategy):
         penalty = self._problem_adapter.penalty_objectives(genome, len(self._objective_keys))
         if penalty is not None:
             self._map_genome_objectives[genome] = penalty
+            penalty_record = without_simulations(
+                STATE_INFEASIBLE,
+                "the individual violates a constraint; no simulation was run")
+            self._generation_completeness[genome_hash] = penalty_record
             self._insert_individual_document(
-                exp_oid, gen_oid, genome, genome_hash, objectives_min=penalty
+                exp_oid, gen_oid, genome, genome_hash, ind_idx,
+                objectives_min=penalty, completeness=penalty_record,
             )
             self._inserted_genomes.add(genome_hash)
             self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
-            self.mongo.genome_cache_repo.set_objectives(self._exp_id, genome_hash, penalty)
+            self.mongo.genome_cache_repo.set_objectives(
+                self._exp_id, genome_hash, penalty, penalty_record)
             self._genome_objectives_cache[genome_hash] = penalty
+            self._genome_completeness_cache[genome_hash] = penalty_record
             self._upload_topology_for(
                 exp_oid, gen_oid, gen_index, ind_idx, genome, genome_hash, first_seed
             )
@@ -651,7 +831,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             return 0
 
         # --- Case D: new genome - register in cache, insert Individual, queue simulations ---
-        self._insert_individual_document(exp_oid, gen_oid, genome, genome_hash)
+        self._insert_individual_document(exp_oid, gen_oid, genome, genome_hash, ind_idx)
         self._inserted_genomes.add(genome_hash)
         self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
         return self._enqueue_genome_simulations(
@@ -677,18 +857,31 @@ class NSGA3LoopStrategy(EngineStrategy):
             "experiment_id": exp_oid,
             "index": gen_index,
             "status": EnumStatus.WAITING,
-            "start_time": datetime.now(),
+            "start_time": utc_now(),
             "end_time": None,
+            # Captured here because nothing in this generation has drawn from
+            # the generator yet: the offspring were produced by the caller, and
+            # enqueueing itself never draws. Restoring this on resume puts the
+            # loop back on the exact stream it would have had.
+            "rng_state": dump_random_state(self._ga_rng),
         }
+        selection_state = self._dump_selection_state()
+        if selection_state is not None:
+            gen_doc["selection_state"] = selection_state
         # Increment before inserting so the change-stream callback (which fires
         # asynchronously) always sees the already-updated index.
         self._gen_index += 1
         self._generation_id = self.mongo.generation_repo.insert(gen_doc)
+        # Completeness is measured against this, not against the
+        # documents that end up existing: a replica whose creation
+        # failed is invisible to a count of what was created.
+        self._replica_gate.record_plan(
+            self._generation_id, self._sim_rand_seeds)
 
         if gen_index == 0:
             self.mongo.experiment_repo.update(str(exp_oid), {
                 "status": EnumStatus.RUNNING,
-                "start_time": datetime.now()
+                "start_time": utc_now()
             })
         return gen_oid, gen_index
 
@@ -699,20 +892,26 @@ class NSGA3LoopStrategy(EngineStrategy):
         gen_oid: ObjectId,
         genome: Chromosome,
         genome_hash: str,
+        ind_idx: int,
         objectives_min: Optional[list[float]] = None,
         evaluation_source: Optional[str] = None,
+        completeness: Optional[dict] = None,
     ) -> None:
         """Insert one Individual document for the current generation.
 
-        ``objectives_min`` is in minimization space and is converted back to the
-        experiment's original goal space for persistence; ``None`` means "not
-        evaluated yet".  ``evaluation_source`` is optional metadata used by
-        strategies that mix evaluation provenances.
+        ``ind_idx`` is the genome's position in the population: a resumed run
+        rebuilds the population in that order, so the mating tournament draws
+        the same indices.  ``objectives_min`` is in minimization space and is
+        converted back to the experiment's original goal space for persistence;
+        ``None`` means "not evaluated yet".  ``completeness`` is the evidence
+        behind objectives already known at enqueue time.  ``evaluation_source``
+        is optional metadata used by strategies that mix evaluation provenances.
         """
         ind_doc: Individual = {
             "experiment_id": exp_oid,
             "generation_id": gen_oid,
             "individual_id": genome_hash,
+            "index": ind_idx,
             "chromosome": genome.to_dict(),
             "objectives": (
                 self._objectives_list_to_original(objectives_min)
@@ -720,6 +919,8 @@ class NSGA3LoopStrategy(EngineStrategy):
             ),
             "topology_picture_id": None,
         }
+        if completeness is not None:
+            ind_doc["completeness"] = completeness
         if evaluation_source is not None:
             ind_doc["evaluation_source"] = evaluation_source
         self.mongo.individual_repo.insert(ind_doc)
@@ -820,7 +1021,9 @@ class NSGA3LoopStrategy(EngineStrategy):
             logger.exception("[NSGA-III] Direct generation-done trigger failed.")
 
 
-    def _update_individual_objectives(self) -> None:
+    def _update_individual_objectives(
+        self, completeness: Optional[dict] = None
+    ) -> None:
         """
         Persists computed objectives to Individual documents in the DB and to the
         genome cache so that future generations (and future engine restarts) can
@@ -835,21 +1038,53 @@ class NSGA3LoopStrategy(EngineStrategy):
                 continue
             original_objectives = self._objectives_list_to_original(objectives)
             genome_hash = genome.get_hash()
-            self.mongo.individual_repo.update_objectives(
+            # This generation's measurement, else what was written for
+            # this genome at enqueue time — a reuse, an analytical
+            # evaluation, an infeasible individual. The handler writes for
+            # every genome it holds a vector for, including the ones it
+            # skipped, so without the second source it overwrote their
+            # evidence with `unknown`.
+            record = (completeness or {}).get(genome_hash)
+            if record is None:
+                record = self._generation_completeness.get(genome_hash)
+            # The objectives and the evidence behind them in one write: stored
+            # separately, a reader could see a vector whose completeness had
+            # not been written yet and have no way to know that.
+            self.mongo.individual_repo.update_evaluation(
                 genome_hash,
                 self._generation_id,
                 original_objectives,
+                annotate(
+                    record,
+                    usable=is_usable(record, self._replica_policy),
+                    policy=self._replica_policy,
+                ),
             )
             # Persist to genome cache only on first evaluation (avoids redundant writes).
             # Cache values remain in minimization space because pylib does not store
             # metadata describing the objective representation.
             if genome_hash not in self._genome_objectives_cache and self._is_ground_truth(genome):
+                # Cached with the vector, because the vector cannot say how
+                # many replicas it rests on — and a later generation reusing
+                # it has nothing of its own to count.
+                evidence = annotate(
+                    record,
+                    usable=is_usable(record, self._replica_policy),
+                    policy=self._replica_policy,
+                )
                 self.mongo.genome_cache_repo.set_objectives(
                     self._exp_id,
                     genome_hash,
                     objectives,
+                    evidence,
                 )
                 self._genome_objectives_cache[genome_hash] = objectives
+                # And in memory, next to it. The in-memory map was only ever
+                # filled by `_load_genome_cache_from_db`, so within one run
+                # the reuse in the *next* generation found nothing and
+                # reported `unknown` — with the database holding the record
+                # all along. Found by running it.
+                self._genome_completeness_cache[genome_hash] = evidence
 
 
     def _is_ground_truth(self, genome: Chromosome) -> bool:
@@ -901,21 +1136,12 @@ class NSGA3LoopStrategy(EngineStrategy):
         # ---------------- First PHASE P_1 ----------------
         if self._parents == []:
             self._parents = self._current_population.copy()
+            # P_0 survives trivially: there is no union to select from yet.
+            self._persist_survivors()
             offspring = self._run_genetic_algorithm()
             self._current_population = offspring
             self._generation_enqueue()
             logger.info("[NSGA-III] Enqueued P_{t+1}; waiting results.")
-            return
-
-        # Stop condition?
-        if self._gen_index > self._max_gen:
-            try:
-                first_pareto_front = self._final_pareto_front()
-            except Exception:
-                logger.exception("[NSGA-III] Could not compute final Pareto front.")
-                first_pareto_front = []
-
-            self._finalize_experiment(pareto_front=first_pareto_front)
             return
 
         # ------- PHASE P_{t+1}: environmental selection on union R_t = P_t ∪ P_{t-1} -------
@@ -945,6 +1171,22 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._parents = self._select_next_parents(R_population, R_objectives)
         if self._parents is None:
             return  # _finalize_experiment already called inside
+        self._persist_survivors()
+
+        # Stop condition — checked AFTER the selection above. The reported
+        # result is then ND(P_final), the selected population of pop_size,
+        # instead of ND(P_{t-1} ∪ Q_t): a union of up to 2·pop_size candidates
+        # that no environmental selection ever ran on. The evaluation budget is
+        # unchanged — neither path enqueues another generation.
+        if self._gen_index > self._max_gen:
+            try:
+                first_pareto_front = self._final_pareto_front()
+            except Exception:
+                logger.exception("[NSGA-III] Could not compute final Pareto front.")
+                first_pareto_front = []
+
+            self._finalize_experiment(pareto_front=first_pareto_front)
+            return
 
         offspring = self._run_genetic_algorithm()
         self._current_population = offspring
@@ -985,12 +1227,58 @@ class NSGA3LoopStrategy(EngineStrategy):
                 remaining = self._pop_size - len(selected_idx)
                 if remaining > 0:
                     partial = niching_selection(
-                        front, R_objectives, self._ref_points, remaining, self._ga_rng
+                        front,
+                        R_objectives,
+                        self._ref_points,
+                        remaining,
+                        self._ga_rng,
+                        accepted=selected_idx,
                     )
                     selected_idx.extend(partial)
                 break
 
         return [R_population[idx] for idx in selected_idx]
+
+
+# ---------------------------------------
+# Survivor set (measured population)
+# ---------------------------------------
+    def _persist_survivors(self) -> None:
+        """Record P_t — the population environmental selection kept — on the
+        generation document that just finished.
+
+        Individuals are stored per generation as the offspring Q_t that were
+        *evaluated* there. Quality indicators computed over Q_t swing with each
+        batch of children and can drop even while the search is still holding an
+        excellent parent, because that parent is not among the children. The
+        surviving population is the set NSGA actually carries forward and the
+        one the reference notebooks plot, so it has to be recoverable after the
+        run — hence this write.
+
+        ``self._generation_id`` still points at the generation whose results
+        triggered this selection: ``_generation_enqueue`` only advances it when
+        the next generation is created, which happens later in ``_evolution``.
+
+        Written verbatim, in selection order and with repeats: a child that
+        reproduces a surviving parent exactly enters the union twice and
+        selection may keep both slots. De-duplicating here would be harmless for
+        the metrics (a front ignores repeats) but would shrink the population a
+        resume rebuilds, so the list stays faithful to P_t.
+
+        Best-effort by design: survivors are analysis metadata, and a failed
+        write must not abort a running experiment. Readers fall back to the
+        offspring when the field is absent.
+        """
+        if self._generation_id is None or not self._parents:
+            return
+        hashes = [genome.get_hash() for genome in self._parents]
+        try:
+            self.mongo.generation_repo.set_survivors(self._generation_id, hashes)
+        except Exception:
+            logger.exception(
+                "[NSGA-III] Could not persist survivors for generation %s.",
+                self._generation_id,
+            )
 
 
 # ---------------------------------------
@@ -1024,6 +1312,9 @@ class NSGA3LoopStrategy(EngineStrategy):
 
         while len(children) < self._pop_size and attempts < max_attempts:
             attempts += 1
+            # No crowding tie-break here, unlike NSGA-II: Deb & Jain leave mating
+            # selection unbiased and enforce diversity through reference-point
+            # niching in the environmental step instead.
             parent1: Chromosome = tournament_selection(parents, individual_ranks, self._ga_rng)
             parent2: Chromosome = tournament_selection(parents, individual_ranks, self._ga_rng)
             if self._ga_rng.random() < self._prob_cx:
@@ -1142,7 +1433,14 @@ class NSGA3LoopStrategy(EngineStrategy):
 
 
     def _final_pareto_front(self) -> list[dict]:
-        """Non-dominated front of the FINAL population (parents ∪ last offspring).
+        """Non-dominated front of P_final — the SELECTED final population.
+
+        ``self._parents`` holds the survivors of the last environmental
+        selection, which ``_evolution`` now runs before the stop condition. The
+        last offspring are already folded into that selection, so taking
+        ``parents ∪ last offspring`` here would report the non-dominated set of
+        a union of up to 2·pop_size candidates instead of the pop_size
+        population the algorithm actually converged to.
 
         This is the clean result standard NSGA reports: ~pop_size well-converged,
         well-distributed points. It deliberately excludes the whole archive
@@ -1150,7 +1448,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         accumulates near-front points from early, poorly-converged generations,
         producing a thick/noisy front that does not match a reference plot.
         """
-        final_population = list(dict.fromkeys(self._parents + self._current_population))
+        final_population = list(dict.fromkeys(self._parents))
         all_objectives: list[list[float]] = []
         pareto_items: list[dict] = []
         for genome in final_population:
@@ -1180,7 +1478,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             logger.info(f"[NSGA-III] Experiment {self._exp_id} completed.")
             self.mongo.experiment_repo.update(str(self._exp_id), {
                 "status": EnumStatus.DONE,
-                "end_time": datetime.now(),
+                "end_time": utc_now(),
                 "system_message": system_msg if system_msg is not None else f"Experiment {self._exp_id} completed.",
                 "pareto_front": pareto_front
             })
@@ -1189,6 +1487,6 @@ class NSGA3LoopStrategy(EngineStrategy):
             self.mongo.experiment_repo.update(str(self._exp_id), {
                 "status": EnumStatus.ERROR,
                 "system_message": system_msg if system_msg is not None else f"Experiment {self._exp_id} finished.",
-                "end_time": datetime.now()
+                "end_time": utc_now()
             })
         self.stop()

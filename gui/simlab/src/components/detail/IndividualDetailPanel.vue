@@ -16,11 +16,7 @@
         <section class="section">
           <div class="section-title">Objectives</div>
           <div class="objectives-grid">
-            <div
-              v-for="(val, i) in individual.objectives"
-              :key="i"
-              class="obj-card"
-            >
+            <div v-for="(val, i) in individual.objectives" :key="i" class="obj-card">
               <div class="obj-name">{{ objectiveNames[i] ?? `obj${i}` }}</div>
               <div class="obj-val">{{ val.toFixed(6) }}</div>
             </div>
@@ -42,15 +38,26 @@
           </div>
         </section>
 
+        <!-- What the objectives rest on -->
+        <section class="section">
+          <div class="section-title">Evaluation</div>
+          <div class="evaluation">
+            <span :class="['level', `level--${completenessTone(individual.completeness)}`]">
+              {{ completenessLabel(individual.completeness) }}
+            </span>
+            <ul v-if="completenessDetail(individual.completeness).length" class="eval-detail">
+              <li v-for="line in completenessDetail(individual.completeness)" :key="line">
+                {{ line }}
+              </li>
+            </ul>
+          </div>
+        </section>
+
         <!-- Chromosome -->
         <section class="section">
           <div class="section-title">Chromosome</div>
           <div class="kv-table">
-            <div
-              v-for="(val, key) in individual.chromosome"
-              :key="key"
-              class="kv-row"
-            >
+            <div v-for="(val, key) in individual.chromosome" :key="key" class="kv-row">
               <span class="kv-key">{{ key }}</span>
               <span class="kv-val mono">{{ formatGene(val) }}</span>
             </div>
@@ -71,18 +78,29 @@
           </div>
 
           <div v-else class="sim-list">
-            <div
-              v-for="sim in simulations"
-              :key="sim.id"
-              class="sim-card"
-            >
+            <div v-for="sim in simulations" :key="sim.id" class="sim-card">
               <div class="sim-header">
                 <StatusBadge :status="sim.status" />
                 <span class="sim-meta">
                   <span v-if="sim.start_time">{{ formatDate(sim.start_time) }}</span>
-                  <span v-if="sim.start_time && sim.end_time"> → {{ formatDate(sim.end_time) }}</span>
+                  <span v-if="sim.start_time && sim.end_time">
+                    → {{ formatDate(sim.end_time) }}</span
+                  >
                 </span>
                 <span class="sim-seed mono">seed {{ sim.random_seed }}</span>
+              </div>
+
+              <!--
+                Where it ran. Two simulations of the same individual differ by
+                seed *and* by machine, and until now the panel showed only the
+                seed — so a difference between replicas could not be told apart
+                from a difference between workers.
+              -->
+              <div v-if="sim.placement" class="sim-where">
+                <span class="sim-where-label">ran on</span>
+                <span class="mono" :title="placementTitle(sim)">
+                  {{ placementLabel(sim.placement) }}
+                </span>
               </div>
 
               <div v-if="sim.system_message" class="sim-message">
@@ -122,7 +140,9 @@
                   </span>
                   <span
                     class="dodag-badge"
-                    :class="sim.dodag.convergence.converged ? 'dodag-badge--ok' : 'dodag-badge--warn'"
+                    :class="
+                      sim.dodag.convergence.converged ? 'dodag-badge--ok' : 'dodag-badge--warn'
+                    "
                   >
                     {{ sim.dodag.convergence.converged ? "converged" : "not converged" }}
                   </span>
@@ -138,13 +158,17 @@
                   </span>
                   <span class="dodag-stat">
                     <span class="dodag-stat-key">Parent switches</span>
-                    <span class="dodag-stat-val mono">{{ sim.dodag.convergence.total_parent_switches }}</span>
+                    <span class="dodag-stat-val mono">{{
+                      sim.dodag.convergence.total_parent_switches
+                    }}</span>
                   </span>
                 </div>
 
                 <!-- Exact tree edges (child → parent), when available -->
                 <div v-if="dodagEdges(sim.dodag).length > 0" class="dodag-tree">
-                  <div class="dodag-tree-title">Tree ({{ dodagEdges(sim.dodag).length }} edges)</div>
+                  <div class="dodag-tree-title">
+                    Tree ({{ dodagEdges(sim.dodag).length }} edges)
+                  </div>
                   <div class="dodag-edges">
                     <div
                       v-for="edge in dodagEdges(sim.dodag)"
@@ -154,13 +178,15 @@
                       <span class="dodag-edge-node">{{ edge.node }}</span>
                       <span class="dodag-edge-arrow">→</span>
                       <span class="dodag-edge-parent">{{ edge.parent }}</span>
-                      <span v-if="edge.depth !== null" class="dodag-edge-depth">d{{ edge.depth }}</span>
+                      <span v-if="edge.depth !== null" class="dodag-edge-depth"
+                        >d{{ edge.depth }}</span
+                      >
                     </div>
                   </div>
                 </div>
                 <div v-else class="dodag-approx-note">
-                  No parent-switch events in log — showing approximate formation only
-                  (legacy firmware).
+                  No parent-switch events in log — showing approximate formation only (legacy
+                  firmware).
                 </div>
               </div>
 
@@ -182,11 +208,7 @@
       </div>
     </div>
 
-    <SimulationDodagModal
-      v-if="dodagSim"
-      :sim="dodagSim"
-      @close="dodagSim = null"
-    />
+    <SimulationDodagModal v-if="dodagSim" :sim="dodagSim" @close="dodagSim = null" />
   </Teleport>
 </template>
 
@@ -197,9 +219,23 @@ import SimulationDodagModal from "./SimulationDodagModal.vue";
 import type { DodagInfo, IndividualDto, SimulationDto } from "../../types/simlab";
 import { getSimulationsByIndividual } from "../../api/simulations";
 import { fetchBlobUrl, downloadFile } from "../../api/files";
+import { placementLabel } from "../../services/placement";
+import {
+  completenessDetail,
+  completenessLabel,
+  completenessTone,
+} from "../../services/completeness";
 
 const props = defineProps<{
   individual: IndividualDto;
+  /**
+   * The experiment being looked at.
+   *
+   * Required to list this individual's simulations: `individual_id` is a
+   * chromosome hash and the same chromosome reappears in later experiments,
+   * so the simulations of all of them pile up under one id.
+   */
+  experimentId: string;
   objectiveNames: string[];
   metricColumns: string[]; // columns used in objective computation (data_conversion_config.metrics[].column)
   isSynthetic?: boolean;
@@ -221,10 +257,34 @@ const dodagSim = ref<SimulationDto | null>(null);
 
 const fileFields = [
   { key: "log_cooja_id", label: "Cooja Log", ext: "log" },
-  { key: "csv_log_id",   label: "CSV",       ext: "csv" },
+  { key: "csv_log_id", label: "CSV", ext: "csv" },
   { key: "runtime_log_id", label: "Runtime Log", ext: "log" },
-  { key: "csc_file_id", label: "CSC",        ext: "csc" },
+  { key: "csc_file_id", label: "CSC", ext: "csc" },
 ];
+
+/**
+ * Everything known about where a run executed, for the hover.
+ *
+ * The card shows host and worker, which is what answers "did these two run in
+ * the same place?". The container id and the attempt belong here rather than
+ * on the card: they matter when something looks wrong, not while reading
+ * results.
+ */
+function placementTitle(sim: SimulationDto): string {
+  const placement = sim.placement;
+  if (!placement) return "";
+  const lines = [
+    `host: ${placement.host_name || "?"}`,
+    `worker: ${placement.resource_name || "?"}`,
+  ];
+  if (placement.container_id) lines.push(`container: ${placement.container_id}`);
+  if (placement.attempt_id) lines.push(`attempt: ${placement.attempt_id}`);
+  if (placement.remote_pid) lines.push(`pid: ${placement.remote_pid}`);
+  if (placement.assigned_at) {
+    lines.push(`placed: ${formatDate(placement.assigned_at)}`);
+  }
+  return lines.join("\n");
+}
 
 function hasFiles(sim: SimulationDto): boolean {
   return fileFields.some((f) => !!sim[f.key as keyof SimulationDto]);
@@ -267,13 +327,21 @@ async function downloadSimFile(simId: string, fieldKey: string, ext: string) {
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleString("en-US", {
-    day: "2-digit", month: "2-digit",
-    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
   });
 }
 
 function formatGene(val: unknown): string {
-  if (Array.isArray(val)) return `[${(val as unknown[]).join(", ")}]`;
+  if (Array.isArray(val)) {
+    const parts = (val as unknown[]).map((el) =>
+      typeof el === "object" && el !== null ? JSON.stringify(el) : String(el),
+    );
+    return `[${parts.join(", ")}]`;
+  }
   if (typeof val === "number") return Number.isInteger(val) ? String(val) : val.toFixed(6);
   if (typeof val === "object" && val !== null) return JSON.stringify(val);
   return String(val);
@@ -298,7 +366,10 @@ onMounted(async () => {
   loadingSims.value = true;
   simError.value = null;
   try {
-    simulations.value = await getSimulationsByIndividual(props.individual.individual_id);
+    simulations.value = await getSimulationsByIndividual(
+      props.individual.individual_id,
+      props.experimentId,
+    );
   } catch (e: unknown) {
     simError.value = e instanceof Error ? e.message : String(e);
   } finally {
@@ -489,6 +560,39 @@ onBeforeUnmount(() => {
   color: var(--color-text);
 }
 
+/* Evaluation */
+.evaluation {
+  font-size: 12px;
+}
+
+.eval-detail {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.level {
+  font-weight: 600;
+}
+
+.level--ok {
+  color: var(--status-done);
+}
+
+.level--warn {
+  color: var(--status-running);
+}
+
+.level--bad {
+  color: var(--status-error);
+}
+
+.level--unknown {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
 /* Simulations */
 .loading-sims,
 .empty-sims {
@@ -541,6 +645,24 @@ onBeforeUnmount(() => {
 .sim-seed {
   font-size: 11px;
   color: var(--color-text-muted);
+}
+
+.sim-where {
+  display: flex;
+  gap: 0.4rem;
+  align-items: baseline;
+  font-size: 0.78rem;
+  color: var(--text-muted, #6b7280);
+}
+
+.sim-where-label {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.66rem;
+}
+
+.sim-where-sep {
+  opacity: 0.5;
 }
 
 .sim-message {
@@ -624,7 +746,9 @@ onBeforeUnmount(() => {
   border-radius: var(--radius-sm);
   background: var(--color-primary-light);
   color: var(--color-primary);
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .dodag-graph-btn:hover {
@@ -743,7 +867,9 @@ onBeforeUnmount(() => {
   border-radius: var(--radius-sm);
   background: var(--color-surface);
   color: var(--color-text);
-  transition: background 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
 }
 
 .file-btn:hover {

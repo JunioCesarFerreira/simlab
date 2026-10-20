@@ -177,30 +177,37 @@ git clone https://github.com/JunioCesarFerreira/simlab.git
 cd simlab
 ```
 
-#### 3. Adjust `docker-compose` settings
+#### 3. Adjust the deployment settings
 
-Open the `docker-compose.yaml` and configure the following parameters:
+Only the nginx reverse proxy publishes ports off the machine (`80` and `443`);
+every other service is either internal or bound to `127.0.0.1`. Copy the
+example settings and edit them:
 
-* **Ports**: make sure the host ports do not conflict with existing services on your machine (for e.g. REST API, MongoDB, etc.).
-* **Number of Cooja simulators** (or simulation instances): edit the replicas or service definitions (for example, under `mo-engine` or `simulators`) to set how many Coojas you want to launch.
-* (Optional) Adjust environment variables or volumes if needed (e.g. data directories, network settings).
-
-Example snippets you may need to adjust:
-
-```yaml
-services:
-  mo-engine:
-    replicas: 3       # number of Cooja instances
-    ports:
-      - "5001:5001"
-    environment:
-      - COOJAS_PER_NODE=3
-  rest-api:
-    ports:
-      - "8080:8080"
+```bash
+cp .env.example .env
 ```
 
-After editing, save the file.
+| Variable | Purpose |
+| --- | --- |
+| `SIMLAB_PUBLIC_URL` | Base URL users type in. **Must include the port** when HTTPS is not on 443. |
+| `SIMLAB_HTTP_PORT` / `SIMLAB_HTTPS_PORT` | Host ports for the proxy — change these if 80/443 are taken. |
+| `SIMLAB_TLS_CN` / `SIMLAB_TLS_SAN` | Hostname baked into the self-signed certificate generated on first start. |
+| `SIMLAB_API_KEY`, `GRAFANA_ADMIN_PASSWORD` | Credentials. Change both before exposing SimLab beyond localhost. |
+
+Every variable has a working default, so the stack also comes up without a
+`.env` file. See [nginx/README.md](nginx/README.md) for the full proxy setup,
+including how to install a CA-issued certificate.
+
+In `docker-compose.yaml` itself you still set the **number of Cooja simulators
+on this machine**: add or remove `cooja*` services and keep the master node's
+`NUMBER_OF_CONTAINERS` in sync.
+
+That variable now **seeds** the local host's workers on the first start rather
+than sizing a worker pool. Capacity comes from an inventory of hosts and
+workers in the database, maintained by Docker discovery and the health cycle,
+and more machines are added from the **Infrastructure** page without touching
+the compose file — see
+[Distributed Cooja resources](docs/markdown/RECURSOS_DISTRIBUIDOS.md).
 
 #### 4. Launch the full stack with Docker Compose
 
@@ -228,7 +235,8 @@ docker-compose ps
 
 You should see a list of containers with their state (e.g. `Up`) and mapped ports. Confirm that:
 
-* The **rest_api** container is running and listening on the configured port (e.g. `8080`)
+* The **simlab_proxy** container is running and publishing `80` and `443` — it is the only way into the stack
+* The **rest_api** container is running (no published port: it is reached through the proxy)
 * The **mo_engine** container is running
 * The **master_node** container is running
 * Any auxiliary services (e.g. database, cooja's) are running
@@ -251,15 +259,31 @@ Once all containers are running, your SimLab environment should be operational a
 
 Once the environment is fully running (as described in the **Setup Instructions**), the system can be operated primarily through the **Swagger UI** exposed by the REST API.
 
-### 1. Access the API Interface
+### 1. Access SimLab
 
-Open your web browser and navigate to:
+Everything is served over HTTPS by the nginx reverse proxy; no other container
+is reachable from outside the machine. With the default settings:
 
+| Interface | URL |
+| --- | --- |
+| Web GUI | `https://localhost/` |
+| Swagger UI | `https://localhost/docs` |
+| REST API | `https://localhost/api/v1/` |
+| Grafana | `https://localhost/grafana/` |
+
+The certificate generated on first start is self-signed, so the browser warns
+on the first visit — accept it, or install a CA-issued certificate as described
+in [nginx/README.md](nginx/README.md).
+
+Open `https://localhost/docs` to launch the **Swagger UI**, which provides an
+interactive interface for all available REST endpoints.
+
+Command-line tools point at the same proxy and verify TLS against
+`nginx/certs/simlab.crt`, so no flags are needed from a checkout:
+
+```bash
+curl --cacert nginx/certs/simlab.crt https://localhost/api/v1/experiments
 ```
-http://localhost:8000/docs
-```
-
-This launches the **Swagger UI**, which provides an interactive interface for all available REST endpoints.
 
 ### 2. Upload Source Files
 
@@ -313,6 +337,9 @@ All raw outputs, logs, and metadata are stored in MongoDB/GridFS for reproducibi
 
 * **Synthetic Problems Guide**
   A detailed usage guide for running synthetic benchmark problems (DTLZ2, ZDT1, SCH1) without requiring Cooja is available in the [documentation directory](./docs/markdown/SYNTHETIC_MODE.md). Synthetic instances are defined visually from the **Synthetic Instances** page in the GUI (sidebar → *Synthetic*) and encoded as the analytical problem P0, which the mo-engine evaluates **in-process** — no simulation jobs are created and the master-node is not involved (the master-node retains a synthetic fallback for the `batch` strategy, legacy experiments, and the `ENABLE_DATA_SYNTHETIC` override).
+
+* **Firmware Traceability Guide**
+  Every experiment keeps an immutable copy of the firmware it ran with, stored in GridFS and owned by that experiment alone — see [docs/markdown/FIRMWARE_TRACEABILITY.md](./docs/markdown/FIRMWARE_TRACEABILITY.md). The snapshot is taken when the experiment starts, survives later edits or deletion of the shared source repository, and is browsable and downloadable from the experiment page in the GUI.
 
 * **Changelog**
   Recent updates and feature additions are documented in the [`CHANGELOG.md`](./CHANGELOG.md) file.

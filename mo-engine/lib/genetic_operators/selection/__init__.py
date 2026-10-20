@@ -1,3 +1,7 @@
 from .rank_selection import rank_selection
 from .roulette_selection import roulette_selection
-from .tournament_selection import tournament_selection, compute_individual_ranks
+from .tournament_selection import (
+    tournament_selection,
+    compute_individual_ranks,
+    compute_crowding_distances,
+)

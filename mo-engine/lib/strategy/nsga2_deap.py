@@ -11,6 +11,7 @@ instantiation will fail with a clear ImportError.
 """
 
 from .nsga2 import NSGA2LoopStrategy
+from .library_rng import numpy_global_seed
 
 
 def _ensure_deap_classes_nsga2(n_obj: int) -> tuple[str, str]:
@@ -72,6 +73,7 @@ class NSGA2DeapStrategy(NSGA2LoopStrategy):
             ind._orig_idx = i
             deap_inds.append(ind)
 
-        selected = tools.selNSGA2(deap_inds, self._pop_size)
+        with numpy_global_seed(self._ga_rng):
+            selected = tools.selNSGA2(deap_inds, self._pop_size)
 
         return [R_population[ind._orig_idx] for ind in selected]

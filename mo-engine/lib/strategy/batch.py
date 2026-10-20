@@ -23,6 +23,17 @@ from lib.nsga import fast_nondominated_sort
 from lib.problem.adapter import ProblemAdapter, Chromosome
 from lib.problem.chromosomes import chromosome_from_dict
 from lib.problem.resolve import build_adapter
+from pylib.timeutil import utc_now
+from lib.strategy.completeness import (
+    STATE_ANALYTICAL,
+    STATE_INFEASIBLE,
+    ReplicaGate,
+    ReplicaPolicy,
+    annotate,
+    is_usable,
+    reused,
+    without_simulations,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -93,6 +104,17 @@ class BatchStrategy(EngineStrategy):
 
         obj = params.get("objectives", []) or []
         self._objective_keys: list[str] = [o["metric_name"] for o in obj]
+        # What an objective vector is allowed to rest on. The policy is
+        # read from the experiment rather than assumed, because "use a
+        # mean over whichever replicas happened to finish" is a
+        # decision about the experiment and it used to be made in
+        # silence.
+        self._replica_policy = ReplicaPolicy.from_config(simulation_config)
+        self._replica_gate = ReplicaGate(
+            self.mongo,
+            objective_keys=self._objective_keys,
+            policy=self._replica_policy, label="Batch",
+        )
         self._objective_goals: list[int] = [1 if o["goal"] == "min" else -1 for o in obj]
         if len(self._objective_keys) != len(self._objective_goals):
             raise ValueError(
@@ -152,7 +174,7 @@ class BatchStrategy(EngineStrategy):
             )
             self._start_watcher()
             self._start_generation_poll()
-            if status == EnumStatus.DONE:
+            if status in (EnumStatus.DONE, EnumStatus.ERROR):
                 with self._lock:
                     self._handle_generation_done(self._generation_id)
             return
@@ -296,14 +318,19 @@ class BatchStrategy(EngineStrategy):
             "experiment_id": exp_oid,
             "index": gen_index,
             "status": EnumStatus.WAITING,
-            "start_time": datetime.now(),
+            "start_time": utc_now(),
             "end_time": None,
         }
         self._generation_id = self.mongo.generation_repo.insert(gen_doc)
+        # Completeness is measured against this, not against the
+        # documents that end up existing: a replica whose creation
+        # failed is invisible to a count of what was created.
+        self._replica_gate.record_plan(
+            self._generation_id, self._sim_rand_seeds)
 
         self.mongo.experiment_repo.update(str(exp_oid), {
             "status": EnumStatus.RUNNING,
-            "start_time": datetime.now(),
+            "start_time": utc_now(),
         })
 
         sims_inserted = 0
@@ -420,6 +447,15 @@ class BatchStrategy(EngineStrategy):
 
         logger.info("[Batch] EVENT GENERATION TERMINAL gen_id=%s", self._generation_id)
 
+        # Before anything is aggregated: are the replicas this
+        # generation planned actually there? A missing one can be run
+        # again, and until that is settled there is nothing to
+        # evaluate.
+        gate = self._replica_gate.evaluate(self._generation_id)
+        if not gate.proceed:
+            return
+        completeness = gate.completeness
+
         map_ind_metrics = self.mongo.generation_repo.get_simulations_metrics_by_individual(
             generation_id=self._generation_id,
             metrics=self._objective_keys,
@@ -433,6 +469,21 @@ class BatchStrategy(EngineStrategy):
             if self._map_genome_objectives.get(ind) is not None:
                 continue
             ind_metrics = map_ind_metrics.get(ind.get_hash())
+            record = completeness.get(ind.get_hash())
+            if not is_usable(record, self._replica_policy):
+                # Fewer replicas than the design called for, and the
+                # policy says an under-replicated individual must not
+                # compete as though it were fully evaluated. The
+                # evidence is persisted either way.
+                logger.warning(
+                    "[Batch] Genome %s rests on %s of %s replicas; "
+                    "assigning worst objectives (%s)",
+                    ind.get_hash(), (record or {}).get("observed"),
+                    (record or {}).get("expected"),
+                    self._replica_policy.describe(),
+                )
+                self._map_genome_objectives[ind] = worst_objectives
+                continue
             if ind_metrics is None:
                 logger.warning(
                     "[Batch] No metrics for genome %s; assigning worst objectives.",
@@ -450,7 +501,7 @@ class BatchStrategy(EngineStrategy):
             else:
                 self._map_genome_objectives[ind] = obj_vector
 
-        self._update_individual_objectives()
+        self._update_individual_objectives(completeness)
 
         try:
             pareto_items: list[dict] = []
@@ -473,17 +524,29 @@ class BatchStrategy(EngineStrategy):
 
         self._finalize_experiment(pareto_front=first_pareto_front)
 
-    def _update_individual_objectives(self) -> None:
+    def _update_individual_objectives(
+        self, completeness: Optional[dict] = None
+    ) -> None:
         if self._generation_id is None:
             return
         for genome in self._chromosomes:
             objectives = self._map_genome_objectives.get(genome)
             if objectives is None:
                 continue
-            self.mongo.individual_repo.update_objectives(
-                genome.get_hash(),
+            genome_hash = genome.get_hash()
+            record = (completeness or {}).get(genome_hash)
+            # The objectives and the evidence behind them in one write: stored
+            # separately, a reader could see a vector whose completeness had
+            # not been written yet and have no way to know that.
+            self.mongo.individual_repo.update_evaluation(
+                genome_hash,
                 self._generation_id,
                 self._objectives_list_to_original(objectives),
+                annotate(
+                    record,
+                    usable=is_usable(record, self._replica_policy),
+                    policy=self._replica_policy,
+                ),
             )
 
     # ------------------------------
@@ -633,7 +696,7 @@ class BatchStrategy(EngineStrategy):
             logger.info("[Batch] Experiment %s completed.", self._exp_id)
             self.mongo.experiment_repo.update(str(self._exp_id), {
                 "status": EnumStatus.DONE,
-                "end_time": datetime.now(),
+                "end_time": utc_now(),
                 "system_message": system_msg
                     if system_msg is not None
                     else f"Experiment {self._exp_id} completed.",
@@ -646,6 +709,6 @@ class BatchStrategy(EngineStrategy):
                 "system_message": system_msg
                     if system_msg is not None
                     else f"Experiment {self._exp_id} finished.",
-                "end_time": datetime.now(),
+                "end_time": utc_now(),
             })
         self.stop()

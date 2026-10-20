@@ -1,13 +1,30 @@
 #!/usr/bin/env python3
 
+import os
+from pathlib import Path
+
 import requests
 
 # ==========================================================
 # CONFIG
 # ==========================================================
 
-API_URL = "http://localhost:8000/api/v1/experiments/"
-API_KEY = "simlab-api-key42"
+# SimLab is served only through the nginx reverse proxy over TLS - the REST API
+# no longer publishes a host port. Override for a real deployment:
+#   SIMLAB_API_BASE=https://simlab.example.org/api/v1
+API_BASE = os.getenv("SIMLAB_API_BASE", "https://localhost/api/v1")
+
+# Trust anchor for the proxy's self-signed certificate. It lives in the
+# checkout, so verification stays ON by default; set SIMLAB_CA_BUNDLE for a
+# different bundle, or SIMLAB_TLS_VERIFY=false to skip verification.
+_CA = Path(__file__).resolve().parents[1] / "nginx" / "certs" / "simlab.crt"
+VERIFY_TLS = (
+    False if os.getenv("SIMLAB_TLS_VERIFY", "true").lower() in ("0", "false", "no", "off")
+    else os.getenv("SIMLAB_CA_BUNDLE") or (str(_CA) if _CA.is_file() else True)
+)
+
+API_URL = f"{API_BASE}/experiments/"
+API_KEY = os.getenv("SIMLAB_API_KEY", "simlab-api-key42")
 
 HEADERS = {
     "accept": "application/json",
@@ -160,7 +177,7 @@ body = {
 # EXECUTION
 # ==========================================================
 
-response = requests.post(API_URL, headers=HEADERS, json=body)
+response = requests.post(API_URL, headers=HEADERS, json=body, verify=VERIFY_TLS)
 
 print("Status:", response.status_code)
 print("Response:", response.text)

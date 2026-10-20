@@ -1,0 +1,61 @@
+# A stand-in for a remote computational host.
+#
+# Runs sshd and carries the Docker CLI, pointed at the developer machine's own
+# daemon through the mounted socket. That is enough to exercise the whole
+# remote path — hop 1 into the host, `docker ps` there, hop 2 tunnelled into a
+# container — on a single machine, without installing sshd on the machine
+# itself or needing a second one.
+#
+# For development only. Key authentication, no password, root login: the point
+# is to reproduce the production code path, not the production hardening.
+FROM alpine:3.20
+
+RUN apk add --no-cache openssh-server docker-cli \
+    && ssh-keygen -A \
+    && mkdir -p /root/.ssh \
+    && chmod 700 /root/.ssh
+
+# Key only. A password would let the fixture pass while the key path — the one
+# the feature recommends — stayed untested.
+#
+# No UsePAM: Alpine's sshd is built without it and only logs a warning about
+# an unsupported option, which is noise in the one log you read when hop 1
+# fails.
+#
+# AllowTcpForwarding is the one that is easy to miss: the second hop into a
+# container is a direct-tcpip channel, so the host's sshd has to allow
+# forwarding. Upstream OpenSSH defaults to yes, but Alpine's package ships it
+# as no — which fails with "Administratively prohibited" and is exactly the
+# prerequisite a real hardened host is likely to share.
+RUN printf '%s\n' \
+        'PermitRootLogin prohibit-password' \
+        'PasswordAuthentication no' \
+        'PubkeyAuthentication yes' \
+        'AuthorizedKeysFile /root/.ssh/authorized_keys' \
+        'AllowTcpForwarding yes' \
+        'PrintMotd no' \
+    > /etc/ssh/sshd_config.d/simlab.conf
+
+# The public key is mounted read-only at /keys and copied into place here,
+# rather than mounted straight onto authorized_keys. A bind mount keeps the
+# host's ownership — uid 1001, not root — and sshd's StrictModes refuses such
+# a file with "bad ownership or modes", which is correct of it and would make
+# the fixture fail for a reason that has nothing to do with SimLab.
+RUN printf '%s\n' \
+        '#!/bin/sh' \
+        'set -e' \
+        'if [ -f /keys/authorized_keys ]; then' \
+        '  install -m 600 -o root -g root /keys/authorized_keys /root/.ssh/authorized_keys' \
+        'else' \
+        '  echo "remote-host: no /keys/authorized_keys mounted; see README.md" >&2' \
+        'fi' \
+        'exec "$@"' \
+    > /usr/local/bin/entrypoint.sh \
+    && chmod +x /usr/local/bin/entrypoint.sh
+
+EXPOSE 22
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+# -D stays in the foreground, -e logs to stderr so `docker logs` shows the
+# authentication attempts — which is what you read when hop 1 fails.
+CMD ["/usr/sbin/sshd", "-D", "-e"]

@@ -464,12 +464,19 @@ def repair_connectivity_to_sink(
             if mask[i] == 1 and dist_sink(i) <= radius
         }
 
-        # If no active node reaches sink, connect the closest one
+        # If no active node reaches the sink, activate a candidate that does.
+        #
+        # A previous version picked the closest *active* node and added it to
+        # sink_comp without checking dist_sink(i) <= radius, which declared a
+        # component rooted even when its nearest node lay beyond the reach
+        # radius. Only candidates actually within radius may seed sink_comp.
         if not sink_comp:
-            closest = min(
-                (i for i in range(n) if mask[i] == 1),
-                key=lambda i: dist_sink(i)
-            )
+            reachable = [i for i in range(n) if dist_sink(i) <= radius]
+            if not reachable:
+                # No candidate position reaches the sink: the instance admits
+                # no mask connected to the root under this radius.
+                return True, []
+            closest = min(reachable, key=lambda i: dist_sink(i))
             mask[closest] = 1
             sink_comp.add(closest)
 

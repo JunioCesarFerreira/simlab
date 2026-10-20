@@ -194,8 +194,11 @@ class TestGroundTruthGate:
         strategy = _strategy()
         good = _Genome("sim-good")
         estimated = _Genome("est-extreme")
-        strategy._parents = [good]
-        strategy._current_population = [estimated]
+        # The front is ND(P_final): an estimate can only reach it by having been
+        # admitted into the selected population (relaxed configuration or
+        # starvation fallback).
+        strategy._parents = [good, estimated]
+        strategy._current_population = []
         strategy._estimated_hashes = {"est-extreme"}
         strategy._map_genome_objectives = {good: [1.0, 1.0], estimated: [0.0, 0.0]}
 
@@ -203,7 +206,7 @@ class TestGroundTruthGate:
 
         assert [item["chromosome"]["tag"] for item in front] == ["sim-good"]
         # The population itself must be restored after the filtered read.
-        assert strategy._current_population == [estimated]
+        assert strategy._parents == [good, estimated]
 
 
 # ---------------------------------------------------------------------------

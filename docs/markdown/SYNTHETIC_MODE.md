@@ -229,9 +229,46 @@ Notes:
   front is reached when those variables equal `0.5`.
 - **ZDT1** — `f₁ = x₀`, `g = 1 + 9·Σ(x₁…xₙ₋₁)/(n−1)`, `f₂ = g·(1 − √(f₁/g))`.
 - **SCH1** — uses the first decision variable mapped to the benchmark's
-  decision domain (configurable via `synthetic.sch1_domain`).
+  decision domain, `[-5, 5]` by default and configurable via
+  `synthetic.sch1_domain`. The Pareto-optimal set is `x ∈ [0, 2]`, so a domain
+  of exactly `(0, 2)` would make every point optimal and test spread only; the
+  default is deliberately wider so the optimiser has to converge first.
+  **This matters when comparing against published SCH1 runs**, which commonly
+  use `[-10, 10]` — a different problem, and not a harder-or-easier one in a
+  simple way, since it changes how much of the domain is already optimal.
 - Objective names/order come from `parameters.objectives[].metric_name`, so the
   stored `{name: value}` dict matches exactly what the mo-engine reads back.
+  `GET /experiments/{id}/hv-gd` resolves requested objectives against that same
+  list, so reordering or subsetting the axes is safe.
+
+### Protocol conventions — read before comparing with anything external
+
+| | SimLab |
+| --- | --- |
+| Hypervolume reference | `1.1 × nadir` of the benchmark (DTLZ2 `[1]*M`, ZDT1 `[1,1]`, SCH1 `[4,4]`) |
+| GD | exact distance to the analytical front (see §7) |
+| IGD / IGD+ | against a 500-point sampled front, normalised by the theoretical ideal-nadir range |
+| Measured population | the survivors `P_t` by default (`population=` selects) |
+| Generation 0 | the initial population, evaluated and counted as a generation |
+| Evaluation budget | `population_size × (number_of_generations + 1)` distinct genomes at most, since generation 0 is evaluated too |
+| Mutation | `prob_mt` (per child) × `per_gene_prob` (per variable) — the two COMPOSE |
+| NSGA-III divisions | derived from `M` and the population, not fixed |
+
+Two of these are easy to get wrong when reproducing a result:
+
+**The evaluation budget includes generation 0.** A run configured for 20
+generations evaluates 21 populations. Counting the initial population as
+generation 0 is a valid convention, but it is one evaluation batch more than a
+protocol that counts only the offspring batches.
+
+**The two mutation probabilities compose.** `prob_mt = 0.1` with
+`per_gene_prob = 0.05` over 10 variables mutates one variable every twenty
+children — a search driven almost entirely by crossover, which is what the GUI
+used to send. The defaults are now the textbook convention (`prob_mt = 1.0`,
+`per_gene_prob = 1/n`), and the launch wizard shows the expected number of
+mutated variables per child so the composition cannot hide. Note that the two
+knobs are not redundant even at equal products: concentrating mutations in few
+children is not the same search as spreading them thinly across all of them.
 
 ---
 
@@ -276,9 +313,8 @@ can render the synthetic badge without fetching the full document.
 ## 7. Convergence metrics against the true front
 
 Because the synthetic benchmarks have a Pareto front known in closed form,
-`pareto-analysis/compute_hv_gd.py` can measure **Generational Distance (GD)**
-against the analytical (true) front instead of the experiment's own final front
-(which would drive GD trivially to zero on the last generation):
+`pareto-analysis/compute_hv_gd.py` can measure **GD**, **IGD** and **IGD+**
+against the analytical (true) front instead of the experiment's own final front:
 
 ```bash
 python compute_hv_gd.py --expid <id> \
@@ -287,12 +323,88 @@ python compute_hv_gd.py --expid <id> \
 ```
 
 Without `--true-front-bench` the behavior is unchanged (self-reference front).
+With it, the HV reference point is the benchmark's fixed `1.1 × nadir` — the
+same one `/hv-gd` and `plot_pareto_results.py` use. `compute_hv_gd.py` used to
+derive it from the observed worst point regardless, so the same experiment
+reported one hypervolume on the CLI and another in the GUI.
+
+> **Self-reference measures agreement with this run, not the true optimum.**
+> The stored final front is built from the selected final survivors. Measuring
+> those same survivors against it gives zero GD/IGD (within numerical tolerance).
+> Offspring or archive series can differ from that reference and need not reach
+> zero. These empirical-reference distances describe progress towards this run's
+> own result; they are not comparable across runs or distances to the true optimum.
+
 The analytical fronts live in `pareto-analysis/lib/true_fronts.py` (DTLZ2 =
 unit hypersphere segment; ZDT1 = `1 − √f₁`; SCH1 = `x²`/`(x−2)²`, `x∈[0,2]`).
 
-> GD here is the **RMS variant** `sqrt((1/N)·Σ dᵢ²)` (Schütze et al., 2012),
-> not Van Veldhuizen's classic `(1/N)·(Σ dᵢᵖ)^(1/p)`. HV uses the `moocore`
-> library with a reference point set to the worst feasible objective + margin.
+> **Definitions.** GD is the arithmetic mean of each front point's distance to
+> the true front — the `p = 1` form used by `moocore`, `pymoo` and jMetal —
+> *not* the RMS variant `sqrt((1/N)·Σ dᵢ²)`. IGD is the average, over the
+> reference points, of the distance to the measured front, and IGD+ is the
+> weakly Pareto-compliant variant of Ishibuchi et al. (2015). HV uses `moocore`,
+> always in raw units, with a reference point that is `1.1 × nadir` for a known
+> benchmark and the worst feasible objective + margin otherwise.
+>
+> The same definitions back `GET /experiments/{id}/hv-gd`, which is what the web
+> GUI plots: they live in `pylib/moo_metrics.py`, mirrored for the offline CLIs
+> in `pareto-analysis/lib/metrics.py` under a parity test.
+
+### Missing survivor sets and resume compatibility
+
+When `population=survivors`, each generation without a persisted survivor set
+falls back to its offspring. `population_sources` is aligned with `generations`;
+`population_source="mixed"` identifies a series containing both populations.
+An explicitly empty survivor set remains empty. A mixed series must not be
+interpreted as a trajectory measured exclusively on survivors. Both the detail
+and comparison charts identify the fallback.
+
+NSGA checkpoints preserve population order, previous survivors and RNG state.
+The pymoo NSGA-III backend additionally persists ideal, worst, nadir and extreme
+points in a versioned `selection_state`, captured at enqueue before selection
+of the current generation. This allows a completed generation to be replayed
+from its original selection state. An invalid snapshot stops resume explicitly.
+
+Legacy checkpoints remain readable. Missing RNG/survivor metadata, or missing
+pymoo normalization after the first selection, produces a warning: the original
+trajectory cannot be guaranteed without the missing history. Reproducibility
+is tested under the installed dependency versions; see the
+[regression validation](../../mo-engine/tests/regression/README.md#validation-of-integration-fixes).
+
+
+### How GD is measured — and why IGD is not measured the same way
+
+For a **known benchmark**, GD uses the *closed-form* distance to the true front
+(`pylib.benchmarks.front_distance`), not a nearest-neighbour search over a
+sampled reference. The response reports which route was taken in `gd_method`.
+
+The reason is that a sampled reference puts a floor under GD equal to its own
+fill distance. Measured on points lying **exactly on** the DTLZ2 front — whose
+true GD is zero:
+
+| Objectives | 500-point reference | 200 000-point reference | closed form |
+| ---: | ---: | ---: | ---: |
+| 2 | 0.0016 | 0.000004 | 4·10⁻¹⁷ |
+| 3 | 0.0296 | 0.0014 | 4·10⁻¹⁷ |
+| 6 | 0.1938 | 0.0510 | 5·10⁻¹⁷ |
+
+That is discretisation error being read as lack of convergence, and no practical
+sample removes it: the front is an (M−1)-dimensional manifold, so fill distance
+shrinks only as `N^(-1/(M-1))` and M=6 would need on the order of 10¹⁵ points.
+
+`front_distance` is exact for DTLZ2 (the front is the unit sphere, so the
+nearest point to any positive-orthant `f` is `f/‖f‖` and the distance is
+`|‖f‖₂ − 1|`) and solved to machine precision for the two plane curves.
+
+**IGD and IGD+ keep the sampled reference and keep the floor.** They average
+over the reference set itself — that is what makes them measure *coverage* —
+so there is nothing to replace it with. Read them as comparative numbers between
+runs sharing the same reference, not as absolute distances.
+
+**Normalisation** uses the benchmark's theoretical ideal-nadir range when one
+exists, rather than the extremes of the sampled reference, so the value does not
+depend on how that sample was drawn. Pass `--raw-distances` to the CLI to skip
+normalisation entirely.
 
 ---
 

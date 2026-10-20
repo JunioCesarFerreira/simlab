@@ -1,4 +1,5 @@
 import type { ProblemDraft } from '../types/problem'
+import { hasCoverageConstraint } from '../types/problem'
 
 export type ValidationError = { field: string; message: string }
 
@@ -7,6 +8,11 @@ export function validateProblem(draft: ProblemDraft): ValidationError[] {
   if (!draft.name.trim()) errors.push({ field: 'name', message: 'Name is required' })
   if (draft.radiusOfReach <= 0) errors.push({ field: 'radius_of_reach', message: 'radius_of_reach must be > 0' })
   if (draft.radiusOfInter <= 0) errors.push({ field: 'radius_of_inter', message: 'radius_of_inter must be > 0' })
+  if (hasCoverageConstraint(draft.name)) {
+    const alpha = draft.minCoveragePercentage
+    if (!Number.isFinite(alpha) || alpha < 0 || alpha > 100)
+      errors.push({ field: 'min_coverage_percentage', message: 'alpha (min_coverage_percentage) must be between 0 and 100' })
+  }
   const [xmin, ymin, xmax, ymax] = draft.region
   if (xmin >= xmax) errors.push({ field: 'region', message: 'xmin must be < xmax' })
   if (ymin >= ymax) errors.push({ field: 'region', message: 'ymin must be < ymax' })

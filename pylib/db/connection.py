@@ -10,24 +10,82 @@ from pymongo.errors import PyMongoError
 logger = logging.getLogger(__name__)
 
 
+#: Every client this class creates reads dates as **aware UTC**.
+#:
+#: BSON stores an instant, not a wall clock, and without this PyMongo hands it
+#: back with ``tzinfo=None``. Nothing downstream could then tell UTC from a
+#: local reading of it: the API serialised ``2026-10-15T15:00:00`` with no
+#: ``Z``, a browser in ``America/Sao_Paulo`` read that as 18:00 UTC, and a
+#: measurement one minute old displayed as being in the future (R25).
+#:
+#: It is a read-side setting and changes no stored value. What it does change
+#: is that a naive datetime can no longer be compared with one that came out
+#: of the database, which is why the writers in this repository use
+#: ``pylib.timeutil.utc_now`` rather than ``datetime.now()``.
+TZ_AWARE = True
+
+
 class MongoDBConnection:
-    def __init__(self, uri: str, db_name: str):
+    def __init__(self, uri: str, db_name: str, *, reuse_client: bool = False):
         logger.info(f"[MongoDBConnection] uri:{uri} db_name:{db_name}")
         self.uri = uri
         self.db_name = db_name
+        # The API owns one factory per worker and can share PyMongo's pool.
+        # Other services retain their existing connection lifecycle.
+        self._client = (
+            MongoClient(uri, tz_aware=TZ_AWARE) if reuse_client else None)
 
     @contextmanager
     def connect(self) -> Generator:
-        client = MongoClient(self.uri)
+        if self._client is not None:
+            yield self._client[self.db_name]
+            return
+        client = MongoClient(self.uri, tz_aware=TZ_AWARE)
         try:
             yield client[self.db_name]
         finally:
             client.close()
 
+    @contextmanager
+    def transaction(self) -> Generator:
+        """Run a block of writes atomically, yielding ``(db, session)``.
+
+        Every operation inside has to be passed ``session=session`` or it
+        runs outside the transaction and silently loses the guarantee.
+
+        What this buys, and what it does not: MongoDB gives snapshot
+        isolation, so two transactions that write the **same document**
+        conflict and one aborts. It does *not* stop a document that did not
+        exist in the snapshot from being inserted by someone else. So a
+        composite operation that must exclude a concurrent insert has to make
+        both sides write one shared document — the host, in the case this was
+        added for — rather than merely read it.
+
+        Requires a replica set, which this deployment already requires for
+        change streams.
+        """
+        if self._client is not None:
+            client = self._client
+            with client.start_session() as session:
+                with session.start_transaction():
+                    yield client[self.db_name], session
+            return
+        client = MongoClient(self.uri, tz_aware=TZ_AWARE)
+        try:
+            with client.start_session() as session:
+                with session.start_transaction():
+                    yield client[self.db_name], session
+        finally:
+            client.close()
+
+    def close(self) -> None:
+        if self._client is not None:
+            self._client.close()
+
     def waiting_ping(self) -> None:
         while True:
             try:
-                with MongoClient(self.uri) as client:
+                with MongoClient(self.uri, tz_aware=TZ_AWARE) as client:
                     client.admin.command("ping")
                 break
             except pymongo.errors.ConnectionFailure:

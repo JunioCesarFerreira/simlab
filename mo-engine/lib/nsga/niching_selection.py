@@ -1,5 +1,4 @@
 from typing import Sequence, TypeVar
-from collections import defaultdict
 import random
 import numpy as np
 from numpy.typing import NDArray
@@ -77,11 +76,59 @@ def environmental_selection(
         else:
             n_needed = pop_size - len(next_idx)
             if n_needed > 0:
-                chosen = niching_selection(front, objectives, reference_points, n_needed, rng)
+                chosen = niching_selection(
+                    front, objectives, reference_points, n_needed, rng, accepted=next_idx
+                )
                 next_idx.extend(chosen)
             break
 
     return [population[i] for i in next_idx]
+
+
+def _find_extreme_points(F: NDArray, ideal: NDArray) -> NDArray:
+    """The M points of *F* that best represent each objective axis.
+
+    Achievement scalarizing function with a near-axis weight vector (1 on the
+    objective, 1e6 on the others): its minimiser is the point that reaches
+    furthest along that axis without being extreme on the rest. Deb & Jain
+    (2014), Algorithm 2.
+    """
+    translated = F - ideal
+    weights = np.eye(F.shape[1])
+    weights[weights == 0.0] = 1e6
+    asf = np.max(translated * weights[:, np.newaxis, :], axis=2)
+    return F[np.argmin(asf, axis=1), :]
+
+
+def _find_intercepts(extreme_points: NDArray, ideal: NDArray, worst: NDArray) -> NDArray:
+    """Where the hyperplane through the extreme points cuts each objective axis.
+
+    Returns the intercepts in ABSOLUTE coordinates, so the normalisation range
+    is always ``intercepts - ideal``.
+
+    Falls back to the worst observed value per objective whenever the hyperplane
+    is degenerate: linearly dependent extreme points, a zero component in the
+    solution, an intercept at or below the ideal point, or one past the worst
+    observed value. Those cases are not exotic — a population collapsed onto a
+    face of the simplex hits them routinely early in a run — and without the
+    guards the normalisation explodes.
+    """
+    b = np.ones(extreme_points.shape[1])
+    A = extreme_points - ideal
+    try:
+        x = np.linalg.solve(A, b)
+    except np.linalg.LinAlgError:
+        return worst
+    if np.count_nonzero(x) != len(x):
+        return worst
+    intercepts = 1.0 / x + ideal
+    if (
+        not np.allclose(A @ x, b)
+        or np.any(intercepts - ideal <= 1e-6)
+        or np.any(intercepts > worst)
+    ):
+        return worst
+    return intercepts
 
 
 def niching_selection(
@@ -89,153 +136,135 @@ def niching_selection(
     objectives: Sequence[ObjectiveVec],
     reference_points: NDArray[np.float64],
     N: int,
-    rng: random.Random
+    rng: random.Random,
+    accepted: Sequence[int] = (),
 ) -> list[int]:
-    """
-    NSGA-III niching selection (simplified Euclidean association).
+    """NSGA-III niching: pick N of *front* to complete the next population.
 
-    Steps:
-    - Compute the ideal point on the given front and normalize objectives by
-      subtracting the ideal and dividing by per-objective range.
-    - Associate each solution to its nearest reference point (Euclidean distance
-      in the normalized space).
-    - Iteratively pick solutions from the least crowded niches; within a niche,
-      prefer the one closest to the reference point (smallest distance).
+    Deb & Jain (2014), Algorithms 1-4, following the reference implementation in
+    ``deap.tools.selNSGA3``.
 
-    Returns
-    -------
-    list[int]
-        Indices (from the original population) of selected solutions, up to N.
+    *accepted* holds the indices already taken from the earlier, complete
+    fronts. It is not optional context — the algorithm is defined over
+    ``St = accepted ∪ front``:
+
+    * the ideal point, the extreme points and the intercepts describe the
+      population being assembled, not the one front being truncated;
+    * niche occupancy starts from the individuals already accepted, so a
+      reference direction that is already crowded does not win the next pick.
+
+    Passing nothing reduces it to niching over the front alone, which is only
+    correct when the front IS the whole selection.
+
+    Returns indices into *objectives*, taken from *front*.
     """
     if N <= 0 or not front:
         return []
 
-    # If front size is already small, just return all (guard).
+    front = list(front)
+    accepted = list(accepted)
     if N >= len(front):
-        return list(front)
+        return front
 
-    objs = np.asarray([objectives[i] for i in front], dtype=float)
-    M = objs.shape[1]
+    pool = accepted + front
+    F = np.asarray([objectives[i] for i in pool], dtype=float)
+    M = F.shape[1]
     if reference_points.ndim != 2 or reference_points.shape[1] != M:
         raise ValueError("reference_points must have shape [K, M] matching objectives dimension M.")
 
-    # Ideal point and range normalization (avoid division by zero).
-    ideal = np.min(objs, axis=0)
-    shifted = objs - ideal
-    ranges = np.max(shifted, axis=0)
-    ranges[ranges == 0.0] = 1.0
-    norm_objs = shifted / ranges
+    ideal = np.min(F, axis=0)
+    worst = np.max(F, axis=0)
+    intercepts = _find_intercepts(_find_extreme_points(F, ideal), ideal, worst)
+    niches, distances = associate_to_niches(F, reference_points, ideal, intercepts)
 
-    # Associate each candidate to nearest reference point.
-    associations: list[tuple[int, int, float]] = []  # (idx_in_pop, ref_idx, distance)
-    for idx_in_pop, vec in zip(front, norm_objs):
-        dists = np.linalg.norm(reference_points - vec, axis=1)
-        j = int(np.argmin(dists))
-        associations.append((idx_in_pop, j, float(dists[j])))
+    niche_count = np.zeros(reference_points.shape[0], dtype=np.int64)
+    for niche in niches[: len(accepted)]:
+        niche_count[niche] += 1
 
-    # Group by reference point.
-    ref_to_candidates: dict[int, list[tuple[int, float]]] = defaultdict(list)
-    for pid, ridx, d in associations:
-        ref_to_candidates[ridx].append((pid, d))
+    # Candidates are the truncated front's slice of the pool.
+    candidate_niches = niches[len(accepted):]
+    candidate_distances = distances[len(accepted):]
+    available = np.ones(len(front), dtype=bool)
 
-    # Niching loop: pick from least crowded niches first.
     selected: list[int] = []
-    selected_flag: dict[int, bool] = {i: False for i in front}
-    niche_count: dict[int, int] = {r: 0 for r in range(reference_points.shape[0])}
-
     while len(selected) < N:
-        # Find minimum occupancy across niches.
-        min_occ = min(niche_count.values())
-        # Consider all reference points with that occupancy (randomized order avoids bias).
-        least_crowded = [r for r, c in niche_count.items() if c == min_occ]
+        # Only niches that still hold an available candidate compete for the
+        # minimum occupancy. Leaving the empty ones in used to let them own the
+        # minimum forever, which pushed the loop into a uniform random pick over
+        # everything left — a pick that did not even update the occupancy.
+        open_niches = np.unique(candidate_niches[available])
+        if open_niches.size == 0:
+            break
+        min_count = niche_count[open_niches].min()
+        least_crowded = [int(r) for r in open_niches if niche_count[r] == min_count]
         rng.shuffle(least_crowded)
 
-        picked_this_round = False
-        for r in least_crowded:
-            candidates = [(pid, d) for (pid, d) in ref_to_candidates.get(r, []) if not selected_flag[pid]]
-            if candidates:
-                # Choose closest to the reference point within this niche.
-                candidates.sort(key=lambda x: x[1])
-                chosen_pid = candidates[0][0]
-                selected.append(chosen_pid)
-                selected_flag[chosen_pid] = True
-                niche_count[r] += 1
-                picked_this_round = True
-                if len(selected) >= N:
-                    break
-
-        if not picked_this_round:
-            # If all least-crowded niches are empty, pick uniformly from remaining.
-            remaining = [pid for pid, flag in selected_flag.items() if not flag]
-            if not remaining:
+        for niche in least_crowded[: N - len(selected)]:
+            members = np.flatnonzero((candidate_niches == niche) & available)
+            if niche_count[niche] == 0:
+                # Seed an empty niche with its closest candidate: that is what
+                # pulls the population towards an unrepresented direction.
+                pick = int(members[np.argmin(candidate_distances[members])])
+            else:
+                # An occupied niche takes a random member instead. Always taking
+                # the closest would keep stacking the same spot on a direction
+                # that is already represented.
+                pick = int(rng.choice(members.tolist()))
+            available[pick] = False
+            niche_count[niche] += 1
+            selected.append(front[pick])
+            if len(selected) >= N:
                 break
-            chosen_pid = rng.choice(remaining)
-            selected.append(chosen_pid)
-            selected_flag[chosen_pid] = True
-            # (Optionally, increment the niche of its association if you keep it.)
 
     return selected[:N]
 
-def associate_to_niches(F_sub: NDArray, H: NDArray) -> tuple[NDArray, NDArray]:
+
+def associate_to_niches(
+    F: NDArray,
+    reference_points: NDArray,
+    ideal: NDArray,
+    intercepts: NDArray,
+) -> tuple[NDArray, NDArray]:
+    """Associate each row of *F* with its nearest reference direction.
+
+    Distance is PERPENDICULAR to the direction — the ray from the origin through
+    the reference point — not Euclidean to the reference point itself. A
+    solution far out along a direction is perfectly aligned with it however
+    distant that reference point is; measuring to the point instead hands the
+    solution to whichever reference happens to sit nearby, which scrambles the
+    niches precisely where the front is sparse. Deb & Jain (2014), Algorithm 3.
+
+    *ideal* and *intercepts* come from the whole selection pool, so a solution's
+    association does not depend on which front it arrived in.
+
+    Returns
+    -------
+    (niche index per row, perpendicular distance to that niche)
     """
-    Associa cada solução (linhas de F_sub) a um ponto de referência em H.
-    Retorna:
-      - niche_idx: array de inteiros com o índice do ponto de referência escolhido para cada solução
-      - niche_dist: array de floats com a distância perpendicular até o respectivo ponto de referência
+    F = np.asarray(F, dtype=np.float64)
+    H = np.asarray(reference_points, dtype=np.float64)
 
-    Parâmetros
-    ----------
-    F_sub : (k, M) ndarray
-        Submatriz de objetivos (minimização), k soluções x M objetivos.
-    H : (R, M) ndarray
-        Pontos de referência (direções no simplex), R vetores x M objetivos.
-
-    Estratégia
-    ----------
-    1) Normaliza F_sub por ponto ideal (min por objetivo) e range (max-min).
-    2) Normaliza cada vetor de H para norma-2 = 1.
-    3) Para cada solução f:
-         - d_perp(h) = ||f - (f·h) h||_2    (distância perpendicular ao ray de h)
-         - escolhe h com menor d_perp.
-    """
-    F_sub = np.asarray(F_sub, dtype=np.float64)
-    H = np.asarray(H, dtype=np.float64)
-
-    if F_sub.ndim != 2 or H.ndim != 2:
-        raise ValueError("F_sub and H must be 2D arrays")
-    if F_sub.shape[1] != H.shape[1]:
-        raise ValueError(f"Dimension mismatch: F_sub has M={F_sub.shape[1]} but H has M={H.shape[1]}")
-
-    k, M = F_sub.shape
-    R = H.shape[0]
-    if k == 0 or R == 0:
+    if F.ndim != 2 or H.ndim != 2:
+        raise ValueError("F and reference_points must be 2D arrays")
+    if F.shape[1] != H.shape[1]:
+        raise ValueError(
+            f"Dimension mismatch: F has M={F.shape[1]} but reference_points has M={H.shape[1]}"
+        )
+    if F.shape[0] == 0 or H.shape[0] == 0:
         return np.empty((0,), dtype=int), np.empty((0,), dtype=float)
 
-    # 1) Ideal point & ranges (evita divisão por zero)
-    z = np.min(F_sub, axis=0)                 # ideal
-    ranges = np.max(F_sub, axis=0) - z
-    ranges[ranges <= 0.0] = 1e-12
+    scale = np.asarray(intercepts, dtype=np.float64) - np.asarray(ideal, dtype=np.float64)
+    scale = np.where(np.abs(scale) > np.finfo(float).eps, scale, np.finfo(float).eps)
+    normalized = (F - ideal) / scale
 
-    # Normalização para [0, +) no espaço dos custos
-    N = (F_sub - z) / ranges  # (k, M)
+    norms = np.linalg.norm(H, axis=1, keepdims=True)
+    norms[norms <= 0.0] = np.finfo(float).eps
+    unit = H / norms
 
-    # 2) Normaliza H (direções unitárias)
-    H_norms = np.linalg.norm(H, axis=1, keepdims=True)
-    H_norms[H_norms <= 0.0] = 1e-12
-    H_unit = H / H_norms  # (R, M)
+    # Perpendicular component: f - (f·ĥ)ĥ, for every (solution, direction) pair.
+    projection = (normalized @ unit.T)[:, :, np.newaxis] * unit[np.newaxis, :, :]
+    d_perp = np.linalg.norm(normalized[:, np.newaxis, :] - projection, axis=2)
 
-    # 3) Distância perpendicular de cada solução a cada direção
-    # Projeção escalar: (k, R) = (k, M) @ (M, R)
-    dot = N @ H_unit.T
-    # componente projetada: (k, R, M) = dot[...,None] * H_unit[None,...]
-    proj = dot[..., None] * H_unit[None, :, :]  # (k, R, M)
-    # vetor perpendicular: (k, R, M)
-    diff = N[:, None, :] - proj                 # (k, R, M)
-    # norma-2 por par (solução, ref)
-    d_perp = np.linalg.norm(diff, axis=2)       # (k, R)
-
-    # índice do nicho mais próximo e a distância correspondente
-    niche_idx = np.argmin(d_perp, axis=1)       # (k,)
-    niche_dist = d_perp[np.arange(k), niche_idx] # (k,)
-
+    niche_idx = np.argmin(d_perp, axis=1)
+    niche_dist = d_perp[np.arange(F.shape[0]), niche_idx]
     return niche_idx.astype(int), niche_dist.astype(float)

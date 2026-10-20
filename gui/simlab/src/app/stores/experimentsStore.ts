@@ -6,25 +6,43 @@ import {
   getExperimentsByStatus,
   deleteExperiment,
 } from "../../api/experiments";
+import { matchesQuery } from "../../utils/textSearch";
 
 export const useExperimentsStore = defineStore("experiments", () => {
   const experiments = ref<ExperimentInfoDto[]>([]);
   const loading = ref(false);
   const error = ref<string | null>(null);
   const selectedStatus = ref<ExperimentStatus | null>(null);
+  const searchQuery = ref("");
+
+  /** Name search, applied before the status filter. */
+  const searchMatches = computed(() =>
+    experiments.value.filter((e) => matchesQuery(e.name, searchQuery.value)),
+  );
 
   const filtered = computed(() => {
-    if (!selectedStatus.value) return experiments.value;
-    return experiments.value.filter((e) => e.status === selectedStatus.value);
+    if (!selectedStatus.value) return searchMatches.value;
+    return searchMatches.value.filter((e) => e.status === selectedStatus.value);
   });
 
-  const countByStatus = computed(() => {
+  function tally(list: ExperimentInfoDto[]): Record<string, number> {
     const counts: Record<string, number> = {};
-    for (const e of experiments.value) {
+    for (const e of list) {
       counts[e.status] = (counts[e.status] ?? 0) + 1;
     }
     return counts;
-  });
+  }
+
+  /** Whole-collection tally: the dashboard reports on everything loaded. */
+  const countByStatus = computed(() => tally(experiments.value));
+
+  /**
+   * Tally restricted to the current search, for the list page tabs — their
+   * numbers must add up to what the list below them actually shows. Kept apart
+   * from `countByStatus` because `searchQuery` is store-wide and would
+   * otherwise follow the user onto the dashboard.
+   */
+  const searchCountByStatus = computed(() => tally(searchMatches.value));
 
   async function fetchAll() {
     loading.value = true;
@@ -72,8 +90,10 @@ export const useExperimentsStore = defineStore("experiments", () => {
     loading,
     error,
     selectedStatus,
+    searchQuery,
     filtered,
     countByStatus,
+    searchCountByStatus,
     fetchAll,
     fetchByStatus,
     setFilter,

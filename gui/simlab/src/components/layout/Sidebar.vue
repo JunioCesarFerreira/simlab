@@ -33,21 +33,29 @@
         <span class="nav-icon">⊟</span>
         Compare
       </RouterLink>
+      <RouterLink to="/infrastructure" class="nav-link">
+        <span class="nav-icon">▤</span>
+        Infrastructure
+      </RouterLink>
     </div>
 
     <div class="sidebar-footer">
-      <button class="theme-toggle" :title="isDark ? 'Switch to light mode' : 'Switch to dark mode'" @click="toggle">
-        <span class="toggle-icon">{{ isDark ? '☀' : '🌙' }}</span>
-        <span class="toggle-label">{{ isDark ? 'Light mode' : 'Dark mode' }}</span>
+      <button
+        class="theme-toggle"
+        :title="isDark ? 'Switch to light mode' : 'Switch to dark mode'"
+        @click="toggle"
+      >
+        <span class="toggle-icon">{{ isDark ? "☀" : "🌙" }}</span>
+        <span class="toggle-label">{{ isDark ? "Light mode" : "Dark mode" }}</span>
       </button>
     </div>
   </nav>
 </template>
 
 <script setup lang="ts">
-import { useTheme } from '../../composables/useTheme'
+import { useTheme } from "../../composables/useTheme";
 
-const { isDark, toggle } = useTheme()
+const { isDark, toggle } = useTheme();
 </script>
 
 <style scoped>
@@ -98,7 +106,9 @@ const { isDark, toggle } = useTheme()
   font-size: 14px;
   font-weight: 500;
   color: var(--color-text-muted);
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .nav-link:hover {
@@ -108,7 +118,7 @@ const { isDark, toggle } = useTheme()
 
 .nav-link.router-link-active {
   background: var(--color-primary-light);
-  color: var(--color-primary);
+  color: var(--color-text);
   font-weight: 600;
 }
 
@@ -141,7 +151,9 @@ const { isDark, toggle } = useTheme()
   font-size: 14px;
   font-weight: 500;
   color: var(--color-text-muted);
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
   cursor: pointer;
 }
 
@@ -159,5 +171,37 @@ const { isDark, toggle } = useTheme()
 
 .toggle-label {
   font-size: 13px;
+}
+@media (max-width: 760px) {
+  .sidebar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 8px 12px;
+  }
+
+  .brand {
+    border: 0;
+    margin: 0;
+    padding: 4px 8px;
+  }
+
+  .nav-section {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    flex-direction: row;
+    overflow-x: auto;
+  }
+
+  .nav-link {
+    flex-shrink: 0;
+  }
+
+  .sidebar-footer {
+    grid-column: 2;
+    grid-row: 1;
+    border: 0;
+    margin: 0;
+    padding: 0;
+  }
 }
 </style>

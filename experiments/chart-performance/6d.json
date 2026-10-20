@@ -1,0 +1,14 @@
+{
+  "dimensions": 6,
+  "generations": 30,
+  "points_per_generation": 50,
+  "include_cumulative": false,
+  "current": {
+    "first_seconds": 0.032578440848737955,
+    "repeat_seconds": 0.003766054753214121,
+    "individual_queries_per_request": {
+      "by_generation": 0,
+      "bulk": 1
+    }
+  }
+}

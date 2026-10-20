@@ -22,6 +22,8 @@ SIM_ID  = "507f1f77bcf86cd799439013"
 IND_ID  = "507f1f77bcf86cd799439014"
 SRC_ID  = "507f1f77bcf86cd799439015"
 FILE_ID = "507f1f77bcf86cd799439016"
+FW_FILE_ID   = "507f1f77bcf86cd799439017"
+FW_FILE_ID_2 = "507f1f77bcf86cd799439018"
 
 
 # ── sample mongo documents ──────────────────────────────────────────────────────
@@ -107,6 +109,30 @@ def sample_source():
         "name": "Test Source",
         "description": "A test source repository",
         "source_files": [{"id": FILE_ID, "file_name": "main.c"}],
+    }
+
+
+def sample_firmware_snapshot():
+    """Firmware captured for an experiment at start time (two copied files)."""
+    return {
+        "status": "captured",
+        "captured_at": datetime(2024, 1, 1, 10, 30),
+        "schema_version": 1,
+        "repositories": [{
+            "option_keys": ["csma"],
+            "source_repository_id": ObjectId(SRC_ID),
+            "name": "rpl-udp-csma",
+            "description": "A test source repository",
+            "files": [
+                {"file_name": "main.c", "file_id": ObjectId(FW_FILE_ID),
+                 "origin_file_id": ObjectId(FILE_ID),
+                 "size_bytes": 12, "sha256": "a" * 64},
+                {"file_name": "Makefile", "file_id": ObjectId(FW_FILE_ID_2),
+                 "origin_file_id": ObjectId(FILE_ID),
+                 "size_bytes": 5, "sha256": "b" * 64},
+            ],
+            "missing_files": [],
+        }],
     }
 
 

@@ -1,0 +1,79 @@
+# A second "host" with its own Cooja containers, for exercising the remote
+# execution path on one machine. See README.md.
+#
+#   docker compose -f debug/docker/remote-host/docker-compose.yaml up -d
+#
+# The topology mirrors a real deployment:
+#
+#   master_node ──cooja_net──▶ remote-host ──remote_sim_net──▶ rcooja1, rcooja2
+#                              (sshd + docker CLI)
+#
+# remote-host sits on both networks; the rcooja containers sit only on the
+# private one. So the master-node can reach the host but *not* its containers
+# directly, which is exactly the situation the tunnel exists for — if the two
+# hops were not working, nothing here would run.
+
+services:
+
+  remote-host:
+    build:
+      context: .
+      dockerfile: Dockerfile.sshd
+    image: simlab/remote-host-sshd:dev
+    container_name: remote_host
+    restart: unless-stopped
+    volumes:
+      # How the "host" answers `docker ps`: the developer machine's daemon.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Generate with: ssh-keygen -t ed25519 -N '' -f ./keys/simlab_remote
+      # Mounted at /keys and copied into place by the entrypoint: a bind mount
+      # keeps the host's ownership, and sshd's StrictModes refuses an
+      # authorized_keys file it does not own.
+      - ./keys/simlab_remote.pub:/keys/authorized_keys:ro
+    networks:
+      # Reachable by the master-node, standing in for the LAN.
+      - cooja-net
+      # Its own containers' network, which the master-node cannot see.
+      - remote-sim-net
+    labels:
+      - "simlab.type=remote-host-sim"
+      - "simlab.role=fixture"
+      - "simlab.group=debug"
+
+  # Labelled `cooja-remote`, not `cooja`: both "hosts" here share one Docker
+  # daemon, so the local host's own filter (simlab.type=cooja) would otherwise
+  # discover these too and count the same container twice. On a real remote
+  # host there is a separate daemon and no such collision — which is why the
+  # fixture adapts its labels rather than the product adapting its filters.
+  rcooja1:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: rcooja1
+    restart: unless-stopped
+    networks:
+      - remote-sim-net
+    labels:
+      - "simlab.type=cooja-remote"
+      - "simlab.id=r1"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
+
+  rcooja2:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: rcooja2
+    restart: unless-stopped
+    networks:
+      - remote-sim-net
+    labels:
+      - "simlab.type=cooja-remote"
+      - "simlab.id=r2"
+      - "simlab.role=worker"
+      - "simlab.group=simulation"
+
+networks:
+  # Created by the main docker-compose.yaml; joined here, not redefined.
+  cooja-net:
+    name: cooja_net
+    external: true
+  remote-sim-net:
+    name: remote_sim_net
+    driver: bridge

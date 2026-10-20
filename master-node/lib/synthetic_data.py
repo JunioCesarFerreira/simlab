@@ -147,7 +147,8 @@ def run_synthetic_simulation(
     """
     sim_oid = ObjectId(sim["_id"]) if not isinstance(sim["_id"], ObjectId) else sim["_id"]
     log.info("Starting benchmark simulation %s (bench=%s noise_std=%s)", sim_oid, bench, noise_std)
-    mongo.simulation_repo.mark_running(sim_oid)
+    # A synthetic run uses no container, so there is no attempt to guard.
+    mongo.simulation_repo.mark_running(sim_oid, attempt_id=None)
 
     exp_id = sim["experiment_id"]
     params = (mongo.experiment_repo.get(exp_id) or {}).get("parameters", {}) or {}
@@ -203,7 +204,7 @@ def run_synthetic_simulation(
         vals = benchmarks.evaluate_noisy(bench, x01, M, noise_std, noise_rng, sch1_domain=sch1_domain)
     except ValueError as exc:
         log.error("Invalid synthetic configuration for simulation %s: %s", sim_oid, exc)
-        mongo.simulation_repo.mark_error(sim_oid, str(exc))
+        mongo.simulation_repo.mark_error(sim_oid, str(exc), attempt_id=None)
         return
 
     bench_upper = bench.upper()
@@ -223,11 +224,12 @@ def run_synthetic_simulation(
     objectives = {name: float(vals[i]) for i, name in enumerate(objective_names)}
 
     try:
-        mongo.simulation_repo.mark_done(sim_oid, None, None, objectives)
+        mongo.simulation_repo.mark_done(
+            sim_oid, None, None, objectives, attempt_id=None)
     except Exception as e:
         log.exception("Failed to mark simulation %s as done; marking as error", sim_oid)
         try:
-            mongo.simulation_repo.mark_error(sim_oid, str(e))
+            mongo.simulation_repo.mark_error(sim_oid, str(e), attempt_id=None)
         except Exception:
             log.exception("Failed to mark simulation %s as error", sim_oid)
         return
@@ -236,11 +238,7 @@ def run_synthetic_simulation(
     if not generation_id:
         log.warning("Simulation %s has no generation_id; skipping generation close check", sim_oid)
         return
-    gr = mongo.generation_repo
     try:
-        if gr.all_simulations_done(generation_id):
-            gr.mark_done(generation_id)
-        elif not gr.any_simulation_active(generation_id):
-            gr.mark_error(generation_id)
+        mongo.generation_repo.close_if_finished(generation_id)
     except Exception:
         log.exception("Failed to close generation %s", generation_id)

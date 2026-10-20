@@ -78,6 +78,41 @@ class RuntimeMetrics(TypedDict, total=False):
     error: str
 
 
+class FirmwareFile(TypedDict, total=False):
+    """One firmware source file copied into the experiment's own GridFS space."""
+    file_name: str
+    file_id: ObjectId        # the copy, owned exclusively by this experiment
+    origin_file_id: ObjectId  # file in the shared source repository
+    size_bytes: int
+    sha256: str
+
+
+class FirmwareRepositorySnapshot(TypedDict, total=False):
+    """Frozen view of one shared source repository at experiment start."""
+    option_keys: list[str]           # keys in ``source_repository_options``
+    source_repository_id: ObjectId   # the shared repo, which may change later
+    name: str
+    description: str
+    files: list[FirmwareFile]
+    missing_files: list[FirmwareFile]  # referenced but absent from GridFS
+
+
+class FirmwareSnapshot(TypedDict, total=False):
+    """Immutable record of the firmware an experiment was executed with.
+
+    Source repositories are shared and mutable: editing or deleting one would
+    otherwise erase the evidence of what a finished experiment actually ran.
+    The snapshot copies every referenced file into GridFS under the sole
+    ownership of the experiment, so the delete cascade removes them with it.
+    """
+    status: str  # "captured" | "partial" | "skipped" | "failed"
+    captured_at: datetime
+    schema_version: int
+    repositories: list[FirmwareRepositorySnapshot]
+    reason: str  # only on skipped
+    error: str   # only on failed
+
+
 class Experiment(TypedDict):
     id: str
     name: str
@@ -92,3 +127,4 @@ class Experiment(TypedDict):
     pareto_front: Optional[list[ParetoFrontItem]]
     analysis_files: dict[str, ObjectId]
     runtime_metrics: Optional[RuntimeMetrics]
+    firmware_snapshot: Optional[FirmwareSnapshot]

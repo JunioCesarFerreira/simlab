@@ -17,6 +17,7 @@ from typing import Any, Callable, Optional
 from bson import ObjectId
 
 from pylib.db import EnumStatus
+from pylib.db.repositories.generation import _completeness_of
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +64,33 @@ class FakeGenerationRepository:
 
     def mark_running(self, generation_id: ObjectId) -> None:
         self.update(generation_id, {"status": EnumStatus.RUNNING})
+
+    def record_plan(self, generation_id: ObjectId, seeds: list[int]) -> None:
+        self.update(generation_id, {"expected_seeds": [int(s) for s in seeds]})
+
+    def set_survivors(self, generation_id: ObjectId, individual_ids: list[str]) -> bool:
+        return self.update(generation_id, {"survivors": list(individual_ids)})
+
+    # --- replica gate (the evaluator never fails, so no round is claimed) --
+    def pending_retry_round(self, generation_id: ObjectId) -> Optional[dict]:
+        return None
+
+    def retries_used(self, generation_id: ObjectId) -> int:
+        return int((self.documents.get(generation_id) or {}).get("replica_retries", 0))
+
+    def replica_completeness(
+        self, generation_id: ObjectId, metrics: list[str]
+    ) -> dict[str, dict]:
+        """Same counting rules as the real repository, over the fake sims."""
+        planned = (self.documents.get(generation_id) or {}).get("expected_seeds")
+        grouped: dict[str, list[dict]] = {}
+        for sim in self._simulations.documents.values():
+            if sim["generation_id"] == generation_id:
+                grouped.setdefault(str(sim["individual_id"]), []).append(sim)
+        return {
+            ind: _completeness_of(runs, metrics, sorted(set(planned)) if planned else None)
+            for ind, runs in grouped.items()
+        }
 
     # --- reads ----------------------------------------------------------
     def get(self, generation_id) -> Optional[dict]:
@@ -155,12 +183,31 @@ class FakeIndividualRepository:
     def find_by_generation(self, generation_id: ObjectId) -> list[dict]:
         return [d for (g, _), d in self.documents.items() if g == generation_id]
 
+    def find_by_experiment_and_ids(self, experiment_id: ObjectId, individual_ids: list[str]) -> list[dict]:
+        wanted = set(individual_ids)
+        return [
+            d for d in self.documents.values()
+            if d["experiment_id"] == experiment_id and d["individual_id"] in wanted
+        ]
+
     def update_objectives(self, individual_id: str, generation_id: ObjectId, objectives: list[float]) -> bool:
         doc = self.documents.get((generation_id, individual_id))
         if doc is None:
             return False
         doc["objectives"] = objectives
         return True
+
+    def update_evaluation(
+        self,
+        individual_id: str,
+        generation_id: ObjectId,
+        objectives: list[float],
+        completeness: Optional[dict] = None,
+    ) -> bool:
+        fields: dict = {"objectives": objectives}
+        if completeness is not None:
+            fields["completeness"] = completeness
+        return self.update_fields(individual_id, generation_id, fields)
 
     def update_fields(self, individual_id: str, generation_id: ObjectId, fields: dict) -> bool:
         doc = self.documents.get((generation_id, individual_id))
@@ -189,6 +236,7 @@ class FakeGenomeCacheRepository:
         experiment_id: ObjectId,
         genome_hash: str,
         objectives: list[float],
+        completeness: Optional[dict] = None,
         evaluation_source: str | None = None,
     ) -> bool:
         doc = self.documents.setdefault(
@@ -196,13 +244,16 @@ class FakeGenomeCacheRepository:
             {"genome_hash": genome_hash, "chromosome": {}, "objectives": None},
         )
         doc["objectives"] = list(objectives)
+        if completeness is not None:
+            doc["completeness"] = completeness
         if evaluation_source is not None:
             doc["evaluation_source"] = evaluation_source
         return True
 
     def get_all_by_experiment(self, experiment_id: ObjectId) -> list[dict]:
         return [
-            {"genome_hash": d["genome_hash"], "objectives": d["objectives"]}
+            {"genome_hash": d["genome_hash"], "objectives": d["objectives"],
+             "completeness": d.get("completeness")}
             for (exp, _), d in self.documents.items() if exp == experiment_id
         ]
 

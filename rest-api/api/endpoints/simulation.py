@@ -27,11 +27,22 @@ def create_simulation(
 @router.get("/by-individual/{individual_id}", response_model=list[SimulationDto])
 def get_simulations_by_individual(
     individual_id: str,
+    experiment_id: str | None = None,
     factory: MongoRepository = Depends(get_factory)
 ) -> list[SimulationDto]:
-    """Retrieve all simulations belonging to a given individual (by chromosome hash)."""
+    """Simulations of one individual (by chromosome hash), within an experiment.
+
+    ``experiment_id`` should always be given. A chromosome hash is stable
+    across experiments, so without it the answer includes every run of that
+    chromosome ever made — which is what made an individual's panel show
+    simulations belonging to other experiments.
+    """
     try:
-        docs = factory.simulation_repo.find_by_individual(individual_id)
+        scope = ObjectId(experiment_id) if experiment_id else None
+    except Exception:
+        raise HTTPException(status_code=422, detail="invalid experiment_id")
+    try:
+        docs = factory.simulation_repo.find_by_individual(individual_id, scope)
         return [simulation_from_mongo(d) for d in docs]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
