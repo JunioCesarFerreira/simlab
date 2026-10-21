@@ -278,6 +278,9 @@ class InfraCrypto(TypedDict, total=False):
 #: master-node would give.
 DEFAULT_REMOTE_DIR = "/opt/contiki-ng/tools/cooja"
 DEFAULT_CONTAINER_SSH_PORT = 22
+#: Hop 1's port when a host does not set one — the same default the
+#: master-node's connection plan applies.
+DEFAULT_HOST_SSH_PORT = 22
 
 
 def target_fingerprint(
@@ -285,8 +288,9 @@ def target_fingerprint(
 ) -> Optional[tuple[str, str, int, str]]:
     """What this registration actually points at, as a comparable value.
 
-    ``(host_access_address, container_address, port, remote_dir)``, or ``None``
+    ``(host_endpoint, container_address, port, remote_dir)``, or ``None``
     when the registration has no address yet and therefore points nowhere.
+    ``host_endpoint`` is the host's SSH ``address:port``.
 
     Two registrations with the same fingerprint are the same physical worker
     under two names. Discovery cannot produce that — it keys on the container
@@ -312,9 +316,20 @@ def target_fingerprint(
         or container_access.get("port")
         or DEFAULT_CONTAINER_SSH_PORT
     )
-    # The host's own address is part of the identity: the same container name
-    # and port on two different machines are two different workers.
-    jump = ((host.get("access") or {}).get("address") or "").strip()
+    # The host is part of the identity: the same container address and port on
+    # two different machines are two different workers.
+    #
+    # And the host is its SSH *endpoint*, address **and port** — the plan's
+    # hop 1, not only its address. Two machines behind one gateway share the
+    # address and differ in the forwarded port (`gateway:2197` and
+    # `gateway:2198` are two VMs), so keying on the address alone made every
+    # pair of their containers with the same internal port look like one
+    # container registered twice: editing one was refused with a 409 naming
+    # the other, and two that already matched could not be edited at all.
+    access = host.get("access") or {}
+    jump = "{}:{}".format(
+        (access.get("address") or "").strip().lower(),
+        int(access.get("port") or DEFAULT_HOST_SSH_PORT))
     if (host.get("type") or EnumHostType.REMOTE.value) == EnumHostType.LOCAL.value:
         jump = EnumHostType.LOCAL.value
     remote_dir = (resource.get("remote_dir") or DEFAULT_REMOTE_DIR).rstrip("/")

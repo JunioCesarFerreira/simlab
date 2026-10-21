@@ -270,7 +270,12 @@ containers seeded as before.
   placed on a host being removed, so a registration that had already read it
   cannot leave a worker behind without one.
 - **Two registrations may not point at the same worker.** Address, port and
-  directory are compared across every host before one is accepted.
+  directory are compared across every host before one is accepted. A host is
+  identified by its SSH **address and port**, as the connection plan reaches
+  it: two VMs behind one gateway (`gateway:2197`, `gateway:2198`) are two
+  machines, and their containers may share an internal port. Keying the host
+  on its address alone refused such an edit with a 409 naming the other VM's
+  worker, and blocked any edit of two workers that already matched.
 - **Validation is uniform across the infrastructure routes**: unknown fields
   at the root of a body, textual and fractional ports, booleans sent as
   strings and nulls sent where text is expected are all refused with a 422.

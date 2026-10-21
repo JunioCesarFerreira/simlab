@@ -2182,3 +2182,98 @@ class TestReEnablingAHostLeavesItToo:
         update = coll.update_one.call_args_list[-1].args[1]["$set"]
         assert update["status"] == EnumHostStatus.DISABLED.value
         assert update["enabled"] is False
+
+
+class TestTwoMachinesBehindOneGateway:
+    """Reported: changing a vm7 worker's port was refused with a 409 naming a
+    vm8 worker.
+
+    Both VMs are reached through the same gateway address on different
+    forwarded SSH ports (``gateway:2197`` and ``gateway:2198``). The physical
+    identity keyed the host on its address alone, so the two machines looked
+    like one, and any pair of their containers with the same internal port
+    looked like one container registered twice. The connection plan uses
+    address **and** port for hop 1; the identity has to use the same rule, or
+    it compares something nobody connects to.
+    """
+
+    OTHER_HOST_ID = ObjectId("507f1f77bcf86cd799430098")
+
+    def _repo(self, existing, hosts):
+        connection, db = make_connection()
+        repo = CoojaResourceRepository(connection)
+        db[HOSTS_COLLECTION].find.return_value = hosts
+        db[RESOURCES_COLLECTION].find.return_value = existing
+        return repo
+
+    def _host(self, host_id, name, port):
+        return {"_id": host_id, "name": name, "type": "remote",
+                "access": {"address": "gateway.example.edu", "port": port},
+                "container_access": {"port": 2222}}
+
+    def _worker(self, host_id, name, port, _id=None):
+        doc = {"name": name, "host_id": host_id,
+               "endpoint": {"address": "localhost", "port": port},
+               "remote_dir": "/opt/contiki-ng/tools/cooja"}
+        if _id is not None:
+            doc["_id"] = _id
+        return doc
+
+    def test_the_same_internal_port_on_two_forwarded_vms_is_two_workers(self):
+        vm7 = self._host(HOST_ID, "vm7", 2197)
+        vm8 = self._host(self.OTHER_HOST_ID, "vm8", 2198)
+        existing = self._worker(self.OTHER_HOST_ID, "vm8-cooja1", 2222, RES_ID)
+        repo = self._repo([existing], [vm7, vm8])
+
+        clash = repo.conflicting_target(
+            vm7, self._worker(HOST_ID, "vm7-cooja1", 2222))
+
+        assert clash is None
+
+    def test_the_same_gateway_and_the_same_port_is_still_one_machine(self):
+        """The coverage the identity exists for is kept: one SSH endpoint
+        registered as two hosts is one machine."""
+        first = self._host(HOST_ID, "vm7", 2197)
+        again = self._host(self.OTHER_HOST_ID, "vm7-again", 2197)
+        existing = self._worker(HOST_ID, "vm7-cooja1", 2222, RES_ID)
+        repo = self._repo([existing], [first, again])
+
+        clash = repo.conflicting_target(
+            again, self._worker(self.OTHER_HOST_ID, "dup", 2222))
+
+        assert clash is not None and clash["name"] == "vm7-cooja1"
+
+    def test_an_unset_port_means_22_as_it_does_for_the_connection(self):
+        explicit = self._host(HOST_ID, "a", 22)
+        implicit = self._host(self.OTHER_HOST_ID, "b", None)
+        existing = self._worker(HOST_ID, "w1", 2222, RES_ID)
+        repo = self._repo([existing], [explicit, implicit])
+
+        clash = repo.conflicting_target(
+            implicit, self._worker(self.OTHER_HOST_ID, "w2", 2222))
+
+        assert clash is not None, "port 22 and no port are the same endpoint"
+
+    def test_the_host_address_is_compared_without_case(self):
+        """A DNS name is case-insensitive; ``Gateway`` and ``gateway`` are
+        the same machine."""
+        upper = self._host(HOST_ID, "a", 2197)
+        upper["access"]["address"] = "GATEWAY.example.edu"
+        lower = self._host(self.OTHER_HOST_ID, "b", 2197)
+        existing = self._worker(HOST_ID, "w1", 2222, RES_ID)
+        repo = self._repo([existing], [upper, lower])
+
+        assert repo.conflicting_target(
+            lower, self._worker(self.OTHER_HOST_ID, "w2", 2222)) is not None
+
+    def test_editing_a_worker_that_already_matched_is_no_longer_blocked(self):
+        """vm7-cooja2 and vm8-cooja2 were both ``localhost:2223``: under the
+        old identity they collided, so any edit of either was refused."""
+        vm7 = self._host(HOST_ID, "vm7", 2197)
+        vm8 = self._host(self.OTHER_HOST_ID, "vm8", 2198)
+        vm7_w = self._worker(HOST_ID, "vm7-cooja2", 2223, RES_ID)
+        vm8_w = self._worker(self.OTHER_HOST_ID, "vm8-cooja2", 2223,
+                             ObjectId("507f1f77bcf86cd799430077"))
+        repo = self._repo([vm7_w, vm8_w], [vm7, vm8])
+
+        assert repo.conflicting_target(vm7, dict(vm7_w), exclude_id=RES_ID) is None
