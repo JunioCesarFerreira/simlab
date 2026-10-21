@@ -37,6 +37,10 @@
         <span class="nav-icon">▤</span>
         Infrastructure
       </RouterLink>
+      <RouterLink to="/scalability" class="nav-link">
+        <span class="nav-icon">⟋</span>
+        Scalability
+      </RouterLink>
     </div>
 
     <div class="sidebar-footer">

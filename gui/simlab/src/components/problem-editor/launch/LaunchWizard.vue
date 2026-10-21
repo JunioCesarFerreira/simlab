@@ -106,6 +106,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useProblemStore } from '../../../app/stores/problemStore'
 import { capabilitiesFor, defaultExtraParams } from '../../../lib/problemCapabilities'
 import { exportProblem } from '../../../services/exportProblemJson'
+import { defaultDataConversion } from '../../../services/defaultDataConversion'
 import { createExperiment } from '../../../api/experiments'
 import { getAllRepositories } from '../../../api/repositories'
 import type { DataConversionConfigDto, JsonObject, ObjectiveItem, SourceRepositoryDto } from '../../../types/simlab'
@@ -197,29 +198,7 @@ const form = reactive<{
     { metric_name: 'energy',     goal: 'min' },
     { metric_name: 'throughput', goal: 'max' },
   ],
-  dataConversion: {
-    node_col: 'node',
-    time_col: 'root_time_now',
-    metrics: [
-      { name: 'cpu_energy_mj',       kind: 'sum_all',              column: 'cpu_energy_mj' },
-      { name: 'lpm_energy_mj',       kind: 'sum_all',              column: 'lpm_energy_mj' },
-      { name: 'radio_tx_energy_mj',  kind: 'sum_all',              column: 'radio_tx_energy_mj' },
-      { name: 'radio_rx_energy_mj',  kind: 'sum_all',              column: 'radio_rx_energy_mj' },
-      { name: 'total_sent',          kind: 'sum_last_minus_first', column: 'total_sent' },
-      { name: 'total_received',      kind: 'sum_last_minus_first', column: 'total_received' },
-      { name: 'server_sent',         kind: 'sum_last_minus_first', column: 'server_received' },
-      { name: 'bytes_tx',            kind: 'sum_last_minus_first', column: 'bytes_tx' },
-      { name: 'bytes_rx',            kind: 'sum_last_minus_first', column: 'bytes_rx' },
-      { name: 'server_bytes_rx',     kind: 'sum_last_minus_first', column: 'server_bytes_rx' },
-      { name: 'r2n_latency',         kind: 'mean',                 column: 'r2n_latency' },
-      { name: 'n2r_latency',         kind: 'mean',                 column: 'n2r_latency' },
-      { name: 'hops',                kind: 'mean',                 column: 'hops' },
-      { name: 'rtt_latency',         kind: 'mean',                 column: 'rtt_latency' },
-      { name: 'latency',             kind: 'mean',                 column: 'rtt_latency' },
-      { name: 'energy',              kind: 'sum_all',              column: 'total_energy_mj' },
-      { name: 'throughput',          kind: 'sum_last_minus_first', column: 'server_received' },
-    ],
-  },
+  dataConversion: defaultDataConversion(),
 })
 
 const canProceed = computed((): boolean => {

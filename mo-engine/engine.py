@@ -17,6 +17,7 @@ from lib.strategy.nsga3_deap import NSGA3DeapStrategy
 from lib.strategy.nsga3_pymoo import NSGA3PymooStrategy
 from lib.strategy.nsga2_deap import NSGA2DeapStrategy
 from lib.strategy.nsga2_pymoo import NSGA2PymooStrategy
+from lib.strategy.usl_benchmark import STRATEGY_NAME as USL_BENCHMARK, UslBenchmarkStrategy
 
 # --------------------------- Logging --------------------------------
 logging.basicConfig(
@@ -55,6 +56,11 @@ def select_strategy(exp_doc: dict) -> EngineStrategy:
         return NSGA2DeapStrategy(exp_doc, mongo)
     if exp_type == "nsga2_pymoo":
         return NSGA2PymooStrategy(exp_doc, mongo)
+    # Launched from the Scalability page, not from the experiment wizard: it
+    # measures the infrastructure rather than optimising anything, so it is
+    # deliberately absent from Step2Experiment.vue.
+    if exp_type == USL_BENCHMARK:
+        return UslBenchmarkStrategy(exp_doc, mongo)
     raise ValueError(f"[mo-engine] Experiment type unknown: {exp_type}")
 
 

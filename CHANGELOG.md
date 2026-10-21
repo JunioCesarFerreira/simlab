@@ -5,6 +5,64 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Scalability benchmark (USL)
+
+A new **Scalability** page measures how the simulation infrastructure scales,
+by running one simulation at increasing concurrency and fitting the
+[Universal Scalability Law](https://www.perfdynamics.com/Manifesto/USLscalability.html)
+to the time each wave takes.
+
+### Added
+
+- **A benchmark strategy, `usl_benchmark`.** One chromosome and one seed, run
+  in waves of `N` identical simulations for each level `N`, one generation per
+  wave. Reusing the generation means the master-node places, runs, recovers
+  and closes a wave exactly as it does any optimisation, so what is measured
+  is the real path, not a model of it. Repetitions alternate ascending and
+  descending order, so a drift in the machines lands on every level instead of
+  biasing one end. A wave in which nothing produced a result stops the
+  benchmark: the workload does not run, and further waves would only measure
+  failures.
+- **The workload comes from a saved problem.** The chromosome defined in the
+  problem editor when there is one, otherwise one feasible network drawn with
+  a fixed seed. It is recorded on the experiment (`benchmark_workload`) after
+  its firmware is resolved, so a restart resumes with the same network and the
+  recorded chromosome is the one that runs.
+- **Two throughputs, both fitted.** *Batch* is `N ÷ makespan`, from the first
+  placement of a wave to its last result — what a batch actually costs.
+  *Per simulation* is `N ÷ mean held time` (Little's law) — insensitive to one
+  straggler, so it isolates contention. The gap between them is the cost of
+  the slowest container in the wave.
+- **The fit** (`pylib/usl.py`) estimates `λ`, contention `σ ∈ [0, 1]` and
+  coherency `κ ≥ 0` by a bounded search with a closed-form `λ`, using NumPy
+  only. It reports `N* = √((1 − σ)/κ)` and the throughput there when `κ > 0`,
+  the ceiling `λ/σ` when there is no peak, and whether the peak lies inside
+  the tested range or is extrapolated. With two levels only, `κ` is held at
+  zero and the status says so.
+- **API:** `POST /scalability` (validated body; answers with the number of
+  waves and simulations before anything runs), `GET /scalability`,
+  `GET /scalability/{id}` (waves, both fits and the sampled curve, computed on
+  demand so a running benchmark already has one).
+- **GUI:** the page proposes levels from the workers that can take work
+  (powers of two, then the whole pool), warns when a level exceeds the pool,
+  and shows the measured waves, the model, linear scaling and the peak, with
+  the extrapolated range shaded. The pool counts only hosts the dispatcher
+  will place on: the overview's totals include hosts that are disabled or out
+  of contact, and proposing their containers would plan waves that queue.
+  The y-axis follows the data rather than the linear reference, so a peak
+  stays legible instead of being squashed against the floor.
+- **A benchmark's own experiment page** points to its analysis instead of
+  drawing Pareto and convergence charts for an experiment with no objectives.
+
+### Changed
+
+- The experiment wizard's metric conversion moved to
+  `services/defaultDataConversion.ts`, shared with the benchmark: the
+  master-node evaluates metrics after every run, and two copies of that list
+  would drift.
+
+---
+
 ## [Unreleased] — Distributed Cooja resources
 
 Simulations can now run on Cooja containers hosted on other machines, with the

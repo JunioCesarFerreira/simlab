@@ -241,8 +241,19 @@
           </details>
         </div>
 
+        <!-- A scalability benchmark optimises nothing: no objectives, no
+             Pareto front, no convergence to measure. Its analysis lives on
+             the Scalability page, so point there instead of drawing empty
+             charts and an HV/GD request that has no objectives to send. -->
+        <div v-if="isBenchmark" class="charts-panel">
+          <div class="card benchmark-pointer">
+            This experiment is a <strong>scalability benchmark</strong>: it runs one simulation at
+            increasing concurrency to measure the infrastructure. Its USL fit and waves are on the
+            <RouterLink :to="`/scalability?id=${props.id}`">Scalability page</RouterLink>.
+          </div>
+        </div>
         <!-- Charts panel -->
-        <div class="charts-panel">
+        <div v-else class="charts-panel">
           <ResizableChartCard v-model="paretoH" label="Pareto front chart">
             <div class="section-title pareto-title">
               Pareto Front
@@ -511,6 +522,7 @@ const has3Objectives = computed(() => (store.objectiveNames?.length ?? 0) >= 3);
 const isSynthetic = computed(
   () => store.experiment?.parameters?.simulation?.synthetic?.enabled ?? false,
 );
+const isBenchmark = computed(() => store.experiment?.parameters?.strategy === "usl_benchmark");
 const syntheticBench = computed(
   () => store.experiment?.parameters?.simulation?.synthetic?.bench ?? "Synthetic",
 );
@@ -1321,6 +1333,12 @@ onBeforeUnmount(() => {
 }
 
 /* Charts */
+.benchmark-pointer {
+  padding: 16px 18px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .charts-panel {
   display: flex;
   flex-direction: column;

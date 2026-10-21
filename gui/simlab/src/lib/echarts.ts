@@ -20,6 +20,9 @@ import {
   GridComponent,
   LegendComponent,
   LegendScrollComponent,
+  MarkAreaComponent,
+  MarkLineComponent,
+  MarkPointComponent,
   ParallelComponent,
   TooltipComponent,
   VisualMapComponent,
@@ -37,6 +40,10 @@ echarts.use([
   DataZoomComponent,
   VisualMapComponent,
   ParallelComponent,
+  // The USL chart marks its peak and shades the extrapolated range.
+  MarkAreaComponent,
+  MarkLineComponent,
+  MarkPointComponent,
   CanvasRenderer,
   SVGRenderer,
 ]);
