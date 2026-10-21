@@ -145,8 +145,8 @@ instead of the Infrastructure page.
 
 ```bash
 python util/register_host.py list
-python util/register_host.py add --name vm7 --address host.example --port 22 \
-    --username simlab --auth-method password
+python util/register_host.py add vm7 --address host.example --port 22 \
+    --user simlab --key ~/.ssh/simlab_vm7
 ```
 
 Two things to know before using it:

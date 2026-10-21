@@ -207,7 +207,7 @@ than sizing a worker pool. Capacity comes from an inventory of hosts and
 workers in the database, maintained by Docker discovery and the health cycle,
 and more machines are added from the **Infrastructure** page without touching
 the compose file — see
-[Distributed Cooja resources](docs/markdown/RECURSOS_DISTRIBUIDOS.md).
+[Distributed Cooja Resources](#distributed-cooja-resources).
 
 #### 4. Launch the full stack with Docker Compose
 
@@ -343,6 +343,116 @@ All raw outputs, logs, and metadata are stored in MongoDB/GridFS for reproducibi
 
 * **Changelog**
   Recent updates and feature additions are documented in the [`CHANGELOG.md`](./CHANGELOG.md) file.
+
+---
+
+## Distributed Cooja Resources
+
+Simulations can run on Cooja containers hosted on other machines. The
+master-node keeps an inventory of **hosts** (machines) and their **workers**
+(Cooja containers), measures each one before giving it work, and places every
+simulation on the host carrying the fewest active simulations. A container on
+another machine is reached through that host's own SSH session, so no
+container port has to be published on the network. A single-machine
+deployment needs nothing new: its local containers are seeded as before.
+
+Each simulation records the host and container it ran on, and the experiment
+page shows how a run was spread across them (*Work distribution*).
+
+### Adding a machine
+
+From the GUI, **Infrastructure → Register host**:
+
+1. **Host access** — address, port and SSH user of the machine.
+2. **Credential** — a private key (recommended) or a password. It is sealed in
+   the browser before it leaves the page, and only the master-node can open it.
+3. **Container access** — default user and port of the containers, and how
+   each container's address is obtained.
+4. **Workers** — *Ask Docker on the host*, or *Configure each one by hand* when
+   the SSH user cannot reach the Docker daemon. A hand-configured worker's
+   address is the one its sshd answers on **from inside the host**: usually
+   `127.0.0.1` with the published port, or the container IP with port 22.
+
+The same can be scripted with [`util/register_host.py`](util/README.md):
+
+```bash
+python util/register_host.py add lab-01 \
+    --address 192.168.0.42 --user simlab --key ~/.ssh/simlab_lab01
+python util/register_host.py list
+```
+
+> **Back up the `infra_keys` volume.** It holds the master-node's private key.
+> Losing it makes every stored credential unreadable, and every host has to be
+> registered again.
+
+### Configuration
+
+Master-node environment variables, all with working defaults:
+
+| Variable | Default | Role |
+|---|---|---|
+| `SCHED_POLICY` | `least_loaded_host` | Placement policy. `fastest_then_least_loaded` also avoids hosts measured as meaningfully slower when there is spare capacity — see [master-node/README.md](master-node/README.md#placement-policies) |
+| `INFRA_CHECK_INTERVAL_SEC` | `30` | Interval of the health cycle that measures hosts and workers |
+| `INFRA_FAILURE_THRESHOLD` | `3` | Consecutive failures before a host is marked `offline` |
+| `RESERVATION_TTL_SEC` | `600` | After this, a reservation nobody renews is reclaimed |
+| `RUN_POLL_INTERVAL_SEC` | `5` | How often a running simulation is followed |
+| `NUMBER_OF_CONTAINERS` | `8` | Only seeds the local host's workers on the first start |
+| `INFRA_KEY_PATH` | `/run/secrets/simlab-infra/x25519.json` | The private key, inside the `infra_keys` volume |
+
+### Behaviour changes worth knowing
+
+These alter results compared with earlier versions, and are listed in
+[`CHANGELOG.md`](CHANGELOG.md):
+
+- **An incomplete evaluation is not used as a complete one.** A failed
+  replica is run again once with its own seed; if it is still missing, the
+  individual gets the worst objective. Set `incomplete_objective: accept` in
+  the experiment's simulation configuration for the previous behaviour, with
+  the completeness recorded next to the objective.
+- **A generation's status counts seeds, not simulation documents**, so one
+  whose failed replica was repeated closes `Done`. Generations created before
+  the replica plan was recorded keep the previous rule.
+- **Timestamps are timezone-aware UTC.** Stored values without a timezone are
+  read as UTC; no data was migrated.
+
+### Limitations
+
+- **One master-node.** There is no leader election and no atomic claim of a
+  simulation itself; reservations are atomic per container, which is not the
+  same guarantee.
+- **The API key is in the GUI bundle.** Anyone who loads the application can
+  read it, and `docker-compose.yaml` falls back to a known default when
+  `SIMLAB_API_KEY` is unset. HTTPS and credential sealing do not replace user
+  authentication.
+- **Runtime telemetry covers local containers only.** cAdvisor scrapes this
+  machine, so CPU and memory of remote hosts are not measured.
+- **No end-to-end *exactly once*.** What is guaranteed is that one container
+  runs one attempt at a time and that a stale attempt cannot publish. A crash
+  between storing a result's files and recording them leaves GridFS blobs that
+  nothing references, and nothing collects them.
+- **A result that could not be collected is recovered by hand.** The worker
+  is held and the files are preserved on the container;
+  [`util/recover_result.py`](util/README.md) brings them back and only then
+  releases the worker.
+- **Duplicate registrations are detected by address, not by machine.** One
+  container registered twice under the same address is refused; the same
+  machine reached through a DNS alias, a tunnel or a different published port
+  is not recognised as the same.
+
+### Next steps
+
+- **Telemetry on remote hosts** (for instance a node-exporter on each machine),
+  to explain why remote workers slow down when a host runs more than one
+  container — and before tuning the placement policy any further.
+- **Evaluate `fastest_then_least_loaded`** with that telemetry. It is off by
+  default: in the measured runs the wait for the last remote simulation of a
+  generation was under 2% of the execution time.
+- **Benchmark against a local-only baseline**, with repeated runs per
+  configuration, to quantify the gain of distributing.
+- **Automatic recovery of preserved results** and a **sweep of unreferenced
+  GridFS blobs**, both currently manual.
+- **More than one master-node**, which needs an atomic claim of the simulation
+  and not only of the container.
 
 ---
 
