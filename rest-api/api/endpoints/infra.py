@@ -24,6 +24,9 @@ from pylib.db.models.infra import OCCUPIED_STATUSES, EnumAuthMethod
 from pylib.db.repositories.infra import HostWithdrawing, RemovalConflicted
 
 from api.dependencies import get_factory
+from api.mappers.topology import topology_from_documents
+from pylib.db.models.enums import EnumStatus
+from pylib.timeutil import utc_now
 
 # Where Cooja lives inside the stock image; a worker may override it.
 DEFAULT_REMOTE_DIR = "/opt/contiki-ng/tools/cooja"
@@ -119,6 +122,49 @@ def get_overview(
 
 
 # ── Hosts ────────────────────────────────────────────────────────────────────
+
+@router.get("/topology")
+def get_topology(factory: MongoRepository = Depends(get_factory)) -> dict:
+    """The pool as a graph — master-node, hosts, workers — and what runs where.
+
+    Built for a page that polls while experiments run, so it is a fixed
+    number of queries however large the pool is: every host, every worker,
+    then the simulations occupying workers and their experiments and
+    generations in one ``$in`` each. Asking each worker separately was one
+    request per container per refresh.
+    """
+    hosts = factory.host_repo.find_all()
+    resources = factory.resource_repo.find_all()
+    schedulable = {
+        str(row["_id"]): bool(row.get("schedulable"))
+        for row in factory.host_repo.inventory_snapshot()
+    }
+    occupied = {s.value for s in OCCUPIED_STATUSES}
+    sim_ids = [r["current_simulation_id"] for r in resources
+               if r.get("status") in occupied and r.get("current_simulation_id")]
+
+    with factory.simulation_repo.connection.connect() as db:
+        simulations = list(db["simulations"].find(
+            {"_id": {"$in": sim_ids}},
+            {"experiment_id": 1, "generation_id": 1, "status": 1,
+             "random_seed": 1, "start_time": 1, "assigned_at": 1},
+        )) if sim_ids else []
+        running = list(db["experiments"].find(
+            {"status": EnumStatus.RUNNING},
+            {"name": 1, "status": 1, "parameters.strategy": 1}))
+        exp_ids = {s["experiment_id"] for s in simulations if s.get("experiment_id")}
+        exp_ids -= {e["_id"] for e in running}
+        experiments = running + (list(db["experiments"].find(
+            {"_id": {"$in": list(exp_ids)}}, {"name": 1})) if exp_ids else [])
+        gen_ids = [s["generation_id"] for s in simulations if s.get("generation_id")]
+        generations = list(db["generations"].find(
+            {"_id": {"$in": gen_ids}}, {"index": 1})) if gen_ids else []
+
+    return topology_from_documents(
+        hosts=hosts, schedulable=schedulable, resources=resources,
+        simulations=simulations, experiments=experiments,
+        generations=generations, running_experiments=running, now=utc_now())
+
 
 @router.get("/hosts", response_model=list[HostDto])
 def list_hosts(

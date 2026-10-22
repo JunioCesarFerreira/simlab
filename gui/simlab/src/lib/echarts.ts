@@ -14,7 +14,7 @@
  * silently renders nothing.
  */
 import * as echarts from "echarts/core";
-import { LineChart, ParallelChart, ScatterChart } from "echarts/charts";
+import { GraphChart, LineChart, ParallelChart, ScatterChart } from "echarts/charts";
 import {
   DataZoomComponent,
   GridComponent,
@@ -30,6 +30,8 @@ import {
 import { CanvasRenderer, SVGRenderer } from "echarts/renderers";
 
 echarts.use([
+  // The infrastructure topology page.
+  GraphChart,
   ScatterChart,
   LineChart,
   ParallelChart,

@@ -24,6 +24,7 @@ import type {
   ResourceDto,
   ResourceSimulationDto,
   ResourceUpdateInput,
+  TopologyDto,
 } from "../types/infra";
 
 // ── Crypto ───────────────────────────────────────────────────────────────────
@@ -148,5 +149,15 @@ export async function deleteResource(id: string): Promise<void> {
 /** What is running on a container, if anything. */
 export async function getResourceSimulation(id: string): Promise<ResourceSimulationDto> {
   const { data } = await client.get<ResourceSimulationDto>(`/infra/resources/${id}/simulation`);
+  return data;
+}
+
+/**
+ * The pool as a graph — master-node, hosts, workers — and what runs on each
+ * worker. One request for the whole picture; the page polls it while
+ * experiments run.
+ */
+export async function getTopology(signal?: AbortSignal): Promise<TopologyDto> {
+  const { data } = await client.get<TopologyDto>("/infra/topology", { signal });
   return data;
 }

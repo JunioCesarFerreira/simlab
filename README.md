@@ -357,7 +357,10 @@ container port has to be published on the network. A single-machine
 deployment needs nothing new: its local containers are seeded as before.
 
 Each simulation records the host and container it ran on, and the experiment
-page shows how a run was spread across them (*Work distribution*).
+page shows how a run was spread across them (*Work distribution*). The
+**Topology** page draws the pool as a graph, live: which hosts the
+master-node reaches, which workers are free or running, and which experiment
+each one is running.
 
 ### Adding a machine
 

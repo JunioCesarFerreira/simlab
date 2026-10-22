@@ -5,6 +5,43 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Infrastructure topology page
+
+A **Topology** page draws the pool as a graph — master-node, hosts, Cooja
+workers — coloured by status and refreshed every 3 s, so a run can be watched
+moving through it.
+
+### Added
+
+- **`GET /infra/topology`**: the graph and what runs on each worker — its
+  simulation, experiment, generation and seed — in a fixed number of queries
+  however large the pool is. The per-worker `/resources/{id}/simulation`
+  route was one request per container per refresh.
+- **Master-node liveness**, which no document records: its health cycle
+  writes `last_check` on every enabled host every cycle, even an unreachable
+  one, so when no host has been checked for 120 s the cycle is not running.
+  The page says so in a banner.
+- **The page**: master on the left, one line per host, each host's workers
+  beside it. Status by colour (free, running, degraded/held/withdrawing,
+  failing, disabled); each running experiment gets a ring colour, stable
+  while it runs, so two experiments sharing the pool are told apart. A panel
+  lists the running experiments with their workers per host, including those
+  still waiting for one.
+
+Three choices in how it is drawn:
+
+- **Fixed positions**, not a force layout: a picture refreshed every few
+  seconds whose nodes move each time cannot be followed.
+- **Left to right**, because the pool grows by hosts. A row of hosts across the
+  top ran out of width at ten, with every box overlapping its neighbours.
+- **Hidden cartesian axes** rather than a fitted view, which scaled x and y
+  independently and stretched the symbols into ellipses.
+
+Names and messages in tooltips come from operators and remote machines and
+are rendered as HTML by ECharts, so they are escaped.
+
+---
+
 ## [Unreleased] — Scalability benchmark (USL)
 
 A new **Scalability** page measures how the simulation infrastructure scales,

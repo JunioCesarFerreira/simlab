@@ -332,3 +332,64 @@ export interface HostUpdateInput {
   container_access?: ContainerAccessInput;
   discovery?: DiscoveryInput;
 }
+
+/* ── Topology: the pool as a graph, and what runs where ─────────────────── */
+
+export type MasterLiveness = "alive" | "stale" | "unknown";
+
+export interface TopologyRun {
+  simulation_id: string | null;
+  simulation_status?: string | null;
+  experiment_id: string | null;
+  experiment_name?: string | null;
+  generation_index?: number | null;
+  random_seed?: number | null;
+  assigned_at?: string | null;
+  started_at?: string | null;
+}
+
+export interface TopologyWorker {
+  id: string;
+  name: string;
+  status: string;
+  enabled: boolean;
+  held: boolean;
+  held_kind?: string | null;
+  message: string;
+  run: TopologyRun | null;
+}
+
+export interface TopologyHost {
+  id: string;
+  name: string;
+  type: string;
+  status: string;
+  enabled: boolean;
+  schedulable: boolean;
+  withdrawing: boolean;
+  last_check?: string | null;
+  message: string;
+  workers: TopologyWorker[];
+}
+
+export interface TopologyRunningExperiment {
+  id: string;
+  name: string;
+  strategy?: string | null;
+  on_workers: number;
+  by_host: Record<string, number>;
+}
+
+export interface TopologyDto {
+  /** Server time: elapsed times are measured against it, not the browser's
+   *  clock, so a skewed laptop does not show a run as starting in the future. */
+  generated_at: string;
+  master: {
+    status: MasterLiveness;
+    last_seen: string | null;
+    age_sec?: number;
+    stale_after_sec: number;
+  };
+  hosts: TopologyHost[];
+  running_experiments: TopologyRunningExperiment[];
+}
