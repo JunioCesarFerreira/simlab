@@ -616,7 +616,8 @@ class TestProbeFreshness:
     A pilot measured 3078 transport opens for 344 simulations and 41 opens in
     three minutes while idle, until the host's sshd began refusing them. What
     makes it safe to skip is the asymmetry: only a worker *in the pool* whose
-    last probe found it *ready* is taken at its word.
+    last probe found it *ready* is taken at its word — and only while its host
+    still answers.
     """
 
     def test_a_worker_that_just_answered_is_not_asked_again(self):
@@ -670,6 +671,51 @@ class TestProbeFreshness:
             mongo, probe=lambda h, r: probed.append(r) or READY).check_host(HOST)
 
         assert [r["name"] for r in probed] == ["cooja1"]
+
+    def _remote_turn(self, error):
+        """A remote host whose first hop fails with ``error`` in this turn,
+        and a worker it left in the pool with a fresh, good probe."""
+        mongo = fake_mongo(hosts=[REMOTE], resources=[in_pool()])
+        monitor = HealthMonitor(mongo, jumps=FakePool(error=error),
+                                discover=lambda m, h: None)
+        # The real probe: it borrows hop 1 from the pool, which re-raises.
+        monitor._probe = monitor._default_probe
+        return monitor, mongo
+
+    def test_a_host_refusing_its_session_is_not_taken_at_its_word(self):
+        """Seen in deployment after the VMs' host keys were regenerated: the
+        pin refused every session and seven of eight hosts stayed online, with
+        a worker available, until the probe aged out."""
+        monitor, mongo = self._remote_turn(
+            HostKeyMismatch("lab-01", "SHA256:old", "SHA256:new"))
+
+        result = monitor.check_host({**REMOTE, "status": "online"})
+
+        assert result.ready == [] and result.fresh == []
+        mongo.resource_repo.mark_error.assert_called_once()
+        mongo.resource_repo.mark_available.assert_not_called()
+
+    def test_an_unreachable_host_is_not_taken_at_its_word(self):
+        # Out of the pool at once, and the host's failure is counted, instead
+        # of the host looking healthy for up to the probe TTL.
+        monitor, mongo = self._remote_turn(TransportUnreachable("no route to host"))
+
+        result = monitor.check_host({**REMOTE, "status": "online"})
+
+        assert result.unhealthy == ["cooja1"]
+        mongo.resource_repo.mark_offline.assert_called_once()
+        assert mongo.host_repo.mark_check_result.call_args.kwargs["reset_failures"] is False
+
+    def test_a_reachable_remote_host_still_skips_the_probe(self):
+        mongo = fake_mongo(hosts=[REMOTE], resources=[in_pool()])
+        probed: list[dict] = []
+
+        result = HealthMonitor(
+            mongo, jumps=FakePool(), discover=lambda m, h: None,
+            probe=lambda h, r: probed.append(r) or READY).check_host(REMOTE)
+
+        assert probed == []
+        assert result.fresh == ["cooja1"]
 
     def test_a_stopped_container_still_leaves_the_pool(self):
         """Level 1 is read before freshness, so a negative observation wins."""

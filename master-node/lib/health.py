@@ -29,9 +29,11 @@ Rules this cycle obeys
   transport opens for 344 simulations, and 41 in three minutes with nothing
   running, until the host's sshd began refusing connections. A worker that is
   in the pool and was last found *ready* within ``probe_ttl_sec`` is taken at
-  its word; everything else is measured, so a failure is still noticed within
-  one interval and recovery is unaffected. An operator pressing "check" gets
-  a real measurement regardless.
+  its word — while its host is reachable: a first hop that failed in this
+  turn contradicts the old answer, and measuring then opens nothing, because
+  the pool re-raises the cached failure. Everything else is measured, so a
+  failure is still noticed within one interval and recovery is unaffected. An
+  operator pressing "check" gets a real measurement regardless.
 * **The connections a cycle does need are shared.** Docker's inventory and
   every probe on one host ride a single hop-1 session (``lib.transport.pool``),
   which costs a host one handshake per cycle instead of one per worker plus
@@ -746,7 +748,19 @@ class HealthMonitor:
             health.unhealthy.append(name)
             return
 
-        if not force and probe_is_fresh(resource, self._probe_ttl, host=host):
+        if (
+            not force
+            # A first hop that failed in this turn contradicts the stored
+            # answer. Observed in deployment: once the VMs' host keys were
+            # regenerated, every session to them was refused, and seven of
+            # eight stayed online with their worker available until its probe
+            # aged out — a placement there would have been refused at
+            # connect. An unreachable host stayed in the pool the same way,
+            # for up to the TTL instead of the failure threshold. Measuring
+            # costs no connection: the pool re-raises the cached failure.
+            and self._jumps.failure(host) is None
+            and probe_is_fresh(resource, self._probe_ttl, host=host)
+        ):
             # It is in the pool and the last measurement found it ready, so
             # there is nothing a new connection could tell us. Anything that
             # did change — a stopped container, a failed placement, an edited

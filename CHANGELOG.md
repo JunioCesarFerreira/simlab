@@ -25,6 +25,13 @@ failed, and every remote host was counted as failing and taken offline.
 - **The last address that worked is used while DNS is down**, for hosts with a
   pinned key only: a different machine at that address fails the pin. Kept on
   the host (`resolved_address`), so it survives a restart.
+- **A worker's recent probe is no longer trusted when its host's first hop
+  fails in the same turn.** After the VMs' host keys were regenerated, the pin
+  refused every session and seven of eight hosts stayed online, each with a
+  worker available, until the probe aged out (up to 5 min) — and an
+  unreachable host stayed in the pool the same way instead of going offline
+  after the failure threshold. Measuring opens no connection: the pool
+  re-raises the failure it already has.
 
 ### Added
 
