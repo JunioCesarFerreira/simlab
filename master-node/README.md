@@ -396,7 +396,7 @@ documents — and a failure of the second used to propagate back and mark the
 | `IS_DOCKER` | `false` | If `true`, seeded hostnames are `cooja1..coojaN` on port 22; otherwise `localhost` on ports `2231+i` |
 | `NUMBER_OF_CONTAINERS` | `8` | How many local containers to **seed** on first start. Not a thread count any more: the pool comes from the inventory, and discovery maintains it |
 | `SIM_TIMEOUT_SEC` | `3600` | How long one simulation may run, and the cutoff for recovering one left `RUNNING` with no container holding it. `0` disables both |
-| `SCHED_POLICY` | `least_loaded_host` | Placement policy — see *Placement policies* below. `least_loaded_host` or `fastest_then_least_loaded` |
+| `SCHED_POLICY` | `least_loaded_host` | Placement policy — see *Placement policies* below. `least_loaded_host`, `fastest_then_least_loaded` or `earliest_completion` (what `docker-compose.yaml` sets) |
 | `RUN_POLL_INTERVAL_SEC` | `5` | How often a running simulation is checked on. One cheap round trip each time |
 | `INFRA_CHECK_INTERVAL_SEC` | `30` | Health cycle interval |
 | `INFRA_FAILURE_THRESHOLD` | `3` | Consecutive failures before a host leaves the pool. Capacity is slow to lose and quick to regain |
@@ -527,6 +527,37 @@ is right for finishing a batch soonest and wrong for spreading work across
 machines. The *Work distribution* card on the experiment page shows which one
 you got.
 
+### `earliest_completion`
+
+`fastest_then_least_loaded` stops sending work to a slow host while a fast one
+is **free**; it cannot see that a busy fast one will be free in a few seconds.
+Measured on a generation of 46 simulations over a local host (111 s each) and
+eight VMs of one machine (666–1008 s each with all eight running), every VM
+took a job as soon as the local workers filled, and the local host then sat
+idle for 9.6 min on average at the end of each generation, waiting for them.
+The whole pool finished later than the local host alone would have (121 min
+against ~109).
+
+This policy plans instead (`lib/scheduler/completion.py`). Every waiting job,
+in turn, is assigned on paper to the worker that would finish it first — a free
+one now, or a busy one once its run ends — using each worker's measured held
+time. The head of the queue is placed only on a worker that plan uses **now**;
+if it uses none, the job waits for the faster worker. For identical jobs on
+workers of different speeds that greedy is optimal for the makespan.
+
+- A slow host takes work at the start of a long queue, where it shortens the
+  batch, and not at its tail, where it would lengthen it.
+- **Waiting is bounded.** A busy worker counts only while it is within twice
+  its expected time; a run past that, or with no estimate, is not waited on.
+- **New work wakes a waiting decision**: a longer queue can make a slower
+  worker worth using.
+- A worker never measured is sampled first, as with the ranked policy.
+- The log says why a job waits: `Holding <id> for a faster worker: …`.
+
+What it trades: a slower host is idle more of the time, by design. Its
+estimate is the worker's own mean held time, so a host measured while
+overloaded starts out pessimistic and converges as its runs get shorter.
+
 ### Where the estimate comes from
 
 Each successful run records how long the container was **held** — connection,
@@ -551,6 +582,39 @@ the same genome with the same seed took 1.22–1.25x longer on the remote hosts
 
 Writing it is advisory and isolated: a failure is logged and the simulation is
 unaffected, because the number only chooses between equally loaded hosts.
+
+---
+
+## Machine Limits
+
+Several hosts can be **one physical machine** — VMs on one hypervisor, reached
+through its address on different forwarded ports — and then they compete for
+the same CPUs, which nothing about them as separate hosts shows. Measured on
+eight VMs of one machine running the same simulation:
+
+| VMs running at once | Time per simulation | Machine throughput |
+|---|---|---|
+| 1 | 36 s | 1.7 sim/min |
+| 5 | 60 s | **5.0 sim/min** |
+| 8 | 109 s | 4.4 sim/min |
+
+A **machine limit** caps how many simulations it runs at once across all of
+its hosts. It is applied before any policy decides, so it holds whichever one
+is configured, and a host being drained still counts against it — its runs use
+the same CPUs.
+
+- **Grouping**: a host's machine is its `machine` label when set, otherwise
+  its SSH address for a remote host and `local` for the master-node's own. The
+  address is right for port-forwarded VMs and wrong for distinct machines
+  behind one NAT gateway, which is what the label is for.
+- **Setting it**: the *Physical machines* card on the Infrastructure page, the
+  per-machine table of a scalability benchmark (which recommends the measured
+  peak), or `PUT /api/v1/infra/machines/{machine}` with
+  `{"max_concurrent": 5}` (`null` removes it). Stored in the `machines`
+  collection and read on every placement decision.
+- **Choosing it**: the benchmark's per-machine fit. Its peak is recommended
+  only when the measurements reach it — a peak the model extrapolates past the
+  largest concurrency tested is reported, not recommended.
 
 ---
 

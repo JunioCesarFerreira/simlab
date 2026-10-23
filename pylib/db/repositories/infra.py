@@ -5,7 +5,7 @@ the invariants that two simulations never share a container, and that a health
 check never steals a container from a running simulation, are enforced by the
 query filters themselves. No caller can get them wrong by forgetting a check.
 
-Four repositories:
+Five repositories:
 
 * ``HostRepository`` — registrations, check/discovery requests, and the
   inventory snapshot the scheduler reads.
@@ -15,6 +15,8 @@ Four repositories:
   a credential against the key the master-node actually holds.
 * ``MasterStatusRepository`` — the master-node's own heartbeat and the state of
   its DNS resolver, which no host document can carry.
+* ``MachineRepository`` — per physical machine settings, today the limit on
+  how many simulations it runs at once across all of its hosts.
 """
 import logging
 from datetime import datetime
@@ -29,6 +31,7 @@ from pylib.db.connection import MongoDBConnection
 from pylib.timeutil import utc_now
 from pylib.db.models.infra import (
     CRYPTO_COLLECTION,
+    MACHINES_COLLECTION,
     MASTER_STATUS_COLLECTION,
     target_fingerprint,
     HOSTS_COLLECTION,
@@ -727,7 +730,8 @@ class HostRepository:
                     "foreignField": "host_id",
                     "as": "_res",
                     "pipeline": [{"$project": {
-                        "status": 1, "enabled": 1, "mean_duration_sec": 1}}],
+                        "status": 1, "enabled": 1, "mean_duration_sec": 1,
+                        "started_at": 1}}],
                 }
             },
             {
@@ -815,6 +819,35 @@ class HostRepository:
                         }},
                         "as": "r", "in": "$$r.mean_duration_sec",
                     }}},
+                    # Per worker, for a policy that plans when work will
+                    # finish: what each free worker is expected to take, and
+                    # how far each occupied one is into its run. `started_at`
+                    # rather than `reserved_at`, which the preparation's
+                    # heartbeat keeps renewing; a reserved worker has none
+                    # yet and is read as just started.
+                    "free_durations": {"$map": {
+                        "input": {"$filter": {
+                            "input": "$_res", "as": "r",
+                            "cond": {"$and": [
+                                {"$eq": [_ENABLED, True]},
+                                {"$eq": ["$$r.status", available]},
+                            ]},
+                        }},
+                        "as": "r",
+                        "in": {"$ifNull": ["$$r.mean_duration_sec", None]},
+                    }},
+                    "occupied_workers": {"$map": {
+                        "input": {"$filter": {
+                            "input": "$_res", "as": "r",
+                            "cond": {"$in": ["$$r.status", _OCCUPIED]},
+                        }},
+                        "as": "r",
+                        "in": {
+                            "mean_duration_sec": {
+                                "$ifNull": ["$$r.mean_duration_sec", None]},
+                            "started_at": {"$ifNull": ["$$r.started_at", None]},
+                        },
+                    }},
                     "schedulable": {
                         "$and": [
                             {"$eq": ["$enabled", True]},
@@ -2214,6 +2247,49 @@ class MasterStatusRepository:
                 upsert=True,
             )
         return now
+
+
+class MachineRepository:
+    """Settings that belong to a physical machine rather than to a host.
+
+    One document per machine label (``machine_of``). Today it carries only
+    ``max_concurrent``: how many simulations the machine runs at once across
+    every host on it. Absent or null means no limit.
+    """
+
+    def __init__(self, connection: MongoDBConnection):
+        self.connection = connection
+
+    def limits(self) -> dict[str, int]:
+        """Every machine that has a limit, as ``{label: max_concurrent}``."""
+        with self.connection.connect() as db:
+            return {
+                str(doc["_id"]): int(doc["max_concurrent"])
+                for doc in db[MACHINES_COLLECTION].find(
+                    {"max_concurrent": {"$type": "number"}})
+            }
+
+    def find_all(self) -> list[dict[str, Any]]:
+        with self.connection.connect() as db:
+            return list(db[MACHINES_COLLECTION].find({}))
+
+    def set_limit(self, machine: str, max_concurrent: Optional[int]) -> None:
+        """Set or clear a machine's limit. ``None`` removes it."""
+        if not machine:
+            raise ValueError("a machine needs a label")
+        if max_concurrent is not None and int(max_concurrent) < 1:
+            raise ValueError("a limit below one would stop the machine entirely")
+        now = utc_now()
+        with self.connection.connect() as db:
+            db[MACHINES_COLLECTION].update_one(
+                {"_id": machine},
+                {"$set": {
+                    "max_concurrent": None if max_concurrent is None else int(max_concurrent),
+                    "updated_time": now,
+                 },
+                 "$setOnInsert": {"created_time": now}},
+                upsert=True,
+            )
 
 
 def host_access_secret(host: Host) -> Optional[SecretEnvelope]:

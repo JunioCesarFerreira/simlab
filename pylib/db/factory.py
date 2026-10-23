@@ -15,6 +15,7 @@ from pylib.db.repositories.infra import (
     HostRepository,
     CoojaResourceRepository,
     InfraCryptoRepository,
+    MachineRepository,
     MasterStatusRepository,
 )
 
@@ -35,6 +36,7 @@ class MongoRepository(NamedTuple):
     infra_crypto_repo: InfraCryptoRepository
     # Last and optional, so code that builds this tuple by hand keeps working.
     master_repo: Optional[MasterStatusRepository] = None
+    machine_repo: Optional[MachineRepository] = None
 
 
 def create_mongo_repository_factory(
@@ -55,6 +57,7 @@ def create_mongo_repository_factory(
     resource_repo = CoojaResourceRepository(connection)
     infra_crypto_repo = InfraCryptoRepository(connection)
     master_repo = MasterStatusRepository(connection)
+    machine_repo = MachineRepository(connection)
     return MongoRepository(
         experiment_repo=experiment_repo,
         simulation_repo=simulation_repo,
@@ -70,4 +73,5 @@ def create_mongo_repository_factory(
         resource_repo=resource_repo,
         infra_crypto_repo=infra_crypto_repo,
         master_repo=master_repo,
+        machine_repo=machine_repo,
     )

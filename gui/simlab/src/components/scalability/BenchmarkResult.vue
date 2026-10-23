@@ -67,6 +67,13 @@
 
     <UslChart :data="chart" :name="detail.name" />
 
+    <MachineBreakdown
+      v-if="analysis.machines?.length"
+      :machines="analysis.machines"
+      :heterogeneous="analysis.heterogeneous_pool ?? false"
+      :name="detail.name"
+    />
+
     <details class="waves" :open="analysis.waves.length <= 12">
       <summary>Waves ({{ analysis.valid_waves }} of {{ analysis.waves.length }} measured)</summary>
       <div class="table-wrap">
@@ -104,6 +111,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
+import MachineBreakdown from "./MachineBreakdown.vue";
 import UslChart from "./UslChart.vue";
 import {
   METRIC_LABELS,

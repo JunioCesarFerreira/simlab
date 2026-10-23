@@ -313,6 +313,18 @@ describe("hostTooltip", () => {
     expect(text).toContain("andromeda.example (last reached at 143.107.0.10)");
   });
 
+  it("names the machine when it says more than the address", () => {
+    const text = hostTooltip(
+      host({ address: "gw.example", machine: "rack-2", name: "lab-01" }),
+      now,
+    );
+
+    expect(text).toContain("machine: rack-2");
+    expect(hostTooltip(host({ address: "Gw.Example", machine: "gw.example" }), now)).not.toContain(
+      "machine:",
+    );
+  });
+
   it("does not repeat an address used directly", () => {
     const text = hostTooltip(host({ address: "10.0.0.1", last_known_ip: "10.0.0.1" }), now);
 

@@ -13,7 +13,13 @@
  * when a peak is real, what a benchmark will cost — can be tested on their
  * own.
  */
-import type { BenchmarkSummary, UslFit, UslMetric, WaveMeasurement } from "../types/scalability";
+import type {
+  BenchmarkSummary,
+  MachineFit,
+  UslFit,
+  UslMetric,
+  WaveMeasurement,
+} from "../types/scalability";
 import type { OverviewDto } from "../types/infra";
 
 /** Mirrors the API's bounds, so the form refuses what the server would. */
@@ -299,4 +305,64 @@ export function yAxisMax(data: Pick<ChartData, "measured" | "means" | "model">):
 export function progress(summary: Pick<BenchmarkSummary, "waves" | "waves_finished">): number {
   if (!summary.waves) return 0;
   return Math.min(1, (summary.waves_finished ?? 0) / summary.waves);
+}
+
+/* ── Per physical machine ────────────────────────────────────────────────── */
+
+/** One machine's own curve, in the shape the chart takes. */
+export function machineChartData(machine: MachineFit): ChartData {
+  const fit: UslFit = {
+    ...machine.fit,
+    levels: machine.levels,
+    curve: machine.curve,
+    peak_within_tested: machine.peak_within_tested,
+  };
+  // A machine's measurements are its per-level means (with their spread in
+  // `means`); there are no per-wave points of its own to scatter.
+  return {
+    ...chartData(fit, [], "per_simulation"),
+    measured: machine.levels.map((row): [number, number] => [row.level, row.mean]),
+    testedMax: machine.max_tested,
+  };
+}
+
+/** What a machine's curve says, in one sentence an operator can act on. */
+export function machineReading(machine: MachineFit): string {
+  if (machine.fit.status === "insufficient_data") {
+    return `Measured at a single concurrency (${machine.max_tested}) — nothing to fit yet.`;
+  }
+  if (machine.recommended_limit !== null) {
+    return (
+      `Peaks at ${machine.recommended_limit} simulation(s) at once ` +
+      `(${formatThroughput(machine.fit.x_peak)} sim/min); giving it more makes it slower overall.`
+    );
+  }
+  if (machine.fit.n_peak_int !== null) {
+    return (
+      `Still scaling at ${machine.max_tested} at once, the most tested; the model puts a peak ` +
+      `near ${machine.fit.n_peak_int}, which was not measured.`
+    );
+  }
+  return `Still scaling at ${machine.max_tested} at once, the most tested — no limit needed yet.`;
+}
+
+/** The machine's speed relative to the fastest, as a percentage. */
+export function formatRelativeSpeed(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  return `${Math.round(value * 100)}%`;
+}
+
+/** The limit to offer applying, or `null` when the current one already is it. */
+export function limitToApply(machine: MachineFit): number | null {
+  const recommended = machine.recommended_limit;
+  if (recommended === null || recommended === machine.limit) return null;
+  return recommended;
+}
+
+/** How much slower the slowest machine is, for the heterogeneity notice. */
+export function slowestRelative(machines: MachineFit[]): number | null {
+  const speeds = machines
+    .map((m) => m.relative_speed)
+    .filter((v): v is number => v !== null && v > 0);
+  return speeds.length ? Math.min(...speeds) : null;
 }

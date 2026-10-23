@@ -38,6 +38,7 @@ from api.domain.infra import (
     AcceptedDto,
     HostDetailDto,
     HostDto,
+    MachineDto,
     OverviewDto,
     PublicKeyDto,
     ResourceDto,
@@ -53,9 +54,11 @@ from api.schemas.infra import (
 from api.mappers.infra import (
     PlaintextRefused,
     as_bool,
+    as_max_concurrent,
     dotted_update,
     host_from_mongo,
     host_to_mongo,
+    machines_from_snapshot,
     occupancy_from_snapshot,
     overview_from_snapshot,
     public_key_from_mongo,
@@ -120,6 +123,55 @@ def get_overview(
             snapshot, builds, host_documents=factory.host_repo.find_all())
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Physical machines ────────────────────────────────────────────────────────
+
+def _machine_limits(factory: MongoRepository) -> dict[str, int]:
+    repo = getattr(factory, "machine_repo", None)
+    limits = repo.limits() if repo is not None else {}
+    return limits if isinstance(limits, dict) else {}
+
+
+@router.get("/machines", response_model=list[MachineDto])
+def list_machines(factory: MongoRepository = Depends(get_factory)) -> list[MachineDto]:
+    """The physical machines behind the hosts, with their limits.
+
+    Several hosts can be one machine — VMs on one hypervisor — and then they
+    compete for its CPUs. A limit set here caps the simulations the machine
+    runs at once, across all its hosts, whatever the placement policy.
+    """
+    return machines_from_snapshot(
+        factory.host_repo.inventory_snapshot(), _machine_limits(factory))
+
+
+@router.put("/machines/{machine:path}", response_model=MachineDto)
+def set_machine_limit(
+    machine: str,
+    body: dict = Body(..., description=(
+        '`{"max_concurrent": <whole number from 1, or null>}`. Null removes '
+        "the limit. Applies from the next placement.")),
+    factory: MongoRepository = Depends(get_factory),
+) -> MachineDto:
+    """Set or clear how many simulations one machine may run at once."""
+    if not isinstance(body, dict) or set(body) != {"max_concurrent"}:
+        raise HTTPException(
+            status_code=422, detail='send exactly {"max_concurrent": <int or null>}')
+    try:
+        limit = as_max_concurrent(body["max_concurrent"])
+    except PlaintextRefused as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    machines = {m["machine"]: m for m in machines_from_snapshot(
+        factory.host_repo.inventory_snapshot(), _machine_limits(factory))}
+    if machine not in machines:
+        # A typo would otherwise create a limit that nothing ever matches.
+        raise HTTPException(
+            status_code=404,
+            detail=f"no host runs on a machine called {machine!r}; known: "
+                   + ", ".join(sorted(machines)))
+    factory.machine_repo.set_limit(machine, limit)
+    return {**machines[machine], "max_concurrent": limit}
 
 
 # ── Hosts ────────────────────────────────────────────────────────────────────

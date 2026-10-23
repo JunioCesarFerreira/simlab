@@ -1135,3 +1135,107 @@ class TestSharedHostKeys:
             self._host("vm1", "gw.example", 2201, fingerprint="SHA256:a"),
             self._host("vm2", "gw.example", 2202, fingerprint="SHA256:b"),
         ]) == []
+
+
+
+# ── Physical machines ───────────────────────────────────────────────────────
+
+def vm_row(name, port, *, active=0, total=1, disabled=0, **over):
+    row = snapshot_row(_id=ObjectId(), name=name, active=active, resource_total=total,
+                       disabled=disabled,
+                       access={"address": "andromeda.example", "port": port})
+    row.update(over)
+    return row
+
+
+class TestMachines:
+    def test_vms_behind_one_address_are_one_machine(self, client, infra):
+        infra.host_repo.inventory_snapshot.return_value = [
+            snapshot_row(_id=ObjectId(), name="local", type="local", resource_total=8,
+                         disabled=2, active=1),
+            vm_row("vm1", 2191, active=1), vm_row("vm2", 2192, total=2, disabled=1),
+        ]
+        infra.machine_repo.limits.return_value = {"andromeda.example": 5}
+
+        machines = client.get("/api/v1/infra/machines").json()
+
+        assert machines == [
+            {"machine": "local", "hosts": ["local"], "workers": 6, "active": 1,
+             "max_concurrent": None},
+            {"machine": "andromeda.example", "hosts": ["vm1", "vm2"], "workers": 2,
+             "active": 1, "max_concurrent": 5},
+        ]
+
+    def test_an_explicit_label_overrides_the_address(self, client, infra):
+        infra.host_repo.inventory_snapshot.return_value = [
+            vm_row("a", 1, machine="rack-1"), vm_row("b", 2, machine="rack-2")]
+        infra.machine_repo.limits.return_value = {}
+
+        labels = [m["machine"] for m in client.get("/api/v1/infra/machines").json()]
+
+        assert labels == ["rack-1", "rack-2"]
+
+    def test_a_limit_is_set_on_a_known_machine(self, client, infra):
+        infra.host_repo.inventory_snapshot.return_value = [vm_row("vm1", 2191)]
+        infra.machine_repo.limits.return_value = {}
+
+        resp = client.put("/api/v1/infra/machines/andromeda.example",
+                          json={"max_concurrent": 5})
+
+        assert resp.status_code == 200
+        assert resp.json()["max_concurrent"] == 5
+        infra.machine_repo.set_limit.assert_called_once_with("andromeda.example", 5)
+
+    def test_null_removes_it(self, client, infra):
+        infra.host_repo.inventory_snapshot.return_value = [vm_row("vm1", 2191)]
+        infra.machine_repo.limits.return_value = {"andromeda.example": 5}
+
+        resp = client.put("/api/v1/infra/machines/andromeda.example",
+                          json={"max_concurrent": None})
+
+        assert resp.json()["max_concurrent"] is None
+        infra.machine_repo.set_limit.assert_called_once_with("andromeda.example", None)
+
+    def test_an_unknown_machine_is_a_404_not_a_limit_nothing_matches(self, client, infra):
+        infra.host_repo.inventory_snapshot.return_value = [vm_row("vm1", 2191)]
+        infra.machine_repo.limits.return_value = {}
+
+        resp = client.put("/api/v1/infra/machines/andromeda.exmaple",
+                          json={"max_concurrent": 5})
+
+        assert resp.status_code == 404
+        assert "andromeda.example" in resp.json()["detail"]
+        infra.machine_repo.set_limit.assert_not_called()
+
+    @pytest.mark.parametrize("bad", [
+        {"max_concurrent": 0}, {"max_concurrent": True}, {"max_concurrent": "5"},
+        {"max_concurrent": 2.5}, {"max_concurrent": 5, "extra": 1}, {},
+    ])
+    def test_a_bad_limit_is_refused(self, client, infra, bad):
+        infra.host_repo.inventory_snapshot.return_value = [vm_row("vm1", 2191)]
+        infra.machine_repo.limits.return_value = {}
+
+        resp = client.put("/api/v1/infra/machines/andromeda.example", json=bad)
+
+        assert resp.status_code == 422
+        infra.machine_repo.set_limit.assert_not_called()
+
+
+class TestHostMachineLabel:
+    def test_a_host_reports_its_label_and_the_one_in_effect(self, client, infra):
+        body = client.get(f"/api/v1/infra/hosts/{HOST_ID}").json()["host"]
+
+        assert body["machine"] is None
+        assert body["machine_label"] == "192.168.0.42"
+
+    def test_it_can_be_set_and_cleared(self, client, infra):
+        client.put(f"/api/v1/infra/hosts/{HOST_ID}", json={"machine": " rack-2 "})
+        assert infra.host_repo.update.call_args.args[1]["machine"] == "rack-2"
+
+        client.put(f"/api/v1/infra/hosts/{HOST_ID}", json={"machine": ""})
+        assert infra.host_repo.update.call_args.args[1]["machine"] is None
+
+    def test_a_label_that_cannot_go_in_a_url_is_refused(self, client, infra):
+        resp = client.put(f"/api/v1/infra/hosts/{HOST_ID}", json={"machine": "a/b"})
+
+        assert resp.status_code == 422

@@ -17,6 +17,7 @@ import type {
   HostCreateInput,
   HostDetailDto,
   HostDto,
+  MachineDto,
   HostUpdateInput,
   OverviewDto,
   PublicKeyDto,
@@ -159,5 +160,22 @@ export async function getResourceSimulation(id: string): Promise<ResourceSimulat
  */
 export async function getTopology(signal?: AbortSignal): Promise<TopologyDto> {
   const { data } = await client.get<TopologyDto>("/infra/topology", { signal });
+  return data;
+}
+
+/** The physical machines behind the hosts, with their concurrency limits. */
+export async function listMachines(signal?: AbortSignal): Promise<MachineDto[]> {
+  const { data } = await client.get<MachineDto[]>("/infra/machines", { signal });
+  return data;
+}
+
+/** Set (or clear, with `null`) how many simulations one machine runs at once. */
+export async function setMachineLimit(
+  machine: string,
+  maxConcurrent: number | null,
+): Promise<MachineDto> {
+  const { data } = await client.put<MachineDto>(`/infra/machines/${encodeURIComponent(machine)}`, {
+    max_concurrent: maxConcurrent,
+  });
   return data;
 }

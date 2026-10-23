@@ -208,3 +208,120 @@ class TestAnalysingABenchmark:
         assert result["waves"] == []
         assert result["fits"]["batch"]["status"] == usl.FIT_INSUFFICIENT
         assert result["planned_levels"] == [1, 2, 4]
+
+
+# ── Per physical machine ─────────────────────────────────────────────────────
+
+def usl_held(k, lam, sigma, kappa):
+    """Seconds one of ``k`` concurrent simulations takes on a machine with
+    these USL parameters (λ in simulations per minute): R = k / X(k)."""
+    return 60.0 * (1 + sigma * (k - 1) + kappa * k * (k - 1)) / lam
+
+
+def mixed_pool(levels=range(1, 15), repetitions=2, local_workers=6,
+               vm=(1.6, 0.05, 0.03)):
+    """Waves filled as the dispatcher fills them: the local host first (30 s
+    a run, no contention), then VMs that share one machine, are slower alone
+    (37.5 s) and slow each other down — the shape measured in deployment."""
+    generations, by_generation = [], {}
+    index = 0
+    for repetition in range(repetitions):
+        for n in levels:
+            g = wave(n, repetition, index)
+            index += 1
+            on_local = min(n, local_workers)
+            on_vms = n - on_local
+            sims = [run(0, 30.0) for _ in range(on_local)]
+            sims += [run(0, usl_held(on_vms, *vm), host=f"vm{i + 1}")
+                     for i in range(on_vms)]
+            generations.append(g)
+            by_generation[str(g["_id"])] = sims
+    return generations, by_generation
+
+
+MACHINES = {"local": "local", **{f"vm{i}": "andromeda" for i in range(1, 9)}}
+
+
+class TestPerMachine:
+    def test_each_machine_gets_its_own_curve(self):
+        generations, sims = mixed_pool()
+
+        machines = {m["machine"]: m for m in
+                    scalability.analyse_machines(generations, sims, MACHINES)}
+
+        assert set(machines) == {"local", "andromeda"}
+        assert machines["andromeda"]["hosts"] == [f"vm{i}" for i in range(1, 9)]
+
+    def test_a_machine_that_saturates_gets_a_recommended_limit(self):
+        """σ=0.05, κ=0.03 peaks at √(0.95/0.03) ≈ 5.6."""
+        generations, sims = mixed_pool()
+
+        vms = next(m for m in scalability.analyse_machines(generations, sims, MACHINES)
+                   if m["machine"] == "andromeda")
+
+        assert vms["fit"]["sigma"] == pytest.approx(0.05, abs=0.02)
+        assert vms["fit"]["kappa"] == pytest.approx(0.03, rel=0.2)
+        assert vms["peak_within_tested"] is True
+        assert vms["recommended_limit"] in (5, 6)
+
+    def test_one_that_does_not_is_not_given_a_limit_from_an_extrapolation(self):
+        generations, sims = mixed_pool()
+
+        local = next(m for m in scalability.analyse_machines(generations, sims, MACHINES)
+                     if m["machine"] == "local")
+
+        assert local["recommended_limit"] is None
+        assert local["best_measured"]["level"] == 6
+
+    def test_speeds_are_compared_and_the_pool_is_flagged(self):
+        generations, sims = mixed_pool()
+
+        result = scalability.analyse(generations, sims, machine_of_host=MACHINES)
+
+        local, vms = result["machines"]
+        assert local["machine"] == "local" and local["relative_speed"] == pytest.approx(1.0)
+        assert vms["relative_speed"] == pytest.approx(1.6 / 2.0, rel=0.05)
+        assert result["heterogeneous_pool"] is True
+
+    def test_a_uniform_pool_is_not_flagged(self):
+        # Two machines with the same speed and no contention.
+        generations, by_generation = [], {}
+        for i, n in enumerate((1, 2, 3, 4)):
+            g = wave(n, 0, i)
+            generations.append(g)
+            by_generation[str(g["_id"])] = [
+                run(0, 30.0, host="a" if j % 2 == 0 else "b") for j in range(n)]
+
+        result = scalability.analyse(generations, by_generation,
+                                     machine_of_host={"a": "a", "b": "b"})
+
+        assert result["heterogeneous_pool"] is False
+
+    def test_a_host_it_does_not_know_is_its_own_machine(self):
+        generations, sims = mixed_pool(levels=(1, 2), local_workers=1)
+
+        machines = scalability.analyse_machines(generations, sims, {})
+
+        assert {m["machine"] for m in machines} == {"local", "vm1"}
+
+    def test_waves_that_are_not_valid_measurements_are_left_out(self):
+        generations, sims = mixed_pool(levels=(7,), repetitions=1)
+        sims[str(generations[0]["_id"])][-1]["status"] = EnumStatus.ERROR
+
+        assert scalability.analyse_machines(generations, sims, MACHINES) == []
+
+    def test_the_current_limit_is_reported_with_it(self):
+        generations, sims = mixed_pool()
+
+        machines = scalability.analyse_machines(
+            generations, sims, MACHINES, limits={"andromeda": 5})
+
+        assert {m["machine"]: m["limit"] for m in machines} == {
+            "local": None, "andromeda": 5}
+
+    def test_without_a_host_map_there_is_no_breakdown(self):
+        generations, sims = mixed_pool(levels=(1, 2))
+
+        result = scalability.analyse(generations, sims)
+
+        assert result["machines"] == [] and result["heterogeneous_pool"] is False

@@ -26,6 +26,7 @@ HOSTS_COLLECTION = "hosts"
 RESOURCES_COLLECTION = "cooja_resources"
 CRYPTO_COLLECTION = "infra_crypto"
 MASTER_STATUS_COLLECTION = "master_status"
+MACHINES_COLLECTION = "machines"
 
 
 class EnumHostType(str, Enum):
@@ -161,6 +162,9 @@ class Host(TypedDict, total=False):
     # The address the last successful connection used, for when the name in
     # ``access.address`` stops resolving: {"name", "ip", "since"}.
     resolved_address: Optional[dict[str, Any]]
+    # The physical machine this host runs on, when the address does not say
+    # it — see ``machine_of``. An operator's setting, not an observation.
+    machine: Optional[str]
     # Set by the API, consumed by the master-node: the API has neither a route
     # to the containers nor the private key, so it asks instead of acting.
     check_requested_at: Optional[datetime]
@@ -289,6 +293,30 @@ DEFAULT_CONTAINER_SSH_PORT = 22
 #: Hop 1's port when a host does not set one — the same default the
 #: master-node's connection plan applies.
 DEFAULT_HOST_SSH_PORT = 22
+
+
+def machine_of(host: dict) -> str:
+    """The physical machine a host's work runs on, as a label.
+
+    Several registered hosts can be one machine: VMs on one hypervisor,
+    reached through its address on different forwarded ports. They then
+    compete for the same CPUs, which nothing about them as separate hosts
+    shows — measured on eight VMs of one machine, their combined throughput
+    peaked at five simulations at once and fell after it. Grouping them is
+    what lets a concurrency limit apply to the machine instead of each VM.
+
+    An explicit ``machine`` wins. Otherwise a remote host is grouped by its
+    SSH address — right for port-forwarded VMs, wrong for distinct machines
+    behind one NAT gateway, which is what the explicit label is for — and
+    the master-node's own host is ``local``.
+    """
+    explicit = str(host.get("machine") or "").strip()
+    if explicit:
+        return explicit
+    if (host.get("type") or EnumHostType.REMOTE.value) == EnumHostType.LOCAL.value:
+        return EnumHostType.LOCAL.value
+    address = str((host.get("access") or {}).get("address") or "").strip().lower()
+    return address or str(host.get("name") or "?")
 
 
 def target_fingerprint(

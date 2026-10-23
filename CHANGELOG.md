@@ -5,6 +5,47 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Using a mixed pool efficiently
+
+Measured on the deployment: in the last NSGA-III run with eight VMs of one
+machine and a desktop added to the local host, the pool took **121 min against
+~109 min estimated for the local host alone**. Two causes, both fixed here:
+the VMs' machine was overloaded (its throughput peaks at five simulations at
+once and falls after), and the scheduler gave work to slow hosts at the tail
+of every generation, leaving the local host idle for 9.6 min on average while
+they finished.
+
+### Added
+
+- **`earliest_completion` placement policy**, now what `docker-compose.yaml`
+  sets. It plans when the waiting work would finish — each job to whichever
+  worker finishes it first, counting when busy ones free up — and places the
+  head of the queue only on a worker that plan uses now; otherwise the job
+  waits for the faster worker. Waiting is bounded: a run past twice its
+  expected time, or with no estimate, is not waited on. New work wakes a
+  waiting decision.
+- **Per-machine concurrency limits.** Hosts are grouped into physical machines
+  — by an explicit `machine` label, else by SSH address, which groups
+  port-forwarded VMs — and a limit caps the simulations a machine runs at once
+  across all its hosts, for every policy. `GET/PUT /infra/machines`, a
+  *Physical machines* card on the Infrastructure page, and a *Physical
+  machine* field in the host form.
+- **USL per physical machine** on the scalability page. In a wave a machine
+  holding `k` simulations ran `k` at once, so its throughput at `k` is `k`
+  over its mean held time; each machine gets its own fit, speed relative to
+  the fastest, and — when the measurements reach a peak — a recommended limit
+  that can be applied from the table.
+
+### Changed
+
+- **The pool-wide USL curve is flagged when machines differ in speed.** It
+  assumes interchangeable units; on a mixed pool the dispatcher fills the
+  fastest machine first, and past its size the fit reads slower machines as
+  contention or coherency. Measured: the batch curve bent at exactly the
+  local host's six workers, and the fit called it a peak at 8 (R² 0.57).
+
+---
+
 ## [Unreleased] — Reaching hosts reliably
 
 Prompted by a deployment where SSH to every VM worked from a terminal and the

@@ -64,6 +64,14 @@ _PORT: dict[str, Any] = {
 
 _FIELDS: dict[str, dict[str, Any]] = {
     "name": {"type": "string", "minLength": 1},
+    "machine": {
+        "type": ["string", "null"], "maxLength": 120,
+        "description": (
+            "The physical machine this host runs on, for hosts that share one "
+            "— VMs on one hypervisor. Left unset, remote hosts are grouped by "
+            "their SSH address. `null` or blank returns to that default. A "
+            "machine's concurrency limit applies to all of its hosts."),
+    },
     "enabled": {
         "type": "boolean",
         "description": "A JSON boolean. The string \"false\" is refused.",

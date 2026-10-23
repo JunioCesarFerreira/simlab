@@ -239,6 +239,10 @@ class HostDto(TypedDict, total=False):
     consecutive_failures: int
     check_pending: bool
     discovery_pending: bool
+    #: The label an operator set, if any.
+    machine: Optional[str]
+    #: The physical machine in effect: the label, or the address by default.
+    machine_label: str
     created_time: Optional[datetime]
     updated_time: Optional[datetime]
 
@@ -291,6 +295,18 @@ class OverviewTotalsDto(TypedDict, total=False):
     running: int
     reserved: int
     draining: int
+
+
+class MachineDto(TypedDict):
+    """A physical machine: its hosts, its workers and its concurrency limit."""
+    machine: str
+    hosts: list[str]
+    #: Enabled workers across its hosts.
+    workers: int
+    #: Simulations it runs now, reserved or busy.
+    active: int
+    #: How many it may run at once across all its hosts; null for no limit.
+    max_concurrent: Optional[int]
 
 
 class SharedHostKeyDto(TypedDict):

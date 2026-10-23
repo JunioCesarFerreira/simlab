@@ -25,6 +25,22 @@ slowest machine in the wave.
 Only a wave whose every simulation produced a result is measured. A wave with
 a failure ran fewer than ``N`` simulations to completion, so ``N`` is not the
 concurrency it measured.
+
+Per machine
+-----------
+The pool-wide curve assumes ``N`` interchangeable units, and a pool of
+machines of different speeds is not that: the dispatcher fills the fastest
+machine first, so past its size every added unit is a slower one, and the
+fit reads that as contention or coherency. Measured on a pool of 6 local
+workers, 8 VMs of one machine and a desktop, the batch curve bent at exactly
+``N = 6`` and the fit called it a peak at 8 (R² 0.57).
+
+So each physical machine is also fitted on its own (``analyse_machines``). In
+a wave every worker takes one simulation and they all start together, so a
+machine holding ``k`` of the wave ran ``k`` at once, and its throughput at
+``k`` is Little's law over its own runs: ``X = k / R̄``. That curve is about
+one set of CPUs, which is what the USL describes, and its peak is how many
+simulations that machine should be given at once.
 """
 from __future__ import annotations
 
@@ -145,21 +161,111 @@ def summarize_levels(waves: list[dict], metric: str) -> list[dict]:
     return rows
 
 
+#: Machines whose single-simulation throughput differs by more than this are
+#: different enough that the pool-wide curve mixes speeds with scaling.
+HETEROGENEITY_RATIO = 1.25
+
+
+def _benchmark_waves(generations: list[dict]) -> list[dict]:
+    return [g for g in sorted(
+                generations,
+                key=lambda g: (g.get("benchmark") or {}).get("wave", g.get("index", 0)))
+            if g.get("benchmark")]
+
+
+def analyse_machines(
+    generations: list[dict],
+    simulations_by_generation: dict[str, list[dict]],
+    machine_of_host: dict[str, str],
+    *,
+    limits: Optional[dict[str, int]] = None,
+) -> list[dict]:
+    """A USL fit per physical machine, from the waves measured pool-wide.
+
+    ``machine_of_host`` maps a simulation's ``assigned_host_name`` to its
+    machine; a host it does not know (renamed, removed) is its own machine.
+    Only valid waves count, for the same reason as pool-wide.
+    """
+    limits = limits or {}
+    points: dict[str, list[tuple[int, float]]] = {}
+    hosts: dict[str, set[str]] = {}
+    for generation in _benchmark_waves(generations):
+        sims = simulations_by_generation.get(str(generation["_id"]), [])
+        if not measure_wave(generation, sims)["valid"]:
+            continue
+        held: dict[str, list[float]] = {}
+        for sim in sims:
+            host = str(sim.get("assigned_host_name") or "?")
+            machine = machine_of_host.get(host, host)
+            seconds = _seconds(sim.get("end_time"), sim.get("assigned_at"))
+            if seconds and seconds > 0:
+                held.setdefault(machine, []).append(seconds)
+                hosts.setdefault(machine, set()).add(host)
+        for machine, values in held.items():
+            k = len(values)
+            points.setdefault(machine, []).append(
+                (k, SECONDS_PER_UNIT * k / (sum(values) / len(values))))
+
+    out = []
+    for machine, pairs in points.items():
+        fitted = usl.fit([k for k, _ in pairs], [x for _, x in pairs])
+        tested = sorted({k for k, _ in pairs})
+        waves = [{"level": k, "valid": True, "throughput": {METRIC_PER_SIMULATION: x}}
+                 for k, x in pairs]
+        levels = summarize_levels(waves, METRIC_PER_SIMULATION)
+        best = max(levels, key=lambda row: row["mean"]) if levels else None
+        within = fitted.n_peak is not None and fitted.n_peak <= max(tested)
+        # One simulation's throughput, for comparing machines. From the fit
+        # when there is one; a machine measured at a single concurrency has
+        # none, and its smallest level divided by its size is what it has.
+        unit = (fitted.lam if fitted.status != usl.FIT_INSUFFICIENT
+                else levels[0]["mean"] / levels[0]["level"])
+        out.append({
+            "machine": machine,
+            "hosts": sorted(hosts.get(machine, ())),
+            "max_tested": max(tested),
+            "fit": fitted.to_dict(),
+            "levels": levels,
+            "curve": usl.curve(fitted, usl.display_range(tested, fitted)),
+            "peak_within_tested": within,
+            # The peak, when the measurements reach it. Past the largest
+            # concurrency tested the model is extrapolating, and a limit set
+            # from an extrapolation would be a guess presented as a result.
+            "recommended_limit": (
+                min(int(fitted.n_peak_int), max(tested))
+                if within and fitted.n_peak_int else None),
+            "best_measured": (
+                {"level": best["level"], "throughput": best["mean"]} if best else None),
+            "limit": limits.get(machine),
+            "unit_throughput": unit,
+        })
+
+    fastest = max((m["unit_throughput"] for m in out), default=0.0)
+    for machine in out:
+        machine["relative_speed"] = (
+            machine["unit_throughput"] / fastest if fastest > 0 else None)
+    out.sort(key=lambda m: -m["unit_throughput"])
+    return out
+
+
 def analyse(
     generations: list[dict],
     simulations_by_generation: dict[str, list[dict]],
     *,
     planned_levels: Optional[list[int]] = None,
+    machine_of_host: Optional[dict[str, str]] = None,
+    limits: Optional[dict[str, int]] = None,
 ) -> dict:
-    """Measurements and a USL fit for each throughput definition."""
-    waves = []
-    for generation in sorted(
-            generations,
-            key=lambda g: (g.get("benchmark") or {}).get("wave", g.get("index", 0))):
-        if not generation.get("benchmark"):
-            continue
-        waves.append(measure_wave(
-            generation, simulations_by_generation.get(str(generation["_id"]), [])))
+    """Measurements and a USL fit for each throughput definition.
+
+    With ``machine_of_host``, also a fit per physical machine, and whether
+    the machines differ enough in speed that the pool-wide curve mixes the
+    two effects.
+    """
+    waves = [
+        measure_wave(generation, simulations_by_generation.get(str(generation["_id"]), []))
+        for generation in _benchmark_waves(generations)
+    ]
 
     fits: dict[str, Any] = {}
     for metric in METRICS:
@@ -178,6 +284,10 @@ def analyse(
                 and fitted.n_peak <= max(tested)),
         }
 
+    machines = (analyse_machines(generations, simulations_by_generation,
+                                 machine_of_host, limits=limits)
+                if machine_of_host is not None else [])
+    speeds = [m["unit_throughput"] for m in machines if m["unit_throughput"] > 0]
     return {
         "unit": "simulations per minute",
         "metrics": list(METRICS),
@@ -186,4 +296,7 @@ def analyse(
         "waves": waves,
         "valid_waves": sum(1 for w in waves if w["valid"]),
         "fits": fits,
+        "machines": machines,
+        "heterogeneous_pool": (
+            len(speeds) > 1 and max(speeds) / min(speeds) > HETEROGENEITY_RATIO),
     }

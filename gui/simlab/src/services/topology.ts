@@ -283,6 +283,15 @@ export function hostTooltip(host: TopologyHost, now?: string): string {
         : "";
     lines.push(`${escapeHtml(host.address)}${known}`);
   }
+  // Only when it says something the address does not: VMs grouped by their
+  // shared address would just repeat it.
+  if (
+    host.machine &&
+    host.machine !== (host.address ?? "").trim().toLowerCase() &&
+    host.machine !== host.name
+  ) {
+    lines.push(`machine: ${escapeHtml(host.machine)}`);
+  }
   if (!host.schedulable && host.enabled) lines.push("not taking new work");
   if (host.retry_at && now) {
     lines.push(`backing off — next check in ${formatElapsed(elapsedSeconds(now, host.retry_at))}`);

@@ -25,7 +25,9 @@ from pylib.db.models.infra import (
     EnumContainerState,
     EnumHostStatus,
     EnumResourceStatus,
+    MACHINES_COLLECTION,
     MASTER_STATUS_COLLECTION,
+    machine_of,
     RESOURCES_COLLECTION,
     HOSTS_COLLECTION,
 )
@@ -33,6 +35,7 @@ from pylib.db.repositories.infra import (
     _REASSIGNABLE as _REASSIGNABLE_FOR_TEST,
     CoojaResourceRepository,
     HostWithdrawing,
+    MachineRepository,
     MasterStatusRepository,
     RemovalConflicted,
     HostRepository,
@@ -2404,3 +2407,76 @@ class TestMasterStatus:
         update = coll.update_one.call_args.args[1]
         assert update["$set"]["last_restart"]["reason"] == "DNS"
         assert update["$push"]["restarts"]["$slice"] == -MasterStatusRepository.RESTARTS_KEPT
+
+
+# ── Physical machines ───────────────────────────────────────────────────────
+
+class TestMachineOf:
+    def test_port_forwarded_vms_are_one_machine(self):
+        vm1 = {"type": "remote", "access": {"address": "Andromeda.example", "port": 2191}}
+        vm2 = {"type": "remote", "access": {"address": "andromeda.example ", "port": 2192}}
+
+        assert machine_of(vm1) == machine_of(vm2) == "andromeda.example"
+
+    def test_an_explicit_label_wins(self):
+        # Distinct machines behind one NAT gateway share its address.
+        assert machine_of({"type": "remote", "machine": " rack-2 ",
+                           "access": {"address": "gw.example"}}) == "rack-2"
+
+    def test_the_master_nodes_own_host_is_local(self):
+        assert machine_of({"type": "local", "name": "local"}) == "local"
+
+    def test_a_host_with_no_address_is_its_own_machine(self):
+        assert machine_of({"type": "remote", "name": "lab-01"}) == "lab-01"
+
+
+class TestMachineLimits:
+    @pytest.fixture
+    def machines(self):
+        connection, db = make_connection()
+        return MachineRepository(connection), db[MACHINES_COLLECTION]
+
+    def test_only_machines_with_a_limit_are_listed(self, machines):
+        repo, coll = machines
+        coll.find.return_value = [{"_id": "andromeda", "max_concurrent": 5}]
+
+        assert repo.limits() == {"andromeda": 5}
+        assert coll.find.call_args.args[0] == {"max_concurrent": {"$type": "number"}}
+
+    def test_a_limit_is_upserted_by_label(self, machines):
+        repo, coll = machines
+
+        repo.set_limit("andromeda", 5)
+
+        flt, update = coll.update_one.call_args.args[:2]
+        assert flt == {"_id": "andromeda"}
+        assert update["$set"]["max_concurrent"] == 5
+        assert coll.update_one.call_args.kwargs["upsert"] is True
+
+    def test_clearing_it_stores_null(self, machines):
+        repo, coll = machines
+
+        repo.set_limit("andromeda", None)
+
+        assert coll.update_one.call_args.args[1]["$set"]["max_concurrent"] is None
+
+    @pytest.mark.parametrize("bad", [0, -1])
+    def test_a_limit_below_one_is_refused(self, machines, bad):
+        repo, _ = machines
+
+        with pytest.raises(ValueError):
+            repo.set_limit("andromeda", bad)
+
+
+class TestSnapshotCarriesWorkerDetail:
+    def test_the_planner_gets_durations_and_start_times(self, hosts):
+        repo, coll = hosts
+        coll.aggregate.return_value = []
+
+        repo.inventory_snapshot()
+
+        pipeline = coll.aggregate.call_args.args[0]
+        lookup = pipeline[0]["$lookup"]["pipeline"][0]["$project"]
+        fields = pipeline[1]["$set"]
+        assert lookup["started_at"] == 1
+        assert "free_durations" in fields and "occupied_workers" in fields

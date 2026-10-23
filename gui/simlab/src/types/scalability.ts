@@ -91,6 +91,34 @@ export interface UslFit {
   curve: CurvePoint[];
 }
 
+/**
+ * One physical machine's own curve, from the same waves.
+ *
+ * In a wave every worker runs one simulation and they start together, so a
+ * machine holding `k` of them ran `k` at once; its throughput at `k` is
+ * `k / mean held` over its own runs. That curve is about one set of CPUs —
+ * what the USL describes — unlike the pool-wide one on a mixed pool.
+ */
+export interface MachineFit {
+  machine: string;
+  hosts: string[];
+  /** The most simulations it ran at once in any measured wave. */
+  max_tested: number;
+  fit: Omit<UslFit, "levels" | "curve" | "peak_within_tested">;
+  levels: LevelSummary[];
+  curve: CurvePoint[];
+  peak_within_tested: boolean;
+  /** The peak, when the measurements reach it — never an extrapolation. */
+  recommended_limit: number | null;
+  best_measured: { level: number; throughput: number } | null;
+  /** The limit set on it now, if any. */
+  limit: number | null;
+  /** One simulation's throughput, sim/min. */
+  unit_throughput: number;
+  /** That, relative to the fastest machine (1 = fastest). */
+  relative_speed: number | null;
+}
+
 export interface BenchmarkAnalysis {
   unit: string;
   metrics: UslMetric[];
@@ -99,6 +127,9 @@ export interface BenchmarkAnalysis {
   waves: WaveMeasurement[];
   valid_waves: number;
   fits: Record<UslMetric, UslFit>;
+  machines?: MachineFit[];
+  /** Machines differ in speed enough that the pool-wide curve mixes speed with scaling. */
+  heterogeneous_pool?: boolean;
 }
 
 export interface BenchmarkDetail extends BenchmarkSummary {

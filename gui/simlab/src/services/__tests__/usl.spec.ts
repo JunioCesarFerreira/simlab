@@ -11,17 +11,22 @@ import {
   benchmarkCost,
   chartData,
   formatCoefficient,
+  formatRelativeSpeed,
   interpret,
+  limitToApply,
+  machineChartData,
+  machineReading,
   parallelEfficiency,
   parseLevels,
   progress,
   proposeLevels,
   schedulablePool,
+  slowestRelative,
   usl,
   verdict,
   yAxisMax,
 } from "../usl";
-import type { UslFit, WaveMeasurement } from "../../types/scalability";
+import type { MachineFit, UslFit, WaveMeasurement } from "../../types/scalability";
 
 function fit(over: Partial<UslFit> = {}): UslFit {
   return {
@@ -317,5 +322,90 @@ describe("yAxisMax", () => {
 
   it("has an axis even with nothing measured", () => {
     expect(yAxisMax({ measured: [], means: [], model: [] })).toBe(1);
+  });
+});
+
+function machine(over: Partial<MachineFit> = {}): MachineFit {
+  return {
+    machine: "andromeda",
+    hosts: ["vm1", "vm2"],
+    max_tested: 8,
+    fit: {
+      status: "ok",
+      lam: 1.7,
+      sigma: 0.0,
+      kappa: 0.03,
+      r2: 0.95,
+      rmse: 0.1,
+      n_points: 16,
+      n_levels: 8,
+      n_peak: 5.8,
+      n_peak_int: 6,
+      x_peak: 5.0,
+      x_asymptote: null,
+    },
+    levels: [
+      { level: 1, mean: 1.7, std: 0, count: 2, min: 1.7, max: 1.7 },
+      { level: 5, mean: 5.0, std: 0.1, count: 2, min: 4.9, max: 5.1 },
+    ],
+    curve: [
+      { n: 1, x: 1.7, ideal: 1.7 },
+      { n: 5, x: 5.0, ideal: 8.5 },
+    ],
+    peak_within_tested: true,
+    recommended_limit: 6,
+    best_measured: { level: 5, throughput: 5.0 },
+    limit: null,
+    unit_throughput: 1.7,
+    relative_speed: 0.8,
+    ...over,
+  };
+}
+
+describe("per machine", () => {
+  it("recommends the measured peak and says why", () => {
+    expect(machineReading(machine())).toContain("Peaks at 6 simulation(s) at once");
+  });
+
+  it("does not present an extrapolated peak as a recommendation", () => {
+    const text = machineReading(
+      machine({ recommended_limit: null, peak_within_tested: false, max_tested: 6 }),
+    );
+
+    expect(text).toContain("Still scaling at 6");
+    expect(text).toContain("not measured");
+  });
+
+  it("says when there is nothing to fit", () => {
+    const m = machine({ recommended_limit: null });
+    m.fit = { ...m.fit, status: "insufficient_data" };
+
+    expect(machineReading(m)).toContain("single concurrency");
+  });
+
+  it("offers a limit only when it would change something", () => {
+    expect(limitToApply(machine())).toBe(6);
+    expect(limitToApply(machine({ limit: 6 }))).toBeNull();
+    expect(limitToApply(machine({ recommended_limit: null }))).toBeNull();
+  });
+
+  it("charts a machine from its own levels and curve", () => {
+    const data = machineChartData(machine());
+
+    expect(data.measured).toEqual([
+      [1, 1.7],
+      [5, 5.0],
+    ]);
+    expect(data.model).toHaveLength(2);
+    expect(data.testedMax).toBe(8);
+    expect(data.peak).toEqual({ n: 6, x: 5.0, withinTested: true });
+  });
+
+  it("reports the slowest machine relative to the fastest", () => {
+    expect(
+      slowestRelative([machine({ relative_speed: 1 }), machine({ relative_speed: 0.34 })]),
+    ).toBe(0.34);
+    expect(formatRelativeSpeed(0.336)).toBe("34%");
+    expect(formatRelativeSpeed(null)).toBe("—");
   });
 });

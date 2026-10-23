@@ -15,6 +15,13 @@ counts the policy sees are always current.
 With no capacity, the job is **held** rather than failed or dropped, and the
 loop waits to be woken: by a release, by a change to the inventory, or by a
 periodic tick that makes a lost signal cost a few seconds instead of a stall.
+
+Two things can hold a job although a worker is free. A **machine limit**: the
+hosts on one physical machine may together run only so many simulations, and
+are skipped once they do — whatever the policy. And a policy that **plans
+completion** may decide that a busy, faster worker will finish the job before
+any free one would; the job then waits for it, and new work arriving wakes
+the decision, since a longer queue can make the slower worker worth using.
 """
 import logging
 import queue
@@ -25,7 +32,7 @@ from typing import Any, Callable, Optional
 
 from bson import ObjectId
 
-from lib.scheduler.inventory import describe_loads, snapshot_loads
+from lib.scheduler.inventory import apply_machine_limits, describe_loads, snapshot_loads
 from lib.scheduler.policy import Policy, build_policy
 from pylib.db.models.enums import EnumStatus
 from pylib.db.models.infra import operator_configured
@@ -83,13 +90,22 @@ class Dispatcher:
         self._rr_cursor = 0
         self._stop = threading.Event()
         self._last_starved_log = 0.0
+        self._last_deferred_log = 0.0
         self._last_rescan = 0.0
+        # Set while the held job is waiting for a faster worker rather than
+        # for any worker: new work is then a reason to decide again.
+        self._deferred = False
 
     # ── inbound ────────────────────────────────────────────────────────────
 
     def submit(self, sim_id: str) -> None:
         """Offer a simulation for placement."""
         self._queue.put(str(sim_id))
+        if self._deferred:
+            # The plan that deferred the held job counted the queue as it
+            # was; with more work behind it, a slower free worker can now be
+            # worth using.
+            self.notify_capacity()
 
     def notify_capacity(self) -> None:
         """Wake a waiting decision: a container was freed, or the pool changed."""
@@ -253,8 +269,20 @@ class Dispatcher:
             log.info("Simulation %s handled without a container", sim_id)
             return False
 
-        loads = snapshot_loads(self._mongo.host_repo)
-        chosen = self._policy.select(loads, self._rr_cursor)
+        limits = self._machine_limits()
+        loads = apply_machine_limits(snapshot_loads(self._mongo.host_repo), limits)
+        planner = getattr(self._policy, "plan", None)
+        self._deferred = False
+        if planner is not None:
+            plan = planner(loads, waiting=self.pending, limits=limits,
+                           rr_cursor=self._rr_cursor)
+            if plan.deferred:
+                self._deferred = True
+                self._log_deferral(sim_id, plan.reason)
+                return _NO_CAPACITY
+            chosen = plan.host
+        else:
+            chosen = self._policy.select(loads, self._rr_cursor)
         if chosen is None:
             self._log_starvation(sim_id, loads)
             return _NO_CAPACITY
@@ -291,6 +319,31 @@ class Dispatcher:
             raise
         return True
 
+    def _machine_limits(self) -> dict[str, int]:
+        """Per-machine concurrency limits, or none if they cannot be read.
+
+        Read on every decision — one small query — so a limit set from the
+        interface applies to the next placement. A failure to read it places
+        as if there were none, which is what the pool did before limits
+        existed, rather than stopping placement over a setting.
+        """
+        repo = getattr(self._mongo, "machine_repo", None)
+        if repo is None:
+            return {}
+        try:
+            return dict(repo.limits())
+        except Exception:
+            log.exception("Could not read the machine limits; placing without them")
+            return {}
+
+    def _log_deferral(self, sim_id: str, reason: str) -> None:
+        """Say why a job waits although a worker is free, without flooding."""
+        now = time.monotonic()
+        if now - self._last_deferred_log < STARVATION_LOG_INTERVAL_SEC:
+            return
+        self._last_deferred_log = now
+        log.info("Holding %s for a faster worker: %s", sim_id, reason)
+
     def _log_starvation(self, sim_id: str, loads: list) -> None:
         """Say why nothing is being placed, visibly but without flooding.
 
@@ -311,7 +364,8 @@ class Dispatcher:
             return
         log.warning(
             "Holding %s: no host can take it. %s "
-            "(a host needs enabled=true, a schedulable status, and a free container)",
+            "(a host needs enabled=true, a schedulable status, a free container, "
+            "and its machine below its limit — `cap`)",
             sim_id, describe_loads(loads),
         )
 

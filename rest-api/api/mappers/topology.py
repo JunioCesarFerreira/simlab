@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Iterable, Optional
 
-from pylib.db.models.infra import OCCUPIED_STATUSES
+from pylib.db.models.infra import OCCUPIED_STATUSES, machine_of
 from pylib.timeutil import as_aware
 
 #: After this long without a write from the health cycle, the master-node is
@@ -189,6 +189,7 @@ def topology_from_documents(
                 if host.get("backoff_until")
                 and as_aware(host["backoff_until"]) > as_aware(now) else None),
             "address": (host.get("access") or {}).get("address"),
+            "machine": machine_of(host),
             "last_known_ip": (host.get("resolved_address") or {}).get("ip"),
             "workers": workers,
         })

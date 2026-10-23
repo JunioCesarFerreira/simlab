@@ -203,8 +203,24 @@ export interface HostDto {
   /** The master-node still owes an answer to a requested check. */
   check_pending: boolean;
   discovery_pending: boolean;
+  /** The physical machine an operator set for this host, if any. */
+  machine?: string | null;
+  /** The machine in effect: that label, or the SSH address by default. */
+  machine_label?: string;
   created_time: string | null;
   updated_time: string | null;
+}
+
+/** A physical machine: the hosts on it, its workers and its concurrency limit. */
+export interface MachineDto {
+  machine: string;
+  hosts: string[];
+  /** Enabled workers across its hosts. */
+  workers: number;
+  /** Simulations it runs now. */
+  active: number;
+  /** How many it may run at once across all its hosts; null for no limit. */
+  max_concurrent: number | null;
 }
 
 /**
@@ -328,6 +344,7 @@ export interface DiscoveryInput {
 export interface HostCreateInput {
   name: string;
   enabled?: boolean;
+  machine?: string | null;
   access: HostAccessInput;
   container_access?: ContainerAccessInput;
   discovery?: DiscoveryInput;
@@ -336,6 +353,8 @@ export interface HostCreateInput {
 export interface HostUpdateInput {
   name?: string;
   enabled?: boolean;
+  /** Null or blank returns the host to grouping by its address. */
+  machine?: string | null;
   access?: Partial<HostAccessInput>;
   container_access?: ContainerAccessInput;
   discovery?: DiscoveryInput;
@@ -383,6 +402,8 @@ export interface TopologyHost {
   address?: string | null;
   /** The address the last successful connection used, if it was by name. */
   last_known_ip?: string | null;
+  /** The physical machine it runs on. */
+  machine?: string;
   workers: TopologyWorker[];
 }
 

@@ -19,6 +19,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, status
 from pylib import scalability
 from pylib.db import MongoRepository
 from pylib.db.models.enums import EnumStatus
+from pylib.db.models.infra import machine_of
 from pylib.timeutil import utc_now
 from api.dependencies import get_factory
 
@@ -235,9 +236,19 @@ def get_benchmark(
     for sim in simulations:
         by_generation.setdefault(str(sim.get("generation_id")), []).append(sim)
 
+    # Which machine each host is on, as the hosts are registered now: the
+    # simulations record the host's name, and a host renamed or removed since
+    # is reported as a machine of its own.
+    machine_of_host = {
+        str(host.get("name")): machine_of(host) for host in factory.host_repo.find_all()}
+    machine_repo = getattr(factory, "machine_repo", None)
+    limits = machine_repo.limits() if machine_repo is not None else {}
+
     summary = _summary(doc, generations)
     return {
         **summary,
         "analysis": scalability.analyse(
-            generations, by_generation, planned_levels=summary["levels"]),
+            generations, by_generation, planned_levels=summary["levels"],
+            machine_of_host=machine_of_host,
+            limits=limits if isinstance(limits, dict) else {}),
     }

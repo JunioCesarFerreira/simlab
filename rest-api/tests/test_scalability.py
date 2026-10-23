@@ -207,6 +207,23 @@ class TestAnalysing:
 
         assert fitted["sigma"] + fitted["kappa"] > 0
 
+    def test_each_physical_machine_gets_its_own_fit(self, client, mock_factory):
+        """Hosts are mapped to machines as they are registered now: two VMs
+        behind one address are one machine."""
+        self._benchmark(mock_factory, [(1, 100), (2, 110), (3, 125)])
+        mock_factory.host_repo.find_all.return_value = [
+            {"name": "local", "type": "local"},
+            {"name": "vm1", "type": "remote", "access": {"address": "gw.example"}},
+        ]
+        mock_factory.machine_repo.limits.return_value = {"local": 4}
+
+        analysis = client.get(f"{BASE}/{EXP_ID}").json()["analysis"]
+
+        [machine] = analysis["machines"]
+        assert machine["machine"] == "local" and machine["limit"] == 4
+        assert machine["fit"]["status"] == "ok"
+        assert analysis["heterogeneous_pool"] is False
+
     def test_an_experiment_that_is_not_a_benchmark_is_a_404(
             self, client, mock_factory):
         mock_factory.experiment_repo.get.return_value = {
