@@ -1,4 +1,4 @@
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 
 from pylib.db.connection import MongoDBConnection
 from pylib.db.gridfs import MongoGridFSHandler
@@ -15,6 +15,7 @@ from pylib.db.repositories.infra import (
     HostRepository,
     CoojaResourceRepository,
     InfraCryptoRepository,
+    MasterStatusRepository,
 )
 
 
@@ -32,6 +33,8 @@ class MongoRepository(NamedTuple):
     host_repo: HostRepository
     resource_repo: CoojaResourceRepository
     infra_crypto_repo: InfraCryptoRepository
+    # Last and optional, so code that builds this tuple by hand keeps working.
+    master_repo: Optional[MasterStatusRepository] = None
 
 
 def create_mongo_repository_factory(
@@ -51,6 +54,7 @@ def create_mongo_repository_factory(
     host_repo = HostRepository(connection)
     resource_repo = CoojaResourceRepository(connection)
     infra_crypto_repo = InfraCryptoRepository(connection)
+    master_repo = MasterStatusRepository(connection)
     return MongoRepository(
         experiment_repo=experiment_repo,
         simulation_repo=simulation_repo,
@@ -65,4 +69,5 @@ def create_mongo_repository_factory(
         host_repo=host_repo,
         resource_repo=resource_repo,
         infra_crypto_repo=infra_crypto_repo,
+        master_repo=master_repo,
     )

@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   EXPERIMENT_COLORS,
   MASTER_NODE_ID,
+  dnsLines,
   elapsedSeconds,
   escapeHtml,
   experimentColors,
@@ -16,6 +17,7 @@ import {
   hostLoad,
   hostNodeId,
   hostTone,
+  hostTooltip,
   layoutTopology,
   masterTone,
   masterTooltip,
@@ -26,7 +28,7 @@ import {
   workerTooltip,
   WORKERS_PER_ROW,
 } from "../topology";
-import type { TopologyHost, TopologyWorker } from "../../types/infra";
+import type { MasterDns, TopologyHost, TopologyWorker } from "../../types/infra";
 import type { NodeLayout } from "../topology";
 
 function worker(over: Partial<TopologyWorker> = {}): TopologyWorker {
@@ -39,6 +41,19 @@ function worker(over: Partial<TopologyWorker> = {}): TopologyWorker {
     held_kind: null,
     message: "ready",
     run: null,
+    ...over,
+  };
+}
+
+function dns(over: Partial<MasterDns> = {}): MasterDns {
+  return {
+    ok: false,
+    message: "the DNS resolver did not answer",
+    names: 2,
+    failing: ["andromeda.example", "lab.example"],
+    missing: [],
+    self_restart: true,
+    restart_waiting: null,
     ...over,
   };
 }
@@ -238,6 +253,70 @@ describe("tooltips", () => {
 
     expect(text).toContain("not checking hosts");
     expect(text).toContain("5 min 0 s");
+  });
+});
+
+describe("the master-node's DNS", () => {
+  it("reads a running master whose resolver answers nothing as degraded", () => {
+    expect(masterTone("alive", dns())).toBe("warn");
+    expect(masterTone("alive", dns({ ok: true }))).toBe("ok");
+    expect(masterTone("alive", null)).toBe("ok");
+  });
+
+  it("keeps a stopped master red whatever its last DNS report said", () => {
+    expect(masterTone("stale", dns())).toBe("bad");
+  });
+
+  it("names the failing names and what is holding the restart back", () => {
+    const text = masterTooltip({
+      status: "alive",
+      last_seen: null,
+      age_sec: 4,
+      stale_after_sec: 120,
+      dns: dns({ restart_waiting: "will restart once no simulation is placed" }),
+    });
+
+    expect(text).toContain("DNS not answering");
+    expect(text).toContain("andromeda.example, lab.example");
+    expect(text).toContain("once no simulation is placed");
+  });
+
+  it("says to restart by hand when self-restart is off", () => {
+    expect(dnsLines(dns({ self_restart: false })).join(" ")).toContain("restart the master-node");
+  });
+
+  it("says nothing about DNS when no host is reached by name", () => {
+    expect(dnsLines(dns({ ok: true, names: 0, failing: [] }))).toEqual([]);
+    expect(dnsLines(null)).toEqual([]);
+  });
+
+  it("escapes the names it repeats", () => {
+    expect(dnsLines(dns({ failing: ["<b>x</b>"] })).join("")).toContain("&lt;b&gt;x");
+  });
+});
+
+describe("hostTooltip", () => {
+  const now = "2026-10-22T10:00:00Z";
+
+  it("says when a host backing off will be checked again", () => {
+    const text = hostTooltip(host({ retry_at: "2026-10-22T10:02:00Z" }), now);
+
+    expect(text).toContain("backing off — next check in 2 min 0 s");
+  });
+
+  it("shows the last address a host reached by name answered on", () => {
+    const text = hostTooltip(
+      host({ address: "andromeda.example", last_known_ip: "143.107.0.10" }),
+      now,
+    );
+
+    expect(text).toContain("andromeda.example (last reached at 143.107.0.10)");
+  });
+
+  it("does not repeat an address used directly", () => {
+    const text = hostTooltip(host({ address: "10.0.0.1", last_known_ip: "10.0.0.1" }), now);
+
+    expect(text).not.toContain("last reached");
   });
 });
 

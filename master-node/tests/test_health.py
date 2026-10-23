@@ -805,6 +805,12 @@ class FakePool:
             raise self._error
         return self.session_obj
 
+    def failure(self, host):
+        return self._error
+
+    def resolution(self, host):
+        return None
+
     def close_host(self, host):
         self.closed.append(str(host.get("name")))
 
@@ -1256,3 +1262,384 @@ class TestResolvingHeldWorkers:
             RunState(alive=False, finished=True, exit_code=0, testlog_bytes=0))
 
         assert monitor.resolve_held_workers() == ["cooja1"]
+
+
+# ── The master-node's own DNS ────────────────────────────────────────────────
+
+import socket  # noqa: E402 - grouped with the tests that need it
+import threading  # noqa: E402
+
+from lib.dns_watch import ResolverWatch  # noqa: E402
+from lib.transport.resolve import (  # noqa: E402
+    HostResolver,
+    NameResolutionFailed,
+    Resolution,
+)
+
+NAMED = {**REMOTE, "_id": ObjectId("507f1f77bcf86cd799430013"), "name": "vm1",
+         "status": "online", "consecutive_failures": 0,
+         "access": {"address": "andromeda.example", "port": 2201,
+                    "username": "simlab", "host_key_fingerprint": "SHA256:pin"}}
+LAB = {**NAMED, "_id": ObjectId("507f1f77bcf86cd799430014"), "name": "lab",
+       "access": {**NAMED["access"], "address": "lab.example", "port": 22}}
+
+DNS_DOWN = NameResolutionFailed(
+    "andromeda.example", resolver_fault=True,
+    reason="Temporary failure in name resolution")
+
+
+def resolver_where(down=(), missing=()) -> HostResolver:
+    """A resolver over a fake ``getaddrinfo``: no network in these tests."""
+    def getaddrinfo(host, port, *_args):
+        if host in down or "*" in down:
+            raise socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution")
+        if host in missing:
+            raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", port))]
+    return HostResolver(getaddrinfo=getaddrinfo)
+
+
+def raising(error):
+    return lambda host, res: (_ for _ in ()).throw(error)
+
+
+def dns_monitor(mongo, resolver, *, pool=None, probe=None, **kwargs) -> HealthMonitor:
+    return HealthMonitor(
+        mongo, jumps=pool or FakePool(), discover=lambda m, h: None,
+        probe=probe or (lambda h, r: READY), resolver=resolver,
+        resolver_watch=kwargs.pop("resolver_watch", None) or ResolverWatch(resolver),
+        **kwargs)
+
+
+class TestMasterSideDns:
+    def test_a_dead_resolver_is_not_counted_against_the_host(self):
+        """The deployment failure: every host reached by name went offline
+        at once, for a fault on the master-node."""
+        mongo = fake_mongo(hosts=[NAMED], resources=[resource()])
+        monitor = dns_monitor(mongo, resolver_where(down=("*",)),
+                              pool=FakePool(error=DNS_DOWN), probe=raising(DNS_DOWN))
+
+        [result] = monitor.cycle()
+
+        mongo.host_repo.mark_check_result.assert_not_called()
+        host_id, message = mongo.host_repo.mark_check_inconclusive.call_args.args
+        assert host_id == NAMED["_id"]
+        assert message.startswith("not measured") and "master-node" in message
+        assert result.status == EnumHostStatus.ONLINE
+
+    def test_its_workers_still_leave_the_pool(self):
+        # True — this master-node cannot use them now — and it keeps a
+        # placement off a worker nothing can connect to.
+        mongo = fake_mongo(hosts=[NAMED], resources=[resource()])
+        monitor = dns_monitor(mongo, resolver_where(down=("*",)),
+                              pool=FakePool(error=DNS_DOWN), probe=raising(DNS_DOWN))
+
+        monitor.cycle()
+
+        mongo.resource_repo.mark_offline.assert_called_once()
+
+    def test_one_name_failing_while_others_resolve_is_counted(self):
+        resolver = resolver_where(down=("andromeda.example",))
+        watch = ResolverWatch(resolver)
+        watch.observe([NAMED, LAB])
+        mongo = fake_mongo(hosts=[NAMED], resources=[resource()])
+        monitor = dns_monitor(mongo, resolver, resolver_watch=watch,
+                              pool=FakePool(error=DNS_DOWN), probe=raising(DNS_DOWN))
+
+        monitor.check_host(NAMED)
+
+        mongo.host_repo.mark_check_inconclusive.assert_not_called()
+        assert mongo.host_repo.mark_check_result.call_args.kwargs["reset_failures"] is False
+
+    def test_a_name_that_does_not_exist_is_the_hosts_problem(self):
+        missing = NameResolutionFailed(
+            "andromeda.example", resolver_fault=False, reason="Name or service not known")
+        resolver = resolver_where(missing=("andromeda.example",))
+        mongo = fake_mongo(hosts=[NAMED], resources=[resource()])
+        monitor = dns_monitor(mongo, resolver, pool=FakePool(error=missing),
+                              probe=raising(missing))
+
+        monitor.cycle()
+
+        mongo.host_repo.mark_check_inconclusive.assert_not_called()
+        mongo.host_repo.mark_check_result.assert_called_once()
+
+    def test_a_host_reached_on_its_last_address_says_so(self):
+        class CachedPool(FakePool):
+            def resolution(self, host):
+                return Resolution("andromeda.example", ("10.0.0.7",), "cache",
+                                  dns_error=DNS_DOWN)
+
+        mongo = fake_mongo(hosts=[NAMED], resources=[resource()])
+        monitor = dns_monitor(mongo, resolver_where(down=("*",)), pool=CachedPool())
+
+        monitor.cycle()
+
+        kwargs = mongo.host_repo.mark_check_result.call_args.kwargs
+        assert kwargs["status"] == EnumHostStatus.ONLINE
+        assert "last known address 10.0.0.7" in kwargs["message"]
+
+
+class TestLastKnownAddress:
+    def test_a_stored_address_is_taught_to_the_resolver(self):
+        """What lets the restart that repairs DNS still reach pinned hosts."""
+        stored = {**NAMED, "resolved_address": {"name": "andromeda.example",
+                                                "ip": "10.0.0.9"}}
+        resolver = resolver_where(down=("*",))
+        mongo = fake_mongo(hosts=[stored], resources=[resource()])
+
+        dns_monitor(mongo, resolver).cycle()
+
+        assert resolver.known("andromeda.example") == "10.0.0.9"
+
+    def test_an_address_stored_for_a_previous_name_is_ignored(self):
+        stored = {**NAMED, "resolved_address": {"name": "old.example", "ip": "10.0.0.9"}}
+        resolver = resolver_where(down=("*",))
+        mongo = fake_mongo(hosts=[stored], resources=[resource()])
+
+        dns_monitor(mongo, resolver).cycle()
+
+        assert resolver.known("andromeda.example") is None
+
+    def test_a_fresh_answer_is_stored_on_the_host(self):
+        mongo = fake_mongo(hosts=[NAMED])
+        monitor = dns_monitor(mongo, resolver_where())
+
+        monitor._remember_address(
+            NAMED, Resolution("andromeda.example", ("10.0.0.3",), "dns"), "10.0.0.3")
+
+        mongo.host_repo.record_resolved_address.assert_called_once_with(
+            NAMED["_id"], "andromeda.example", "10.0.0.3")
+
+    def test_the_fallback_itself_is_not_stored_again(self):
+        mongo = fake_mongo(hosts=[NAMED])
+        monitor = dns_monitor(mongo, resolver_where())
+
+        monitor._remember_address(
+            NAMED, Resolution("andromeda.example", ("10.0.0.3",), "cache"), "10.0.0.3")
+
+        mongo.host_repo.record_resolved_address.assert_not_called()
+
+
+class TestHeartbeat:
+    def test_every_cycle_writes_one_with_the_resolvers_state(self):
+        mongo = fake_mongo(hosts=[NAMED], resources=[resource()])
+
+        dns_monitor(mongo, resolver_where(down=("*",))).cycle()
+
+        kwargs = mongo.master_repo.heartbeat.call_args.kwargs
+        assert kwargs["resolver"]["ok"] is False
+        assert kwargs["resolver"]["names"] == ["andromeda.example"]
+        assert kwargs["cycle_sec"] >= 0
+
+    def test_a_working_resolver_is_reported_as_such(self):
+        mongo = fake_mongo(hosts=[NAMED], resources=[resource()])
+
+        dns_monitor(mongo, resolver_where()).cycle()
+
+        assert mongo.master_repo.heartbeat.call_args.kwargs["resolver"]["ok"] is True
+
+
+class TestSelfRestart:
+    def _monitor(self, *, occupied=(), record_fails=False):
+        resolver = resolver_where(down=("*",))
+        watch = ResolverWatch(resolver, self_restart=True, restart_after_sec=0)
+        mongo = fake_mongo(hosts=[NAMED], resources=[resource()])
+        mongo.master_repo.get.return_value = {}
+        mongo.resource_repo.find_occupied.return_value = list(occupied)
+        if record_fails:
+            mongo.master_repo.record_restart.side_effect = RuntimeError("db down")
+        request = MagicMock()
+        monitor = dns_monitor(mongo, resolver, resolver_watch=watch,
+                              pool=FakePool(error=DNS_DOWN), probe=raising(DNS_DOWN),
+                              request_restart=request)
+        return monitor, mongo, request
+
+    def test_a_dead_resolver_on_an_idle_pool_asks_for_a_restart(self):
+        monitor, mongo, request = self._monitor()
+
+        monitor.cycle()
+
+        mongo.master_repo.record_restart.assert_called_once()
+        request.assert_called_once()
+        assert "DNS" in request.call_args.args[0]
+
+    def test_not_while_a_simulation_is_placed(self):
+        monitor, mongo, request = self._monitor(occupied=[resource(status="busy")])
+
+        monitor.cycle()
+
+        request.assert_not_called()
+        waiting = mongo.master_repo.heartbeat.call_args.kwargs["resolver"]["restart_waiting"]
+        assert "no simulation is placed" in waiting
+
+    def test_not_when_the_restart_cannot_be_recorded(self):
+        # The record is the loop guard; restarting without it could loop.
+        monitor, mongo, request = self._monitor(record_fails=True)
+
+        monitor.cycle()
+
+        request.assert_not_called()
+
+    def test_not_without_a_way_to_restart(self):
+        resolver = resolver_where(down=("*",))
+        watch = ResolverWatch(resolver, self_restart=True, restart_after_sec=0)
+        mongo = fake_mongo(hosts=[NAMED], resources=[resource()])
+
+        dns_monitor(mongo, resolver, resolver_watch=watch).cycle()
+
+        mongo.master_repo.record_restart.assert_not_called()
+
+
+# ── Backoff ──────────────────────────────────────────────────────────────────
+
+class TestBackoff:
+    def _failing(self, host, **kwargs):
+        mongo = fake_mongo(hosts=[host], resources=[resource()])
+        build_monitor(mongo, probe=raising(TransportUnreachable("no route")),
+                      interval_sec=30, failure_threshold=3, **kwargs).check_host(host)
+        return mongo.host_repo.mark_check_result.call_args.kwargs
+
+    @staticmethod
+    def _delay(kwargs) -> float:
+        return (kwargs["backoff_until"] - utc_now()).total_seconds()
+
+    def test_none_before_the_host_is_offline(self):
+        # The hysteresis that takes a host offline is not slowed down.
+        kwargs = self._failing({**REMOTE, "status": "online", "consecutive_failures": 0})
+
+        assert kwargs["backoff_until"] is None
+
+    def test_the_normal_pace_when_it_goes_offline(self):
+        kwargs = self._failing({**REMOTE, "consecutive_failures": 2})
+
+        assert 25 < self._delay(kwargs) <= 30
+        assert "next check in" not in kwargs["message"]
+
+    def test_it_doubles_with_each_failure_after_that(self):
+        kwargs = self._failing({**REMOTE, "consecutive_failures": 4})
+
+        assert 115 < self._delay(kwargs) <= 120
+        assert "next check in 120 s" in kwargs["message"]
+
+    def test_it_is_capped(self):
+        kwargs = self._failing({**REMOTE, "consecutive_failures": 40}, backoff_cap_sec=600)
+
+        assert 595 < self._delay(kwargs) <= 600
+
+    def test_a_local_host_never_backs_off(self):
+        # No connect timeout to save, and its containers coming up should be
+        # noticed at once.
+        kwargs = self._failing({**HOST, "consecutive_failures": 10})
+
+        assert kwargs["backoff_until"] is None
+
+    def test_a_success_clears_it(self):
+        mongo = fake_mongo(hosts=[REMOTE], resources=[resource()])
+        host = {**REMOTE, "consecutive_failures": 9,
+                "backoff_until": utc_now() - timedelta(seconds=1)}
+
+        build_monitor(mongo).check_host(host)
+
+        kwargs = mongo.host_repo.mark_check_result.call_args.kwargs
+        assert kwargs["reset_failures"] is True and kwargs["backoff_until"] is None
+
+    def test_a_host_backing_off_is_skipped_and_nothing_is_written(self):
+        waiting = {**REMOTE, "consecutive_failures": 6,
+                   "backoff_until": utc_now() + timedelta(minutes=5)}
+        mongo = fake_mongo(hosts=[waiting], resources=[resource()])
+        probe = MagicMock(return_value=READY)
+
+        [result] = build_monitor(mongo, probe=probe).cycle()
+
+        probe.assert_not_called()
+        mongo.host_repo.mark_check_result.assert_not_called()
+        assert "not checked" in result.message
+
+    def test_its_time_come_it_is_checked(self):
+        due = {**REMOTE, "consecutive_failures": 6,
+               "backoff_until": utc_now() - timedelta(seconds=1)}
+        mongo = fake_mongo(hosts=[due], resources=[resource()])
+        probe = MagicMock(return_value=READY)
+
+        build_monitor(mongo, probe=probe).cycle()
+
+        probe.assert_called_once()
+
+    def test_a_forced_cycle_ignores_it(self):
+        # The first cycle of a process measures everything.
+        waiting = {**REMOTE, "consecutive_failures": 6,
+                   "backoff_until": utc_now() + timedelta(minutes=5)}
+        mongo = fake_mongo(hosts=[waiting], resources=[resource()])
+        probe = MagicMock(return_value=READY)
+
+        build_monitor(mongo, probe=probe).cycle(force=True)
+
+        probe.assert_called_once()
+
+    def test_an_operators_check_ignores_it(self):
+        waiting = {**REMOTE, "consecutive_failures": 6,
+                   "backoff_until": utc_now() + timedelta(minutes=5),
+                   "check_requested_at": utc_now()}
+        mongo = fake_mongo(hosts=[waiting], resources=[resource()])
+        mongo.host_repo.get.side_effect = lambda _id: waiting
+        probe = MagicMock(return_value=READY)
+
+        build_monitor(mongo, probe=probe).cycle()
+
+        # Served from the request, then skipped by the cycle: once, not zero.
+        probe.assert_called_once()
+
+
+# ── Hosts in parallel ────────────────────────────────────────────────────────
+
+class TestConcurrentHosts:
+    HOSTS = [{**REMOTE, "_id": ObjectId(), "name": f"vm{i}"} for i in range(1, 4)]
+
+    def test_hosts_are_checked_at_the_same_time(self):
+        """Serially, each slow host delayed every host after it and all the
+        housekeeping: a cycle with eight hosts down took almost four minutes."""
+        barrier = threading.Barrier(len(self.HOSTS), timeout=5)
+
+        def probe(host, res):
+            barrier.wait()          # only passes if every host is in flight
+            return READY
+
+        mongo = fake_mongo(hosts=self.HOSTS, resources=[resource()])
+
+        results = build_monitor(mongo, probe=probe).cycle()
+
+        assert [r.host_name for r in results] == ["vm1", "vm2", "vm3"]
+        assert all(r.status == EnumHostStatus.ONLINE for r in results)
+
+    def test_the_parallelism_is_bounded(self):
+        lock = threading.Lock()
+        active = {"now": 0, "max": 0}
+
+        def probe(host, res):
+            with lock:
+                active["now"] += 1
+                active["max"] = max(active["max"], active["now"])
+            threading.Event().wait(0.05)
+            with lock:
+                active["now"] -= 1
+            return READY
+
+        mongo = fake_mongo(hosts=self.HOSTS, resources=[resource()])
+
+        build_monitor(mongo, probe=probe, max_parallel_hosts=1).cycle()
+
+        assert active["max"] == 1
+
+    def test_one_host_blowing_up_does_not_stop_the_others(self):
+        def probe(host, res):
+            if host["name"] == "vm2":
+                raise RuntimeError("unexpected")
+            return READY
+
+        mongo = fake_mongo(hosts=self.HOSTS, resources=[resource()])
+
+        results = build_monitor(mongo, probe=probe).cycle()
+
+        assert [r.status for r in results] == [
+            EnumHostStatus.ONLINE, EnumHostStatus.OFFLINE, EnumHostStatus.ONLINE]

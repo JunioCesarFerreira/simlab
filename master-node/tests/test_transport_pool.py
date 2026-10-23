@@ -11,7 +11,10 @@ Properties locked in:
   * a local host is not connected to at all — there is no first hop;
   * a failed handshake is not retried once per worker;
   * a turn ends when the caller says so, and the next one starts clean;
-  * a missing address is a configuration error, raised before any socket.
+  * a missing address is a configuration error, raised before any socket;
+  * a health check's handshake has its own, shorter, timeout;
+  * why a host's turn failed can be asked for, and the address a session was
+    opened on is handed to whoever keeps it.
 """
 from unittest.mock import MagicMock
 
@@ -21,6 +24,7 @@ from lib.credentials import CredentialUnavailable, SecretOpener
 from lib.transport.base import TransportUnreachable
 from lib.transport.plan import PlanError
 from lib.transport.pool import JumpPool, needs_jump
+from lib.transport.resolve import NameResolutionFailed, Resolution
 
 HOST_ID = "507f1f77bcf86cd799430011"
 
@@ -50,12 +54,15 @@ class FakeSession:
     instances: list["FakeSession"] = []
 
     def __init__(self, endpoint, credential, *, pinned_host_key=None,
-                 on_learn_host_key=None, host_name="?"):
+                 on_learn_host_key=None, host_name="?", timeout=None,
+                 resolver=None):
         self.endpoint = endpoint
         self.credential = credential
         self.pinned_host_key = pinned_host_key
         self.on_learn_host_key = on_learn_host_key
         self.host_name = host_name
+        self.timeout = timeout
+        self.resolver = resolver
         self.opens = 0
         self.closes = 0
         self.client = MagicMock(name=f"client:{host_name}")
@@ -296,3 +303,70 @@ class TestFirstContact:
     def test_without_a_sink_nothing_is_reported(self):
         pool = build_pool()
         assert pool.session(REMOTE_HOST).on_learn_host_key is None
+
+
+# ── What a turn learned ──────────────────────────────────────────────────────
+
+class ResolvedSession(FakeSession):
+    """Opens as a real session would report it: by name, on one address."""
+
+    def open(self):
+        self.opens += 1
+        self.resolution = Resolution(
+            self.endpoint.address, ("10.0.0.5",), "dns")
+        self.connected_address = "10.0.0.5"
+
+
+class DnsDownSession(FakeSession):
+    def open(self):
+        self.opens += 1
+        raise NameResolutionFailed(
+            "lab-01.example", resolver_fault=True, reason="Temporary failure")
+
+
+class TestWhatATurnLearned:
+    def test_the_connect_timeout_reaches_the_session(self):
+        pool = JumpPool(SecretOpener(FakeKeystore()), session_factory=FakeSession,
+                        connect_timeout=8.0)
+
+        assert pool.session(REMOTE_HOST).timeout == 8.0
+
+    def test_the_failure_of_a_turn_can_be_asked_for(self):
+        pool = build_pool(session_factory=DnsDownSession)
+        with pytest.raises(NameResolutionFailed):
+            pool.session(REMOTE_HOST)
+
+        failure = pool.failure(REMOTE_HOST)
+
+        assert isinstance(failure, NameResolutionFailed) and failure.resolver_fault
+
+    def test_a_new_turn_forgets_it(self):
+        pool = build_pool(session_factory=DnsDownSession)
+        with pytest.raises(NameResolutionFailed):
+            pool.session(REMOTE_HOST)
+
+        pool.close_host(REMOTE_HOST)
+
+        assert pool.failure(REMOTE_HOST) is None
+
+    def test_the_address_a_session_opened_on_is_reported_with_its_host(self):
+        seen = []
+        pool = JumpPool(
+            SecretOpener(FakeKeystore()), session_factory=ResolvedSession,
+            on_connected=lambda host, resolution, address: seen.append(
+                (host["name"], resolution.source, address)))
+
+        pool.session(REMOTE_HOST)
+
+        assert seen == [("lab-01", "dns", "10.0.0.5")]
+        assert pool.resolution(REMOTE_HOST).addresses == ("10.0.0.5",)
+
+    def test_failing_to_record_the_address_does_not_lose_the_session(self):
+        def broken_sink(*_args):
+            raise RuntimeError("database down")
+
+        pool = JumpPool(SecretOpener(FakeKeystore()), session_factory=ResolvedSession,
+                        on_connected=broken_sink)
+
+        assert pool.session(REMOTE_HOST) is not None
+        assert pool.failure(REMOTE_HOST) is None

@@ -6,7 +6,7 @@ import pandas as pd
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from threading import Thread
+from threading import Event, Thread
 from typing import Callable
 from bson import ObjectId
 
@@ -26,6 +26,7 @@ from lib.detached import (
     inspect_dir,
     inspect_run,
 )
+from lib.dns_watch import RESTART_EXIT_CODE, ResolverWatch
 from lib.health import HealthMonitor
 from lib.recovery import reconcile_occupied_resources
 from lib.scheduler import (
@@ -40,6 +41,7 @@ from lib.scheduler import (
 )
 from lib.synthetic_data import run_synthetic_simulation, resolve_synthetic_settings
 from lib.transport import (
+    DEFAULT_RESOLVER,
     HostKeyMismatch,
     SSHTransport,
     TransportError,
@@ -85,6 +87,12 @@ class Settings:
     infra_check_interval_sec: float
     infra_failure_threshold: int
     reservation_ttl_sec: float
+    infra_connect_timeout_sec: float
+    infra_check_parallel: int
+    infra_backoff_max_sec: float
+    dns_self_restart: bool
+    dns_restart_after_sec: float
+    dns_restart_min_interval_sec: float
 
     @staticmethod
     def from_env() -> "Settings":
@@ -122,6 +130,18 @@ class Settings:
         infra_check_interval_sec = float(os.getenv("INFRA_CHECK_INTERVAL_SEC", "30"))
         infra_failure_threshold = int(os.getenv("INFRA_FAILURE_THRESHOLD", "3"))
         reservation_ttl_sec = float(os.getenv("RESERVATION_TTL_SEC", "600"))
+        # Hop 1 of a health check only; a simulation's connection keeps 20 s.
+        infra_connect_timeout_sec = float(os.getenv("INFRA_CONNECT_TIMEOUT_SEC", "8"))
+        infra_check_parallel = int(os.getenv("INFRA_CHECK_PARALLEL", "8"))
+        # Ceiling of the exponential backoff for a host that keeps failing.
+        infra_backoff_max_sec = float(os.getenv("INFRA_BACKOFF_MAX_SEC", "600"))
+        # Restarting is how a container renews DNS servers Docker copied at
+        # start (see lib/dns_watch.py). Only meaningful under a restart
+        # policy, so on by default only in Docker.
+        dns_self_restart = to_bool(os.getenv("DNS_SELF_RESTART"), default=is_docker)
+        dns_restart_after_sec = float(os.getenv("DNS_RESTART_AFTER_SEC", "300"))
+        dns_restart_min_interval_sec = float(
+            os.getenv("DNS_RESTART_MIN_INTERVAL_SEC", "3600"))
 
         return Settings(
             is_docker=is_docker,
@@ -141,6 +161,12 @@ class Settings:
             infra_check_interval_sec=infra_check_interval_sec,
             infra_failure_threshold=infra_failure_threshold,
             reservation_ttl_sec=reservation_ttl_sec,
+            infra_connect_timeout_sec=infra_connect_timeout_sec,
+            infra_check_parallel=infra_check_parallel,
+            infra_backoff_max_sec=infra_backoff_max_sec,
+            dns_self_restart=dns_self_restart,
+            dns_restart_after_sec=dns_restart_after_sec,
+            dns_restart_min_interval_sec=dns_restart_min_interval_sec,
         )
 
 
@@ -897,12 +923,31 @@ def main() -> None:
             quiet=quiet,
         )
 
+    # Set by the health cycle when the DNS resolver has been dead long enough
+    # that only a new container will repair it; the main thread exits on it.
+    restart_requested = Event()
+    restart_reasons: list[str] = []
+
+    def request_restart(reason: str) -> None:
+        restart_reasons.append(reason)
+        restart_requested.set()
+
     monitor = HealthMonitor(
         mongo,
         opener=opener,
         interval_sec=SET.infra_check_interval_sec,
         failure_threshold=SET.infra_failure_threshold,
         reservation_ttl_sec=SET.reservation_ttl_sec,
+        connect_timeout=SET.infra_connect_timeout_sec,
+        max_parallel_hosts=SET.infra_check_parallel,
+        backoff_cap_sec=SET.infra_backoff_max_sec,
+        resolver_watch=ResolverWatch(
+            DEFAULT_RESOLVER,
+            self_restart=SET.dns_self_restart,
+            restart_after_sec=SET.dns_restart_after_sec,
+            restart_guard_sec=SET.dns_restart_min_interval_sec,
+        ),
+        request_restart=request_restart,
         on_capacity=dispatcher.notify_capacity,
         # Every cycle, not just at startup: a container whose host was
         # unreachable at boot kept its reservation and nothing ever came back
@@ -944,10 +989,16 @@ def main() -> None:
     ).start()
 
     try:
-        while True:
-            time.sleep(1)
+        while not restart_requested.wait(1):
+            pass
     except KeyboardInterrupt:
         log.info("closing...")
+        return
+    # The restart policy (`unless-stopped`) starts a new container, and with
+    # it a resolver configured from the machine's current DNS servers.
+    log.error("exiting for a restart: %s", restart_reasons[-1])
+    monitor.stop()
+    sys.exit(RESTART_EXIT_CODE)
 
 
 if __name__ == "__main__":

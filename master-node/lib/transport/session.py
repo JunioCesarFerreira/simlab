@@ -6,7 +6,8 @@ whether the host answers at all. Both predate any resource, so neither can go
 through a container-oriented transport.
 
 ``connect_host`` is shared with ``SSHTransport``'s jump so the host-key
-pinning, the keepalive and the error classification exist once.
+pinning, the keepalive, the name resolution and the error classification
+exist once.
 """
 import logging
 from typing import Callable, Optional
@@ -19,6 +20,7 @@ from lib.credentials import SSHCredential
 from lib.transport.base import ExecResult, TransportError, TransportUnreachable
 from lib.transport.hostkey import HostKeyMismatch, PinnedHostKeyPolicy
 from lib.transport.plan import SSHEndpoint
+from lib.transport.resolve import DEFAULT_RESOLVER, HostResolver, Resolution
 
 log = logging.getLogger(__name__)
 
@@ -33,39 +35,71 @@ def connect_host(
     pinned_host_key: Optional[str] = None,
     on_learn_host_key: Optional[Callable[[str], None]] = None,
     timeout: float = CONNECT_TIMEOUT,
+    resolver: Optional[HostResolver] = None,
+    on_connected: Optional[Callable[[Resolution, str], None]] = None,
 ) -> SSHClient:
     """Open an authenticated session on a host, with its key pinned.
 
     ``TransportUnreachable`` is raised only for "could not get there", kept
     separate from an authentication or protocol failure: the caller treats the
     two differently, because unreachable says nothing about work already
-    running on that host.
-    """
-    client = paramiko.SSHClient()
-    client.load_system_host_keys()
-    client.set_missing_host_key_policy(
-        PinnedHostKeyPolicy(pinned_host_key, on_learn_host_key))
-    try:
-        client.connect(
-            endpoint.address,
-            port=endpoint.port,
-            timeout=timeout,
-            **credential.connect_kwargs(),
-        )
-    except HostKeyMismatch:
-        client.close()
-        raise
-    except (NoValidConnectionsError, OSError) as e:
-        client.close()
-        raise TransportUnreachable(f"host {endpoint} is unreachable: {e}") from None
-    except SSHException as e:
-        client.close()
-        raise TransportError(f"SSH to host {endpoint} failed: {e}") from None
+    running on that host. A name that does not resolve raises its subclass
+    ``NameResolutionFailed``, which also says whether the master-node's
+    resolver or the host's name is at fault.
 
-    transport = client.get_transport()
-    if transport is not None:
-        transport.set_keepalive(KEEPALIVE_INTERVAL)
-    return client
+    The name is resolved here rather than by paramiko, so a failed lookup is
+    bounded and classified, and a host with a pinned key can still be reached
+    at its last known address while DNS is down. ``on_connected`` is told how
+    the address was found and which one answered.
+
+    ``timeout`` bounds the TCP connect and the wait for the server's banner.
+    """
+    resolver = resolver or DEFAULT_RESOLVER
+    resolution = resolver.resolve(
+        endpoint.address, endpoint.port, allow_cached=bool(pinned_host_key))
+
+    last_error: Optional[BaseException] = None
+    for address in resolution.addresses:
+        client = paramiko.SSHClient()
+        client.load_system_host_keys()
+        client.set_missing_host_key_policy(
+            PinnedHostKeyPolicy(pinned_host_key, on_learn_host_key))
+        try:
+            client.connect(
+                address,
+                port=endpoint.port,
+                timeout=timeout,
+                banner_timeout=timeout,
+                **credential.connect_kwargs(),
+            )
+        except HostKeyMismatch:
+            client.close()
+            raise
+        except (NoValidConnectionsError, OSError) as e:
+            # Not reachable on this address; the next one may be — a name
+            # with an IPv6 record on a network without IPv6 is the usual case.
+            client.close()
+            last_error = e
+            continue
+        except SSHException as e:
+            client.close()
+            raise TransportError(f"SSH to host {endpoint} failed: {e}") from None
+
+        transport = client.get_transport()
+        if transport is not None:
+            transport.set_keepalive(KEEPALIVE_INTERVAL)
+        resolver.remember(endpoint.address, address)
+        if on_connected is not None:
+            on_connected(resolution, address)
+        return client
+
+    where = ""
+    if resolution.source != "literal":
+        where = f" at {', '.join(resolution.addresses)}"
+    if resolution.from_cache:
+        where += f" (its last known address; {resolution.dns_error})"
+    raise TransportUnreachable(
+        f"host {endpoint} is unreachable{where}: {last_error}") from None
 
 
 class HostSession:
@@ -80,6 +114,7 @@ class HostSession:
         on_learn_host_key: Optional[Callable[[str], None]] = None,
         host_name: str = "?",
         timeout: float = CONNECT_TIMEOUT,
+        resolver: Optional[HostResolver] = None,
     ):
         self.endpoint = endpoint
         self.host_name = host_name
@@ -87,7 +122,11 @@ class HostSession:
         self._pinned_host_key = pinned_host_key
         self._on_learn_host_key = on_learn_host_key
         self._timeout = timeout
+        self._resolver = resolver
         self._client: Optional[SSHClient] = None
+        #: How the address was found and which one answered, once open.
+        self.resolution: Optional[Resolution] = None
+        self.connected_address: Optional[str] = None
 
     def open(self) -> None:
         if self._client is None:
@@ -97,7 +136,13 @@ class HostSession:
                 pinned_host_key=self._pinned_host_key,
                 on_learn_host_key=self._on_learn_host_key,
                 timeout=self._timeout,
+                resolver=self._resolver,
+                on_connected=self._connected,
             )
+
+    def _connected(self, resolution: Resolution, address: str) -> None:
+        self.resolution = resolution
+        self.connected_address = address
 
     def close(self) -> None:
         if self._client is not None:

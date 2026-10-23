@@ -5,6 +5,59 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Reaching hosts reliably
+
+Prompted by a deployment where SSH to every VM worked from a terminal and the
+master-node saw none of them. The master-node container had kept the DNS
+servers of the network its machine was on when it started; every lookup
+failed, and every remote host was counted as failing and taken offline.
+
+### Fixed
+
+- **A name that does not resolve is told apart from a host that does not
+  answer.** Hop 1 resolves the name itself, with a 5 s timeout, and raises
+  `NameResolutionFailed` saying whether the master-node's resolver did not
+  answer or the name does not exist.
+- **The master-node's DNS failing is no longer the hosts failing.** While the
+  resolver answers for none of the hosts' names, a host reached by name is
+  recorded as *not measured* — status, failure count and backoff unchanged.
+  One name failing while others resolve is still that host's failure.
+- **The last address that worked is used while DNS is down**, for hosts with a
+  pinned key only: a different machine at that address fails the pin. Kept on
+  the host (`resolved_address`), so it survives a restart.
+
+### Added
+
+- **Self-restart to renew stale DNS servers** (`DNS_SELF_RESTART`, on by
+  default in Docker): after `DNS_RESTART_AFTER_SEC` (300) of a resolver that
+  answers nothing, and only with no worker reserved or busy, the master-node
+  exits with status 75 and its restart policy starts a new container. At most
+  once per `DNS_RESTART_MIN_INTERVAL_SEC` (3600), recorded in the database so
+  the guard survives the restart it guards.
+- **A master-node heartbeat** (`master_status` collection) with the resolver's
+  state. The Topology page reads liveness from it — a master whose hosts are
+  all disabled or backing off no longer looks dead — and flags the master in
+  amber with a banner when DNS is failing.
+- **Hosts sharing an SSH host key are flagged** on the Infrastructure page
+  (`shared_host_keys` in `GET /infra/overview`): cloned VM images that kept
+  their keys, which pinning cannot tell apart. The banner and the master-node
+  README give the commands to regenerate the keys and clear the pins.
+
+### Changed
+
+- **Hosts are checked concurrently** (`INFRA_CHECK_PARALLEL`, 8). Serially, a
+  cycle with eight hosts down took 3 min 44 s, delaying the reservation sweep
+  and the reconciliation behind it.
+- **A health check's handshake times out after 8 s**
+  (`INFRA_CONNECT_TIMEOUT_SEC`), banner included; a simulation's connection
+  keeps 20 s.
+- **A remote host that keeps failing is retried less often**: once offline it
+  waits one interval, then two, four, … up to `INFRA_BACKOFF_MAX_SEC` (600 s).
+  An operator's check, an access edit or re-enabling the host skip the wait;
+  the Topology tooltip shows when the next check is due.
+
+---
+
 ## [Unreleased] — Infrastructure topology page
 
 A **Topology** page draws the pool as a graph — master-node, hosts, Cooja

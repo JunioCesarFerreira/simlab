@@ -7,6 +7,7 @@
  * returned by remote machines, so it is also where HTML gets escaped.
  */
 import type {
+  MasterDns,
   MasterLiveness,
   TopologyDto,
   TopologyHost,
@@ -36,8 +37,10 @@ export function toneColors(dark: boolean): Record<Tone, string> {
   };
 }
 
-export function masterTone(status: MasterLiveness): Tone {
-  if (status === "alive") return "ok";
+/** A running master-node whose resolver answers nothing is degraded: hosts
+ *  reached by name are not being measured. */
+export function masterTone(status: MasterLiveness, dns?: MasterDns | null): Tone {
+  if (status === "alive") return dns && !dns.ok ? "warn" : "ok";
   if (status === "stale") return "bad";
   return "off";
 }
@@ -237,26 +240,53 @@ export function escapeHtml(text: string | null | undefined): string {
     .replace(/'/g, "&#39;");
 }
 
+/** What the master-node's resolver state means, in one or two lines. */
+export function dnsLines(dns: MasterDns | null | undefined): string[] {
+  if (!dns) return [];
+  if (dns.ok) return dns.names ? [`DNS: ${dns.names} host name(s) resolving`] : [];
+  const lines = [
+    `<b>DNS not answering</b> for ${dns.failing.map(escapeHtml).join(", ") || "any host name"}`,
+  ];
+  if (dns.restart_waiting) lines.push(escapeHtml(dns.restart_waiting));
+  else if (!dns.self_restart) lines.push("self-restart is off: restart the master-node container");
+  return lines;
+}
+
 export function masterTooltip(master: TopologyDto["master"]): string {
   const heading = "<b>master-node</b>";
   if (master.status === "unknown") {
     return `${heading}<br/>No enabled host to observe it by.`;
   }
   const age = formatElapsed(master.age_sec === undefined ? null : Math.round(master.age_sec));
-  return master.status === "alive"
-    ? `${heading} — running<br/>last health check ${age} ago`
-    : `${heading} — <b>not checking hosts</b><br/>last health check ${age} ago ` +
-        `(expected every few seconds; stale after ${master.stale_after_sec} s)`;
+  const lines =
+    master.status === "alive"
+      ? [`${heading} — running`, `last health check ${age} ago`]
+      : [
+          `${heading} — <b>not checking hosts</b>`,
+          `last health check ${age} ago ` +
+            `(expected every few seconds; stale after ${master.stale_after_sec} s)`,
+        ];
+  return [...lines, ...dnsLines(master.dns)].join("<br/>");
 }
 
-export function hostTooltip(host: TopologyHost): string {
+export function hostTooltip(host: TopologyHost, now?: string): string {
   const load = hostLoad(host);
   const lines = [
     `<b>${escapeHtml(host.name)}</b> — ${escapeHtml(host.status)}` +
       (host.withdrawing ? " · being removed" : ""),
     `${load.running} of ${load.total} worker(s) running`,
   ];
+  if (host.address) {
+    const known =
+      host.last_known_ip && host.last_known_ip !== host.address
+        ? ` (last reached at ${escapeHtml(host.last_known_ip)})`
+        : "";
+    lines.push(`${escapeHtml(host.address)}${known}`);
+  }
   if (!host.schedulable && host.enabled) lines.push("not taking new work");
+  if (host.retry_at && now) {
+    lines.push(`backing off — next check in ${formatElapsed(elapsedSeconds(now, host.retry_at))}`);
+  }
   if (host.message) lines.push(`<i>${escapeHtml(host.message)}</i>`);
   return lines.join("<br/>");
 }

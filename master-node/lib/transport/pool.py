@@ -15,14 +15,21 @@ authenticated channel, because that is the connection a simulation runs on.
 
 A *failed* handshake is remembered too, and re-raised for the rest of the
 host's turn. Retrying it once per worker is precisely the behaviour that turns
-one unreachable host into a burst of connection attempts against it.
+one unreachable host into a burst of connection attempts against it. The
+caller can ask for it (``failure``) to tell *why* the host could not be
+reached — a resolver that did not answer is not the host's fault.
+
+Hosts are checked concurrently, each by one thread, so every map here is
+guarded; a host's turn itself is never shared between threads.
 """
 import logging
+import threading
 from typing import Any, Callable, Optional
 
 from lib.credentials import SecretOpener, resolve_host_credential
 from lib.transport.plan import PlanError, SSHEndpoint
-from lib.transport.session import HostSession
+from lib.transport.resolve import HostResolver, Resolution
+from lib.transport.session import CONNECT_TIMEOUT, HostSession
 from pylib.db.models.infra import EnumHostType
 
 log = logging.getLogger(__name__)
@@ -57,6 +64,9 @@ class JumpPool:
         *,
         on_learn: Optional[Callable[[dict, str], None]] = None,
         session_factory: Optional[Callable[..., HostSession]] = None,
+        connect_timeout: float = CONNECT_TIMEOUT,
+        resolver: Optional[HostResolver] = None,
+        on_connected: Optional[Callable[[dict, Resolution, str], None]] = None,
     ):
         self._opener = opener
         # Called with (host, fingerprint) when a host's key is accepted on
@@ -66,6 +76,15 @@ class JumpPool:
         # recording the first use.
         self._on_learn = on_learn
         self._session_factory = session_factory or HostSession
+        # The health cycle passes a shorter one than a simulation's: a check
+        # that waits twenty seconds for a host that is down delays every
+        # other host's turn and the housekeeping after them.
+        self._connect_timeout = connect_timeout
+        self._resolver = resolver
+        # Called with (host, resolution, address) once a session is open, so
+        # the address that worked can be kept for when DNS does not.
+        self._on_connected = on_connected
+        self._lock = threading.Lock()
         self._sessions: dict[str, HostSession] = {}
         self._failures: dict[str, Exception] = {}
 
@@ -82,20 +101,34 @@ class JumpPool:
             return None
 
         key = _key(host)
-        failure = self._failures.get(key)
+        with self._lock:
+            failure = self._failures.get(key)
+            existing = self._sessions.get(key)
         if failure is not None:
             raise failure
-        existing = self._sessions.get(key)
         if existing is not None:
             return existing
 
         try:
             session = self._open(host)
         except Exception as error:
-            self._failures[key] = error
+            with self._lock:
+                self._failures[key] = error
             raise
-        self._sessions[key] = session
+        with self._lock:
+            self._sessions[key] = session
         return session
+
+    def failure(self, host: dict[str, Any]) -> Optional[Exception]:
+        """Why opening this host's session failed in this turn, if it did."""
+        with self._lock:
+            return self._failures.get(_key(host))
+
+    def resolution(self, host: dict[str, Any]) -> Optional[Resolution]:
+        """How this turn's session found its address, if one is open."""
+        with self._lock:
+            session = self._sessions.get(_key(host))
+        return getattr(session, "resolution", None)
 
     def _open(self, host: dict[str, Any]) -> HostSession:
         access = host.get("access") or {}
@@ -115,9 +148,20 @@ class JumpPool:
             pinned_host_key=access.get("host_key_fingerprint"),
             on_learn_host_key=on_learn,
             host_name=name,
+            timeout=self._connect_timeout,
+            resolver=self._resolver,
         )
         session.open()
         log.debug("Host session open: %s (%s)", name, session.endpoint)
+        address = getattr(session, "connected_address", None)
+        resolution = getattr(session, "resolution", None)
+        if self._on_connected is not None and address and resolution is not None:
+            try:
+                self._on_connected(host, resolution, address)
+            except Exception:
+                # Bookkeeping. The session is open and works; losing the
+                # address only costs the fallback until the next success.
+                log.exception("Could not record the address of host %s", name)
         return session
 
     # ── lifetime ───────────────────────────────────────────────────────────
@@ -125,16 +169,19 @@ class JumpPool:
     def close_host(self, host: dict[str, Any]) -> None:
         """End this host's turn: close its session and forget its failure."""
         key = _key(host)
-        self._failures.pop(key, None)
-        session = self._sessions.pop(key, None)
+        with self._lock:
+            self._failures.pop(key, None)
+            session = self._sessions.pop(key, None)
         if session is not None:
             session.close()
 
     def close(self) -> None:
-        self._failures.clear()
-        for session in list(self._sessions.values()):
+        with self._lock:
+            self._failures.clear()
+            sessions = list(self._sessions.values())
+            self._sessions.clear()
+        for session in sessions:
             session.close()
-        self._sessions.clear()
 
     def __enter__(self) -> "JumpPool":
         return self

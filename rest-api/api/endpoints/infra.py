@@ -116,7 +116,8 @@ def get_overview(
             (r.get("probe") or {}).get("cooja_jar_sha256")
             for r in factory.resource_repo.find_all()
         ]
-        return overview_from_snapshot(snapshot, builds)
+        return overview_from_snapshot(
+            snapshot, builds, host_documents=factory.host_repo.find_all())
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -160,10 +161,14 @@ def get_topology(factory: MongoRepository = Depends(get_factory)) -> dict:
         generations = list(db["generations"].find(
             {"_id": {"$in": gen_ids}}, {"index": 1})) if gen_ids else []
 
+    master_repo = getattr(factory, "master_repo", None)
+    master = master_repo.get() if master_repo is not None else None
+
     return topology_from_documents(
         hosts=hosts, schedulable=schedulable, resources=resources,
         simulations=simulations, experiments=experiments,
-        generations=generations, running_experiments=running, now=utc_now())
+        generations=generations, running_experiments=running, now=utc_now(),
+        master=master if isinstance(master, dict) else None)
 
 
 @router.get("/hosts", response_model=list[HostDto])

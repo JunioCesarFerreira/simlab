@@ -19,6 +19,7 @@ from typing import Any, Iterable, Optional
 
 from pylib.crypto import MalformedEnvelope, redact, validate_envelope
 from pylib.db.models.infra import (
+    DEFAULT_HOST_SSH_PORT,
     SCHEDULABLE_HOST_STATUSES,
     EnumAddressMode,
     EnumAuthMethod,
@@ -45,6 +46,7 @@ from api.mappers.helpers import oid_to_str, pop_id
 _OBSERVED_HOST_FIELDS = frozenset({
     "status", "type", "origin", "last_check", "last_check_message",
     "consecutive_failures", "check_requested_at", "discovery_requested_at",
+    "backoff_until", "resolved_address",
     "created_time", "updated_time", "_id", "id",
 })
 # `mode` is absent on purpose: where a host's workers come from is an
@@ -218,8 +220,40 @@ def occupancy_from_snapshot(row: dict) -> HostOccupancyDto:
     }
 
 
+def shared_host_keys(hosts: Iterable[dict]) -> list[dict]:
+    """Groups of hosts that present the same SSH host key from different endpoints.
+
+    Cloned VM images keep the source's host keys unless they are regenerated,
+    and then pinning cannot tell the clones apart: a port forward pointing at
+    the wrong VM is accepted, because that VM answers with the pinned key —
+    and whoever holds one clone's private key can impersonate all of them.
+    Two registrations of the *same* endpoint sharing a key is just one
+    machine, and is not reported.
+    """
+    groups: dict[str, dict[tuple[str, int], list[str]]] = {}
+    for host in hosts:
+        access = host.get("access") or {}
+        fingerprint = access.get("host_key_fingerprint")
+        if not fingerprint or host.get("withdrawn_at"):
+            continue
+        endpoint = (
+            str(access.get("address") or "").strip().lower(),
+            int(access.get("port") or DEFAULT_HOST_SSH_PORT),
+        )
+        groups.setdefault(fingerprint, {}).setdefault(endpoint, []).append(
+            str(host.get("name", "?")))
+    shared = [
+        {"fingerprint": fingerprint,
+         "hosts": sorted(n for names in endpoints.values() for n in names)}
+        for fingerprint, endpoints in groups.items() if len(endpoints) > 1
+    ]
+    return sorted(shared, key=lambda group: group["hosts"])
+
+
 def overview_from_snapshot(
-    snapshot: list[dict], cooja_builds: Optional[list[str]] = None
+    snapshot: list[dict],
+    cooja_builds: Optional[list[str]] = None,
+    host_documents: Optional[Iterable[dict]] = None,
 ) -> OverviewDto:
     """Totals and per-host occupancy for the Infrastructure page."""
     hosts = [occupancy_from_snapshot(dict(row)) for row in snapshot]
@@ -248,6 +282,7 @@ def overview_from_snapshot(
         # effect in the results.
         "heterogeneous": len(builds) > 1,
         "cooja_builds": builds,
+        "shared_host_keys": shared_host_keys(host_documents or []),
     }
 
 

@@ -25,6 +25,7 @@ from pylib.db.models.infra import (
     EnumContainerState,
     EnumHostStatus,
     EnumResourceStatus,
+    MASTER_STATUS_COLLECTION,
     RESOURCES_COLLECTION,
     HOSTS_COLLECTION,
 )
@@ -32,6 +33,7 @@ from pylib.db.repositories.infra import (
     _REASSIGNABLE as _REASSIGNABLE_FOR_TEST,
     CoojaResourceRepository,
     HostWithdrawing,
+    MasterStatusRepository,
     RemovalConflicted,
     HostRepository,
     InfraCryptoRepository,
@@ -2277,3 +2279,128 @@ class TestTwoMachinesBehindOneGateway:
         repo = self._repo([vm7_w, vm8_w], [vm7, vm8])
 
         assert repo.conflicting_target(vm7, dict(vm7_w), exclude_id=RES_ID) is None
+
+
+# ── Backoff, inconclusive checks and the last known address ─────────────────
+
+class TestHostCheckBookkeeping:
+    """What the health cycle writes about a host besides its status."""
+
+    def test_a_check_result_clears_the_backoff_unless_given_one(self, hosts):
+        repo, coll = hosts
+        coll.update_one.return_value = MagicMock(matched_count=1)
+
+        repo.mark_check_result(HOST_ID, status=EnumHostStatus.ONLINE, reset_failures=True)
+
+        # Written as null rather than left alone: a host that recovers goes
+        # back to the normal pace at once.
+        assert coll.update_one.call_args.args[1]["$set"]["backoff_until"] is None
+
+    def test_a_failed_check_carries_its_backoff(self, hosts):
+        repo, coll = hosts
+        coll.update_one.return_value = MagicMock(matched_count=1)
+        until = utc_now() + timedelta(minutes=2)
+
+        repo.mark_check_result(HOST_ID, status=EnumHostStatus.OFFLINE, backoff_until=until)
+
+        assert coll.update_one.call_args.args[1]["$set"]["backoff_until"] == until
+
+    def test_an_inconclusive_check_leaves_the_verdict_alone(self, hosts):
+        """A resolver on the master-node failing is not the host failing."""
+        repo, coll = hosts
+        coll.update_one.return_value = MagicMock(matched_count=1)
+
+        repo.mark_check_inconclusive(HOST_ID, "not measured: DNS")
+
+        flt, update = coll.update_one.call_args.args[:2]
+        assert flt["enabled"] is True
+        assert set(update) == {"$set"}
+        assert set(update["$set"]) == {"last_check", "last_check_message"}
+
+    def test_an_address_is_written_only_when_it_changed(self, hosts):
+        repo, coll = hosts
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        assert repo.record_resolved_address(HOST_ID, "lab.example", "10.0.0.1") is True
+
+        flt, update = coll.update_one.call_args.args[:2]
+        assert {"resolved_address.ip": {"$ne": "10.0.0.1"}} in flt["$or"]
+        assert {"resolved_address.name": {"$ne": "lab.example"}} in flt["$or"]
+        stored = update["$set"]["resolved_address"]
+        assert stored["name"] == "lab.example" and stored["ip"] == "10.0.0.1"
+
+    def test_an_unchanged_address_is_not_rewritten(self, hosts):
+        repo, coll = hosts
+        coll.update_one.return_value = MagicMock(modified_count=0)
+
+        assert repo.record_resolved_address(HOST_ID, "lab.example", "10.0.0.1") is False
+
+    def test_an_access_edit_clears_the_backoff(self, hosts):
+        # It was earned by the configuration that just changed.
+        repo, coll = hosts
+        coll.find_one_and_update.return_value = {"config_version": 2}
+
+        repo.bump_config_version(HOST_ID)
+
+        update = coll.find_one_and_update.call_args.args[1]
+        assert update["$set"]["backoff_until"] is None
+
+    def test_re_enabling_clears_the_backoff(self, hosts):
+        repo, coll = hosts
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        repo.set_enabled(HOST_ID, True)
+
+        assert coll.update_one.call_args.args[1]["$set"]["backoff_until"] is None
+
+    def test_disabling_does_not_touch_it(self, hosts):
+        repo, coll = hosts
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        repo.set_enabled(HOST_ID, False)
+
+        assert "backoff_until" not in coll.update_one.call_args.args[1]["$set"]
+
+    def test_neither_can_be_written_by_a_client(self, hosts):
+        repo, coll = hosts
+
+        assert repo.update(HOST_ID, {
+            "backoff_until": None,
+            "resolved_address": {"name": "x", "ip": "10.6.6.6"},
+        }) is False
+        coll.update_one.assert_not_called()
+
+
+class TestMasterStatus:
+    @pytest.fixture
+    def master(self):
+        connection, db = make_connection()
+        return MasterStatusRepository(connection), db[MASTER_STATUS_COLLECTION]
+
+    def test_the_heartbeat_is_one_upserted_document(self, master):
+        repo, coll = master
+
+        repo.heartbeat(resolver={"ok": False}, cycle_sec=1.23456)
+
+        flt, update = coll.update_one.call_args.args[:2]
+        assert flt == {"_id": MasterStatusRepository.DOC_ID}
+        assert coll.update_one.call_args.kwargs["upsert"] is True
+        assert update["$set"]["resolver"] == {"ok": False}
+        assert update["$set"]["cycle_sec"] == 1.235
+        assert isinstance(update["$set"]["heartbeat_at"], datetime)
+
+    def test_a_heartbeat_without_news_of_the_resolver_keeps_the_last(self, master):
+        repo, coll = master
+
+        repo.heartbeat()
+
+        assert "resolver" not in coll.update_one.call_args.args[1]["$set"]
+
+    def test_a_restart_is_recorded_and_the_history_bounded(self, master):
+        repo, coll = master
+
+        repo.record_restart("DNS")
+
+        update = coll.update_one.call_args.args[1]
+        assert update["$set"]["last_restart"]["reason"] == "DNS"
+        assert update["$push"]["restarts"]["$slice"] == -MasterStatusRepository.RESTARTS_KEPT

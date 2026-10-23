@@ -14,6 +14,8 @@ import base64
 import pytest
 from bson import ObjectId
 
+from api.mappers.infra import shared_host_keys
+
 HOST_ID = "507f1f77bcf86cd799430011"
 RES_ID = "507f1f77bcf86cd799430021"
 SIM_ID = "507f1f77bcf86cd799430031"
@@ -409,6 +411,25 @@ class TestOverview:
     def test_a_uniform_pool_is_not_flagged(self, client, infra):
         body = client.get("/api/v1/infra/overview").json()
         assert body["heterogeneous"] is False
+
+    def test_clones_sharing_a_host_key_are_flagged(self, client, infra):
+        """Cloned VM images that kept their host keys: the pin cannot tell
+        them apart, so a port forward to the wrong VM would be accepted."""
+        infra.host_repo.find_all.return_value = [
+            sample_host(_id=ObjectId(), name=f"vm{i}",
+                        access={"address": "gateway.example", "port": 2200 + i,
+                                "host_key_fingerprint": "SHA256:same"})
+            for i in (2, 1)
+        ] + [sample_host()]
+
+        body = client.get("/api/v1/infra/overview").json()
+
+        assert body["shared_host_keys"] == [
+            {"fingerprint": "SHA256:same", "hosts": ["vm1", "vm2"]}]
+
+    def test_a_clean_pool_has_no_shared_keys(self, client, infra):
+        body = client.get("/api/v1/infra/overview").json()
+        assert body["shared_host_keys"] == []
 
 
 # ── Reads ────────────────────────────────────────────────────────────────────
@@ -1078,3 +1099,39 @@ class TestRemovingAHostIsAllOrNothing:
 
         assert resp.status_code == 409
         assert "Try again" in resp.json()["detail"]
+
+
+# ── Shared host keys ─────────────────────────────────────────────────────────
+
+class TestSharedHostKeys:
+    """Which hosts the pin cannot tell apart."""
+
+    @staticmethod
+    def _host(name, address, port, fingerprint="SHA256:same", **over):
+        doc = {"name": name, "access": {"address": address, "port": port,
+                                        "host_key_fingerprint": fingerprint}}
+        doc.update(over)
+        return doc
+
+    def test_one_key_on_two_endpoints_is_reported(self):
+        groups = shared_host_keys([
+            self._host("vm1", "gw.example", 2201), self._host("vm2", "gw.example", 2202)])
+
+        assert groups == [{"fingerprint": "SHA256:same", "hosts": ["vm1", "vm2"]}]
+
+    def test_two_registrations_of_one_endpoint_are_one_machine(self):
+        assert shared_host_keys([
+            self._host("a", "GW.example", 22), self._host("b", "gw.example", None)]) == []
+
+    def test_a_host_being_removed_or_never_contacted_is_left_out(self):
+        assert shared_host_keys([
+            self._host("vm1", "gw.example", 2201),
+            self._host("vm2", "gw.example", 2202, withdrawn_at="2026-10-22T10:00:00Z"),
+            self._host("vm3", "gw.example", 2203, fingerprint=None),
+        ]) == []
+
+    def test_different_keys_are_different_machines(self):
+        assert shared_host_keys([
+            self._host("vm1", "gw.example", 2201, fingerprint="SHA256:a"),
+            self._host("vm2", "gw.example", 2202, fingerprint="SHA256:b"),
+        ]) == []

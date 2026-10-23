@@ -323,6 +323,10 @@ services:
       context: .
       dockerfile: Dockerfile.master-node
     container_name: master_node
+    # Required by DNS_SELF_RESTART (on by default here): when the container's
+    # copy of the machine's DNS servers goes stale, the master-node exits with
+    # status 75 and this policy starts a fresh container. With `restart: "no"`
+    # set DNS_SELF_RESTART=false, or that exit stops it for good.
     restart: unless-stopped
     working_dir: /app
     environment:

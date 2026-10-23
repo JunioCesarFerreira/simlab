@@ -8,7 +8,8 @@ replaces.
 
 What this adds over the existing inventory routes is **what is running on
 each container** — the simulation, its experiment and generation — and
-**whether the master-node is alive**, which no document records directly.
+**whether the master-node is alive and can resolve names**, from the heartbeat
+it writes every cycle.
 """
 from __future__ import annotations
 
@@ -18,11 +19,11 @@ from typing import Any, Iterable, Optional
 from pylib.db.models.infra import OCCUPIED_STATUSES
 from pylib.timeutil import as_aware
 
-#: After this long without any host being checked, the master-node is taken to
-#: have stopped. Its health cycle writes ``last_check`` on every enabled host
-#: every ``INFRA_CHECK_INTERVAL_SEC`` (30 s by default) — even when the host is
-#: unreachable — so silence across *every* host means the cycle itself is not
-#: running. Four intervals, so one slow cycle is not reported as a dead one.
+#: After this long without a write from the health cycle, the master-node is
+#: taken to have stopped. The cycle runs every ``INFRA_CHECK_INTERVAL_SEC``
+#: (30 s by default), writes its heartbeat at the end of each pass and
+#: ``last_check`` on every host it checks — even an unreachable one. Four
+#: intervals, so one slow cycle is not reported as a dead one.
 MASTER_STALE_AFTER_SEC = 120
 
 MASTER_ALIVE = "alive"
@@ -37,20 +38,28 @@ def _oid(value: Any) -> Optional[str]:
     return str(value) if value is not None else None
 
 
-def master_status(hosts: Iterable[dict], now: datetime) -> dict:
+def master_status(
+    hosts: Iterable[dict], now: datetime, master: Optional[dict] = None
+) -> dict:
     """Whether the master-node's health cycle is running, judged by its writes.
 
-    Only enabled, non-withdrawing hosts count: a disabled host is never
-    checked, so its ``last_check`` is old by design and would make a healthy
-    master look stopped.
+    The latest of its heartbeat and every host's ``last_check``: the heartbeat
+    is written at the end of a pass, the checks during it, so a long pass
+    still shows progress — and a master whose hosts are all disabled or
+    backing off is still seen by its heartbeat. Only enabled, non-withdrawing
+    hosts count: a disabled host is never checked, so its ``last_check`` is
+    old by design and would make a healthy master look stopped.
     """
     observed = [
         as_aware(h["last_check"]) for h in hosts
         if h.get("enabled", True) and not h.get("withdrawn_at") and h.get("last_check")
     ]
+    if master and master.get("heartbeat_at"):
+        observed.append(as_aware(master["heartbeat_at"]))
+    dns = dns_status(master)
     if not observed:
         return {"status": MASTER_UNKNOWN, "last_seen": None,
-                "stale_after_sec": MASTER_STALE_AFTER_SEC}
+                "stale_after_sec": MASTER_STALE_AFTER_SEC, "dns": dns}
     last_seen = max(observed)
     age = (as_aware(now) - last_seen).total_seconds()
     return {
@@ -58,6 +67,32 @@ def master_status(hosts: Iterable[dict], now: datetime) -> dict:
         "last_seen": last_seen,
         "age_sec": max(0.0, age),
         "stale_after_sec": MASTER_STALE_AFTER_SEC,
+        "dns": dns,
+    }
+
+
+def dns_status(master: Optional[dict]) -> Optional[dict]:
+    """The master-node's resolver, as its last cycle found it.
+
+    ``None`` when nothing has been reported — a master-node older than the
+    heartbeat, or one that has not finished a cycle yet.
+    """
+    resolver = (master or {}).get("resolver")
+    if not resolver:
+        return None
+    last_restart = (master or {}).get("last_restart") or {}
+    return {
+        "ok": bool(resolver.get("ok", True)),
+        "message": resolver.get("message", ""),
+        "checked_at": resolver.get("checked_at"),
+        "failing_since": resolver.get("failing_since"),
+        "names": len(resolver.get("names") or []),
+        "failing": sorted((resolver.get("failing") or {}).keys()),
+        "missing": sorted((resolver.get("missing") or {}).keys()),
+        "self_restart": bool(resolver.get("self_restart")),
+        "restart_waiting": resolver.get("restart_waiting"),
+        "last_restart_at": last_restart.get("at"),
+        "last_restart_reason": last_restart.get("reason"),
     }
 
 
@@ -99,6 +134,7 @@ def topology_from_documents(
     generations: Iterable[dict],
     running_experiments: Iterable[dict],
     now: datetime,
+    master: Optional[dict] = None,
 ) -> dict:
     """The graph and the runs on it, from documents already read.
 
@@ -146,6 +182,14 @@ def topology_from_documents(
             "withdrawing": bool(host.get("withdrawn_at")),
             "last_check": host.get("last_check"),
             "message": host.get("last_check_message", ""),
+            # Only while it is in the future: a past one no longer holds the
+            # host back, it just has not been cleared by a check yet.
+            "retry_at": (
+                host["backoff_until"]
+                if host.get("backoff_until")
+                and as_aware(host["backoff_until"]) > as_aware(now) else None),
+            "address": (host.get("access") or {}).get("address"),
+            "last_known_ip": (host.get("resolved_address") or {}).get("ip"),
             "workers": workers,
         })
 
@@ -164,7 +208,7 @@ def topology_from_documents(
 
     return {
         "generated_at": now,
-        "master": master_status(hosts, now),
+        "master": master_status(hosts, now, master),
         "hosts": out_hosts,
         "running_experiments": running,
     }

@@ -25,6 +25,7 @@ from pylib.crypto.envelope import SecretEnvelope
 HOSTS_COLLECTION = "hosts"
 RESOURCES_COLLECTION = "cooja_resources"
 CRYPTO_COLLECTION = "infra_crypto"
+MASTER_STATUS_COLLECTION = "master_status"
 
 
 class EnumHostType(str, Enum):
@@ -153,6 +154,13 @@ class Host(TypedDict, total=False):
     last_check: Optional[datetime]
     last_check_message: str
     consecutive_failures: int
+    # Not checked again before this instant: a host that keeps failing is
+    # retried less and less often. Cleared by a success, an access edit or
+    # re-enabling, and ignored by an operator's explicit check.
+    backoff_until: Optional[datetime]
+    # The address the last successful connection used, for when the name in
+    # ``access.address`` stops resolving: {"name", "ip", "since"}.
+    resolved_address: Optional[dict[str, Any]]
     # Set by the API, consumed by the master-node: the API has neither a route
     # to the containers nor the private key, so it asks instead of acting.
     check_requested_at: Optional[datetime]

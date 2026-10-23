@@ -72,6 +72,28 @@
       below.
     </p>
 
+    <!-- Cloned VM images keep the source's host keys. The pin is what tells
+         one host from another, so with a shared key a port forward pointing
+         at the wrong VM would be accepted without a word. -->
+    <p
+      v-for="group in overview?.shared_host_keys ?? []"
+      :key="group.fingerprint"
+      class="warn-banner"
+    >
+      {{ group.hosts.join(", ") }} answer with the same SSH host key (<code>{{
+        group.fingerprint
+      }}</code
+      >) — cloned images that kept their keys. The pinned key cannot tell them apart. On each
+      machine run
+      <code
+        >sudo rm /etc/ssh/ssh_host_* &amp;&amp; sudo ssh-keygen -A &amp;&amp; sudo systemctl restart
+        ssh</code
+      >, then clear each host's pin so the new key is learned on the next check:
+      <code>PUT /api/v1/infra/hosts/{id}</code> with
+      <code>{"access": {"host_key_fingerprint": null}}</code> (master-node README, "Several hosts
+      share one host key").
+    </p>
+
     <p v-if="!loading && hosts.length === 0" class="empty-state">
       No hosts registered yet. The local host is created by the master-node on startup — if it is
       missing, check that the master-node is running.

@@ -261,12 +261,20 @@ export interface OverviewTotalsDto {
   draining?: number;
 }
 
+/** Hosts on different endpoints that answer with the same SSH host key. */
+export interface SharedHostKey {
+  fingerprint: string;
+  hosts: string[];
+}
+
 export interface OverviewDto {
   totals: OverviewTotalsDto;
   hosts: HostOccupancyDto[];
   /** More than one Cooja build in the pool. */
   heterogeneous: boolean;
   cooja_builds: string[];
+  /** Cloned images that kept their host keys — the pin cannot tell them apart. */
+  shared_host_keys?: SharedHostKey[];
 }
 
 export interface HostDetailDto {
@@ -369,6 +377,12 @@ export interface TopologyHost {
   withdrawing: boolean;
   last_check?: string | null;
   message: string;
+  /** Backing off after repeated failures: not checked before this instant. */
+  retry_at?: string | null;
+  /** The configured SSH address — a name or an IP. */
+  address?: string | null;
+  /** The address the last successful connection used, if it was by name. */
+  last_known_ip?: string | null;
   workers: TopologyWorker[];
 }
 
@@ -380,16 +394,39 @@ export interface TopologyRunningExperiment {
   by_host: Record<string, number>;
 }
 
+/** The master-node's DNS resolver, as its last health cycle found it. */
+export interface MasterDns {
+  ok: boolean;
+  message: string;
+  checked_at?: string | null;
+  failing_since?: string | null;
+  /** Host names looked up. */
+  names: number;
+  /** Names the resolver did not answer for. */
+  failing: string[];
+  /** Names that do not exist — an answer, so not the resolver's fault. */
+  missing: string[];
+  self_restart: boolean;
+  /** Why a restart that would renew the DNS servers has not happened yet. */
+  restart_waiting?: string | null;
+  last_restart_at?: string | null;
+  last_restart_reason?: string | null;
+}
+
+export interface TopologyMaster {
+  status: MasterLiveness;
+  last_seen: string | null;
+  age_sec?: number;
+  stale_after_sec: number;
+  /** `null` until a master-node reports it. */
+  dns?: MasterDns | null;
+}
+
 export interface TopologyDto {
   /** Server time: elapsed times are measured against it, not the browser's
    *  clock, so a skewed laptop does not show a run as starting in the future. */
   generated_at: string;
-  master: {
-    status: MasterLiveness;
-    last_seen: string | null;
-    age_sec?: number;
-    stale_after_sec: number;
-  };
+  master: TopologyMaster;
   hosts: TopologyHost[];
   running_experiments: TopologyRunningExperiment[];
 }

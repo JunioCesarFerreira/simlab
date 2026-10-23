@@ -25,6 +25,20 @@
       {{ formatElapsed(Math.round(topology.master.age_sec ?? 0)) }} — its health cycle is not
       running, so nothing new is being placed and the statuses below may be out of date.
     </p>
+    <p v-else-if="topology && topology.master.dns && !topology.master.dns.ok" class="warn-banner">
+      The master-node's DNS resolver is not answering
+      <template v-if="topology.master.dns.failing.length">
+        for {{ topology.master.dns.failing.join(", ") }}</template
+      >. Hosts reached by name are not being measured — their status is kept, not counted as
+      failures — and those already pinned are still reached at their last known address.
+      <template v-if="topology.master.dns.restart_waiting">
+        {{ topology.master.dns.restart_waiting }}.
+      </template>
+      <template v-else-if="!topology.master.dns.self_restart">
+        Restart the master-node container (<code>docker restart master_node</code>) to give it the
+        machine's current DNS servers.
+      </template>
+    </p>
 
     <template v-if="topology">
       <div class="stat-grid">
@@ -240,6 +254,16 @@ onBeforeUnmount(() => {
   background: #fee2e2;
   color: var(--status-error);
   border: 1px solid #fecaca;
+}
+
+.warn-banner {
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  line-height: 1.5;
+  background: rgba(245, 158, 11, 0.12);
+  color: #b45309;
+  border: 1px solid rgba(245, 158, 11, 0.3);
 }
 
 .stat-grid {

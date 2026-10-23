@@ -293,12 +293,20 @@ class OverviewTotalsDto(TypedDict, total=False):
     draining: int
 
 
+class SharedHostKeyDto(TypedDict):
+    """Hosts on different endpoints that answer with one SSH host key."""
+    fingerprint: str
+    hosts: list[str]
+
+
 class OverviewDto(TypedDict):
     """Everything the Infrastructure page needs for its summary."""
     totals: OverviewTotalsDto
     hosts: list[HostOccupancyDto]
     heterogeneous: bool
     cooja_builds: list[str]
+    #: Cloned images that kept their host keys: pinning cannot tell them apart.
+    shared_host_keys: list[SharedHostKeyDto]
 
 
 class HostDetailDto(TypedDict):

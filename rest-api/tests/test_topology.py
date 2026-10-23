@@ -18,6 +18,7 @@ from api.mappers.topology import (
     MASTER_STALE,
     MASTER_STALE_AFTER_SEC,
     MASTER_UNKNOWN,
+    dns_status,
     master_status,
     topology_from_documents,
 )
@@ -102,6 +103,65 @@ class TestIsTheMasterAlive:
         assert result["status"] == MASTER_ALIVE
 
 
+class TestTheMastersOwnReport:
+    """The heartbeat and resolver state the master-node writes each cycle."""
+
+    BROKEN = {
+        "heartbeat_at": NOW - timedelta(seconds=5),
+        "resolver": {
+            "ok": False, "message": "the DNS resolver did not answer",
+            "names": ["andromeda.example", "lab.example"],
+            "failing": {"lab.example": "x", "andromeda.example": "y"},
+            "missing": {}, "failing_since": NOW - timedelta(minutes=3),
+            "self_restart": True, "restart_waiting": "once no simulation is placed",
+        },
+        "last_restart": {"at": NOW - timedelta(hours=2), "reason": "DNS"},
+    }
+
+    def test_a_heartbeat_proves_it_runs_with_every_host_disabled(self):
+        """Inferring it from hosts alone said "unknown" for a running master
+        whose hosts were all switched off."""
+        result = master_status(
+            [host(VM7, "vm7", enabled=False)], NOW,
+            {"heartbeat_at": NOW - timedelta(seconds=12)})
+
+        assert result["status"] == MASTER_ALIVE
+        assert result["age_sec"] == 12
+
+    def test_the_latest_write_of_either_kind_counts(self):
+        # A long pass writes checks before its heartbeat.
+        result = master_status(
+            [host(LOCAL, "local", seconds_ago=3)], NOW,
+            {"heartbeat_at": NOW - timedelta(seconds=MASTER_STALE_AFTER_SEC + 60)})
+
+        assert result["status"] == MASTER_ALIVE and result["age_sec"] == 3
+
+    def test_an_old_heartbeat_is_stale(self):
+        result = master_status(
+            [], NOW, {"heartbeat_at": NOW - timedelta(seconds=MASTER_STALE_AFTER_SEC + 1)})
+
+        assert result["status"] == MASTER_STALE
+
+    def test_a_failing_resolver_is_reported(self):
+        dns = master_status([], NOW, self.BROKEN)["dns"]
+
+        assert dns["ok"] is False
+        assert dns["names"] == 2
+        assert dns["failing"] == ["andromeda.example", "lab.example"]
+        assert dns["restart_waiting"] == "once no simulation is placed"
+        assert dns["last_restart_reason"] == "DNS"
+
+    def test_nothing_reported_is_none_not_healthy(self):
+        # An older master-node, or one that has not finished a cycle.
+        assert dns_status(None) is None
+        assert dns_status({"heartbeat_at": NOW}) is None
+
+    def test_the_whole_answer_carries_it(self):
+        result = assemble([host(LOCAL, "local")], [], master=self.BROKEN)
+
+        assert result["master"]["dns"]["ok"] is False
+
+
 class TestTheGraph:
     def test_workers_hang_under_their_host(self):
         result = assemble(
@@ -132,6 +192,25 @@ class TestTheGraph:
 
         w = result["hosts"][0]["workers"][0]
         assert w["held"] is True and w["held_kind"] == "collection_pending"
+
+    def test_a_host_backing_off_says_when_it_will_be_checked(self):
+        later = NOW + timedelta(minutes=4)
+        result = assemble([host(VM7, "vm7", backoff_until=later)], [])
+
+        assert result["hosts"][0]["retry_at"] == later
+
+    def test_a_backoff_that_has_passed_is_not_shown(self):
+        result = assemble([host(VM7, "vm7", backoff_until=NOW - timedelta(seconds=1))], [])
+
+        assert result["hosts"][0]["retry_at"] is None
+
+    def test_a_host_carries_its_name_and_last_known_address(self):
+        result = assemble([host(
+            VM7, "vm7", access={"address": "andromeda.example", "port": 2207},
+            resolved_address={"name": "andromeda.example", "ip": "143.107.0.10"})], [])
+
+        assert result["hosts"][0]["address"] == "andromeda.example"
+        assert result["hosts"][0]["last_known_ip"] == "143.107.0.10"
 
     def test_a_host_being_removed_is_flagged(self):
         result = assemble([host(VM7, "vm7", withdrawn_at=NOW)], [])
@@ -246,6 +325,25 @@ class TestTheRoute:
         assert workers[1]["run"] is None
         assert sims.find.call_count == 1
         assert sims.find.call_args.args[0] == {"_id": {"$in": [SIM]}}
+
+    def test_the_masters_report_reaches_the_page(self, client, mock_factory):
+        mock_factory.host_repo.find_all.return_value = []
+        mock_factory.resource_repo.find_all.return_value = []
+        mock_factory.host_repo.inventory_snapshot.return_value = []
+        exps = MagicMock()
+        exps.find.return_value = []
+        mock_factory.simulation_repo.connection = connection_returning(
+            {"simulations": MagicMock(), "experiments": exps, "generations": MagicMock()})
+        mock_factory.master_repo.get.return_value = {
+            "heartbeat_at": utc_now(),
+            "resolver": {"ok": False, "message": "no answer", "names": ["a.example"],
+                         "failing": {"a.example": "x"}},
+        }
+
+        body = client.get("/api/v1/infra/topology").json()
+
+        assert body["master"]["status"] == MASTER_ALIVE
+        assert body["master"]["dns"]["ok"] is False
 
     def test_an_idle_pool_does_not_query_simulations(self, client, mock_factory):
         mock_factory.host_repo.find_all.return_value = [host(LOCAL, "local")]

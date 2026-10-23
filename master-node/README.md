@@ -112,6 +112,14 @@ implementation (one hop for a local container, two for one on another host),
 `hostkey` is the trust policy, `pool` keeps the first hop from being opened
 once per worker, and `factory` composes a transport from the stored records.
 
+`resolve` turns a host's name into an address before paramiko sees it, so a
+failed lookup is bounded (5 s) and classified: `NameResolutionFailed` says
+whether the master-node's resolver did not answer (`resolver_fault`) or the
+name does not exist. It also remembers the last address each name connected
+on — in memory, and on the host as `resolved_address` — and uses it when the
+lookup fails, **only** for a host whose key is pinned: an address that now
+belongs to another machine fails the pin instead of being trusted.
+
 ### `lib/health.py`
 
 The measuring cycle: Docker says whether a container exists, an SSH probe says
@@ -125,6 +133,27 @@ settings changed is measured again before it is schedulable. Both halves
 matter: clearing the stored measurement does not stop a probe that was
 *already running* from writing a positive result for a path that no longer
 exists.
+
+Hosts are checked **concurrently** (`INFRA_CHECK_PARALLEL`), each with a
+shorter handshake timeout than a simulation's (`INFRA_CONNECT_TIMEOUT_SEC`).
+Checked one at a time, a pool with eight hosts down took almost four minutes
+per cycle, and the housekeeping after the hosts waited with it.
+
+A remote host that keeps failing is **backed off**: from the cycle that takes
+it offline, it waits one interval, then two, four, … up to
+`INFRA_BACKOFF_MAX_SEC`, written on the host as `backoff_until`. Its workers
+are already out of the pool, so checking every interval only bought another
+connect timeout. An operator's check, an edit of the host's access settings
+and re-enabling it all skip the wait; a local host never backs off.
+
+The cycle also watches the master-node's own resolver (`lib/dns_watch.py`)
+and writes a heartbeat to `master_status` with what it found; the Topology
+page reads both. While the resolver answers for **none** of the hosts' names,
+a host reached by name is recorded as *not measured*: its status, failure
+count and backoff are left alone instead of every host going offline at once
+for a fault on the master-node. Its workers still leave the pool, because this
+master-node cannot use them, unless the host is reached at its last known
+address. See *The master-node cannot resolve host names* below.
 
 ### `lib/detached.py`
 
@@ -371,6 +400,12 @@ documents — and a failure of the second used to propagate back and mark the
 | `RUN_POLL_INTERVAL_SEC` | `5` | How often a running simulation is checked on. One cheap round trip each time |
 | `INFRA_CHECK_INTERVAL_SEC` | `30` | Health cycle interval |
 | `INFRA_FAILURE_THRESHOLD` | `3` | Consecutive failures before a host leaves the pool. Capacity is slow to lose and quick to regain |
+| `INFRA_CONNECT_TIMEOUT_SEC` | `8` | Hop-1 handshake timeout (TCP connect and SSH banner) for a **health check**. A simulation's connection keeps 20 s |
+| `INFRA_CHECK_PARALLEL` | `8` | Hosts checked at the same time in one cycle |
+| `INFRA_BACKOFF_MAX_SEC` | `600` | Longest wait between checks of a host that keeps failing. `0` disables the backoff |
+| `DNS_SELF_RESTART` | `true` in Docker | Exit (status 75) so the restart policy starts a new container when the resolver has answered for none of the hosts' names for `DNS_RESTART_AFTER_SEC` and no worker is reserved or busy. See *The master-node cannot resolve host names* |
+| `DNS_RESTART_AFTER_SEC` | `300` | How long the resolver must have failed before restarting over it |
+| `DNS_RESTART_MIN_INTERVAL_SEC` | `3600` | At most one such restart per interval — the guard against a loop when the machine itself has no DNS. The last restart is stored in `master_status`, so the guard survives the restart |
 | `RESERVATION_TTL_SEC` | `600` | How long a container may stay reserved without its simulation starting. Covers only that window — a run that got as far as `busy` is governed by `SIM_TIMEOUT_SEC` |
 | `INFRA_KEY_PATH` | `/run/secrets/simlab-infra/x25519.json` | The keystore that opens sealed credentials. The private half never leaves this process |
 | `COOJA_JVM_XMS` / `COOJA_JVM_XMX` | `1g` / `2g` | JVM heap for Cooja |
@@ -607,6 +642,70 @@ bumped and its workers' probes are cleared — they leave the pool until the nex
 health cycle measures them against the new configuration. That is deliberate: a
 key change is a reason to re-verify the path, not to keep trusting the last
 measurement.
+
+### Several hosts share one host key
+
+The Infrastructure page warns when hosts on **different endpoints** present
+the same SSH host key. That is what cloned VM images look like when the host
+keys were not regenerated after cloning, and it defeats pinning: the pin is
+what tells one host from another, so a port forward pointing at the wrong VM
+is accepted without a word, and whoever holds one clone's private key can
+impersonate all of them.
+
+The fix is on the machines. On each one:
+
+```
+sudo rm /etc/ssh/ssh_host_*
+sudo ssh-keygen -A                 # or: sudo dpkg-reconfigure openssh-server
+sudo systemctl restart ssh         # `sshd` on RHEL-like systems
+```
+
+Then clear each host's pin, as in *A host key has to be replaced* above, so
+the next check learns the new key:
+
+```
+PUT /api/v1/infra/hosts/{id}   {"access": {"host_key_fingerprint": null}}
+```
+
+Until the pin is cleared every session to that host is refused with both
+fingerprints in the message — the intended response to a key that changed.
+Clients that connect by hand (`ssh` from a terminal) will also report the
+change, and need their `known_hosts` entry removed (`ssh-keygen -R`).
+
+### The master-node cannot resolve host names
+
+Symptom: every host registered **by name** goes unmeasured at once, the
+Topology page flags the master-node with *DNS not answering*, and the log says
+`DNS: the DNS resolver did not answer for any of N host name(s)`, while `ssh`
+to the same names from a terminal on the same machine works.
+
+Cause, as observed in deployment: Docker's embedded resolver (`127.0.0.11`)
+copies the machine's upstream DNS servers when the container **starts** and
+never reads them again. After the machine moves to another network — home to
+lab, a VPN coming up or down — the container keeps asking servers it can no
+longer reach. `docker exec master_node cat /etc/resolv.conf` shows the copied
+list in its `ExtServers` comment.
+
+What happens on its own:
+
+- hosts with a pinned key are reached at their **last known address**, so
+  work continues on them, with a note in the host's message;
+- hosts reached by name are not counted as failing, so nothing is taken
+  offline or backed off for it;
+- once the resolver has failed for `DNS_RESTART_AFTER_SEC` and nothing is
+  reserved or busy, the master-node **restarts itself** and Docker gives the
+  new container the machine's current servers. A running simulation is never
+  interrupted for this — the restart waits for an idle pool — and at most one
+  such restart happens per `DNS_RESTART_MIN_INTERVAL_SEC`.
+
+By hand, at any time: `docker restart master_node`.
+
+If a restart does not help, the machine itself has no working DNS, and the
+guard stops further restarts. Fix the machine's resolver, or register the
+hosts by IP address. Pinning servers in `docker-compose.yaml`
+(`dns: [1.1.1.1, 8.8.8.8]` on the master-node service) also works, **but** it
+breaks on networks that block external DNS and cannot resolve names that only
+a local DNS server knows — which is why it is not the default.
 
 ### A worker carries old port data
 

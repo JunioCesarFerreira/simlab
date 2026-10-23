@@ -82,7 +82,7 @@ function option(topology: TopologyDto, dark: boolean, showLabels: boolean): ECha
   const links: NonNullable<GraphSeriesOption["links"]> = [];
 
   const masterPos = positions.get(MASTER_NODE_ID)!;
-  const mTone = masterTone(topology.master.status);
+  const mTone = masterTone(topology.master.status, topology.master.dns);
   nodes.push({
     id: MASTER_NODE_ID,
     name: "master-node",
@@ -106,7 +106,7 @@ function option(topology: TopologyDto, dark: boolean, showLabels: boolean): ECha
       symbolSize: [108, 40],
       itemStyle: { color: c.tooltip, borderColor: colorOf(hTone), borderWidth: 2 },
       label: { show: true, color: c.text, fontSize: 11, lineHeight: 15 },
-      tip: hostTooltip(host),
+      tip: hostTooltip(host, topology.generated_at),
     });
     links.push({
       source: MASTER_NODE_ID,

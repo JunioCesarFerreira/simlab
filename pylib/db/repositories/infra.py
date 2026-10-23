@@ -5,7 +5,7 @@ the invariants that two simulations never share a container, and that a health
 check never steals a container from a running simulation, are enforced by the
 query filters themselves. No caller can get them wrong by forgetting a check.
 
-Three repositories:
+Four repositories:
 
 * ``HostRepository`` — registrations, check/discovery requests, and the
   inventory snapshot the scheduler reads.
@@ -13,6 +13,8 @@ Three repositories:
   reserve/start/release cycle.
 * ``InfraCryptoRepository`` — the published public key, so the browser can seal
   a credential against the key the master-node actually holds.
+* ``MasterStatusRepository`` — the master-node's own heartbeat and the state of
+  its DNS resolver, which no host document can carry.
 """
 import logging
 from datetime import datetime
@@ -27,6 +29,7 @@ from pylib.db.connection import MongoDBConnection
 from pylib.timeutil import utc_now
 from pylib.db.models.infra import (
     CRYPTO_COLLECTION,
+    MASTER_STATUS_COLLECTION,
     target_fingerprint,
     HOSTS_COLLECTION,
     OCCUPIED_STATUSES,
@@ -258,7 +261,7 @@ class HostRepository:
             return False
         protected = {
             "status", "last_check", "last_check_message", "consecutive_failures",
-            "created_time", "_id",
+            "backoff_until", "resolved_address", "created_time", "_id",
         }
         payload = {k: v for k, v in updates.items() if k not in protected}
         if not payload:
@@ -287,10 +290,13 @@ class HostRepository:
         if oid is None:
             return 0
         with self.connection.connect() as db:
+            # The backoff goes with it: it was earned by the configuration
+            # that just changed, and the operator who changed it is waiting to
+            # see whether the new one works.
             doc = db[HOSTS_COLLECTION].find_one_and_update(
                 {"_id": oid},
                 {"$inc": {"config_version": 1},
-                 "$set": {"updated_time": utc_now()}},
+                 "$set": {"updated_time": utc_now(), "backoff_until": None}},
                 return_document=ReturnDocument.AFTER,
                 projection={"config_version": 1},
             )
@@ -347,6 +353,9 @@ class HostRepository:
             updates["status"] = EnumHostStatus.DISABLED.value
         with self.connection.connect() as db:
             if enabled:
+                # Measured at the next cycle, not after whatever backoff it
+                # had accumulated before it was switched off.
+                updates["backoff_until"] = None
                 db[HOSTS_COLLECTION].update_one(
                     {"_id": oid, "status": EnumHostStatus.DISABLED.value},
                     {"$set": {
@@ -564,8 +573,13 @@ class HostRepository:
         status: EnumHostStatus,
         message: str = "",
         reset_failures: bool = False,
+        backoff_until: Optional[datetime] = None,
     ) -> bool:
-        """Record the outcome of a reachability check."""
+        """Record the outcome of a reachability check.
+
+        ``backoff_until`` is written every time — ``None`` clears it — so a
+        host that recovers is checked at the normal pace again at once.
+        """
         oid = _oid(host_id)
         if oid is None:
             return False
@@ -575,6 +589,7 @@ class HostRepository:
                 "status": status.value,
                 "last_check": now,
                 "last_check_message": message,
+                "backoff_until": backoff_until,
                 "updated_time": now,
             }
         }
@@ -588,6 +603,51 @@ class HostRepository:
             res = db[HOSTS_COLLECTION].update_one(
                 {"_id": oid, "enabled": True}, update)
             return res.matched_count > 0
+
+    def mark_check_inconclusive(self, host_id: Any, message: str) -> bool:
+        """Record a check that learned nothing about the host.
+
+        For a failure on the master-node's side — its DNS resolver not
+        answering. The status, the failure count and the backoff stay as they
+        were: counting it against the host took every host reached by name
+        offline at once, for a fault none of them had. ``last_check`` still
+        moves, because the check did run.
+        """
+        oid = _oid(host_id)
+        if oid is None:
+            return False
+        now = utc_now()
+        with self.connection.connect() as db:
+            res = db[HOSTS_COLLECTION].update_one(
+                {"_id": oid, "enabled": True},
+                {"$set": {"last_check": now, "last_check_message": message}},
+            )
+            return res.matched_count > 0
+
+    def record_resolved_address(self, host_id: Any, name: str, ip: str) -> bool:
+        """Keep the address a connection to ``name`` last succeeded on.
+
+        Written only when it changed, so a host that keeps its address costs
+        no write per cycle. Read back at startup: an address learned before a
+        restart is what lets the master-node reach a pinned host while its
+        DNS is down.
+        """
+        oid = _oid(host_id)
+        if oid is None or not name or not ip:
+            return False
+        with self.connection.connect() as db:
+            res = db[HOSTS_COLLECTION].update_one(
+                {
+                    "_id": oid,
+                    "$or": [
+                        {"resolved_address.ip": {"$ne": ip}},
+                        {"resolved_address.name": {"$ne": name}},
+                    ],
+                },
+                {"$set": {"resolved_address": {
+                    "name": name, "ip": ip, "since": utc_now()}}},
+            )
+            return res.modified_count > 0
 
     # ── requests from the API (D4/D6) ──────────────────────────────────────
 
@@ -2095,6 +2155,65 @@ class InfraCryptoRepository:
                 },
                 upsert=True,
             )
+
+
+class MasterStatusRepository:
+    """What the master-node says about itself, in one document.
+
+    Its liveness used to be inferred from the hosts' ``last_check``, which
+    stops moving when every host is disabled or backing off — a healthy
+    master then looked dead. And a resolver that stopped answering belongs to
+    no host at all. Both are written here, once per health cycle.
+    """
+
+    DOC_ID = "master-node"
+    #: Restarts kept for display; the loop guard only needs the last one.
+    RESTARTS_KEPT = 10
+
+    def __init__(self, connection: MongoDBConnection):
+        self.connection = connection
+
+    def get(self) -> Optional[dict[str, Any]]:
+        with self.connection.connect() as db:
+            return db[MASTER_STATUS_COLLECTION].find_one({"_id": self.DOC_ID})
+
+    def heartbeat(
+        self, *, resolver: Optional[dict[str, Any]] = None,
+        cycle_sec: Optional[float] = None,
+    ) -> None:
+        now = utc_now()
+        fields: dict[str, Any] = {"heartbeat_at": now}
+        if resolver is not None:
+            fields["resolver"] = resolver
+        if cycle_sec is not None:
+            fields["cycle_sec"] = round(float(cycle_sec), 3)
+        with self.connection.connect() as db:
+            db[MASTER_STATUS_COLLECTION].update_one(
+                {"_id": self.DOC_ID},
+                {"$set": fields, "$setOnInsert": {"created_at": now}},
+                upsert=True,
+            )
+
+    def record_restart(self, reason: str) -> datetime:
+        """Write down a restart the master-node is about to do to itself.
+
+        Written *before* exiting: it is what keeps the next process from
+        restarting again for the same reason straight away.
+        """
+        now = utc_now()
+        entry = {"at": now, "reason": reason}
+        with self.connection.connect() as db:
+            db[MASTER_STATUS_COLLECTION].update_one(
+                {"_id": self.DOC_ID},
+                {
+                    "$set": {"last_restart": entry},
+                    "$push": {"restarts": {
+                        "$each": [entry], "$slice": -self.RESTARTS_KEPT}},
+                    "$setOnInsert": {"created_at": now},
+                },
+                upsert=True,
+            )
+        return now
 
 
 def host_access_secret(host: Host) -> Optional[SecretEnvelope]:
