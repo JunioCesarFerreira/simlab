@@ -148,6 +148,14 @@ class TestLookup:
         finally:
             release.set()
 
+    def test_an_interrupt_is_not_mistaken_for_a_dns_failure(self):
+        # The first health cycle runs on the main thread.
+        def interrupted(*_args):
+            raise KeyboardInterrupt
+
+        with pytest.raises(KeyboardInterrupt):
+            HostResolver(getaddrinfo=interrupted).lookup(NAME)
+
     def test_many_names_share_one_timeout(self):
         def mixed(host, port, *_args):
             if host == "down.example":

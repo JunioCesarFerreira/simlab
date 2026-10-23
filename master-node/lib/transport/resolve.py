@@ -183,7 +183,9 @@ class HostResolver:
         future = self._start(name, port)
         try:
             return future.result(timeout=self._timeout if timeout is None else timeout)
-        except BaseException as error:  # noqa: BLE001 - classified, then raised
+        except Exception as error:
+            # Not BaseException: the first health cycle runs on the main
+            # thread, and a Ctrl+C there is not a DNS failure.
             raise classify(name, error) from None
 
     def lookup_many(self, names: Iterable[str], *, timeout: Optional[float] = None
@@ -200,7 +202,7 @@ class HostResolver:
             try:
                 out[name] = futures[name].result(
                     timeout=max(0.0, deadline - time.monotonic()))
-            except BaseException as error:  # noqa: BLE001
+            except Exception as error:
                 out[name] = classify(name, error)
         return out
 
