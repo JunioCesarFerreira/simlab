@@ -1,9 +1,28 @@
 <template>
   <div class="usl-chart">
     <div class="usl-chart__bar">
+      <span class="usl-chart__hint">
+        Scroll to zoom · drag to pan · drag the bar below the chart to resize
+      </span>
+      <button
+        v-if="isZoomed"
+        type="button"
+        class="reset-zoom-btn"
+        title="Reset zoom to full view"
+        @click="resetZoom"
+      >
+        ↺ Reset zoom
+      </button>
       <ChartExportButton @click="exportPng" />
     </div>
-    <div ref="el" class="usl-chart__canvas" role="img" :aria-label="ariaLabel" />
+    <div
+      ref="el"
+      class="usl-chart__canvas"
+      :style="{ height: `${height}px` }"
+      role="img"
+      :aria-label="ariaLabel"
+    />
+    <ResizeHandle v-model="height" :label="`${name || 'USL'} chart`" :min="220" :max="1000" />
   </div>
 </template>
 
@@ -15,7 +34,9 @@ import { useTheme } from "../../composables/useTheme";
 import { chartExportBackground, chartPalette } from "../../services/chartTheme";
 import { chartExportFilename } from "../../utils/chartExport";
 import { formatThroughput, yAxisMax, type ChartData } from "../../services/usl";
+import { usePersistedHeight } from "../../composables/usePersistedHeight";
 import ChartExportButton from "../charts/ChartExportButton.vue";
+import ResizeHandle from "../common/ResizeHandle.vue";
 
 /**
  * Throughput against concurrency: what was measured, the USL fitted to it,
@@ -24,16 +45,30 @@ import ChartExportButton from "../charts/ChartExportButton.vue";
  * The model is drawn past the largest measured level and that part is
  * shaded, because a curve is worth showing where nothing was measured only
  * if the chart says that it is a prediction.
+ *
+ * Zoomable — the wheel zooms both axes, a drag pans, the slider under the
+ * chart picks the range of N — because the interesting part is often a few
+ * levels around the knee, squeezed between a long extrapolation and the
+ * origin. Resizable by the bar underneath, remembered for the session.
  */
 const props = defineProps<{
   data: ChartData;
-  /** Used for the export file name. */
+  /** Used for the export file name. A new name is a different chart, so it
+   *  starts zoomed out again. */
   name?: string;
+  /** Which remembered height to use: charts with different roles keep
+   *  their own. */
+  heightKey?: string;
 }>();
 
 const el = ref<HTMLElement | null>(null);
 const chart = useEChart(el);
 const { isDark } = useTheme();
+const height = usePersistedHeight(
+  `usl:${props.heightKey ?? "pool"}`,
+  typeof window !== "undefined" && window.innerWidth < 640 ? 300 : 380,
+);
+const isZoomed = ref(false);
 
 const ariaLabel = computed(() => {
   const peak = props.data.peak;
@@ -113,7 +148,23 @@ function option(data: ChartData, dark: boolean): EChartsOption {
   return {
     backgroundColor: c.bg,
     animation: false,
-    grid: { left: 64, right: 24, top: 40, bottom: 56 },
+    // Room under the axis name for the zoom slider.
+    grid: { left: 64, right: 24, top: 40, bottom: 88 },
+    dataZoom: [
+      // Wheel zooms, drag pans. `filterMode: none` keeps the lines whole
+      // instead of cutting them at the edge of the window.
+      { type: "inside", xAxisIndex: 0, yAxisIndex: 0, filterMode: "none" },
+      {
+        type: "slider",
+        xAxisIndex: 0,
+        filterMode: "none",
+        height: 18,
+        bottom: 8,
+        borderColor: c.grid,
+        textStyle: { color: c.muted, fontSize: 11 },
+        labelFormatter: (value: number) => String(Math.round(value)),
+      },
+    ],
     legend: {
       type: "scroll",
       top: 4,
@@ -189,13 +240,48 @@ function option(data: ChartData, dark: boolean): EChartsOption {
   };
 }
 
+// After the first render, updates replace only the series: everything else
+// merges, so the viewer's zoom survives the page's refresh of a running
+// benchmark instead of snapping back every few seconds.
+let initialized = false;
+
 function render() {
-  chart.setOption(option(props.data, isDark.value));
+  const next = option(props.data, isDark.value);
+  if (!initialized) {
+    chart.setOption(next, true);
+    initialized = true;
+    isZoomed.value = false;
+  } else {
+    chart.setOption(next, { replaceMerge: ["series"] });
+  }
 }
+
+function resetZoom() {
+  for (const dataZoomIndex of [0, 1]) {
+    chart.dispatch({ type: "dataZoom", dataZoomIndex, start: 0, end: 100 });
+  }
+  isZoomed.value = false;
+}
+
+chart.on("datazoom", () => {
+  isZoomed.value = true;
+});
 
 watch(() => props.data, render, { deep: true, immediate: true });
 watch(isDark, render);
-watch(chart.ready, (ready) => ready && render());
+watch(
+  () => props.name,
+  () => {
+    initialized = false;
+    render();
+  },
+);
+// A new chart instance (its element was recreated) starts from scratch.
+watch(chart.ready, (ready) => {
+  if (!ready) return;
+  initialized = false;
+  render();
+});
 
 function exportPng() {
   chart.exportImage(chartExportFilename(`usl-${props.name || "benchmark"}`), {
@@ -214,16 +300,36 @@ function exportPng() {
 .usl-chart__bar {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.usl-chart__hint {
+  margin-right: auto;
+  font-size: 11px;
+  color: var(--color-text-muted);
 }
 
 .usl-chart__canvas {
   width: 100%;
-  height: 380px;
+  /* height from the :style binding — resizable, bounded by the handle */
 }
 
-@media (max-width: 640px) {
-  .usl-chart__canvas {
-    height: 300px;
-  }
+.reset-zoom-btn {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.reset-zoom-btn:hover {
+  background: var(--color-primary);
+  color: #fff;
 }
 </style>

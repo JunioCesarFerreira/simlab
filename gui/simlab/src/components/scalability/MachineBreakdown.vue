@@ -74,7 +74,11 @@
       <p class="machines__reading">
         <strong>{{ selected.machine }}</strong> — {{ machineReading(selected) }}
       </p>
-      <UslChart :data="machineChartData(selected)" :name="`${name} · ${selected.machine}`" />
+      <UslChart
+        :data="machineChartData(selected)"
+        :name="`${name} · ${selected.machine}`"
+        height-key="machine"
+      />
     </template>
   </section>
 </template>
