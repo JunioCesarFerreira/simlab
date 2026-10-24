@@ -19,6 +19,7 @@ from typing import Any, Callable, Optional
 from bson import ObjectId
 
 from lib.detached import RUN_ARTIFACTS, LiveRunPresent, assert_no_live_run
+from lib.firmware_cache import FirmwareStateError
 from lib.transport import TransportError, build_transport
 from pylib.db.models.infra import operator_configured
 from pylib.timeutil import utc_now
@@ -235,6 +236,7 @@ class SimulationRunner:
         on_learn_host_key: Optional[Callable[[Any, str], None]] = None,
         lease_heartbeat_sec: float = LEASE_HEARTBEAT_SEC,
         prepare_budget_sec: float = PREPARE_BUDGET_SEC,
+        firmware: Any = None,
     ):
         self._mongo = mongo
         self._execute = execute
@@ -243,6 +245,9 @@ class SimulationRunner:
         self._on_release = on_release
         self._cleanup_local = cleanup_local
         self._on_learn_host_key = on_learn_host_key
+        # A ``FirmwareCache``, or ``None`` for the previous behaviour: every
+        # run clears the build and sends everything.
+        self._firmware = firmware
         # Only guarded against zero or negative, which would spin. The
         # operational floor belongs where the value is derived from the TTL,
         # not here — a test that wants millisecond beats is not a
@@ -368,10 +373,16 @@ class SimulationRunner:
                     raise TerminationUnconfirmed(
                         str(error), started=False) from error
 
-                # Defensive: clear artifacts left behind if a previous run
-                # crashed before its own cleanup could execute.
-                transport.cleanup()
-                transport.put_files(local_files, remote_files)
+                placement = self._place_firmware(
+                    transport, local_files, remote_files)
+                if placement is None:
+                    # Defensive: clear artifacts left behind if a previous run
+                    # crashed before its own cleanup could execute.
+                    transport.cleanup()
+                    transport.put_files(local_files, remote_files)
+                else:
+                    transport.put_files(
+                        placement.local_files, placement.remote_files)
                 self._refuse_if_lost(lost, attempt_id)
                 # And a direct renewal, so the reservation is demonstrably
                 # ours at the instant the run starts rather than one heartbeat
@@ -389,10 +400,34 @@ class SimulationRunner:
                 attempt_id=attempt_id,
             )
             self._publish(sim, sim_oid, attempt_id, report)
+            # Kept only behind a confirmed result that was published: that is
+            # the evidence the build in place is sound. Anything less clears
+            # it as before, and the manifest left `pending` makes the next run
+            # rebuild.
+            if (placement is not None and getattr(report, "confirmed", True)
+                    and self._firmware.keep(transport, placement)):
+                return
             self._clear_remote(transport, remote_files)
 
         self._on_container(sim, host, resource, attempt_id, body,
                            cleanup=lambda: local_files, measure=True)
+
+    def _place_firmware(
+        self, transport: Any, local_files: list[str], remote_files: list[str]
+    ) -> Any:
+        """Reuse the firmware in place, or clear it completely.
+
+        ``None`` without a ``FirmwareCache``. A state the cache could not
+        reach is a failed run: nothing has been sent and nothing is running,
+        and building on top of what the previous firmware left is exactly
+        what must not happen.
+        """
+        if self._firmware is None:
+            return None
+        try:
+            return self._firmware.place(transport, local_files, remote_files)
+        except FirmwareStateError as error:
+            raise RunFailed(str(error)) from error
 
     def resume(
         self,

@@ -409,6 +409,7 @@ documents — and a failure of the second used to propagate back and mark the
 | `RESERVATION_TTL_SEC` | `600` | How long a container may stay reserved without its simulation starting. Covers only that window — a run that got as far as `busy` is governed by `SIM_TIMEOUT_SEC` |
 | `INFRA_KEY_PATH` | `/run/secrets/simlab-infra/x25519.json` | The keystore that opens sealed credentials. The private half never leaves this process |
 | `COOJA_JVM_XMS` / `COOJA_JVM_XMX` | `1g` / `2g` | JVM heap for Cooja |
+| `FIRMWARE_REUSE` | `true` | Skip sending and rebuilding a firmware the container already holds, once a run built from it was confirmed. `false` never reuses but still removes a previous firmware completely. See `lib/firmware_cache.py` |
 | `ENABLE_DATA_SYNTHETIC` | `false` | Replace Cooja execution with a benchmark function for experiments without a per-experiment `synthetic` block (only affects simulations that reach the master-node — P0 experiments are evaluated in-process by the mo-engine) |
 | `BENCH` | `DTLZ2` | Benchmark to use in synthetic mode: `DTLZ2`, `ZDT1`, or `SCH1` |
 | `NOISE_STD` | `0.0` | Standard deviation of Gaussian noise added to synthetic objectives |

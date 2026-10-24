@@ -35,9 +35,24 @@ they finished.
   over its mean held time; each machine gets its own fit, speed relative to
   the fastest, and — when the measurements reach a peak — a recommended limit
   that can be applied from the table.
+- **Firmware reuse between runs on a container** (`FIRMWARE_REUSE`, on by
+  default). A run whose firmware matches the one already on the container
+  sends only `simulation.csc`/`positions.dat`, and Cooja's `make` relinks
+  from the objects in place: 0 files compiled against 109, with a library
+  byte-identical to a clean build. Reuse needs a manifest marked `valid`,
+  which only a confirmed and published run writes. The fingerprint covers the
+  content of every firmware file and the `.csc` mote types without their
+  motes, and the files on the container are checked against it before each
+  reuse. The manifest goes back to `pending` when a run starts, so any failure
+  makes the next run rebuild.
 
 ### Changed
 
+- **A changed firmware is removed completely before the new one is sent.**
+  This covers the files the manifest names, `build/cooja`, and any top-level
+  C source, header or Makefile. Before, the files of a failed or resumed run
+  were never removed, so a firmware with different file names left the old
+  ones in the build directory.
 - **The pool-wide USL curve is flagged when machines differ in speed.** It
   assumes interchangeable units; on a mixed pool the dispatcher fills the
   fastest machine first, and past its size the fit reads slower machines as

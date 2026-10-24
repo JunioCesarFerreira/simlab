@@ -27,6 +27,7 @@ from lib.detached import (
     inspect_run,
 )
 from lib.dns_watch import RESTART_EXIT_CODE, ResolverWatch
+from lib.firmware_cache import CSC_NAME, POSITIONS_NAME, FirmwareCache
 from lib.health import HealthMonitor
 from lib.recovery import reconcile_occupied_resources
 from lib.scheduler import (
@@ -93,6 +94,7 @@ class Settings:
     dns_self_restart: bool
     dns_restart_after_sec: float
     dns_restart_min_interval_sec: float
+    firmware_reuse: bool
 
     @staticmethod
     def from_env() -> "Settings":
@@ -142,6 +144,10 @@ class Settings:
         dns_restart_after_sec = float(os.getenv("DNS_RESTART_AFTER_SEC", "300"))
         dns_restart_min_interval_sec = float(
             os.getenv("DNS_RESTART_MIN_INTERVAL_SEC", "3600"))
+        # Skip sending and rebuilding a firmware the container already holds
+        # and has run successfully (see lib/firmware_cache.py). Off still
+        # clears the previous firmware completely; it only never reuses it.
+        firmware_reuse = to_bool(os.getenv("FIRMWARE_REUSE"), default=True)
 
         return Settings(
             is_docker=is_docker,
@@ -167,6 +173,7 @@ class Settings:
             dns_self_restart=dns_self_restart,
             dns_restart_after_sec=dns_restart_after_sec,
             dns_restart_min_interval_sec=dns_restart_min_interval_sec,
+            firmware_reuse=firmware_reuse,
         )
 
 
@@ -289,7 +296,7 @@ def prepare_simulation_files(
                   sim.get("csc_file_id"), sim.get("_id"), e)
         return False, local_files, remote_files
     local_files.append(str(local_xml))
-    remote_files.append("simulation.csc")
+    remote_files.append(CSC_NAME)
 
     # Positions (optional)
     if sim.get("pos_file_id"):
@@ -300,7 +307,7 @@ def prepare_simulation_files(
                       sim.get("pos_file_id"), sim.get("_id"), e)
             return False, local_files, remote_files
         local_files.append(str(local_dat))
-        remote_files.append("positions.dat")
+        remote_files.append(POSITIONS_NAME)
 
     # Source repository
     src_repo_id = sim.get("source_repository_id")
@@ -850,7 +857,10 @@ def build_dispatcher(
         # worker up in minutes instead of holding it until SIM_TIMEOUT_SEC
         # with a reservation that looks healthy.
         prepare_budget_sec=SET.reservation_ttl_sec * 3.0,
+        firmware=FirmwareCache(reuse=SET.firmware_reuse),
     )
+    log.info("Firmware reuse between runs: %s",
+             "on" if SET.firmware_reuse else "off")
     dispatcher = Dispatcher(
         mongo,
         runner,
