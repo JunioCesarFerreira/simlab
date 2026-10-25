@@ -89,6 +89,9 @@ class PlacementWorkerDto(TypedDict, total=False):
     #: Percentage of the *placed* simulations, not of every simulation: a run
     #: that never reached a container belongs to no worker.
     share: float
+    #: Mean ``end_time - start_time`` of the runs that finished Done; ``None``
+    #: when none did. Failed runs stop at arbitrary points and are left out.
+    mean_duration_sec: Optional[float]
 
 
 class PlacementHostDto(TypedDict, total=False):
@@ -99,6 +102,8 @@ class PlacementHostDto(TypedDict, total=False):
     failed: int
     active: int
     share: float
+    #: Weighted by run across the host's workers.
+    mean_duration_sec: Optional[float]
     workers: list[PlacementWorkerDto]
 
 

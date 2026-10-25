@@ -115,6 +115,22 @@ export function describeOutcome(worker: PlacementWorkerDto): string {
 }
 
 /**
+ * A worker's mean execution time.
+ *
+ * `—` when nothing finished there: a zero would read as the fastest worker,
+ * which is the opposite of "no measurement". Tenths only below a minute,
+ * where they still separate workers; past that they are noise.
+ */
+export function formatMeanDuration(seconds?: number | null): string {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return "—";
+  if (seconds < 60) return `${seconds.toFixed(1)} s`;
+  const total = Math.round(seconds);
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) return `${minutes} min ${total % 60} s`;
+  return `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+}
+
+/**
  * The sentence shown instead of the bars, or an empty string when there are
  * bars to show.
  *

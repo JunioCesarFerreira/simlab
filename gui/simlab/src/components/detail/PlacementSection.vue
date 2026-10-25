@@ -28,6 +28,13 @@
         <div class="pl-host-head">
           <span class="pl-host-name">{{ host.host_name }}</span>
           <span class="pl-host-share">{{ formatShare(host.share) }}</span>
+          <span
+            v-if="host.mean_duration_sec != null"
+            class="pl-host-mean"
+            title="Mean execution time over this host's runs that finished done"
+          >
+            avg {{ formatMeanDuration(host.mean_duration_sec) }}
+          </span>
           <span class="pl-host-count">{{ host.total }}</span>
         </div>
 
@@ -63,6 +70,16 @@
             />
           </div>
           <span class="pl-worker-share">{{ formatShare(worker.share) }}</span>
+          <span
+            class="pl-worker-mean"
+            :title="
+              worker.mean_duration_sec == null
+                ? 'No run finished done on this container'
+                : 'Mean execution time over the runs that finished done'
+            "
+          >
+            {{ formatMeanDuration(worker.mean_duration_sec) }}
+          </span>
           <span class="pl-worker-count">{{ describeOutcome(worker) }}</span>
         </div>
       </div>
@@ -72,7 +89,7 @@
         <span class="pl-key pl-key--active" />running
         <span class="pl-legend-note">
           Counted per simulation, so a replica that was repeated counts on both containers that ran
-          it.
+          it. Mean time runs from start to result, over the runs that finished done.
         </span>
       </p>
     </template>
@@ -87,6 +104,7 @@ import {
   busiestWorker,
   describeOutcome,
   emptyMessage,
+  formatMeanDuration,
   formatShare,
   segmentWidth,
   workerCount,
@@ -194,6 +212,12 @@ watch(() => props.experimentId, load, { immediate: true });
   color: var(--color-text-muted);
 }
 
+.pl-host-mean {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .pl-host-count {
   margin-left: auto;
   font-size: 11px;
@@ -203,7 +227,7 @@ watch(() => props.experimentId, load, { immediate: true });
 
 .pl-worker {
   display: grid;
-  grid-template-columns: minmax(80px, 150px) 1fr 56px auto;
+  grid-template-columns: minmax(80px, 150px) 1fr 56px 84px auto;
   align-items: center;
   gap: 10px;
   padding: 5px 0;
@@ -241,6 +265,13 @@ watch(() => props.experimentId, load, { immediate: true });
   text-align: right;
   font-variant-numeric: tabular-nums;
   font-weight: 600;
+}
+
+.pl-worker-mean {
+  text-align: right;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .pl-worker-count {
@@ -286,11 +317,11 @@ watch(() => props.experimentId, load, { immediate: true });
 
 @media (max-width: 640px) {
   .pl-worker {
-    grid-template-columns: minmax(70px, 1fr) 48px;
+    grid-template-columns: minmax(70px, 1fr) auto 48px;
     grid-template-areas:
-      "name share"
-      "bar  bar"
-      "count count";
+      "name  mean  share"
+      "bar   bar   bar"
+      "count count count";
   }
 
   .pl-worker-name {
@@ -303,6 +334,10 @@ watch(() => props.experimentId, load, { immediate: true });
 
   .pl-worker-share {
     grid-area: share;
+  }
+
+  .pl-worker-mean {
+    grid-area: mean;
   }
 
   .pl-worker-count {

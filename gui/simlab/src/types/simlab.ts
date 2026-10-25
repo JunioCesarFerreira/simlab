@@ -241,6 +241,11 @@ export interface PlacementWorkerDto {
   failed: number;
   active: number;
   share: number;
+  /**
+   * Mean `end_time - start_time` of the runs that finished Done, in seconds;
+   * `null` when none did. Failed runs stop at arbitrary points and are left out.
+   */
+  mean_duration_sec?: number | null;
 }
 
 export interface PlacementHostDto {
@@ -251,6 +256,8 @@ export interface PlacementHostDto {
   failed: number;
   active: number;
   share: number;
+  /** Weighted by run across the host's workers, not a mean of their means. */
+  mean_duration_sec?: number | null;
   workers: PlacementWorkerDto[];
 }
 

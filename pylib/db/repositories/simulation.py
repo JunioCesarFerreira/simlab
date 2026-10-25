@@ -12,6 +12,11 @@ from pylib.timeutil import utc_now
 log = logging.getLogger(__name__)
 
 
+def _mean_sec(duration_ms: float, runs: int) -> Optional[float]:
+    """A mean duration in seconds, or ``None`` when nothing was timed."""
+    return round(duration_ms / runs / 1000.0, 1) if runs else None
+
+
 class SimulationRepository:
     def __init__(self, connection: MongoDBConnection):
         self.connection = connection
@@ -423,6 +428,7 @@ class SimulationRepository:
             }))
 
     def placement_distribution(self, experiment_id: ObjectId) -> dict:
+
         """How an experiment's work was spread over the containers that ran it.
 
         The placement is denormalized onto each simulation at reservation
@@ -441,7 +447,22 @@ class SimulationRepository:
         reservation, belongs to no container, and silently excluding it would
         make the percentages describe a smaller experiment than the one that
         exists.
+
+        ``mean_duration_sec`` is the mean of ``end_time - start_time`` over the
+        simulations that finished **Done**: from ``mark_running`` to the
+        published result, so it includes the collection but not the upload. A
+        failed run is left out because it stops at an arbitrary point — a
+        timeout reads as the slowest worker, a crash at launch as the fastest.
+        ``None`` when no finished run has both times. The host's mean is
+        weighted by run, not a mean of its workers' means.
         """
+        # Typed, so a record whose times are missing or not dates is skipped
+        # instead of failing the whole aggregation.
+        timed = {"$and": [
+            {"$eq": ["$status", EnumStatus.DONE]},
+            {"$eq": [{"$type": "$start_time"}, "date"]},
+            {"$eq": [{"$type": "$end_time"}, "date"]},
+        ]}
         with self.connection.connect() as db:
             rows = list(db["simulations"].aggregate([
                 {"$match": {"experiment_id": experiment_id}},
@@ -461,6 +482,9 @@ class SimulationRepository:
                     "active": {"$sum": {"$cond": [
                         {"$in": ["$status", [EnumStatus.WAITING,
                                              EnumStatus.RUNNING]]}, 1, 0]}},
+                    "timed": {"$sum": {"$cond": [timed, 1, 0]}},
+                    "duration_ms": {"$sum": {"$cond": [
+                        timed, {"$subtract": ["$end_time", "$start_time"]}, 0]}},
                 }},
             ]))
 
@@ -481,18 +505,24 @@ class SimulationRepository:
                 "host_id": str(key["host_id"]) if key.get("host_id") else None,
                 "host_name": key.get("host") or "(unregistered host)",
                 "total": 0, "done": 0, "failed": 0, "active": 0,
+                "timed": 0, "duration_ms": 0,
                 "workers": [],
             })
+            timed_runs = int(row.get("timed") or 0)
+            duration_ms = float(row.get("duration_ms") or 0)
             host["total"] += row["total"]
             host["done"] += row["done"]
             host["failed"] += row["failed"]
             host["active"] += row["active"]
+            host["timed"] += timed_runs
+            host["duration_ms"] += duration_ms
             host["workers"].append({
                 "resource_id": (str(key["resource_id"])
                                 if key.get("resource_id") else None),
                 "resource_name": resource_name,
                 "total": row["total"], "done": row["done"],
                 "failed": row["failed"], "active": row["active"],
+                "mean_duration_sec": _mean_sec(duration_ms, timed_runs),
             })
 
         def share(count: int) -> float:
@@ -500,6 +530,8 @@ class SimulationRepository:
 
         for host in hosts.values():
             host["share"] = share(host["total"])
+            host["mean_duration_sec"] = _mean_sec(
+                host.pop("duration_ms"), host.pop("timed"))
             host["workers"].sort(key=lambda w: (-w["total"], w["resource_name"]))
             for worker in host["workers"]:
                 worker["share"] = share(worker["total"])
