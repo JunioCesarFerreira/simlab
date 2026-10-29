@@ -5,6 +5,41 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Choosing the seed aggregator
+
+The engine has long accepted `parameters.simulation.aggregator` (Ψa) — how the
+seeds of one individual become a single objective value — but nothing in the
+GUI set or showed it, so every experiment launched from the wizard used the
+mean.
+
+### Added
+
+- **Seed aggregation in the launch wizard.** Step 3 (*Simulation*) picks mean,
+  median, trimmed mean, minimum or maximum. The trimmed mean takes a trim per
+  end and says how many seeds it drops for the current list — with eight seeds
+  a trim of 0.1 drops none and equals the mean. Minimum and maximum carry a
+  note that they apply to every metric whatever its objective's goal.
+- **The aggregator is shown** in the experiment detail (*Simulation*;
+  `mean (default)` for experiments that do not record one) and in the
+  comparison table.
+
+### Changed
+
+- **`POST /experiments/` rejects an invalid aggregator with 422.** The engine
+  reads it only once the first generation's simulations are done, so a typo
+  cost a generation of runs before failing. Unknown parameters are rejected
+  too: `{"kind": "trimmed_mean", "trimm": 0.1}` used to run as a plain mean.
+- **The seed aggregator moved to `pylib/seed_aggregation.py`**, out of
+  `statistics.py`, so the API can validate it without installing pandas.
+
+### Fixed
+
+- **Analytical problems (P0) use the configured aggregator.** They always
+  averaged the per-seed benchmark values, whatever the experiment said. The
+  mean is computed exactly as before.
+
+---
+
 ## [Unreleased] — Using a mixed pool efficiently
 
 Measured on the deployment: in the last NSGA-III run with eight VMs of one

@@ -77,15 +77,57 @@
         @change="handleImport"
       />
     </div>
+
+    <div class="section-divider">Seed aggregation</div>
+
+    <p class="hint">
+      How the seeds of one individual are combined into a single value per metric — the objective
+      value the optimizer compares.
+    </p>
+
+    <div class="field-group">
+      <label class="field-label" for="sim-aggregator">Aggregation function</label>
+      <select
+        id="sim-aggregator"
+        :value="modelValue.aggregator"
+        @change="updateAggregator(($event.target as HTMLSelectElement).value as SeedAggregatorKind)"
+      >
+        <option v-for="opt in SEED_AGGREGATORS" :key="opt.kind" :value="opt.kind">{{ opt.label }}</option>
+      </select>
+      <span class="agg-hint">{{ aggregatorHint }}</span>
+    </div>
+
+    <div v-if="modelValue.aggregator === 'trimmed_mean'" class="field-group">
+      <label class="field-label" for="sim-trim">Trim per end (fraction) <span class="required">*</span></label>
+      <input
+        id="sim-trim"
+        :value="modelValue.trim"
+        type="number" min="0" max="0.49" step="0.05"
+        @input="updateTrim(($event.target as HTMLInputElement).value)"
+      />
+      <span v-if="trimError" class="err">Trim must be at least 0 and below 0.5.</span>
+      <span v-else class="agg-hint">{{ trimSummary }}</span>
+    </div>
+
+    <p v-if="extremeAggregator" class="agg-note warn-banner">
+      Applied to every metric whatever its objective's goal: the {{ extremeAggregator.name }} is the
+      worst case for a metric you {{ extremeAggregator.worstFor }} and the best case for one you
+      {{ extremeAggregator.bestFor }}.
+    </p>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onBeforeUnmount } from 'vue'
+import type { SeedAggregatorKind } from '../../../../types/simlab'
+import { SEED_AGGREGATORS, isValidTrim, trimmedPerSide } from '../../../../lib/seedAggregator'
 
 export interface Step3Value {
   duration: number
   randomSeeds: number[]
+  aggregator: SeedAggregatorKind
+  /** Only used when aggregator is trimmed_mean. */
+  trim: number
 }
 
 const props = defineProps<{ modelValue: Step3Value; showValidation: boolean }>()
@@ -107,6 +149,35 @@ const PRESETS = [
 
 function updateDuration(raw: string) {
   emit('update:modelValue', { ...props.modelValue, duration: parseInt(raw, 10) || 1 })
+}
+
+// ── Seed aggregation ─────────────────────────────────────────────────────────
+
+const aggregatorHint = computed(
+  () => SEED_AGGREGATORS.find((o) => o.kind === props.modelValue.aggregator)?.hint ?? '',
+)
+const trimError = computed(() => !isValidTrim(props.modelValue.trim))
+
+const trimSummary = computed(() => {
+  const n = props.modelValue.randomSeeds.length
+  if (n === 0) return 'Fraction of the seeds dropped from each end.'
+  const k = trimmedPerSide(props.modelValue.trim, n)
+  if (k === 0) return `With ${n} seed${n !== 1 ? 's' : ''} this drops nothing, so it equals the mean.`
+  return `With ${n} seeds, drops ${k} from each end and averages the remaining ${n - 2 * k}.`
+})
+
+const extremeAggregator = computed(() => {
+  if (props.modelValue.aggregator === 'max') return { name: 'maximum', worstFor: 'minimize', bestFor: 'maximize' }
+  if (props.modelValue.aggregator === 'min') return { name: 'minimum', worstFor: 'maximize', bestFor: 'minimize' }
+  return null
+})
+
+function updateAggregator(kind: SeedAggregatorKind) {
+  emit('update:modelValue', { ...props.modelValue, aggregator: kind })
+}
+
+function updateTrim(raw: string) {
+  emit('update:modelValue', { ...props.modelValue, trim: parseFloat(raw) })
 }
 
 function addSeed() {
@@ -234,6 +305,17 @@ input {
   font-size: 13px; color: var(--color-text); background: var(--color-surface); outline: none; width: 100%;
 }
 input:focus { border-color: var(--color-primary); }
+select {
+  padding: 7px 10px; border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+  font-size: 13px; color: var(--color-text); background: var(--color-surface); outline: none; width: 100%;
+}
+select:focus { border-color: var(--color-primary); }
+.agg-hint { font-size: 11px; color: var(--color-text-muted); line-height: 1.4; }
+.agg-note {
+  font-size: 12px; line-height: 1.5; color: #b45309;
+  background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: var(--radius-sm); padding: 8px 10px; margin: 0;
+}
 .add-btn {
   padding: 7px 14px; background: var(--color-primary); color: #fff;
   border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; border: none; cursor: pointer;

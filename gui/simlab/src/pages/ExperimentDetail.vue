@@ -188,6 +188,10 @@
                   }}</span>
                 </span>
               </div>
+              <div class="param-row">
+                <span class="pk">seed aggregator</span>
+                <span class="pv mono">{{ seedAggregatorLabel }}</span>
+              </div>
               <div v-for="(val, key) in simulationOtherParams" :key="key" class="param-row">
                 <span class="pk">{{ key }}</span>
                 <span class="pv mono">{{ formatParamVal(val) }}</span>
@@ -453,6 +457,7 @@ import { confirmDialog } from "../composables/useConfirm";
 import { reportRuntimeError } from "../composables/useRuntimeError";
 import type { IndividualDto, JsonObject, ParetoFrontItemDto } from "../types/simlab";
 import { isPenalized } from "../types/simlab";
+import { formatSeedAggregator } from "../lib/seedAggregator";
 import { computeRanks } from "../utils/nonDominatedSort";
 import { useParetoRanks } from "../composables/useParetoRanks";
 
@@ -690,10 +695,14 @@ const simulationOtherParams = computed(() => {
   const sim = store.experiment?.parameters?.simulation ?? {};
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(sim)) {
-    if (k !== "random_seeds") out[k] = v;
+    if (k !== "random_seeds" && k !== "aggregator") out[k] = v;
   }
   return out;
 });
+
+const seedAggregatorLabel = computed(() =>
+  formatSeedAggregator(store.experiment?.parameters?.simulation?.aggregator),
+);
 
 const totalSimulations = computed(() => {
   const gens = store.experiment?.generations ?? [];

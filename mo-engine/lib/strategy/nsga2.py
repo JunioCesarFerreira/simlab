@@ -769,7 +769,7 @@ class NSGA2LoopStrategy(EngineStrategy):
                     self._problem_adapter, genome, genome_hash,
                     bench=self._bench, noise_std=self._noise_std, sch1_domain=self._sch1_domain,
                     seeds=self._sim_rand_seeds, n_obj=len(self._objective_keys),
-                    objective_goals=self._objective_goals,
+                    objective_goals=self._objective_goals, aggregator=self._aggregator,
                 )
                 self._map_genome_objectives[genome] = obj_min
                 analytical_record = without_simulations(

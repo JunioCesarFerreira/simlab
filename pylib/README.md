@@ -29,6 +29,7 @@ from pylib.db import create_mongo_repository_factory
 | `timeutil.py` | Aware-UTC timestamps, and arithmetic that tolerates the naive values written before that convention |
 | `db/connection.py` | The Mongo client, built `tz_aware` — which is what makes a stored instant readable as one instead of a wall clock nobody can place |
 | `statistics.py`, `moo_metrics.py` | Metric evaluation and multi-objective quality indicators |
+| `seed_aggregation.py` | The seed aggregator (Ψa) that turns an individual's replicas into one objective value. No pandas, so the API can validate an experiment's aggregator |
 | `cooja_files.py`, `cooja_builder/` | Reading Cooja's output and writing its inputs |
 | `rpl_dodag.py` | DODAG formation and tree, from a testlog |
 | `telemetry/` | Runtime metric collection |

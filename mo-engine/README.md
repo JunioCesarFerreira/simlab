@@ -122,6 +122,10 @@ All strategies support a `parameters.simulation.aggregator` field that controls 
 }
 ```
 
+It applies to analytical problems (P0) as well. `POST /experiments/` validates
+it (`pylib/seed_aggregation.py`) and answers 422 for an unknown kind or
+parameter, and the GUI launch wizard sets it in step 3 (*Simulation*).
+
 ---
 
 ## Operation Flow

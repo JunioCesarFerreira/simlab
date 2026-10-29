@@ -1,6 +1,6 @@
 """Tests for AGGREGATOR_DISPATCH and aggregate_seed_values (C4 — Ψa plural)."""
 import pytest
-from pylib.statistics import (
+from pylib.seed_aggregation import (
     AGGREGATOR_DISPATCH,
     aggregate_seed_values,
     resolve_aggregator,

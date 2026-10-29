@@ -83,6 +83,36 @@ class TestCreateExperiment:
         resp = client.post(f"{BASE}/", json=_VALID_PAYLOAD)
         assert resp.status_code == 500
 
+    @staticmethod
+    def _with_aggregator(aggregator):
+        payload = {**_VALID_PAYLOAD, "parameters": {**_VALID_PAYLOAD["parameters"]}}
+        payload["parameters"]["simulation"] = {"duration": 60, "random_seeds": [1, 2], "aggregator": aggregator}
+        return payload
+
+    @pytest.mark.parametrize("aggregator", [
+        "mean", "median", "min", "max",
+        {"kind": "trimmed_mean", "trim": 0.2},
+    ])
+    def test_valid_aggregator_is_stored(self, client, mock_factory, aggregator):
+        mock_factory.experiment_repo.insert.return_value = ObjectId(EXP_ID)
+        resp = client.post(f"{BASE}/", json=self._with_aggregator(aggregator))
+        assert resp.status_code == 200
+        doc = mock_factory.experiment_repo.insert.call_args.args[0]
+        assert doc["parameters"]["simulation"]["aggregator"] == aggregator
+
+    @pytest.mark.parametrize("aggregator", [
+        "average",
+        {"kind": "trimmed_mean", "trim": 0.5},
+        {"kind": "trimmed_mean", "trimm": 0.1},
+        42,
+        None,
+    ])
+    def test_invalid_aggregator_returns_422(self, client, mock_factory, aggregator):
+        resp = client.post(f"{BASE}/", json=self._with_aggregator(aggregator))
+        assert resp.status_code == 422
+        assert "aggregator" in resp.json()["detail"]
+        mock_factory.experiment_repo.insert.assert_not_called()
+
 
 # ── GET / (list all) ───────────────────────────────────────────────────────────
 class TestGetAllExperiments:

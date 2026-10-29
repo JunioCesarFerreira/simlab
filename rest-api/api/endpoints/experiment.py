@@ -19,6 +19,7 @@ from bson import ObjectId
 from pylib import benchmarks, moo_metrics
 from pylib.db import MongoRepository
 from pylib.firmware_snapshot import iter_snapshot_files
+from pylib.seed_aggregation import resolve_aggregator
 from pylib.db.models.enums import EnumStatus
 from api.dependencies import get_factory
 from api.metrics_cache import hv_gd_cache
@@ -43,12 +44,24 @@ from pylib.timeutil import utc_now
 router = APIRouter()
 
 
+def _validate_seed_aggregator(simulation: dict) -> None:
+    # The engine reads it only once the first generation's simulations are
+    # done, so a bad value would otherwise cost a whole generation of runs.
+    if "aggregator" not in simulation:
+        return
+    try:
+        resolve_aggregator(simulation["aggregator"])
+    except (TypeError, ValueError) as e:
+        raise HTTPException(status_code=422, detail=f"parameters.simulation.aggregator: {e}")
+
+
 @router.post("/", response_model=str)
 def create_experiment(
     experiment: ExperimentDto,
     factory: MongoRepository = Depends(get_factory)
 ) -> str:
     """Create a new experiment. Returns the generated experiment_id."""
+    _validate_seed_aggregator(experiment["parameters"]["simulation"])
     try:
         doc = experiment_to_mongo(experiment)
         return str(factory.experiment_repo.insert(doc))

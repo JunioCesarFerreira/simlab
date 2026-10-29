@@ -91,10 +91,18 @@ export interface SyntheticConfigDto {
   noise_std?: number;
 }
 
+/** Seed aggregator (Ψa), see pylib/seed_aggregation.py. Only trimmed_mean takes a parameter. */
+export type SeedAggregatorKind = "mean" | "median" | "trimmed_mean" | "min" | "max";
+export type SeedAggregatorSpec =
+  | SeedAggregatorKind
+  | { kind: SeedAggregatorKind; trim?: number };
+
 export interface SimulationParamsDto {
   duration?: number;
   random_seeds?: number[];
   random_seeds_count?: number;
+  /** Absent means "mean", the engine's default. */
+  aggregator?: SeedAggregatorSpec;
   synthetic?: SyntheticConfigDto;
   // See AlgorithmParamsDto for why this is `unknown`.
   [k: string]: unknown;

@@ -107,6 +107,12 @@ import { useProblemStore } from '../../../app/stores/problemStore'
 import { capabilitiesFor, defaultExtraParams } from '../../../lib/problemCapabilities'
 import { exportProblem } from '../../../services/exportProblemJson'
 import { defaultDataConversion } from '../../../services/defaultDataConversion'
+import {
+  DEFAULT_SEED_AGGREGATOR,
+  DEFAULT_TRIM,
+  buildSeedAggregator,
+  isValidTrim,
+} from '../../../lib/seedAggregator'
 import { createExperiment } from '../../../api/experiments'
 import { getAllRepositories } from '../../../api/repositories'
 import type { DataConversionConfigDto, JsonObject, ObjectiveItem, SourceRepositoryDto } from '../../../types/simlab'
@@ -192,6 +198,8 @@ const form = reactive<{
   simulation: {
     duration: 180,
     randomSeeds: [336157, 667370, 35239, 873465, 987654, 123456, 493499, 5343],
+    aggregator: DEFAULT_SEED_AGGREGATOR,
+    trim: DEFAULT_TRIM,
   },
   objectives: [
     { metric_name: 'latency',    goal: 'min' },
@@ -211,7 +219,11 @@ const canProceed = computed((): boolean => {
       form.experiment.sourceOptions.length > 0 &&
       form.experiment.sourceOptions.every(o => o.protocol.trim().length > 0 && o.repoId.trim().length > 0)
     )
-    case 3: return form.simulation.randomSeeds.length > 0 && form.simulation.duration >= 1
+    case 3: return (
+      form.simulation.randomSeeds.length > 0 &&
+      form.simulation.duration >= 1 &&
+      (form.simulation.aggregator !== 'trimmed_mean' || isValidTrim(form.simulation.trim))
+    )
     case 4: return (
       form.objectives.length > 0 &&
       form.objectives.every(o => o.metric_name.trim().length > 0)
@@ -302,6 +314,7 @@ async function submit() {
         simulation: {
           duration:     form.simulation.duration,
           random_seeds: form.simulation.randomSeeds,
+          aggregator:   buildSeedAggregator(form.simulation.aggregator, form.simulation.trim),
         },
         problem: exported.problem as JsonObject,
         objectives: form.objectives,

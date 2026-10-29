@@ -123,6 +123,24 @@ class TestAnalyticalEvaluation:
         many = self._eval(seeds=[1, 2, 3])
         assert one[0] == pytest.approx(many[0])   # no noise → mean equals single eval
 
+    @pytest.mark.parametrize("aggregator, collapse", [
+        ("median", lambda v: sorted(v)[1]),
+        ("max", max),
+        ("min", min),
+    ])
+    def test_multiseed_uses_configured_aggregator(self, aggregator, collapse):
+        seeds = [1, 2, 3]
+        per_seed = [self._eval(noise_std=0.5, seeds=[s])[0] for s in seeds]
+        orig, _ = self._eval(noise_std=0.5, seeds=seeds, aggregator=aggregator)
+        for j in range(2):
+            assert orig[j] == pytest.approx(collapse([p[j] for p in per_seed]))
+
+    def test_multiseed_default_is_mean(self):
+        seeds = [1, 2, 3]
+        per_seed = [self._eval(noise_std=0.5, seeds=[s])[0] for s in seeds]
+        orig, _ = self._eval(noise_std=0.5, seeds=seeds)
+        assert orig[0] == pytest.approx(sum(p[0] for p in per_seed) / 3)
+
     def test_minimization_space_applies_goals(self):
         orig, minimization = self._eval(objective_goals=[1, -1])
         assert minimization[0] == pytest.approx(orig[0])

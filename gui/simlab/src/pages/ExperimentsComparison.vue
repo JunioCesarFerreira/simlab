@@ -101,6 +101,11 @@
                 <td>{{ seedsCount(result.expB) }}</td>
               </tr>
               <tr>
+                <td>Seed aggregator</td>
+                <td>{{ formatSeedAggregator(result.expA.parameters.simulation?.aggregator) }}</td>
+                <td>{{ formatSeedAggregator(result.expB.parameters.simulation?.aggregator) }}</td>
+              </tr>
+              <tr>
                 <td>Sim. duration (s)</td>
                 <td>{{ fmtParam(result.expA.parameters.simulation?.duration) }}</td>
                 <td>{{ fmtParam(result.expB.parameters.simulation?.duration) }}</td>
@@ -277,6 +282,7 @@ import { getExperiment } from '../api/experiments';
 import client from '../api/client';
 import type { HvGdData, Population } from '../api/metrics';
 import { populationCaption, populationLabel } from '../lib/metricPopulation';
+import { formatSeedAggregator } from '../lib/seedAggregator';
 import type { CampaignInfoDto, ExperimentDto, ObjectiveItem } from '../types/simlab';
 import { extractFront, coverage, epsilonIndicator, igdPlus, spacing } from '../utils/comparisonMetrics';
 import { chartExportFilename } from '../utils/chartExport';

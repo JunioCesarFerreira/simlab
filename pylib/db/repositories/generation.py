@@ -588,7 +588,7 @@ class GenerationRepository:
                     accumulated[ind_id].setdefault(m, []).append(float(metrics_map[m]))
 
         # Aggregate per seed using Ψa
-        from pylib.statistics import resolve_aggregator, AGGREGATOR_DISPATCH
+        from pylib.seed_aggregation import resolve_aggregator, AGGREGATOR_DISPATCH
         kind, params = resolve_aggregator(aggregator)
         agg_fn = AGGREGATOR_DISPATCH[kind]
 
