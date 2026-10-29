@@ -46,7 +46,12 @@
             :show-validation="showValidation"
           />
           <Step3Simulation v-else-if="currentStep === 3" v-model="form.simulation" :show-validation="showValidation" />
-          <Step4Objectives v-else-if="currentStep === 4" v-model="form.objectives" :show-validation="showValidation" />
+          <Step4Objectives
+            v-else-if="currentStep === 4"
+            v-model="form.objectives"
+            :seeds-count="form.simulation.randomSeeds.length"
+            :show-validation="showValidation"
+          />
           <Step5DataConversion v-else-if="currentStep === 5" v-model="form.dataConversion" :show-validation="showValidation" />
         </div>
 
@@ -109,9 +114,8 @@ import { exportProblem } from '../../../services/exportProblemJson'
 import { defaultDataConversion } from '../../../services/defaultDataConversion'
 import {
   DEFAULT_SEED_AGGREGATOR,
-  DEFAULT_TRIM,
-  buildSeedAggregator,
-  isValidTrim,
+  conflictingAggregatorMetrics,
+  isValidSeedAggregator,
 } from '../../../lib/seedAggregator'
 import { createExperiment } from '../../../api/experiments'
 import { getAllRepositories } from '../../../api/repositories'
@@ -198,13 +202,11 @@ const form = reactive<{
   simulation: {
     duration: 180,
     randomSeeds: [336157, 667370, 35239, 873465, 987654, 123456, 493499, 5343],
-    aggregator: DEFAULT_SEED_AGGREGATOR,
-    trim: DEFAULT_TRIM,
   },
   objectives: [
-    { metric_name: 'latency',    goal: 'min' },
-    { metric_name: 'energy',     goal: 'min' },
-    { metric_name: 'throughput', goal: 'max' },
+    { metric_name: 'latency',    goal: 'min', aggregator: DEFAULT_SEED_AGGREGATOR },
+    { metric_name: 'energy',     goal: 'min', aggregator: DEFAULT_SEED_AGGREGATOR },
+    { metric_name: 'throughput', goal: 'max', aggregator: DEFAULT_SEED_AGGREGATOR },
   ],
   dataConversion: defaultDataConversion(),
 })
@@ -219,14 +221,11 @@ const canProceed = computed((): boolean => {
       form.experiment.sourceOptions.length > 0 &&
       form.experiment.sourceOptions.every(o => o.protocol.trim().length > 0 && o.repoId.trim().length > 0)
     )
-    case 3: return (
-      form.simulation.randomSeeds.length > 0 &&
-      form.simulation.duration >= 1 &&
-      (form.simulation.aggregator !== 'trimmed_mean' || isValidTrim(form.simulation.trim))
-    )
+    case 3: return form.simulation.randomSeeds.length > 0 && form.simulation.duration >= 1
     case 4: return (
       form.objectives.length > 0 &&
-      form.objectives.every(o => o.metric_name.trim().length > 0)
+      form.objectives.every(o => o.metric_name.trim().length > 0 && isValidSeedAggregator(o.aggregator)) &&
+      conflictingAggregatorMetrics(form.objectives).length === 0
     )
     case 5: return (
       form.dataConversion.node_col.trim().length > 0 &&
@@ -314,7 +313,6 @@ async function submit() {
         simulation: {
           duration:     form.simulation.duration,
           random_seeds: form.simulation.randomSeeds,
-          aggregator:   buildSeedAggregator(form.simulation.aggregator, form.simulation.trim),
         },
         problem: exported.problem as JsonObject,
         objectives: form.objectives,

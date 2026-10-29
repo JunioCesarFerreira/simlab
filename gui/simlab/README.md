@@ -156,8 +156,8 @@ Open a campaign and click **Launch experiment**. The wizard walks through:
 |---|---|---|
 | 1 | **Problem** | Select the saved WSN problem to optimise |
 | 2 | **Experiment** | Algorithm (NSGA-II / NSGA-III / variants), source repository (firmware), population size, number of generations, crossover/mutation rates, NSGA-III divisions |
-| 3 | **Simulation** | Simulation duration (seconds), random seeds, and the seed aggregation function that turns an individual's seeds into one objective value (mean / median / trimmed mean / min / max) |
-| 4 | **Objectives** | One row per metric to optimise — name (e.g. `energy`, `latency`, `coverage`) and direction (`Minimize` / `Maximize`) |
+| 3 | **Simulation** | Simulation duration (seconds), random seeds |
+| 4 | **Objectives** | One row per metric to optimise — name (e.g. `energy`, `latency`, `coverage`), direction (`Minimize` / `Maximize`), and how its value is combined across seeds (mean / median / trimmed mean / min / max). The row says when min/max judges an individual by its worst or best seed |
 | 5 | **Data conversion** | Column names in the Cooja CSV log, plus one aggregation rule (mean / max / min / last) per metric |
 
 #### Tip — reusing seeds across experiments

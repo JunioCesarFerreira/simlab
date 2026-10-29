@@ -12,7 +12,7 @@ import random
 from typing import Sequence
 
 from pylib import benchmarks
-from pylib.seed_aggregation import AGGREGATOR_DISPATCH, resolve_aggregator
+from pylib.seed_aggregation import aggregate_seed_values
 
 
 def analytical_objectives(
@@ -26,7 +26,7 @@ def analytical_objectives(
     seeds: Sequence[int],
     n_obj: int,
     objective_goals: Sequence[int],
-    aggregator: "str | dict" = "mean",
+    aggregators: "Sequence[str | dict] | None" = None,
 ) -> tuple[list[float], list[float]]:
     """Evaluate *genome* analytically.
 
@@ -36,10 +36,11 @@ def analytical_objectives(
       * ``minimization`` — the same values mapped to minimisation space via
         ``objective_goals`` (what the NSGA loop consumes).
 
-    The benchmark is evaluated once per simulation seed and the per-seed values
-    are collapsed with *aggregator* (Ψa, ``parameters.simulation.aggregator``),
-    the same one used for simulation-based problems. The per-(seed, genome) RNG
-    makes noisy evaluations reproducible.
+    The benchmark is evaluated once per simulation seed and each objective's
+    per-seed values are collapsed with its seed aggregator (Ψa), *aggregators*
+    in objective order (mean when omitted) — the same ones used for
+    simulation-based problems. The per-(seed, genome) RNG makes noisy
+    evaluations reproducible.
     """
     dv = adapter.decision_vector(genome)
     seed_list = list(seeds) or [0]
@@ -51,12 +52,10 @@ def analytical_objectives(
         )
         for seed in seed_list
     ]
-    kind, params = resolve_aggregator(aggregator)
-    if kind == "mean" and not params:
-        # The original expression, so mean results stay bit-identical.
-        original = [sum(col) / len(col) for col in zip(*per_seed)]
-    else:
-        agg_fn = AGGREGATOR_DISPATCH[kind]
-        original = [agg_fn(list(col), params) for col in zip(*per_seed)]
+    specs = list(aggregators) if aggregators is not None else ["mean"] * n_obj
+    original = [
+        aggregate_seed_values(list(col), spec)
+        for col, spec in zip(zip(*per_seed), specs, strict=True)
+    ]
     minimization = [g * v for g, v in zip(objective_goals, original)]
     return original, minimization

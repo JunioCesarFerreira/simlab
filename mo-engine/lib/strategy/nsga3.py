@@ -31,6 +31,7 @@ from .library_rng import dump_random_state, load_random_state
 from .analytical import analytical_objectives
 from pylib import benchmarks
 from pylib.timeutil import utc_now
+from pylib.seed_aggregation import objective_aggregators
 from lib.strategy.completeness import (
     STATE_ANALYTICAL,
     STATE_INFEASIBLE,
@@ -99,7 +100,6 @@ class NSGA3LoopStrategy(EngineStrategy):
         # --- simulation and algorithm parameters ---
         self._sim_duration: int = int(simulation_config.get("duration", 120))
         self._sim_rand_seeds: list[int] = [int(x) for x in simulation_config.get("random_seeds", [123456])]
-        self._aggregator: "str | dict" = simulation_config.get("aggregator", "mean")
         self._pop_size: int = int(algorithm_config.get("population_size", 20))
         self._max_gen: int = int(algorithm_config.get("number_of_generations", 5))
         self._prob_cx = float(algorithm_config.get("prob_cx", 0.8))
@@ -118,6 +118,7 @@ class NSGA3LoopStrategy(EngineStrategy):
 
         obj = params.get("objectives", []) or []
         self._objective_keys: list[str] = [o["metric_name"] for o in obj]
+        self._aggregators = objective_aggregators(obj, simulation_config.get("aggregator", "mean"))
         # What an objective vector is allowed to rest on. The policy is
         # read from the experiment rather than assumed, because "use a
         # mean over whichever replicas happened to finish" is a
@@ -272,7 +273,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         map_ind_metrics = self.mongo.generation_repo.get_simulations_metrics_by_individual(
             generation_id=self._generation_id,
             metrics=self._objective_keys,
-            aggregator=self._aggregator,
+            aggregators=dict(zip(self._objective_keys, self._aggregators)),
         )
 
         n_obj = len(self._objective_keys)
@@ -782,7 +783,7 @@ class NSGA3LoopStrategy(EngineStrategy):
                     self._problem_adapter, genome, genome_hash,
                     bench=self._bench, noise_std=self._noise_std, sch1_domain=self._sch1_domain,
                     seeds=self._sim_rand_seeds, n_obj=len(self._objective_keys),
-                    objective_goals=self._objective_goals, aggregator=self._aggregator,
+                    objective_goals=self._objective_goals, aggregators=self._aggregators,
                 )
                 self._map_genome_objectives[genome] = obj_min
                 analytical_record = without_simulations(

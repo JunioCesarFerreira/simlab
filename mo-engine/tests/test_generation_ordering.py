@@ -107,7 +107,7 @@ def test_analytical_enqueue_skips_simulations(cls):
     strat._exp_id = ObjectId()
     strat._gen_index = 0
     strat._sim_rand_seeds = [42]
-    strat._aggregator = "mean"
+    strat._aggregators = ["mean", "mean"]
     # The enqueue snapshots this onto the generation document, for resume.
     strat._ga_rng = random.Random(42)
     strat._genome_objectives_cache = {}

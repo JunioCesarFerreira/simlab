@@ -39,6 +39,8 @@ export type SimulationStatus = "Waiting" | "Running" | "Done" | "Error";
 export interface ObjectiveItem {
   metric_name: string;
   goal: "min" | "max" | string;
+  /** Absent means simulation.aggregator, else mean. */
+  aggregator?: SeedAggregatorSpec;
 }
 
 export interface MetricItem {
@@ -101,7 +103,7 @@ export interface SimulationParamsDto {
   duration?: number;
   random_seeds?: number[];
   random_seeds_count?: number;
-  /** Absent means "mean", the engine's default. */
+  /** Experiment-wide default for objectives without their own; absent means mean. */
   aggregator?: SeedAggregatorSpec;
   synthetic?: SyntheticConfigDto;
   // See AlgorithmParamsDto for why this is `unknown`.

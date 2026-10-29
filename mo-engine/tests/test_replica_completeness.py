@@ -353,7 +353,7 @@ class TestTheStrategyHonoursThePolicy:
         strat._exp_id = ObjectId()
         strat._objective_keys = ["latency"]
         strat._objective_goals = [1]
-        strat._aggregator = "mean"
+        strat._aggregators = ["mean"]
         strat._ga_rng = random.Random(1)
         strat._genome_objectives_cache = {}
         strat._genome_completeness_cache = {}
@@ -756,7 +756,7 @@ class TestTheHandlerDoesNotOverwriteWhatTheEnqueueWrote:
         strat._exp_id = ObjectId()
         strat._objective_keys = ["latency"]
         strat._objective_goals = [1]
-        strat._aggregator = "mean"
+        strat._aggregators = ["mean"]
         strat._ga_rng = random.Random(1)
         strat._genome_objectives_cache = {}
         strat._genome_completeness_cache = {}

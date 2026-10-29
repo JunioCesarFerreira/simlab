@@ -535,15 +535,15 @@ class GenerationRepository:
         self,
         generation_id: ObjectId | str,
         metrics: list[str],
-        aggregator: "str | dict" = "mean",
+        aggregators: "Optional[dict[str, str | dict]]" = None,
     ) -> dict[str, dict[str, float]]:
         """
         Returns a map: individual_id_hash → {metric_name → aggregated value}
         Aggregates over all DONE simulations belonging to the same individual
         (multiple seeds per individual).
 
-        aggregator: str or dict following resolve_aggregator() convention.
-        Default "mean" preserves historical behaviour.
+        aggregators: metric_name → spec following the resolve_aggregator()
+        convention; a metric not in it is aggregated with the mean.
         """
         if isinstance(generation_id, str):
             try:
@@ -588,17 +588,15 @@ class GenerationRepository:
                     accumulated[ind_id].setdefault(m, []).append(float(metrics_map[m]))
 
         # Aggregate per seed using Ψa
-        from pylib.seed_aggregation import resolve_aggregator, AGGREGATOR_DISPATCH
-        kind, params = resolve_aggregator(aggregator)
-        agg_fn = AGGREGATOR_DISPATCH[kind]
+        from pylib.seed_aggregation import aggregate_seed_values
+        specs = aggregators or {}
 
         result: dict[str, dict[str, float]] = {}
         for ind_id, metrics_vals in accumulated.items():
-            if kind == "mean" and not params:
-                # Preserve original literal expression for bit-identical results.
-                result[ind_id] = {m: sum(v) / len(v) for m, v in metrics_vals.items() if v}
-            else:
-                result[ind_id] = {m: agg_fn(v, params) for m, v in metrics_vals.items() if v}
+            result[ind_id] = {
+                m: aggregate_seed_values(v, specs.get(m, "mean"))
+                for m, v in metrics_vals.items() if v
+            }
         return result
 
     def replica_completeness(

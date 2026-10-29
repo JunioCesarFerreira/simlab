@@ -1,4 +1,4 @@
-from typing import TypedDict, Any, Optional
+from typing import TypedDict, Any, NotRequired, Optional
 from datetime import datetime
 from bson import ObjectId
 
@@ -15,6 +15,9 @@ class MetricItem(TypedDict):
 class ObjetiveItem(TypedDict):
     metric_name: str
     goal: str  # "min" or "max"
+    # Seed aggregator (Ψa) for this objective; see pylib/seed_aggregation.py.
+    # Absent → parameters.simulation.aggregator, else mean.
+    aggregator: NotRequired[str | dict[str, Any]]
 
 
 class DataConversionConfig(TypedDict):

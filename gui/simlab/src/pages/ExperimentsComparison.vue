@@ -101,9 +101,9 @@
                 <td>{{ seedsCount(result.expB) }}</td>
               </tr>
               <tr>
-                <td>Seed aggregator</td>
-                <td>{{ formatSeedAggregator(result.expA.parameters.simulation?.aggregator) }}</td>
-                <td>{{ formatSeedAggregator(result.expB.parameters.simulation?.aggregator) }}</td>
+                <td>Seed aggregation</td>
+                <td>{{ fmtSeedAggregators(result.expA) }}</td>
+                <td>{{ fmtSeedAggregators(result.expB) }}</td>
               </tr>
               <tr>
                 <td>Sim. duration (s)</td>
@@ -282,7 +282,7 @@ import { getExperiment } from '../api/experiments';
 import client from '../api/client';
 import type { HvGdData, Population } from '../api/metrics';
 import { populationCaption, populationLabel } from '../lib/metricPopulation';
-import { formatSeedAggregator } from '../lib/seedAggregator';
+import { effectiveSeedAggregator, formatSeedAggregator } from '../lib/seedAggregator';
 import type { CampaignInfoDto, ExperimentDto, ObjectiveItem } from '../types/simlab';
 import { extractFront, coverage, epsilonIndicator, igdPlus, spacing } from '../utils/comparisonMetrics';
 import { chartExportFilename } from '../utils/chartExport';
@@ -778,6 +778,13 @@ function fmtParam(v: unknown): string {
 
 function fmtObjectives(objs: ObjectiveItem[]): string {
   return objs.map(o => `${o.metric_name} (${o.goal})`).join(', ');
+}
+
+function fmtSeedAggregators(exp: ExperimentDto): string {
+  const sim = exp.parameters.simulation;
+  return exp.parameters.objectives
+    .map(o => `${o.metric_name}: ${formatSeedAggregator(effectiveSeedAggregator(o, sim))}`)
+    .join(', ');
 }
 
 function seedsCount(exp: ExperimentDto): string {

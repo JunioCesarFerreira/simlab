@@ -159,7 +159,14 @@
                 class="param-row"
               >
                 <span class="pk">{{ obj.metric_name }}</span>
-                <span class="pv goal" :class="`goal--${obj.goal}`">{{ obj.goal }}</span>
+                <span class="pv obj-pv">
+                  <span class="obj-agg mono" title="Aggregation across seeds">{{
+                    formatSeedAggregator(
+                      effectiveSeedAggregator(obj, store.experiment.parameters.simulation),
+                    )
+                  }}</span>
+                  <span class="goal" :class="`goal--${obj.goal}`">{{ obj.goal }}</span>
+                </span>
               </div>
             </div>
           </details>
@@ -187,10 +194,6 @@
                     seed
                   }}</span>
                 </span>
-              </div>
-              <div class="param-row">
-                <span class="pk">seed aggregator</span>
-                <span class="pv mono">{{ seedAggregatorLabel }}</span>
               </div>
               <div v-for="(val, key) in simulationOtherParams" :key="key" class="param-row">
                 <span class="pk">{{ key }}</span>
@@ -457,7 +460,7 @@ import { confirmDialog } from "../composables/useConfirm";
 import { reportRuntimeError } from "../composables/useRuntimeError";
 import type { IndividualDto, JsonObject, ParetoFrontItemDto } from "../types/simlab";
 import { isPenalized } from "../types/simlab";
-import { formatSeedAggregator } from "../lib/seedAggregator";
+import { effectiveSeedAggregator, formatSeedAggregator } from "../lib/seedAggregator";
 import { computeRanks } from "../utils/nonDominatedSort";
 import { useParetoRanks } from "../composables/useParetoRanks";
 
@@ -695,14 +698,11 @@ const simulationOtherParams = computed(() => {
   const sim = store.experiment?.parameters?.simulation ?? {};
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(sim)) {
+    // The default aggregator is shown resolved, on each objective.
     if (k !== "random_seeds" && k !== "aggregator") out[k] = v;
   }
   return out;
 });
-
-const seedAggregatorLabel = computed(() =>
-  formatSeedAggregator(store.experiment?.parameters?.simulation?.aggregator),
-);
 
 const totalSimulations = computed(() => {
   const gens = store.experiment?.generations ?? [];
@@ -1309,6 +1309,20 @@ onBeforeUnmount(() => {
 }
 .goal--max {
   color: var(--status-done);
+}
+
+.obj-pv {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  word-break: normal;
+}
+.obj-agg {
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--color-text-muted);
 }
 
 .muted-inline {

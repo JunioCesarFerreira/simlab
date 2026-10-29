@@ -1,11 +1,13 @@
 """Seed aggregator (Ψa): collapses the per-seed results of one individual into a
 single objective value.
 
-Kept free of pandas so the REST API, which does not install it, can validate
-an experiment's ``parameters.simulation.aggregator`` when it is created.
+Each objective may name its own (``parameters.objectives[i].aggregator``);
+``parameters.simulation.aggregator`` is the experiment-wide default, and mean
+the default of that. Kept free of pandas so the REST API, which does not
+install it, can validate them when an experiment is created.
 """
 import math
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 AggregatorFn = Callable[[list[float], dict[str, Any]], float]
 
@@ -103,3 +105,36 @@ def aggregate_seed_values(values: list[float], aggregator: "str | dict[str, Any]
     """Collapse a list of per-seed values into a single float using the given aggregator."""
     kind, params = resolve_aggregator(aggregator)
     return AGGREGATOR_DISPATCH[kind](values, params)
+
+
+def objective_aggregators(
+    objectives: Sequence[dict[str, Any]],
+    default: "str | dict[str, Any]" = "mean",
+) -> "list[str | dict[str, Any]]":
+    """The seed aggregator of each objective, in objective order.
+
+    An objective's own ``aggregator`` wins, else *default*. Raises ValueError
+    naming the offending field (``objectives[1].aggregator: ...``).
+    """
+    try:
+        resolve_aggregator(default)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"simulation.aggregator: {e}") from e
+
+    specs: list = []
+    by_metric: dict[str, tuple[str, dict[str, Any]]] = {}
+    for i, objective in enumerate(objectives):
+        spec = objective.get("aggregator", default)
+        try:
+            resolved = resolve_aggregator(spec)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"objectives[{i}].aggregator: {e}") from e
+        # Per-seed values are collected per metric, so one metric cannot be
+        # collapsed two ways.
+        metric = objective.get("metric_name")
+        if metric in by_metric and by_metric[metric] != resolved:
+            raise ValueError(
+                f"objectives[{i}].aggregator: metric '{metric}' already has a different aggregator")
+        by_metric[metric] = resolved
+        specs.append(spec)
+    return specs

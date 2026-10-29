@@ -131,7 +131,7 @@ class TestAnalyticalEvaluation:
     def test_multiseed_uses_configured_aggregator(self, aggregator, collapse):
         seeds = [1, 2, 3]
         per_seed = [self._eval(noise_std=0.5, seeds=[s])[0] for s in seeds]
-        orig, _ = self._eval(noise_std=0.5, seeds=seeds, aggregator=aggregator)
+        orig, _ = self._eval(noise_std=0.5, seeds=seeds, aggregators=[aggregator, aggregator])
         for j in range(2):
             assert orig[j] == pytest.approx(collapse([p[j] for p in per_seed]))
 
@@ -140,6 +140,13 @@ class TestAnalyticalEvaluation:
         per_seed = [self._eval(noise_std=0.5, seeds=[s])[0] for s in seeds]
         orig, _ = self._eval(noise_std=0.5, seeds=seeds)
         assert orig[0] == pytest.approx(sum(p[0] for p in per_seed) / 3)
+
+    def test_each_objective_uses_its_own_aggregator(self):
+        seeds = [1, 2, 3]
+        per_seed = [self._eval(noise_std=0.5, seeds=[s])[0] for s in seeds]
+        orig, _ = self._eval(noise_std=0.5, seeds=seeds, aggregators=["max", "min"])
+        assert orig[0] == pytest.approx(max(p[0] for p in per_seed))
+        assert orig[1] == pytest.approx(min(p[1] for p in per_seed))
 
     def test_minimization_space_applies_goals(self):
         orig, minimization = self._eval(objective_goals=[1, -1])

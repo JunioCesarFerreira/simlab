@@ -5,6 +5,7 @@ import pytest
 from pylib.seed_aggregation import (
     resolve_aggregator,
     aggregate_seed_values,
+    objective_aggregators,
     _agg_mean,
     _agg_median,
     _agg_trimmed_mean,
@@ -86,3 +87,49 @@ class TestResolveAggregator:
     def test_aggregate_seed_values_end_to_end(self):
         assert aggregate_seed_values([2.0, 4.0, 6.0], "mean") == pytest.approx(4.0)
         assert aggregate_seed_values([1.0, 5.0], "max") == 5.0
+
+
+class TestObjectiveAggregators:
+    def test_objective_overrides_default(self):
+        objectives = [
+            {"metric_name": "latency", "goal": "min", "aggregator": "max"},
+            {"metric_name": "energy", "goal": "min"},
+            {"metric_name": "throughput", "goal": "max",
+             "aggregator": {"kind": "trimmed_mean", "trim": 0.2}},
+        ]
+        assert objective_aggregators(objectives, "median") == [
+            "max", "median", {"kind": "trimmed_mean", "trim": 0.2}]
+
+    def test_default_is_mean(self):
+        assert objective_aggregators([{"metric_name": "latency", "goal": "min"}]) == ["mean"]
+
+    def test_invalid_objective_names_its_position(self):
+        objectives = [
+            {"metric_name": "latency", "goal": "min"},
+            {"metric_name": "energy", "goal": "min", "aggregator": "average"},
+        ]
+        with pytest.raises(ValueError, match=r"^objectives\[1\]\.aggregator"):
+            objective_aggregators(objectives)
+
+    def test_wrong_type_is_reported_as_value_error(self):
+        with pytest.raises(ValueError, match=r"^objectives\[0\]\.aggregator"):
+            objective_aggregators([{"metric_name": "latency", "goal": "min", "aggregator": None}])
+
+    def test_invalid_default_is_reported_even_if_unused(self):
+        with pytest.raises(ValueError, match=r"^simulation\.aggregator"):
+            objective_aggregators([{"metric_name": "latency", "goal": "min", "aggregator": "max"}], "xyz")
+
+    def test_same_metric_two_ways_raises(self):
+        objectives = [
+            {"metric_name": "latency", "goal": "min", "aggregator": "max"},
+            {"metric_name": "latency", "goal": "max", "aggregator": "min"},
+        ]
+        with pytest.raises(ValueError, match="latency"):
+            objective_aggregators(objectives)
+
+    def test_same_metric_same_aggregator_is_fine(self):
+        objectives = [
+            {"metric_name": "latency", "goal": "min", "aggregator": "median"},
+            {"metric_name": "latency", "goal": "max", "aggregator": {"kind": "median"}},
+        ]
+        assert len(objective_aggregators(objectives)) == 2

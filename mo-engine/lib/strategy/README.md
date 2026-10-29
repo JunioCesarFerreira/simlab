@@ -136,10 +136,10 @@ instead of being delegated to simulation:
   the strategy calls `analytical_objectives()` and inserts the `Individual`
   with its objectives already filled — **no `Simulation` document is created**
   and the master-node is never involved.
-- The benchmark is evaluated once per simulation seed and the per-seed values
-  are collapsed with the experiment's seed aggregator
-  (`parameters.simulation.aggregator`, default mean), the same one used for
-  simulation-based problems.
+- The benchmark is evaluated once per simulation seed and each objective's
+  per-seed values are collapsed with that objective's seed aggregator
+  (`objectives[i].aggregator`, else `simulation.aggregator`, else mean), the
+  same ones used for simulation-based problems.
 - Observation noise is reproducible: the RNG is seeded per
   `(seed, genome_hash)` pair, so re-evaluations and genome-cache hits are
   always consistent.
