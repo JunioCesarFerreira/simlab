@@ -202,8 +202,9 @@ Essa variável agora **semeia** os workers do host local no primeiro start, em
 vez de dimensionar um pool. A capacidade vem de um inventário de hosts e
 workers no banco, mantido pela descoberta Docker e pelo ciclo de saúde, e
 outras máquinas são acrescentadas pela página **Infraestrutura** sem tocar no
-compose — ver
-[Recursos computacionais distribuídos](docs/markdown/RECURSOS_DISTRIBUIDOS.md).
+compose — ver a seção
+[Distributed Cooja Resources](README.md#distributed-cooja-resources) do README
+principal.
 
 #### 4. Inicializar a pilha completa com Docker Compose
 

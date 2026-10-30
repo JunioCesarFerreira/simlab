@@ -10,8 +10,9 @@ status reporting.
 Containers are **not** a fixed list of worker threads any more. The master-node
 keeps an inventory of *hosts*, each with its own Cooja *workers*, measures
 them, and places each simulation on the host carrying the fewest active
-simulations. [RECURSOS_DISTRIBUIDOS.md](../docs/markdown/RECURSOS_DISTRIBUIDOS.md)
-describes that design in full; this file is about the process.
+simulations. Setup, configuration and limitations are in the main README's
+[Distributed Cooja Resources](../README.md#distributed-cooja-resources)
+section; this file is about the design and the process.
 
 ---
 

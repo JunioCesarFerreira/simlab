@@ -1,7 +1,6 @@
 """Distributed execution infrastructure: hosts, Cooja resources, crypto keys.
 
-Three entities, deliberately separate (see
-docs/markdown/DISTRIBUTED_RESOURCES_PLAN.md, decision D2):
+Three entities, deliberately separate:
 
 * **Host** — a machine, and the unit of load balancing.
 * **Cooja resource** — a container, and the unit of reservation.
