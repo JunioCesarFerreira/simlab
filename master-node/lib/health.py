@@ -29,33 +29,56 @@ Rules this cycle obeys
   transport opens for 344 simulations, and 41 in three minutes with nothing
   running, until the host's sshd began refusing connections. A worker that is
   in the pool and was last found *ready* within ``probe_ttl_sec`` is taken at
-  its word; everything else is measured, so a failure is still noticed within
-  one interval and recovery is unaffected. An operator pressing "check" gets
-  a real measurement regardless.
+  its word — while its host is reachable: a first hop that failed in this
+  turn contradicts the old answer, and measuring then opens nothing, because
+  the pool re-raises the cached failure. Everything else is measured, so a
+  failure is still noticed within one interval and recovery is unaffected. An
+  operator pressing "check" gets a real measurement regardless.
 * **The connections a cycle does need are shared.** Docker's inventory and
   every probe on one host ride a single hop-1 session (``lib.transport.pool``),
   which costs a host one handshake per cycle instead of one per worker plus
   one. Hop 2 stays per container: that is the connection a simulation runs on.
 * **It replaces the optimistic defaults** that existed while nothing measured
   anything. A host now reaches ``online`` because a probe said so.
+* **Hosts are checked concurrently.** One at a time, a pool with eight hosts
+  down took almost four minutes per cycle — each waiting out its connect
+  timeout — and the housekeeping after the hosts waited with it. Each host's
+  turn is still one thread and one hop-1 session.
+* **A host that keeps failing is retried less often** — exponentially, up to
+  ``backoff_cap_sec`` — once it is offline. Its workers are already out of the
+  pool, so the only thing a check every interval bought was another connect
+  timeout. An operator's check, an access edit or re-enabling the host skips
+  the wait.
+* **The master-node's own DNS failing is not the hosts failing.** When the
+  resolver answers for none of the hosts' names, a host reached by name is
+  recorded as *not measured* instead of failed, and hosts with a pinned key
+  are reached at their last known address meanwhile (see ``lib.dns_watch``).
 """
 import logging
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Callable, Optional
 
 from lib.credentials import CredentialError, SecretOpener
 from lib.discovery import discover_host, unavailable_report
+from lib.dns_watch import ResolverStatus, ResolverWatch, RestartDecision
 from lib.transport import (
+    DEFAULT_RESOLVER,
     HostKeyMismatch,
+    HostResolver,
     JumpPool,
+    NameResolutionFailed,
     PlanError,
+    Resolution,
     TransportError,
     build_transport,
+    needs_jump,
 )
 from pylib.db.repositories.infra import HostWithdrawing
-from pylib.timeutil import elapsed_since, utc_now
+from pylib.timeutil import as_aware, elapsed_since, utc_now
 from pylib.db.models.infra import (
     EnumHostStatus,
     EnumHostType,
@@ -89,6 +112,15 @@ DEFAULT_PROBE_TTL_SEC = 300.0
 # generation, which inserts its simulations one at a time, and the cost of
 # waiting is a delay in a repair rather than anything lost.
 DEFAULT_GENERATION_GRACE_SEC = 300.0
+
+#: Hop 1 for a health check. Shorter than a simulation's (20 s): a host that
+#: has not completed a handshake in this long is not going to be usable, and
+#: every second spent waiting delays the rest of the cycle.
+HEALTH_CONNECT_TIMEOUT = 8.0
+#: Hosts checked at once. Each is mostly waiting on a network.
+DEFAULT_PARALLEL_HOSTS = 8
+#: The longest a failing host waits between checks.
+DEFAULT_BACKOFF_CAP_SEC = 600.0
 
 STALE_RESERVATION_MESSAGE = (
     "Recovered: the container was reserved but the simulation never started"
@@ -143,6 +175,12 @@ class HealthMonitor:
         on_capacity: Optional[Callable[[], None]] = None,
         reconcile: Optional[Callable[[], Any]] = None,
         inspect_run: Optional[Callable[[dict, dict, Any], Any]] = None,
+        connect_timeout: float = HEALTH_CONNECT_TIMEOUT,
+        max_parallel_hosts: int = DEFAULT_PARALLEL_HOSTS,
+        backoff_cap_sec: float = DEFAULT_BACKOFF_CAP_SEC,
+        resolver: Optional[HostResolver] = None,
+        resolver_watch: Optional[ResolverWatch] = None,
+        request_restart: Optional[Callable[[str], None]] = None,
     ):
         self._mongo = mongo
         self._opener = opener
@@ -151,9 +189,24 @@ class HealthMonitor:
         self._reservation_ttl = reservation_ttl_sec
         self._probe_ttl = probe_ttl_sec
         self._generation_grace = generation_grace_sec
+        self._parallel = max(1, int(max_parallel_hosts))
+        self._backoff_cap = max(0.0, backoff_cap_sec)
+        # Shared with the runners' connections by default, so an address one
+        # of them learns serves the other.
+        self._resolver = resolver or DEFAULT_RESOLVER
+        self._watch = resolver_watch or ResolverWatch(self._resolver)
+        # Asks the process to exit so its restart policy starts it again —
+        # the only repair for a container whose DNS servers went stale.
+        self._request_restart = request_restart
         # Hop 1, opened at most once per host per turn. Owned here because the
         # monitor is the only thing that knows when a host's turn is over.
-        self._jumps = jumps or JumpPool(opener, on_learn=self._pin_host_key)
+        self._jumps = jumps or JumpPool(
+            opener,
+            on_learn=self._pin_host_key,
+            connect_timeout=connect_timeout,
+            resolver=self._resolver,
+            on_connected=self._remember_address,
+        )
         self._discover = discover or self._default_discover
         self._probe = probe or self._default_probe
         self._on_capacity = on_capacity
@@ -194,15 +247,18 @@ class HealthMonitor:
         process that just died describes a pool this one has not seen, and it
         is the cycle before the first placement that the dispatcher relies on.
         """
+        started = time.monotonic()
         try:
             self._serve_requests()
         except Exception:
             log.exception("Serving check/discovery requests failed; continuing")
 
-        results = [
-            self._check_host_isolated(host, force=force)
-            for host in self._mongo.host_repo.find_enabled()
-        ]
+        hosts = list(self._mongo.host_repo.find_enabled())
+        self._seed_addresses(hosts)
+        # Before the hosts: whether a failed lookup is the host's fault or
+        # the resolver's is decided from this.
+        resolver_status = self._observe_resolver(hosts)
+        results = self._check_hosts(hosts, force=force)
 
         try:
             self.sweep_stale_reservations()
@@ -224,9 +280,158 @@ class HealthMonitor:
         except Exception:
             log.exception("Resolving held workers failed; continuing")
 
+        decision = self._restart_decision()
+        self._heartbeat(resolver_status, decision, time.monotonic() - started)
+        if decision.reason is not None:
+            self._restart(decision.reason)
+
         if any(result.ready for result in results) and self._on_capacity is not None:
             self._on_capacity()
         return results
+
+    # ── hosts, concurrently and with backoff ───────────────────────────────
+
+    def _check_hosts(self, hosts: list[dict], *, force: bool) -> list[HostHealth]:
+        """Check every host that is due, in parallel; report the rest as waiting.
+
+        Results come back in the order of ``hosts``.
+        """
+        now = utc_now()
+        due = [h for h in hosts if force or not self._backing_off(h, now)]
+        due_ids = {id(h) for h in due}
+        waiting = {id(h): self._waiting(h) for h in hosts if id(h) not in due_ids}
+
+        if len(due) <= 1 or self._parallel == 1:
+            checked = [self._check_host_isolated(h, force=force) for h in due]
+        else:
+            with ThreadPoolExecutor(
+                max_workers=min(self._parallel, len(due)),
+                thread_name_prefix="health-host",
+            ) as pool:
+                checked = list(pool.map(
+                    lambda h: self._check_host_isolated(h, force=force), due))
+        by_host = {id(h): r for h, r in zip(due, checked)}
+        by_host.update(waiting)
+        return [by_host[id(h)] for h in hosts]
+
+    def _backing_off(self, host: dict, now: datetime) -> bool:
+        until = host.get("backoff_until")
+        return until is not None and as_aware(until) > now
+
+    def _waiting(self, host: dict) -> HostHealth:
+        """A host skipped this cycle because it is backing off. Nothing written."""
+        until = as_aware(host["backoff_until"])
+        message = (
+            f"not checked: {int(host.get('consecutive_failures') or 0)} "
+            f"consecutive failures, next check at {until.strftime('%H:%M:%S')} UTC"
+        )
+        log.debug("Host %s — %s", host.get("name"), message)
+        return HostHealth(
+            host_name=str(host.get("name", "?")),
+            status=_current_status(host), message=message)
+
+    def _backoff_delay(self, failures: int) -> Optional[float]:
+        """How long a host that has failed ``failures`` times in a row waits.
+
+        Nothing below the threshold, so the hysteresis that takes a host
+        offline is not slowed down. From there it doubles: one interval at the
+        threshold — the normal pace — then two, four, ... up to the cap.
+        """
+        if failures < self._threshold or self._backoff_cap <= 0:
+            return None
+        exponent = min(failures - self._threshold, 16)
+        return min(self._backoff_cap, self._interval * (2 ** exponent))
+
+    # ── the master-node's resolver ─────────────────────────────────────────
+
+    def _seed_addresses(self, hosts: list[dict]) -> None:
+        """Teach the resolver the addresses stored before this process started.
+
+        Without it, the first DNS failure after a restart — including the
+        restart that is meant to repair DNS — would find nothing to fall
+        back on.
+        """
+        for host in hosts:
+            stored = host.get("resolved_address") or {}
+            name = (host.get("access") or {}).get("address")
+            if name and stored.get("name") == name and stored.get("ip"):
+                self._resolver.remember_if_unknown(str(name), str(stored["ip"]))
+
+    def _remember_address(self, host: dict, resolution: Resolution, address: str) -> None:
+        if resolution.source != "dns":
+            return
+        if self._mongo.host_repo.record_resolved_address(
+                host["_id"], resolution.name, address):
+            log.info("Host %s resolves to %s", host.get("name"), address)
+
+    def _observe_resolver(self, hosts: list[dict]) -> Optional[ResolverStatus]:
+        try:
+            return self._watch.observe(hosts)
+        except Exception:
+            log.exception("Checking the DNS resolver failed; continuing")
+            return None
+
+    def _master_side_failure(self, host: dict) -> Optional[NameResolutionFailed]:
+        """The resolver's failure, if that is all this host's turn learned.
+
+        Only while the resolver answers for none of the hosts' names. One name
+        failing while others resolve is that name's problem, and is counted
+        against its host like any other failure.
+        """
+        failure = self._jumps.failure(host)
+        if (
+            isinstance(failure, NameResolutionFailed)
+            and failure.resolver_fault
+            and self._watch.broken
+        ):
+            return failure
+        return None
+
+    def _restart_decision(self) -> RestartDecision:
+        if self._request_restart is None or not self._watch.broken:
+            return RestartDecision()
+        repo = getattr(self._mongo, "master_repo", None)
+        if repo is None:
+            # Nowhere to remember the last restart, so no loop guard.
+            return RestartDecision()
+        try:
+            doc = repo.get() or {}
+            last = (doc.get("last_restart") or {}).get("at") if isinstance(doc, dict) else None
+            idle = not self._mongo.resource_repo.find_occupied()
+        except Exception:
+            log.exception("Could not decide whether to restart over DNS")
+            return RestartDecision()
+        return self._watch.restart_decision(idle=idle, last_restart_at=last)
+
+    def _restart(self, reason: str) -> None:
+        log.error("Restarting the master-node: %s", reason)
+        repo = getattr(self._mongo, "master_repo", None)
+        try:
+            if repo is not None:
+                repo.record_restart(reason)
+        except Exception:
+            # Without the record the guard cannot hold, so do not restart:
+            # a loop of restarts is worse than a stale resolver.
+            log.exception("Could not record the restart; not restarting")
+            return
+        assert self._request_restart is not None
+        self._request_restart(reason)
+
+    def _heartbeat(
+        self, status: Optional[ResolverStatus], decision: RestartDecision, cycle_sec: float
+    ) -> None:
+        repo = getattr(self._mongo, "master_repo", None)
+        if repo is None:
+            return
+        resolver = status.to_document() if status is not None else None
+        if resolver is not None:
+            resolver["self_restart"] = bool(
+                self._watch.self_restart and self._request_restart is not None)
+            resolver["restart_waiting"] = decision.waiting
+        try:
+            repo.heartbeat(resolver=resolver, cycle_sec=cycle_sec)
+        except Exception:
+            log.exception("Could not write the master-node heartbeat")
 
     def reconcile_unwatched(self) -> Any:
         """Look again at runs that nobody is following.
@@ -469,6 +674,9 @@ class HealthMonitor:
 
         resources = self._mongo.resource_repo.find_by_host(host["_id"])
         if not resources:
+            master_side = self._master_side_failure(host)
+            if master_side is not None:
+                return self._record_inconclusive(host, name, master_side)
             # Nothing to check, and nothing to place. A host with no
             # containers is misconfigured rather than down — and if discovery
             # could not run, that is why.
@@ -482,7 +690,19 @@ class HealthMonitor:
         for resource in resources:
             self._check_resource(host, resource, health, force=force)
 
+        master_side = self._master_side_failure(host)
+        if master_side is not None:
+            return self._record_inconclusive(host, name, master_side, health=health)
+
         status, message = self._conclude(health, discovery_message)
+        resolution = self._jumps.resolution(host)
+        if resolution is not None and resolution.from_cache:
+            # Reached, but not by its name: say so, or the page shows a
+            # healthy host while DNS for it is down.
+            message = (
+                f"{message} — reached at its last known address "
+                f"{resolution.addresses[0]}: {resolution.dns_error}"
+            )
         return self._record(
             host, name, status, message,
             healthy=status in (EnumHostStatus.ONLINE, EnumHostStatus.DEGRADED),
@@ -528,7 +748,19 @@ class HealthMonitor:
             health.unhealthy.append(name)
             return
 
-        if not force and probe_is_fresh(resource, self._probe_ttl, host=host):
+        if (
+            not force
+            # A first hop that failed in this turn contradicts the stored
+            # answer. Observed in deployment: once the VMs' host keys were
+            # regenerated, every session to them was refused, and seven of
+            # eight stayed online with their worker available until its probe
+            # aged out — a placement there would have been refused at
+            # connect. An unreachable host stayed in the pool the same way,
+            # for up to the TTL instead of the failure threshold. Measuring
+            # costs no connection: the pool re-raises the cached failure.
+            and self._jumps.failure(host) is None
+            and probe_is_fresh(resource, self._probe_ttl, host=host)
+        ):
             # It is in the pool and the last measurement found it ready, so
             # there is nothing a new connection could tell us. Anything that
             # did change — a stopped container, a failed placement, an edited
@@ -642,6 +874,7 @@ class HealthMonitor:
         """
         failures = int(host.get("consecutive_failures") or 0)
         effective = status
+        backoff_until = None
 
         if not healthy:
             if failures + 1 < self._threshold and host.get("status") in (
@@ -652,14 +885,47 @@ class HealthMonitor:
                     f"{message} (failure {failures + 1} of {self._threshold} "
                     "before going offline)"
                 )
+            # Remote hosts only: a local check costs no connect timeout, and
+            # backing off would only delay noticing its containers come up.
+            delay = self._backoff_delay(failures + 1) if needs_jump(host) else None
+            if delay is not None:
+                backoff_until = utc_now() + timedelta(seconds=delay)
+                if delay > self._interval:
+                    message = f"{message} (next check in {int(delay)} s)"
 
         self._mongo.host_repo.mark_check_result(
-            host["_id"], status=effective, message=message, reset_failures=healthy)
+            host["_id"], status=effective, message=message, reset_failures=healthy,
+            backoff_until=backoff_until)
 
         result = health or HostHealth(host_name=name, status=effective, message=message)
         result.status = effective
         result.message = message
         log.info("Host %s — %s", name, result.describe())
+        return result
+
+    def _record_inconclusive(
+        self,
+        host: dict,
+        name: str,
+        failure: NameResolutionFailed,
+        *,
+        health: Optional[HostHealth] = None,
+    ) -> HostHealth:
+        """Record a turn that learned nothing about the host.
+
+        The status, the failure count and the backoff are left as they were;
+        only the message and ``last_check`` move. The workers the probes
+        could not reach were still marked offline: that is true — this
+        master-node cannot use them right now — and keeps a placement off
+        them.
+        """
+        message = f"not measured: {failure}"
+        self._mongo.host_repo.mark_check_inconclusive(host["_id"], message)
+        status = _current_status(host)
+        result = health or HostHealth(host_name=name, status=status, message=message)
+        result.status = status
+        result.message = message
+        log.warning("Host %s — %s", name, message)
         return result
 
     def _close_generation(self, simulation_id: Any) -> None:
@@ -863,6 +1129,14 @@ def _close_generation_after_sweep(mongo: Any, simulation_id: Any) -> None:
         mongo.generation_repo.close_if_finished(generation_id)
     except Exception:
         log.exception("Failed to close generation %s", generation_id)
+
+
+def _current_status(host: dict) -> EnumHostStatus:
+    """The status a host already has, for a turn that does not change it."""
+    try:
+        return EnumHostStatus(host.get("status") or EnumHostStatus.OFFLINE.value)
+    except ValueError:
+        return EnumHostStatus.OFFLINE
 
 
 def _config_version(host: dict) -> int:

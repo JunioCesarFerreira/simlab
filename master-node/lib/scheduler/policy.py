@@ -37,10 +37,20 @@ class HostLoad:
     #: no measurements at all, and treating that as the worst case would make
     #: a speed-aware policy refuse to use it.
     fastest_free_sec: Optional[float] = None
+    #: The physical machine it runs on (``machine_of``). Hosts that share one
+    #: compete for its CPUs, and a concurrency limit applies to all of them.
+    machine: str = ""
+    #: Expected held time of each free worker, ``None`` where unmeasured.
+    free_durations: tuple[Optional[float], ...] = ()
+    #: Each occupied worker as ``(expected held time, seconds since it
+    #: started)``; either may be ``None``.
+    occupied: tuple[tuple[Optional[float], Optional[float]], ...] = ()
+    #: Its machine is running as many simulations as its limit allows.
+    capped: bool = False
 
     @property
     def eligible(self) -> bool:
-        return self.schedulable and self.free > 0
+        return self.schedulable and self.free > 0 and not self.capped
 
 
 class Policy(Protocol):
@@ -172,9 +182,45 @@ class FastestThenLeastLoadedPolicy:
         return select_fastest_then_least_loaded(loads, rr_cursor)
 
 
+class EarliestCompletionPolicy:
+    """Places a job only where it finishes soonest — which may mean waiting.
+
+    ``fastest_then_least_loaded`` stops sending work to a slow host while a
+    fast one is *free*; it cannot see that a busy fast one will be free in a
+    few seconds. Measured on a generation of 46 simulations over a local host
+    (111 s each) and eight VMs on one machine (666–1008 s each), every VM took
+    a job as soon as the local workers filled, and the local host then sat
+    idle for 9.6 min on average at the end of every generation waiting for
+    them. The pool finished later than the local host alone would have.
+
+    This plans instead (``lib.scheduler.completion``): the waiting jobs are
+    assigned, on paper, to whichever worker would finish each one first,
+    counting when the busy ones free up. A free worker gets the job now only
+    if that plan uses it now; otherwise the job waits for the faster worker.
+    A slow host therefore takes work exactly when it shortens the batch — at
+    the start of a long queue — and not at its tail.
+
+    ``select`` is the same as ``fastest_then_least_loaded``, for a caller
+    without the per-worker detail the plan needs.
+    """
+
+    name = "earliest_completion"
+    prefers_fastest = True
+
+    def select(self, loads: list[HostLoad], rr_cursor: int) -> Optional[HostLoad]:
+        return select_fastest_then_least_loaded(loads, rr_cursor)
+
+    def plan(self, loads: list[HostLoad], *, waiting: int, limits: dict[str, int],
+             rr_cursor: int = 0):
+        # Imported here: the planner builds on this module's types and rules.
+        from lib.scheduler.completion import plan_completion
+        return plan_completion(loads, waiting, limits=limits, rr_cursor=rr_cursor)
+
+
 _POLICIES: dict[str, type] = {
     LeastLoadedHostPolicy.name: LeastLoadedHostPolicy,
     FastestThenLeastLoadedPolicy.name: FastestThenLeastLoadedPolicy,
+    EarliestCompletionPolicy.name: EarliestCompletionPolicy,
 }
 
 

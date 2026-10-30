@@ -25,6 +25,9 @@ from pylib.db.models.infra import (
     EnumContainerState,
     EnumHostStatus,
     EnumResourceStatus,
+    MACHINES_COLLECTION,
+    MASTER_STATUS_COLLECTION,
+    machine_of,
     RESOURCES_COLLECTION,
     HOSTS_COLLECTION,
 )
@@ -32,6 +35,8 @@ from pylib.db.repositories.infra import (
     _REASSIGNABLE as _REASSIGNABLE_FOR_TEST,
     CoojaResourceRepository,
     HostWithdrawing,
+    MachineRepository,
+    MasterStatusRepository,
     RemovalConflicted,
     HostRepository,
     InfraCryptoRepository,
@@ -2182,3 +2187,296 @@ class TestReEnablingAHostLeavesItToo:
         update = coll.update_one.call_args_list[-1].args[1]["$set"]
         assert update["status"] == EnumHostStatus.DISABLED.value
         assert update["enabled"] is False
+
+
+class TestTwoMachinesBehindOneGateway:
+    """Reported: changing a vm7 worker's port was refused with a 409 naming a
+    vm8 worker.
+
+    Both VMs are reached through the same gateway address on different
+    forwarded SSH ports (``gateway:2197`` and ``gateway:2198``). The physical
+    identity keyed the host on its address alone, so the two machines looked
+    like one, and any pair of their containers with the same internal port
+    looked like one container registered twice. The connection plan uses
+    address **and** port for hop 1; the identity has to use the same rule, or
+    it compares something nobody connects to.
+    """
+
+    OTHER_HOST_ID = ObjectId("507f1f77bcf86cd799430098")
+
+    def _repo(self, existing, hosts):
+        connection, db = make_connection()
+        repo = CoojaResourceRepository(connection)
+        db[HOSTS_COLLECTION].find.return_value = hosts
+        db[RESOURCES_COLLECTION].find.return_value = existing
+        return repo
+
+    def _host(self, host_id, name, port):
+        return {"_id": host_id, "name": name, "type": "remote",
+                "access": {"address": "gateway.example.edu", "port": port},
+                "container_access": {"port": 2222}}
+
+    def _worker(self, host_id, name, port, _id=None):
+        doc = {"name": name, "host_id": host_id,
+               "endpoint": {"address": "localhost", "port": port},
+               "remote_dir": "/opt/contiki-ng/tools/cooja"}
+        if _id is not None:
+            doc["_id"] = _id
+        return doc
+
+    def test_the_same_internal_port_on_two_forwarded_vms_is_two_workers(self):
+        vm7 = self._host(HOST_ID, "vm7", 2197)
+        vm8 = self._host(self.OTHER_HOST_ID, "vm8", 2198)
+        existing = self._worker(self.OTHER_HOST_ID, "vm8-cooja1", 2222, RES_ID)
+        repo = self._repo([existing], [vm7, vm8])
+
+        clash = repo.conflicting_target(
+            vm7, self._worker(HOST_ID, "vm7-cooja1", 2222))
+
+        assert clash is None
+
+    def test_the_same_gateway_and_the_same_port_is_still_one_machine(self):
+        """The coverage the identity exists for is kept: one SSH endpoint
+        registered as two hosts is one machine."""
+        first = self._host(HOST_ID, "vm7", 2197)
+        again = self._host(self.OTHER_HOST_ID, "vm7-again", 2197)
+        existing = self._worker(HOST_ID, "vm7-cooja1", 2222, RES_ID)
+        repo = self._repo([existing], [first, again])
+
+        clash = repo.conflicting_target(
+            again, self._worker(self.OTHER_HOST_ID, "dup", 2222))
+
+        assert clash is not None and clash["name"] == "vm7-cooja1"
+
+    def test_an_unset_port_means_22_as_it_does_for_the_connection(self):
+        explicit = self._host(HOST_ID, "a", 22)
+        implicit = self._host(self.OTHER_HOST_ID, "b", None)
+        existing = self._worker(HOST_ID, "w1", 2222, RES_ID)
+        repo = self._repo([existing], [explicit, implicit])
+
+        clash = repo.conflicting_target(
+            implicit, self._worker(self.OTHER_HOST_ID, "w2", 2222))
+
+        assert clash is not None, "port 22 and no port are the same endpoint"
+
+    def test_the_host_address_is_compared_without_case(self):
+        """A DNS name is case-insensitive; ``Gateway`` and ``gateway`` are
+        the same machine."""
+        upper = self._host(HOST_ID, "a", 2197)
+        upper["access"]["address"] = "GATEWAY.example.edu"
+        lower = self._host(self.OTHER_HOST_ID, "b", 2197)
+        existing = self._worker(HOST_ID, "w1", 2222, RES_ID)
+        repo = self._repo([existing], [upper, lower])
+
+        assert repo.conflicting_target(
+            lower, self._worker(self.OTHER_HOST_ID, "w2", 2222)) is not None
+
+    def test_editing_a_worker_that_already_matched_is_no_longer_blocked(self):
+        """vm7-cooja2 and vm8-cooja2 were both ``localhost:2223``: under the
+        old identity they collided, so any edit of either was refused."""
+        vm7 = self._host(HOST_ID, "vm7", 2197)
+        vm8 = self._host(self.OTHER_HOST_ID, "vm8", 2198)
+        vm7_w = self._worker(HOST_ID, "vm7-cooja2", 2223, RES_ID)
+        vm8_w = self._worker(self.OTHER_HOST_ID, "vm8-cooja2", 2223,
+                             ObjectId("507f1f77bcf86cd799430077"))
+        repo = self._repo([vm7_w, vm8_w], [vm7, vm8])
+
+        assert repo.conflicting_target(vm7, dict(vm7_w), exclude_id=RES_ID) is None
+
+
+# ── Backoff, inconclusive checks and the last known address ─────────────────
+
+class TestHostCheckBookkeeping:
+    """What the health cycle writes about a host besides its status."""
+
+    def test_a_check_result_clears_the_backoff_unless_given_one(self, hosts):
+        repo, coll = hosts
+        coll.update_one.return_value = MagicMock(matched_count=1)
+
+        repo.mark_check_result(HOST_ID, status=EnumHostStatus.ONLINE, reset_failures=True)
+
+        # Written as null rather than left alone: a host that recovers goes
+        # back to the normal pace at once.
+        assert coll.update_one.call_args.args[1]["$set"]["backoff_until"] is None
+
+    def test_a_failed_check_carries_its_backoff(self, hosts):
+        repo, coll = hosts
+        coll.update_one.return_value = MagicMock(matched_count=1)
+        until = utc_now() + timedelta(minutes=2)
+
+        repo.mark_check_result(HOST_ID, status=EnumHostStatus.OFFLINE, backoff_until=until)
+
+        assert coll.update_one.call_args.args[1]["$set"]["backoff_until"] == until
+
+    def test_an_inconclusive_check_leaves_the_verdict_alone(self, hosts):
+        """A resolver on the master-node failing is not the host failing."""
+        repo, coll = hosts
+        coll.update_one.return_value = MagicMock(matched_count=1)
+
+        repo.mark_check_inconclusive(HOST_ID, "not measured: DNS")
+
+        flt, update = coll.update_one.call_args.args[:2]
+        assert flt["enabled"] is True
+        assert set(update) == {"$set"}
+        assert set(update["$set"]) == {"last_check", "last_check_message"}
+
+    def test_an_address_is_written_only_when_it_changed(self, hosts):
+        repo, coll = hosts
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        assert repo.record_resolved_address(HOST_ID, "lab.example", "10.0.0.1") is True
+
+        flt, update = coll.update_one.call_args.args[:2]
+        assert {"resolved_address.ip": {"$ne": "10.0.0.1"}} in flt["$or"]
+        assert {"resolved_address.name": {"$ne": "lab.example"}} in flt["$or"]
+        stored = update["$set"]["resolved_address"]
+        assert stored["name"] == "lab.example" and stored["ip"] == "10.0.0.1"
+
+    def test_an_unchanged_address_is_not_rewritten(self, hosts):
+        repo, coll = hosts
+        coll.update_one.return_value = MagicMock(modified_count=0)
+
+        assert repo.record_resolved_address(HOST_ID, "lab.example", "10.0.0.1") is False
+
+    def test_an_access_edit_clears_the_backoff(self, hosts):
+        # It was earned by the configuration that just changed.
+        repo, coll = hosts
+        coll.find_one_and_update.return_value = {"config_version": 2}
+
+        repo.bump_config_version(HOST_ID)
+
+        update = coll.find_one_and_update.call_args.args[1]
+        assert update["$set"]["backoff_until"] is None
+
+    def test_re_enabling_clears_the_backoff(self, hosts):
+        repo, coll = hosts
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        repo.set_enabled(HOST_ID, True)
+
+        assert coll.update_one.call_args.args[1]["$set"]["backoff_until"] is None
+
+    def test_disabling_does_not_touch_it(self, hosts):
+        repo, coll = hosts
+        coll.update_one.return_value = MagicMock(modified_count=1)
+
+        repo.set_enabled(HOST_ID, False)
+
+        assert "backoff_until" not in coll.update_one.call_args.args[1]["$set"]
+
+    def test_neither_can_be_written_by_a_client(self, hosts):
+        repo, coll = hosts
+
+        assert repo.update(HOST_ID, {
+            "backoff_until": None,
+            "resolved_address": {"name": "x", "ip": "10.6.6.6"},
+        }) is False
+        coll.update_one.assert_not_called()
+
+
+class TestMasterStatus:
+    @pytest.fixture
+    def master(self):
+        connection, db = make_connection()
+        return MasterStatusRepository(connection), db[MASTER_STATUS_COLLECTION]
+
+    def test_the_heartbeat_is_one_upserted_document(self, master):
+        repo, coll = master
+
+        repo.heartbeat(resolver={"ok": False}, cycle_sec=1.23456)
+
+        flt, update = coll.update_one.call_args.args[:2]
+        assert flt == {"_id": MasterStatusRepository.DOC_ID}
+        assert coll.update_one.call_args.kwargs["upsert"] is True
+        assert update["$set"]["resolver"] == {"ok": False}
+        assert update["$set"]["cycle_sec"] == 1.235
+        assert isinstance(update["$set"]["heartbeat_at"], datetime)
+
+    def test_a_heartbeat_without_news_of_the_resolver_keeps_the_last(self, master):
+        repo, coll = master
+
+        repo.heartbeat()
+
+        assert "resolver" not in coll.update_one.call_args.args[1]["$set"]
+
+    def test_a_restart_is_recorded_and_the_history_bounded(self, master):
+        repo, coll = master
+
+        repo.record_restart("DNS")
+
+        update = coll.update_one.call_args.args[1]
+        assert update["$set"]["last_restart"]["reason"] == "DNS"
+        assert update["$push"]["restarts"]["$slice"] == -MasterStatusRepository.RESTARTS_KEPT
+
+
+# ── Physical machines ───────────────────────────────────────────────────────
+
+class TestMachineOf:
+    def test_port_forwarded_vms_are_one_machine(self):
+        vm1 = {"type": "remote", "access": {"address": "Andromeda.example", "port": 2191}}
+        vm2 = {"type": "remote", "access": {"address": "andromeda.example ", "port": 2192}}
+
+        assert machine_of(vm1) == machine_of(vm2) == "andromeda.example"
+
+    def test_an_explicit_label_wins(self):
+        # Distinct machines behind one NAT gateway share its address.
+        assert machine_of({"type": "remote", "machine": " rack-2 ",
+                           "access": {"address": "gw.example"}}) == "rack-2"
+
+    def test_the_master_nodes_own_host_is_local(self):
+        assert machine_of({"type": "local", "name": "local"}) == "local"
+
+    def test_a_host_with_no_address_is_its_own_machine(self):
+        assert machine_of({"type": "remote", "name": "lab-01"}) == "lab-01"
+
+
+class TestMachineLimits:
+    @pytest.fixture
+    def machines(self):
+        connection, db = make_connection()
+        return MachineRepository(connection), db[MACHINES_COLLECTION]
+
+    def test_only_machines_with_a_limit_are_listed(self, machines):
+        repo, coll = machines
+        coll.find.return_value = [{"_id": "andromeda", "max_concurrent": 5}]
+
+        assert repo.limits() == {"andromeda": 5}
+        assert coll.find.call_args.args[0] == {"max_concurrent": {"$type": "number"}}
+
+    def test_a_limit_is_upserted_by_label(self, machines):
+        repo, coll = machines
+
+        repo.set_limit("andromeda", 5)
+
+        flt, update = coll.update_one.call_args.args[:2]
+        assert flt == {"_id": "andromeda"}
+        assert update["$set"]["max_concurrent"] == 5
+        assert coll.update_one.call_args.kwargs["upsert"] is True
+
+    def test_clearing_it_stores_null(self, machines):
+        repo, coll = machines
+
+        repo.set_limit("andromeda", None)
+
+        assert coll.update_one.call_args.args[1]["$set"]["max_concurrent"] is None
+
+    @pytest.mark.parametrize("bad", [0, -1])
+    def test_a_limit_below_one_is_refused(self, machines, bad):
+        repo, _ = machines
+
+        with pytest.raises(ValueError):
+            repo.set_limit("andromeda", bad)
+
+
+class TestSnapshotCarriesWorkerDetail:
+    def test_the_planner_gets_durations_and_start_times(self, hosts):
+        repo, coll = hosts
+        coll.aggregate.return_value = []
+
+        repo.inventory_snapshot()
+
+        pipeline = coll.aggregate.call_args.args[0]
+        lookup = pipeline[0]["$lookup"]["pipeline"][0]["$project"]
+        fields = pipeline[1]["$set"]
+        assert lookup["started_at"] == 1
+        assert "free_durations" in fields and "occupied_workers" in fields

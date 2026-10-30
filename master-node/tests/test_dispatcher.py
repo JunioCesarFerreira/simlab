@@ -19,6 +19,7 @@ from bson import ObjectId
 
 from lib.scheduler.dispatcher import Dispatcher
 from lib.scheduler.policy import (
+    EarliestCompletionPolicy,
     FastestThenLeastLoadedPolicy,
     HostLoad,
     LeastLoadedHostPolicy,
@@ -664,3 +665,91 @@ class TestTheOrderingInsideTheHostFollowsThePolicy:
 
         assert mongo.resource_repo.find_free_by_host.call_args.kwargs == {
             "prefer_fastest": False}
+
+
+# ── Machine limits and planned completion ────────────────────────────────────
+
+def detailed(host_id, name, *, free=(), busy=(), machine=None):
+    """A snapshot row with the per-worker detail the planner reads."""
+    row = {"_id": host_id, "name": name, "free": len(free), "active": len(busy),
+           "schedulable": True, "free_durations": list(free),
+           "occupied_workers": [{"mean_duration_sec": d, "started_at": None}
+                                for d in busy]}
+    if machine:
+        row["machine"] = machine
+    return row
+
+
+class TestMachineLimits:
+    def test_a_machine_at_its_limit_holds_the_job(self):
+        mongo = FakeMongo(inventory=snapshot((HOST_A, "host-a", 3, 1)))
+        mongo.machine_repo = MagicMock()
+        mongo.machine_repo.limits.return_value = {"host-a": 1}
+        dispatcher, started = make_dispatcher(mongo)
+        dispatcher.submit(SIM_ID)
+
+        assert dispatcher.step() is False
+        assert started == [] and dispatcher.pending == 1
+
+    def test_below_its_limit_the_job_is_placed(self):
+        mongo = FakeMongo(inventory=snapshot((HOST_A, "host-a", 3, 1)))
+        mongo.machine_repo = MagicMock()
+        mongo.machine_repo.limits.return_value = {"host-a": 2}
+        dispatcher, started = make_dispatcher(mongo)
+        dispatcher.submit(SIM_ID)
+
+        assert dispatcher.step() is True
+
+    def test_limits_that_cannot_be_read_do_not_stop_placement(self):
+        mongo = FakeMongo(inventory=snapshot((HOST_A, "host-a", 3, 1)))
+        mongo.machine_repo = MagicMock()
+        mongo.machine_repo.limits.side_effect = RuntimeError("db gone")
+        dispatcher, started = make_dispatcher(mongo)
+        dispatcher.submit(SIM_ID)
+
+        assert dispatcher.step() is True
+
+
+class TestPlannedCompletion:
+    def _tail(self):
+        """The end of a batch: the fast host busy and nearly done, a slow one free."""
+        mongo = FakeMongo(inventory=[
+            detailed(HOST_A, "fast", busy=(30.0,)),
+            detailed(HOST_B, "slow", free=(90.0,)),
+        ])
+        dispatcher, started = make_dispatcher(mongo, policy=EarliestCompletionPolicy())
+        return mongo, dispatcher, started
+
+    def test_the_tail_waits_for_the_faster_worker(self):
+        mongo, dispatcher, started = self._tail()
+        dispatcher.submit(SIM_ID)
+
+        assert dispatcher.step() is False
+        assert started == [] and dispatcher.pending == 1
+        mongo.resource_repo.reserve.assert_not_called()
+
+    def test_new_work_wakes_a_deferred_decision(self):
+        mongo, dispatcher, _ = self._tail()
+        dispatcher.submit(SIM_ID)
+        dispatcher.step()
+        dispatcher.notify_capacity = MagicMock()
+
+        dispatcher.submit("507f1f77bcf86cd799439999")
+
+        dispatcher.notify_capacity.assert_called_once()
+
+    def test_a_queue_long_enough_puts_the_slower_worker_to_use(self):
+        mongo, dispatcher, started = self._tail()
+        for i in range(5):
+            dispatcher.submit(f"507f1f77bcf86cd79943990{i}")
+
+        assert dispatcher.step() is True
+        assert mongo.resource_repo.find_free_by_host.call_args.args[0] == HOST_B
+
+    def test_a_policy_without_a_plan_is_unaffected(self):
+        mongo, _, _ = self._tail()
+        dispatcher, started = make_dispatcher(mongo, policy=FastestThenLeastLoadedPolicy())
+        dispatcher.submit(SIM_ID)
+
+        # The ranked policy only sees the free host, and takes it.
+        assert dispatcher.step() is True

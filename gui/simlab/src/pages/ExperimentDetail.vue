@@ -159,7 +159,14 @@
                 class="param-row"
               >
                 <span class="pk">{{ obj.metric_name }}</span>
-                <span class="pv goal" :class="`goal--${obj.goal}`">{{ obj.goal }}</span>
+                <span class="pv obj-pv">
+                  <span class="obj-agg mono" title="Aggregation across seeds">{{
+                    formatSeedAggregator(
+                      effectiveSeedAggregator(obj, store.experiment.parameters.simulation),
+                    )
+                  }}</span>
+                  <span class="goal" :class="`goal--${obj.goal}`">{{ obj.goal }}</span>
+                </span>
               </div>
             </div>
           </details>
@@ -241,8 +248,19 @@
           </details>
         </div>
 
+        <!-- A scalability benchmark optimises nothing: no objectives, no
+             Pareto front, no convergence to measure. Its analysis lives on
+             the Scalability page, so point there instead of drawing empty
+             charts and an HV/GD request that has no objectives to send. -->
+        <div v-if="isBenchmark" class="charts-panel">
+          <div class="card benchmark-pointer">
+            This experiment is a <strong>scalability benchmark</strong>: it runs one simulation at
+            increasing concurrency to measure the infrastructure. Its USL fit and waves are on the
+            <RouterLink :to="`/scalability?id=${props.id}`">Scalability page</RouterLink>.
+          </div>
+        </div>
         <!-- Charts panel -->
-        <div class="charts-panel">
+        <div v-else class="charts-panel">
           <ResizableChartCard v-model="paretoH" label="Pareto front chart">
             <div class="section-title pareto-title">
               Pareto Front
@@ -442,6 +460,7 @@ import { confirmDialog } from "../composables/useConfirm";
 import { reportRuntimeError } from "../composables/useRuntimeError";
 import type { IndividualDto, JsonObject, ParetoFrontItemDto } from "../types/simlab";
 import { isPenalized } from "../types/simlab";
+import { effectiveSeedAggregator, formatSeedAggregator } from "../lib/seedAggregator";
 import { computeRanks } from "../utils/nonDominatedSort";
 import { useParetoRanks } from "../composables/useParetoRanks";
 
@@ -511,6 +530,7 @@ const has3Objectives = computed(() => (store.objectiveNames?.length ?? 0) >= 3);
 const isSynthetic = computed(
   () => store.experiment?.parameters?.simulation?.synthetic?.enabled ?? false,
 );
+const isBenchmark = computed(() => store.experiment?.parameters?.strategy === "usl_benchmark");
 const syntheticBench = computed(
   () => store.experiment?.parameters?.simulation?.synthetic?.bench ?? "Synthetic",
 );
@@ -678,7 +698,8 @@ const simulationOtherParams = computed(() => {
   const sim = store.experiment?.parameters?.simulation ?? {};
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(sim)) {
-    if (k !== "random_seeds") out[k] = v;
+    // The default aggregator is shown resolved, on each objective.
+    if (k !== "random_seeds" && k !== "aggregator") out[k] = v;
   }
   return out;
 });
@@ -1290,6 +1311,20 @@ onBeforeUnmount(() => {
   color: var(--status-done);
 }
 
+.obj-pv {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  word-break: normal;
+}
+.obj-agg {
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
 .muted-inline {
   color: var(--color-text-muted);
   font-weight: 400;
@@ -1321,6 +1356,12 @@ onBeforeUnmount(() => {
 }
 
 /* Charts */
+.benchmark-pointer {
+  padding: 16px 18px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .charts-panel {
   display: flex;
   flex-direction: column;

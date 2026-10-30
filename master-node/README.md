@@ -112,6 +112,14 @@ implementation (one hop for a local container, two for one on another host),
 `hostkey` is the trust policy, `pool` keeps the first hop from being opened
 once per worker, and `factory` composes a transport from the stored records.
 
+`resolve` turns a host's name into an address before paramiko sees it, so a
+failed lookup is bounded (5 s) and classified: `NameResolutionFailed` says
+whether the master-node's resolver did not answer (`resolver_fault`) or the
+name does not exist. It also remembers the last address each name connected
+on — in memory, and on the host as `resolved_address` — and uses it when the
+lookup fails, **only** for a host whose key is pinned: an address that now
+belongs to another machine fails the pin instead of being trusted.
+
 ### `lib/health.py`
 
 The measuring cycle: Docker says whether a container exists, an SSH probe says
@@ -125,6 +133,27 @@ settings changed is measured again before it is schedulable. Both halves
 matter: clearing the stored measurement does not stop a probe that was
 *already running* from writing a positive result for a path that no longer
 exists.
+
+Hosts are checked **concurrently** (`INFRA_CHECK_PARALLEL`), each with a
+shorter handshake timeout than a simulation's (`INFRA_CONNECT_TIMEOUT_SEC`).
+Checked one at a time, a pool with eight hosts down took almost four minutes
+per cycle, and the housekeeping after the hosts waited with it.
+
+A remote host that keeps failing is **backed off**: from the cycle that takes
+it offline, it waits one interval, then two, four, … up to
+`INFRA_BACKOFF_MAX_SEC`, written on the host as `backoff_until`. Its workers
+are already out of the pool, so checking every interval only bought another
+connect timeout. An operator's check, an edit of the host's access settings
+and re-enabling it all skip the wait; a local host never backs off.
+
+The cycle also watches the master-node's own resolver (`lib/dns_watch.py`)
+and writes a heartbeat to `master_status` with what it found; the Topology
+page reads both. While the resolver answers for **none** of the hosts' names,
+a host reached by name is recorded as *not measured*: its status, failure
+count and backoff are left alone instead of every host going offline at once
+for a fault on the master-node. Its workers still leave the pool, because this
+master-node cannot use them, unless the host is reached at its last known
+address. See *The master-node cannot resolve host names* below.
 
 ### `lib/detached.py`
 
@@ -367,10 +396,16 @@ documents — and a failure of the second used to propagate back and mark the
 | `IS_DOCKER` | `false` | If `true`, seeded hostnames are `cooja1..coojaN` on port 22; otherwise `localhost` on ports `2231+i` |
 | `NUMBER_OF_CONTAINERS` | `8` | How many local containers to **seed** on first start. Not a thread count any more: the pool comes from the inventory, and discovery maintains it |
 | `SIM_TIMEOUT_SEC` | `3600` | How long one simulation may run, and the cutoff for recovering one left `RUNNING` with no container holding it. `0` disables both |
-| `SCHED_POLICY` | `least_loaded_host` | Placement policy — see *Placement policies* below. `least_loaded_host` or `fastest_then_least_loaded` |
+| `SCHED_POLICY` | `least_loaded_host` | Placement policy — see *Placement policies* below. `least_loaded_host`, `fastest_then_least_loaded` or `earliest_completion` (what `docker-compose.yaml` sets) |
 | `RUN_POLL_INTERVAL_SEC` | `5` | How often a running simulation is checked on. One cheap round trip each time |
 | `INFRA_CHECK_INTERVAL_SEC` | `30` | Health cycle interval |
 | `INFRA_FAILURE_THRESHOLD` | `3` | Consecutive failures before a host leaves the pool. Capacity is slow to lose and quick to regain |
+| `INFRA_CONNECT_TIMEOUT_SEC` | `8` | Hop-1 handshake timeout (TCP connect and SSH banner) for a **health check**. A simulation's connection keeps 20 s |
+| `INFRA_CHECK_PARALLEL` | `8` | Hosts checked at the same time in one cycle |
+| `INFRA_BACKOFF_MAX_SEC` | `600` | Longest wait between checks of a host that keeps failing. `0` disables the backoff |
+| `DNS_SELF_RESTART` | `true` in Docker | Exit (status 75) so the restart policy starts a new container when the resolver has answered for none of the hosts' names for `DNS_RESTART_AFTER_SEC` and no worker is reserved or busy. See *The master-node cannot resolve host names* |
+| `DNS_RESTART_AFTER_SEC` | `300` | How long the resolver must have failed before restarting over it |
+| `DNS_RESTART_MIN_INTERVAL_SEC` | `3600` | At most one such restart per interval — the guard against a loop when the machine itself has no DNS. The last restart is stored in `master_status`, so the guard survives the restart |
 | `RESERVATION_TTL_SEC` | `600` | How long a container may stay reserved without its simulation starting. Covers only that window — a run that got as far as `busy` is governed by `SIM_TIMEOUT_SEC` |
 | `INFRA_KEY_PATH` | `/run/secrets/simlab-infra/x25519.json` | The keystore that opens sealed credentials. The private half never leaves this process |
 | `COOJA_JVM_XMS` / `COOJA_JVM_XMX` | `1g` / `2g` | JVM heap for Cooja |
@@ -492,6 +527,37 @@ is right for finishing a batch soonest and wrong for spreading work across
 machines. The *Work distribution* card on the experiment page shows which one
 you got.
 
+### `earliest_completion`
+
+`fastest_then_least_loaded` stops sending work to a slow host while a fast one
+is **free**; it cannot see that a busy fast one will be free in a few seconds.
+Measured on a generation of 46 simulations over a local host (111 s each) and
+eight VMs of one machine (666–1008 s each with all eight running), every VM
+took a job as soon as the local workers filled, and the local host then sat
+idle for 9.6 min on average at the end of each generation, waiting for them.
+The whole pool finished later than the local host alone would have (121 min
+against ~109).
+
+This policy plans instead (`lib/scheduler/completion.py`). Every waiting job,
+in turn, is assigned on paper to the worker that would finish it first — a free
+one now, or a busy one once its run ends — using each worker's measured held
+time. The head of the queue is placed only on a worker that plan uses **now**;
+if it uses none, the job waits for the faster worker. For identical jobs on
+workers of different speeds that greedy is optimal for the makespan.
+
+- A slow host takes work at the start of a long queue, where it shortens the
+  batch, and not at its tail, where it would lengthen it.
+- **Waiting is bounded.** A busy worker counts only while it is within twice
+  its expected time; a run past that, or with no estimate, is not waited on.
+- **New work wakes a waiting decision**: a longer queue can make a slower
+  worker worth using.
+- A worker never measured is sampled first, as with the ranked policy.
+- The log says why a job waits: `Holding <id> for a faster worker: …`.
+
+What it trades: a slower host is idle more of the time, by design. Its
+estimate is the worker's own mean held time, so a host measured while
+overloaded starts out pessimistic and converges as its runs get shorter.
+
 ### Where the estimate comes from
 
 Each successful run records how long the container was **held** — connection,
@@ -516,6 +582,39 @@ the same genome with the same seed took 1.22–1.25x longer on the remote hosts
 
 Writing it is advisory and isolated: a failure is logged and the simulation is
 unaffected, because the number only chooses between equally loaded hosts.
+
+---
+
+## Machine Limits
+
+Several hosts can be **one physical machine** — VMs on one hypervisor, reached
+through its address on different forwarded ports — and then they compete for
+the same CPUs, which nothing about them as separate hosts shows. Measured on
+eight VMs of one machine running the same simulation:
+
+| VMs running at once | Time per simulation | Machine throughput |
+|---|---|---|
+| 1 | 36 s | 1.7 sim/min |
+| 5 | 60 s | **5.0 sim/min** |
+| 8 | 109 s | 4.4 sim/min |
+
+A **machine limit** caps how many simulations it runs at once across all of
+its hosts. It is applied before any policy decides, so it holds whichever one
+is configured, and a host being drained still counts against it — its runs use
+the same CPUs.
+
+- **Grouping**: a host's machine is its `machine` label when set, otherwise
+  its SSH address for a remote host and `local` for the master-node's own. The
+  address is right for port-forwarded VMs and wrong for distinct machines
+  behind one NAT gateway, which is what the label is for.
+- **Setting it**: the *Physical machines* card on the Infrastructure page, the
+  per-machine table of a scalability benchmark (which recommends the measured
+  peak), or `PUT /api/v1/infra/machines/{machine}` with
+  `{"max_concurrent": 5}` (`null` removes it). Stored in the `machines`
+  collection and read on every placement decision.
+- **Choosing it**: the benchmark's per-machine fit. Its peak is recommended
+  only when the measurements reach it — a peak the model extrapolates past the
+  largest concurrency tested is reported, not recommended.
 
 ---
 
@@ -607,6 +706,70 @@ bumped and its workers' probes are cleared — they leave the pool until the nex
 health cycle measures them against the new configuration. That is deliberate: a
 key change is a reason to re-verify the path, not to keep trusting the last
 measurement.
+
+### Several hosts share one host key
+
+The Infrastructure page warns when hosts on **different endpoints** present
+the same SSH host key. That is what cloned VM images look like when the host
+keys were not regenerated after cloning, and it defeats pinning: the pin is
+what tells one host from another, so a port forward pointing at the wrong VM
+is accepted without a word, and whoever holds one clone's private key can
+impersonate all of them.
+
+The fix is on the machines. On each one:
+
+```
+sudo rm /etc/ssh/ssh_host_*
+sudo ssh-keygen -A                 # or: sudo dpkg-reconfigure openssh-server
+sudo systemctl restart ssh         # `sshd` on RHEL-like systems
+```
+
+Then clear each host's pin, as in *A host key has to be replaced* above, so
+the next check learns the new key:
+
+```
+PUT /api/v1/infra/hosts/{id}   {"access": {"host_key_fingerprint": null}}
+```
+
+Until the pin is cleared every session to that host is refused with both
+fingerprints in the message — the intended response to a key that changed.
+Clients that connect by hand (`ssh` from a terminal) will also report the
+change, and need their `known_hosts` entry removed (`ssh-keygen -R`).
+
+### The master-node cannot resolve host names
+
+Symptom: every host registered **by name** goes unmeasured at once, the
+Topology page flags the master-node with *DNS not answering*, and the log says
+`DNS: the DNS resolver did not answer for any of N host name(s)`, while `ssh`
+to the same names from a terminal on the same machine works.
+
+Cause, as observed in deployment: Docker's embedded resolver (`127.0.0.11`)
+copies the machine's upstream DNS servers when the container **starts** and
+never reads them again. After the machine moves to another network — home to
+lab, a VPN coming up or down — the container keeps asking servers it can no
+longer reach. `docker exec master_node cat /etc/resolv.conf` shows the copied
+list in its `ExtServers` comment.
+
+What happens on its own:
+
+- hosts with a pinned key are reached at their **last known address**, so
+  work continues on them, with a note in the host's message;
+- hosts reached by name are not counted as failing, so nothing is taken
+  offline or backed off for it;
+- once the resolver has failed for `DNS_RESTART_AFTER_SEC` and nothing is
+  reserved or busy, the master-node **restarts itself** and Docker gives the
+  new container the machine's current servers. A running simulation is never
+  interrupted for this — the restart waits for an idle pool — and at most one
+  such restart happens per `DNS_RESTART_MIN_INTERVAL_SEC`.
+
+By hand, at any time: `docker restart master_node`.
+
+If a restart does not help, the machine itself has no working DNS, and the
+guard stops further restarts. Fix the machine's resolver, or register the
+hosts by IP address. Pinning servers in `docker-compose.yaml`
+(`dns: [1.1.1.1, 8.8.8.8]` on the master-node service) also works, **but** it
+breaks on networks that block external DNS and cannot resolve names that only
+a local DNS server knows — which is why it is not the default.
 
 ### A worker carries old port data
 

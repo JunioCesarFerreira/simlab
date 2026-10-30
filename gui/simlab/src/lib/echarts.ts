@@ -14,12 +14,15 @@
  * silently renders nothing.
  */
 import * as echarts from "echarts/core";
-import { LineChart, ParallelChart, ScatterChart } from "echarts/charts";
+import { GraphChart, LineChart, ParallelChart, ScatterChart } from "echarts/charts";
 import {
   DataZoomComponent,
   GridComponent,
   LegendComponent,
   LegendScrollComponent,
+  MarkAreaComponent,
+  MarkLineComponent,
+  MarkPointComponent,
   ParallelComponent,
   TooltipComponent,
   VisualMapComponent,
@@ -27,6 +30,8 @@ import {
 import { CanvasRenderer, SVGRenderer } from "echarts/renderers";
 
 echarts.use([
+  // The infrastructure topology page.
+  GraphChart,
   ScatterChart,
   LineChart,
   ParallelChart,
@@ -37,6 +42,10 @@ echarts.use([
   DataZoomComponent,
   VisualMapComponent,
   ParallelComponent,
+  // The USL chart marks its peak and shades the extrapolated range.
+  MarkAreaComponent,
+  MarkLineComponent,
+  MarkPointComponent,
   CanvasRenderer,
   SVGRenderer,
 ]);

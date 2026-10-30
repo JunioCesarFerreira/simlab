@@ -14,6 +14,8 @@ import base64
 import pytest
 from bson import ObjectId
 
+from api.mappers.infra import shared_host_keys
+
 HOST_ID = "507f1f77bcf86cd799430011"
 RES_ID = "507f1f77bcf86cd799430021"
 SIM_ID = "507f1f77bcf86cd799430031"
@@ -409,6 +411,25 @@ class TestOverview:
     def test_a_uniform_pool_is_not_flagged(self, client, infra):
         body = client.get("/api/v1/infra/overview").json()
         assert body["heterogeneous"] is False
+
+    def test_clones_sharing_a_host_key_are_flagged(self, client, infra):
+        """Cloned VM images that kept their host keys: the pin cannot tell
+        them apart, so a port forward to the wrong VM would be accepted."""
+        infra.host_repo.find_all.return_value = [
+            sample_host(_id=ObjectId(), name=f"vm{i}",
+                        access={"address": "gateway.example", "port": 2200 + i,
+                                "host_key_fingerprint": "SHA256:same"})
+            for i in (2, 1)
+        ] + [sample_host()]
+
+        body = client.get("/api/v1/infra/overview").json()
+
+        assert body["shared_host_keys"] == [
+            {"fingerprint": "SHA256:same", "hosts": ["vm1", "vm2"]}]
+
+    def test_a_clean_pool_has_no_shared_keys(self, client, infra):
+        body = client.get("/api/v1/infra/overview").json()
+        assert body["shared_host_keys"] == []
 
 
 # ── Reads ────────────────────────────────────────────────────────────────────
@@ -1078,3 +1099,143 @@ class TestRemovingAHostIsAllOrNothing:
 
         assert resp.status_code == 409
         assert "Try again" in resp.json()["detail"]
+
+
+# ── Shared host keys ─────────────────────────────────────────────────────────
+
+class TestSharedHostKeys:
+    """Which hosts the pin cannot tell apart."""
+
+    @staticmethod
+    def _host(name, address, port, fingerprint="SHA256:same", **over):
+        doc = {"name": name, "access": {"address": address, "port": port,
+                                        "host_key_fingerprint": fingerprint}}
+        doc.update(over)
+        return doc
+
+    def test_one_key_on_two_endpoints_is_reported(self):
+        groups = shared_host_keys([
+            self._host("vm1", "gw.example", 2201), self._host("vm2", "gw.example", 2202)])
+
+        assert groups == [{"fingerprint": "SHA256:same", "hosts": ["vm1", "vm2"]}]
+
+    def test_two_registrations_of_one_endpoint_are_one_machine(self):
+        assert shared_host_keys([
+            self._host("a", "GW.example", 22), self._host("b", "gw.example", None)]) == []
+
+    def test_a_host_being_removed_or_never_contacted_is_left_out(self):
+        assert shared_host_keys([
+            self._host("vm1", "gw.example", 2201),
+            self._host("vm2", "gw.example", 2202, withdrawn_at="2026-10-22T10:00:00Z"),
+            self._host("vm3", "gw.example", 2203, fingerprint=None),
+        ]) == []
+
+    def test_different_keys_are_different_machines(self):
+        assert shared_host_keys([
+            self._host("vm1", "gw.example", 2201, fingerprint="SHA256:a"),
+            self._host("vm2", "gw.example", 2202, fingerprint="SHA256:b"),
+        ]) == []
+
+
+
+# ── Physical machines ───────────────────────────────────────────────────────
+
+def vm_row(name, port, *, active=0, total=1, disabled=0, **over):
+    row = snapshot_row(_id=ObjectId(), name=name, active=active, resource_total=total,
+                       disabled=disabled,
+                       access={"address": "andromeda.example", "port": port})
+    row.update(over)
+    return row
+
+
+class TestMachines:
+    def test_vms_behind_one_address_are_one_machine(self, client, infra):
+        infra.host_repo.inventory_snapshot.return_value = [
+            snapshot_row(_id=ObjectId(), name="local", type="local", resource_total=8,
+                         disabled=2, active=1),
+            vm_row("vm1", 2191, active=1), vm_row("vm2", 2192, total=2, disabled=1),
+        ]
+        infra.machine_repo.limits.return_value = {"andromeda.example": 5}
+
+        machines = client.get("/api/v1/infra/machines").json()
+
+        assert machines == [
+            {"machine": "local", "hosts": ["local"], "workers": 6, "active": 1,
+             "max_concurrent": None},
+            {"machine": "andromeda.example", "hosts": ["vm1", "vm2"], "workers": 2,
+             "active": 1, "max_concurrent": 5},
+        ]
+
+    def test_an_explicit_label_overrides_the_address(self, client, infra):
+        infra.host_repo.inventory_snapshot.return_value = [
+            vm_row("a", 1, machine="rack-1"), vm_row("b", 2, machine="rack-2")]
+        infra.machine_repo.limits.return_value = {}
+
+        labels = [m["machine"] for m in client.get("/api/v1/infra/machines").json()]
+
+        assert labels == ["rack-1", "rack-2"]
+
+    def test_a_limit_is_set_on_a_known_machine(self, client, infra):
+        infra.host_repo.inventory_snapshot.return_value = [vm_row("vm1", 2191)]
+        infra.machine_repo.limits.return_value = {}
+
+        resp = client.put("/api/v1/infra/machines/andromeda.example",
+                          json={"max_concurrent": 5})
+
+        assert resp.status_code == 200
+        assert resp.json()["max_concurrent"] == 5
+        infra.machine_repo.set_limit.assert_called_once_with("andromeda.example", 5)
+
+    def test_null_removes_it(self, client, infra):
+        infra.host_repo.inventory_snapshot.return_value = [vm_row("vm1", 2191)]
+        infra.machine_repo.limits.return_value = {"andromeda.example": 5}
+
+        resp = client.put("/api/v1/infra/machines/andromeda.example",
+                          json={"max_concurrent": None})
+
+        assert resp.json()["max_concurrent"] is None
+        infra.machine_repo.set_limit.assert_called_once_with("andromeda.example", None)
+
+    def test_an_unknown_machine_is_a_404_not_a_limit_nothing_matches(self, client, infra):
+        infra.host_repo.inventory_snapshot.return_value = [vm_row("vm1", 2191)]
+        infra.machine_repo.limits.return_value = {}
+
+        resp = client.put("/api/v1/infra/machines/andromeda.exmaple",
+                          json={"max_concurrent": 5})
+
+        assert resp.status_code == 404
+        assert "andromeda.example" in resp.json()["detail"]
+        infra.machine_repo.set_limit.assert_not_called()
+
+    @pytest.mark.parametrize("bad", [
+        {"max_concurrent": 0}, {"max_concurrent": True}, {"max_concurrent": "5"},
+        {"max_concurrent": 2.5}, {"max_concurrent": 5, "extra": 1}, {},
+    ])
+    def test_a_bad_limit_is_refused(self, client, infra, bad):
+        infra.host_repo.inventory_snapshot.return_value = [vm_row("vm1", 2191)]
+        infra.machine_repo.limits.return_value = {}
+
+        resp = client.put("/api/v1/infra/machines/andromeda.example", json=bad)
+
+        assert resp.status_code == 422
+        infra.machine_repo.set_limit.assert_not_called()
+
+
+class TestHostMachineLabel:
+    def test_a_host_reports_its_label_and_the_one_in_effect(self, client, infra):
+        body = client.get(f"/api/v1/infra/hosts/{HOST_ID}").json()["host"]
+
+        assert body["machine"] is None
+        assert body["machine_label"] == "192.168.0.42"
+
+    def test_it_can_be_set_and_cleared(self, client, infra):
+        client.put(f"/api/v1/infra/hosts/{HOST_ID}", json={"machine": " rack-2 "})
+        assert infra.host_repo.update.call_args.args[1]["machine"] == "rack-2"
+
+        client.put(f"/api/v1/infra/hosts/{HOST_ID}", json={"machine": ""})
+        assert infra.host_repo.update.call_args.args[1]["machine"] is None
+
+    def test_a_label_that_cannot_go_in_a_url_is_refused(self, client, infra):
+        resp = client.put(f"/api/v1/infra/hosts/{HOST_ID}", json={"machine": "a/b"})
+
+        assert resp.status_code == 422

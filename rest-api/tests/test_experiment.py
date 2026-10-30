@@ -83,6 +83,69 @@ class TestCreateExperiment:
         resp = client.post(f"{BASE}/", json=_VALID_PAYLOAD)
         assert resp.status_code == 500
 
+    @staticmethod
+    def _with_aggregators(objective_aggregator=None, default=None):
+        objective = {"metric_name": "latency", "goal": "min"}
+        if objective_aggregator is not None:
+            objective["aggregator"] = objective_aggregator
+        simulation = {"duration": 60, "random_seeds": [1, 2]}
+        if default is not None:
+            simulation["aggregator"] = default
+        return {**_VALID_PAYLOAD, "parameters": {
+            **_VALID_PAYLOAD["parameters"],
+            "simulation": simulation,
+            "objectives": [objective, {"metric_name": "throughput", "goal": "max"}],
+        }}
+
+    _VALID = ["mean", "median", "min", "max", {"kind": "trimmed_mean", "trim": 0.2}]
+    _INVALID = ["average", {"kind": "trimmed_mean", "trim": 0.5}, {"kind": "trimmed_mean", "trimm": 0.1}]
+
+    @pytest.mark.parametrize("aggregator", _VALID)
+    def test_objective_aggregator_is_stored(self, client, mock_factory, aggregator):
+        mock_factory.experiment_repo.insert.return_value = ObjectId(EXP_ID)
+        resp = client.post(f"{BASE}/", json=self._with_aggregators(objective_aggregator=aggregator))
+        assert resp.status_code == 200
+        objectives = mock_factory.experiment_repo.insert.call_args.args[0]["parameters"]["objectives"]
+        assert objectives[0]["aggregator"] == aggregator
+        assert "aggregator" not in objectives[1]
+
+    @pytest.mark.parametrize("aggregator", _VALID)
+    def test_default_aggregator_is_stored(self, client, mock_factory, aggregator):
+        mock_factory.experiment_repo.insert.return_value = ObjectId(EXP_ID)
+        resp = client.post(f"{BASE}/", json=self._with_aggregators(default=aggregator))
+        assert resp.status_code == 200
+        doc = mock_factory.experiment_repo.insert.call_args.args[0]
+        assert doc["parameters"]["simulation"]["aggregator"] == aggregator
+
+    @pytest.mark.parametrize("aggregator", _INVALID)
+    def test_invalid_objective_aggregator_returns_422(self, client, mock_factory, aggregator):
+        resp = client.post(f"{BASE}/", json=self._with_aggregators(objective_aggregator=aggregator))
+        assert resp.status_code == 422
+        assert resp.json()["detail"].startswith("parameters.objectives[0].aggregator")
+        mock_factory.experiment_repo.insert.assert_not_called()
+
+    @pytest.mark.parametrize("aggregator", [*_INVALID, 42, None])
+    def test_invalid_default_aggregator_returns_422(self, client, mock_factory, aggregator):
+        payload = self._with_aggregators(default="mean")
+        payload["parameters"]["simulation"]["aggregator"] = aggregator
+        resp = client.post(f"{BASE}/", json=payload)
+        assert resp.status_code == 422
+        assert resp.json()["detail"].startswith("parameters.simulation.aggregator")
+        mock_factory.experiment_repo.insert.assert_not_called()
+
+    def test_objective_aggregator_of_wrong_type_returns_422(self, client, mock_factory):
+        resp = client.post(f"{BASE}/", json=self._with_aggregators(objective_aggregator=42))
+        assert resp.status_code == 422
+        mock_factory.experiment_repo.insert.assert_not_called()
+
+    def test_objective_aggregator_is_returned(self, client, mock_factory):
+        exp = sample_experiment()
+        exp["parameters"]["objectives"] = [{"metric_name": "latency", "goal": "min", "aggregator": "max"}]
+        mock_factory.experiment_repo.get.return_value = exp
+        resp = client.get(f"{BASE}/{EXP_ID}")
+        assert resp.status_code == 200
+        assert resp.json()["parameters"]["objectives"][0]["aggregator"] == "max"
+
 
 # ── GET / (list all) ───────────────────────────────────────────────────────────
 class TestGetAllExperiments:

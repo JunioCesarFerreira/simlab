@@ -652,6 +652,22 @@ class TestOneResultPerSeedInTheAggregation:
 
         assert means["ind-a"]["latency"] == 15.0
 
+    def test_each_metric_uses_its_own_aggregator(self, repo_and_sims):
+        repo, sims, _ = repo_and_sims
+        sims.find.return_value = [
+            {"individual_id": "ind-a", "random_seed": s,
+             "network_metrics": {"latency": lat, "throughput": thr, "energy": en}}
+            for s, lat, thr, en in [(1, 10.0, 5.0, 1.0), (2, 40.0, 3.0, 2.0), (3, 20.0, 4.0, 6.0)]
+        ]
+
+        result = repo.get_simulations_metrics_by_individual(
+            GEN_ID, ["latency", "throughput", "energy"],
+            aggregators={"latency": "max", "throughput": "min"},
+        )
+
+        # Worst case for each goal; energy, not named, is the mean.
+        assert result["ind-a"] == {"latency": 40.0, "throughput": 3.0, "energy": 3.0}
+
 
 class TestTheRecordNamesItsOwnHole:
     """F3.4: an absent seed and a missing metric need a stated destination.

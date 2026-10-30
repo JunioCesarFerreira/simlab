@@ -203,8 +203,24 @@ export interface HostDto {
   /** The master-node still owes an answer to a requested check. */
   check_pending: boolean;
   discovery_pending: boolean;
+  /** The physical machine an operator set for this host, if any. */
+  machine?: string | null;
+  /** The machine in effect: that label, or the SSH address by default. */
+  machine_label?: string;
   created_time: string | null;
   updated_time: string | null;
+}
+
+/** A physical machine: the hosts on it, its workers and its concurrency limit. */
+export interface MachineDto {
+  machine: string;
+  hosts: string[];
+  /** Enabled workers across its hosts. */
+  workers: number;
+  /** Simulations it runs now. */
+  active: number;
+  /** How many it may run at once across all its hosts; null for no limit. */
+  max_concurrent: number | null;
 }
 
 /**
@@ -261,12 +277,20 @@ export interface OverviewTotalsDto {
   draining?: number;
 }
 
+/** Hosts on different endpoints that answer with the same SSH host key. */
+export interface SharedHostKey {
+  fingerprint: string;
+  hosts: string[];
+}
+
 export interface OverviewDto {
   totals: OverviewTotalsDto;
   hosts: HostOccupancyDto[];
   /** More than one Cooja build in the pool. */
   heterogeneous: boolean;
   cooja_builds: string[];
+  /** Cloned images that kept their host keys — the pin cannot tell them apart. */
+  shared_host_keys?: SharedHostKey[];
 }
 
 export interface HostDetailDto {
@@ -320,6 +344,7 @@ export interface DiscoveryInput {
 export interface HostCreateInput {
   name: string;
   enabled?: boolean;
+  machine?: string | null;
   access: HostAccessInput;
   container_access?: ContainerAccessInput;
   discovery?: DiscoveryInput;
@@ -328,7 +353,101 @@ export interface HostCreateInput {
 export interface HostUpdateInput {
   name?: string;
   enabled?: boolean;
+  /** Null or blank returns the host to grouping by its address. */
+  machine?: string | null;
   access?: Partial<HostAccessInput>;
   container_access?: ContainerAccessInput;
   discovery?: DiscoveryInput;
+}
+
+/* ── Topology: the pool as a graph, and what runs where ─────────────────── */
+
+export type MasterLiveness = "alive" | "stale" | "unknown";
+
+export interface TopologyRun {
+  simulation_id: string | null;
+  simulation_status?: string | null;
+  experiment_id: string | null;
+  experiment_name?: string | null;
+  generation_index?: number | null;
+  random_seed?: number | null;
+  assigned_at?: string | null;
+  started_at?: string | null;
+}
+
+export interface TopologyWorker {
+  id: string;
+  name: string;
+  status: string;
+  enabled: boolean;
+  held: boolean;
+  held_kind?: string | null;
+  message: string;
+  run: TopologyRun | null;
+}
+
+export interface TopologyHost {
+  id: string;
+  name: string;
+  type: string;
+  status: string;
+  enabled: boolean;
+  schedulable: boolean;
+  withdrawing: boolean;
+  last_check?: string | null;
+  message: string;
+  /** Backing off after repeated failures: not checked before this instant. */
+  retry_at?: string | null;
+  /** The configured SSH address — a name or an IP. */
+  address?: string | null;
+  /** The address the last successful connection used, if it was by name. */
+  last_known_ip?: string | null;
+  /** The physical machine it runs on. */
+  machine?: string;
+  workers: TopologyWorker[];
+}
+
+export interface TopologyRunningExperiment {
+  id: string;
+  name: string;
+  strategy?: string | null;
+  on_workers: number;
+  by_host: Record<string, number>;
+}
+
+/** The master-node's DNS resolver, as its last health cycle found it. */
+export interface MasterDns {
+  ok: boolean;
+  message: string;
+  checked_at?: string | null;
+  failing_since?: string | null;
+  /** Host names looked up. */
+  names: number;
+  /** Names the resolver did not answer for. */
+  failing: string[];
+  /** Names that do not exist — an answer, so not the resolver's fault. */
+  missing: string[];
+  self_restart: boolean;
+  /** Why a restart that would renew the DNS servers has not happened yet. */
+  restart_waiting?: string | null;
+  last_restart_at?: string | null;
+  last_restart_reason?: string | null;
+}
+
+export interface TopologyMaster {
+  status: MasterLiveness;
+  last_seen: string | null;
+  age_sec?: number;
+  stale_after_sec: number;
+  /** `null` until a master-node reports it. */
+  dns?: MasterDns | null;
+}
+
+export interface TopologyDto {
+  /** Server time: elapsed times are measured against it, not the browser's
+   *  clock, so a skewed laptop does not show a run as starting in the future. */
+  generated_at: string;
+  master: TopologyMaster;
+  hosts: TopologyHost[];
+  running_experiments: TopologyRunningExperiment[];
 }

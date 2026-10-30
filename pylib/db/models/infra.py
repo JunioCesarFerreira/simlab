@@ -25,6 +25,8 @@ from pylib.crypto.envelope import SecretEnvelope
 HOSTS_COLLECTION = "hosts"
 RESOURCES_COLLECTION = "cooja_resources"
 CRYPTO_COLLECTION = "infra_crypto"
+MASTER_STATUS_COLLECTION = "master_status"
+MACHINES_COLLECTION = "machines"
 
 
 class EnumHostType(str, Enum):
@@ -153,6 +155,16 @@ class Host(TypedDict, total=False):
     last_check: Optional[datetime]
     last_check_message: str
     consecutive_failures: int
+    # Not checked again before this instant: a host that keeps failing is
+    # retried less and less often. Cleared by a success, an access edit or
+    # re-enabling, and ignored by an operator's explicit check.
+    backoff_until: Optional[datetime]
+    # The address the last successful connection used, for when the name in
+    # ``access.address`` stops resolving: {"name", "ip", "since"}.
+    resolved_address: Optional[dict[str, Any]]
+    # The physical machine this host runs on, when the address does not say
+    # it — see ``machine_of``. An operator's setting, not an observation.
+    machine: Optional[str]
     # Set by the API, consumed by the master-node: the API has neither a route
     # to the containers nor the private key, so it asks instead of acting.
     check_requested_at: Optional[datetime]
@@ -278,6 +290,33 @@ class InfraCrypto(TypedDict, total=False):
 #: master-node would give.
 DEFAULT_REMOTE_DIR = "/opt/contiki-ng/tools/cooja"
 DEFAULT_CONTAINER_SSH_PORT = 22
+#: Hop 1's port when a host does not set one — the same default the
+#: master-node's connection plan applies.
+DEFAULT_HOST_SSH_PORT = 22
+
+
+def machine_of(host: dict) -> str:
+    """The physical machine a host's work runs on, as a label.
+
+    Several registered hosts can be one machine: VMs on one hypervisor,
+    reached through its address on different forwarded ports. They then
+    compete for the same CPUs, which nothing about them as separate hosts
+    shows — measured on eight VMs of one machine, their combined throughput
+    peaked at five simulations at once and fell after it. Grouping them is
+    what lets a concurrency limit apply to the machine instead of each VM.
+
+    An explicit ``machine`` wins. Otherwise a remote host is grouped by its
+    SSH address — right for port-forwarded VMs, wrong for distinct machines
+    behind one NAT gateway, which is what the explicit label is for — and
+    the master-node's own host is ``local``.
+    """
+    explicit = str(host.get("machine") or "").strip()
+    if explicit:
+        return explicit
+    if (host.get("type") or EnumHostType.REMOTE.value) == EnumHostType.LOCAL.value:
+        return EnumHostType.LOCAL.value
+    address = str((host.get("access") or {}).get("address") or "").strip().lower()
+    return address or str(host.get("name") or "?")
 
 
 def target_fingerprint(
@@ -285,8 +324,9 @@ def target_fingerprint(
 ) -> Optional[tuple[str, str, int, str]]:
     """What this registration actually points at, as a comparable value.
 
-    ``(host_access_address, container_address, port, remote_dir)``, or ``None``
+    ``(host_endpoint, container_address, port, remote_dir)``, or ``None``
     when the registration has no address yet and therefore points nowhere.
+    ``host_endpoint`` is the host's SSH ``address:port``.
 
     Two registrations with the same fingerprint are the same physical worker
     under two names. Discovery cannot produce that — it keys on the container
@@ -312,9 +352,20 @@ def target_fingerprint(
         or container_access.get("port")
         or DEFAULT_CONTAINER_SSH_PORT
     )
-    # The host's own address is part of the identity: the same container name
-    # and port on two different machines are two different workers.
-    jump = ((host.get("access") or {}).get("address") or "").strip()
+    # The host is part of the identity: the same container address and port on
+    # two different machines are two different workers.
+    #
+    # And the host is its SSH *endpoint*, address **and port** — the plan's
+    # hop 1, not only its address. Two machines behind one gateway share the
+    # address and differ in the forwarded port (`gateway:2197` and
+    # `gateway:2198` are two VMs), so keying on the address alone made every
+    # pair of their containers with the same internal port look like one
+    # container registered twice: editing one was refused with a 409 naming
+    # the other, and two that already matched could not be edited at all.
+    access = host.get("access") or {}
+    jump = "{}:{}".format(
+        (access.get("address") or "").strip().lower(),
+        int(access.get("port") or DEFAULT_HOST_SSH_PORT))
     if (host.get("type") or EnumHostType.REMOTE.value) == EnumHostType.LOCAL.value:
         jump = EnumHostType.LOCAL.value
     remote_dir = (resource.get("remote_dir") or DEFAULT_REMOTE_DIR).rstrip("/")

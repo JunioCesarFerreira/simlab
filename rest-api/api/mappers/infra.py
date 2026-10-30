@@ -19,7 +19,9 @@ from typing import Any, Iterable, Optional
 
 from pylib.crypto import MalformedEnvelope, redact, validate_envelope
 from pylib.db.models.infra import (
+    DEFAULT_HOST_SSH_PORT,
     SCHEDULABLE_HOST_STATUSES,
+    machine_of,
     EnumAddressMode,
     EnumAuthMethod,
     EnumDiscoveryMode,
@@ -45,6 +47,7 @@ from api.mappers.helpers import oid_to_str, pop_id
 _OBSERVED_HOST_FIELDS = frozenset({
     "status", "type", "origin", "last_check", "last_check_message",
     "consecutive_failures", "check_requested_at", "discovery_requested_at",
+    "backoff_until", "resolved_address",
     "created_time", "updated_time", "_id", "id",
 })
 # `mode` is absent on purpose: where a host's workers come from is an
@@ -87,6 +90,10 @@ def host_from_mongo(doc: dict) -> HostDto:
         # timestamps the two sides use to coordinate.
         "check_pending": d.get("check_requested_at") is not None,
         "discovery_pending": d.get("discovery_requested_at") is not None,
+        # The label an operator set, and the one in effect — the address
+        # groups port-forwarded VMs on its own when nothing is set.
+        "machine": d.get("machine") or None,
+        "machine_label": machine_of(d),
         "created_time": d.get("created_time"),
         "updated_time": d.get("updated_time"),
     }
@@ -218,8 +225,40 @@ def occupancy_from_snapshot(row: dict) -> HostOccupancyDto:
     }
 
 
+def shared_host_keys(hosts: Iterable[dict]) -> list[dict]:
+    """Groups of hosts that present the same SSH host key from different endpoints.
+
+    Cloned VM images keep the source's host keys unless they are regenerated,
+    and then pinning cannot tell the clones apart: a port forward pointing at
+    the wrong VM is accepted, because that VM answers with the pinned key —
+    and whoever holds one clone's private key can impersonate all of them.
+    Two registrations of the *same* endpoint sharing a key is just one
+    machine, and is not reported.
+    """
+    groups: dict[str, dict[tuple[str, int], list[str]]] = {}
+    for host in hosts:
+        access = host.get("access") or {}
+        fingerprint = access.get("host_key_fingerprint")
+        if not fingerprint or host.get("withdrawn_at"):
+            continue
+        endpoint = (
+            str(access.get("address") or "").strip().lower(),
+            int(access.get("port") or DEFAULT_HOST_SSH_PORT),
+        )
+        groups.setdefault(fingerprint, {}).setdefault(endpoint, []).append(
+            str(host.get("name", "?")))
+    shared = [
+        {"fingerprint": fingerprint,
+         "hosts": sorted(n for names in endpoints.values() for n in names)}
+        for fingerprint, endpoints in groups.items() if len(endpoints) > 1
+    ]
+    return sorted(shared, key=lambda group: group["hosts"])
+
+
 def overview_from_snapshot(
-    snapshot: list[dict], cooja_builds: Optional[list[str]] = None
+    snapshot: list[dict],
+    cooja_builds: Optional[list[str]] = None,
+    host_documents: Optional[Iterable[dict]] = None,
 ) -> OverviewDto:
     """Totals and per-host occupancy for the Infrastructure page."""
     hosts = [occupancy_from_snapshot(dict(row)) for row in snapshot]
@@ -248,6 +287,7 @@ def overview_from_snapshot(
         # effect in the results.
         "heterogeneous": len(builds) > 1,
         "cooja_builds": builds,
+        "shared_host_keys": shared_host_keys(host_documents or []),
     }
 
 
@@ -437,6 +477,11 @@ def host_to_mongo(dto: dict, *, for_update: bool = False) -> dict:
         doc["name"] = _as_text(d["name"], field="name")
     if "enabled" in d:
         doc["enabled"] = as_bool(d["enabled"], field="enabled")
+    if "machine" in d:
+        # Null or blank puts the host back on the default grouping.
+        doc["machine"] = (
+            None if d["machine"] is None or not str(d["machine"]).strip()
+            else _as_machine_label(d["machine"]))
 
     if "access" in d:
         doc["access"] = _access_to_mongo(
@@ -547,6 +592,52 @@ def _as_text(value: Any, *, field: str) -> str:
     return text
 
 
+def _as_machine_label(value: Any) -> str:
+    """A label for a physical machine: text, short, and usable in a URL path."""
+    text = _as_text(value, field="machine")
+    if len(text) > 120 or "/" in text:
+        raise PlaintextRefused(
+            "machine must be at most 120 characters and contain no '/'")
+    return text
+
+
+def as_max_concurrent(value: Any) -> Optional[int]:
+    """A machine's limit: a whole number from 1, or null for none."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise PlaintextRefused(
+            f"max_concurrent must be a whole number or null, got {value!r}")
+    if value < 1:
+        raise PlaintextRefused(
+            "max_concurrent must be at least 1; send null to remove the limit")
+    return value
+
+
+def machines_from_snapshot(
+    snapshot: Iterable[dict], limits: dict[str, int]
+) -> list[dict]:
+    """Physical machines, the hosts on each, and how much of each is in use.
+
+    From the same snapshot the scheduler reads. ``workers`` counts the
+    enabled ones; ``active`` every occupied one, enabled or draining, because
+    a limit counts what runs on the machine's CPUs.
+    """
+    machines: dict[str, dict] = {}
+    for row in snapshot:
+        label = machine_of(row)
+        entry = machines.setdefault(label, {
+            "machine": label, "hosts": [], "workers": 0, "active": 0,
+            "max_concurrent": limits.get(label)})
+        entry["hosts"].append(str(row.get("name", "?")))
+        entry["workers"] += max(
+            0, int(row.get("resource_total") or 0) - int(row.get("disabled") or 0))
+        entry["active"] += int(row.get("active") or 0)
+    for entry in machines.values():
+        entry["hosts"].sort()
+    return sorted(machines.values(), key=lambda m: (m["machine"] != "local", m["machine"]))
+
+
 def _as_choice(value: Any, *, field: str, allowed: Iterable[str]) -> str:
     choices = list(allowed)
     text = str(value)
@@ -571,7 +662,7 @@ def _refuse_unknown(payload: dict, known: Iterable[str], *, where: str) -> None:
 
 #: What a client may send at the root of each body. The nested blocks already
 #: refused unknown fields; these are the two levels that did not.
-_HOST_FIELDS = ("name", "enabled", "access", "container_access", "discovery")
+_HOST_FIELDS = ("name", "enabled", "machine", "access", "container_access", "discovery")
 _RESOURCE_FIELDS = ("name", "enabled", "remote_dir", "endpoint", "connection")
 _ENDPOINT_FIELDS = ("address", "port")
 

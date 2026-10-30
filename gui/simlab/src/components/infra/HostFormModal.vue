@@ -46,7 +46,20 @@
                 <span>SSH user</span>
                 <input v-model.trim="form.username" placeholder="simlab" :disabled="saving" />
               </label>
+              <label class="field">
+                <span>Physical machine <em>(optional)</em></span>
+                <input
+                  v-model.trim="form.machine"
+                  :placeholder="form.address || 'grouped by address'"
+                  :disabled="saving"
+                />
+              </label>
             </div>
+            <p class="hint">
+              Hosts on one machine share its CPUs and its concurrency limit. Left blank, hosts with
+              the same address are one machine — right for VMs behind port forwarding; name it when
+              different machines share one gateway.
+            </p>
           </section>
 
           <!-- The credential -->
@@ -254,6 +267,7 @@ const form = reactive({
   labelFilter: props.host?.discovery?.label_filter ?? "simlab.type=cooja",
   namePrefix: props.host?.discovery?.name_prefix ?? "",
   enabled: props.host?.enabled ?? true,
+  machine: props.host?.machine ?? "",
 });
 
 const secretInput = ref("");
@@ -334,6 +348,7 @@ async function saveNew(sealed: SealedSecret): Promise<string> {
   const payload: HostCreateInput = {
     name: form.name,
     enabled: form.enabled,
+    ...(form.machine ? { machine: form.machine } : {}),
     access: {
       address: form.address,
       port: form.port,
@@ -360,6 +375,8 @@ async function saveEdit(sealed?: SealedSecret): Promise<string> {
   const updates: HostUpdateInput = {
     name: form.name,
     enabled: form.enabled,
+    // Blank clears it: the host goes back to being grouped by its address.
+    machine: form.machine || null,
     access: {
       address: form.address,
       port: form.port,

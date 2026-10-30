@@ -11,6 +11,7 @@ import {
   countByHost,
   describeOutcome,
   emptyMessage,
+  formatMeanDuration,
   formatShare,
   placementLabel,
   ranInTheSamePlace,
@@ -219,6 +220,24 @@ describe("describeOutcome", () => {
     expect(describeOutcome(worker({ done: 1, failed: 1, active: 2 }))).toBe(
       "1 done, 1 failed, 2 running",
     );
+  });
+});
+
+describe("formatMeanDuration", () => {
+  it("is a dash when nothing finished, never zero", () => {
+    // Zero would read as the fastest worker.
+    expect(formatMeanDuration(null)).toBe("—");
+    expect(formatMeanDuration(undefined)).toBe("—");
+  });
+
+  it("keeps tenths below a minute", () => {
+    expect(formatMeanDuration(1.24)).toBe("1.2 s");
+    expect(formatMeanDuration(59.9)).toBe("59.9 s");
+  });
+
+  it("reads minutes and hours past that", () => {
+    expect(formatMeanDuration(90.4)).toBe("1 min 30 s");
+    expect(formatMeanDuration(3725)).toBe("1 h 2 min");
   });
 });
 

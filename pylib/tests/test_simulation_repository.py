@@ -438,12 +438,13 @@ RES_3 = ObjectId("507f1f77bcf86cd799442003")
 
 
 def group(host_id, host, resource_id, resource, total,
-          done=0, failed=0, active=0):
+          done=0, failed=0, active=0, timed=0, duration_ms=0):
     """One row as the ``$group`` stage returns it."""
     return {
         "_id": {"host_id": host_id, "host": host,
                 "resource_id": resource_id, "resource": resource},
         "total": total, "done": done, "failed": failed, "active": active,
+        "timed": timed, "duration_ms": duration_ms,
     }
 
 
@@ -529,6 +530,53 @@ class TestPlacementDistribution:
         worker = out["hosts"][0]["workers"][0]
         assert (worker["done"], worker["failed"], worker["active"]) == (2, 2, 1)
         assert out["hosts"][0]["done"] == 2
+
+    def test_each_worker_reports_its_mean_execution_time(self, simulations):
+        out = self._distribution(simulations, [
+            group(HOST_A, "local", RES_1, "cooja1", 4, done=4,
+                  timed=4, duration_ms=4 * 90_000),
+            group(HOST_A, "local", RES_2, "cooja2", 2, done=2,
+                  timed=2, duration_ms=2 * 150_000),
+        ])
+
+        means = {w["resource_name"]: w["mean_duration_sec"]
+                 for w in out["hosts"][0]["workers"]}
+        assert means == {"cooja1": 90.0, "cooja2": 150.0}
+
+    def test_the_host_mean_is_weighted_by_run(self, simulations):
+        """Not the mean of its workers' means: a worker that ran one
+        simulation must not weigh as much as one that ran forty."""
+        out = self._distribution(simulations, [
+            group(HOST_A, "local", RES_1, "cooja1", 3, done=3,
+                  timed=3, duration_ms=3 * 100_000),
+            group(HOST_A, "local", RES_2, "cooja2", 1, done=1,
+                  timed=1, duration_ms=1 * 200_000),
+        ])
+
+        assert out["hosts"][0]["mean_duration_sec"] == 125.0
+        assert "timed" not in out["hosts"][0]
+        assert "duration_ms" not in out["hosts"][0]
+
+    def test_a_worker_with_no_finished_run_has_no_mean(self, simulations):
+        """Unknown, not zero: zero would read as the fastest worker."""
+        out = self._distribution(simulations, [
+            group(HOST_A, "local", RES_1, "cooja1", 2, failed=1, active=1),
+        ])
+
+        assert out["hosts"][0]["workers"][0]["mean_duration_sec"] is None
+        assert out["hosts"][0]["mean_duration_sec"] is None
+
+    def test_only_finished_runs_with_both_times_are_timed(self, simulations):
+        repo, coll = simulations
+        coll.aggregate.return_value = iter([])
+
+        repo.placement_distribution(EXP_ID)
+
+        stage = coll.aggregate.call_args.args[0][1]["$group"]
+        condition = stage["timed"]["$sum"]["$cond"][0]["$and"]
+        assert {"$eq": ["$status", "Done"]} in condition
+        assert {"$eq": [{"$type": "$start_time"}, "date"]} in condition
+        assert {"$eq": [{"$type": "$end_time"}, "date"]} in condition
 
     def test_two_hosts_may_carry_a_worker_of_the_same_name(self, simulations):
         """The name is the label; the id is the identity. Grouping by name

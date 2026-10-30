@@ -105,22 +105,34 @@ full picture of the two evaluation paths.
 
 ### Aggregator parameter (`Ψa`)
 
-All strategies support a `parameters.simulation.aggregator` field that controls how per-seed simulation metrics are collapsed into a single objective value per individual:
+All strategies collapse the per-seed metrics of an individual into one value per objective with a seed aggregator. Each objective can name its own (`parameters.objectives[i].aggregator`); `parameters.simulation.aggregator` is the default for the objectives that do not, and mean the default of that:
 
 | Value | Behaviour |
 |---|---|
 | `"mean"` (default) | arithmetic mean — backward-compatible with all existing experiments |
 | `"median"` | robust to outlier seeds |
-| `"trimmed_mean"` | requires dict form: `{"kind": "trimmed_mean", "trim": 0.1}` |
-| `"min"` / `"max"` | lower / upper bound across seeds |
+| `"trimmed_mean"` | requires dict form: `{"kind": "trimmed_mean", "trim": 0.1}` — drops ⌊trim·n⌋ seeds from each end |
+| `"min"` / `"max"` | lower / upper bound across seeds — the worst case is `max` for a minimized metric and `min` for a maximized one |
 
 ```json
 "simulation": {
     "duration": 180,
     "random_seeds": [336157, 667370],
     "aggregator": "median"
-}
+},
+"objectives": [
+    {"metric_name": "latency",    "goal": "min", "aggregator": "max"},
+    {"metric_name": "energy",     "goal": "min"},
+    {"metric_name": "throughput", "goal": "max", "aggregator": "min"}
+]
 ```
+
+Here latency and throughput are judged by the worst seed and energy by the
+median. It applies to analytical problems (P0) as well. A metric listed in two
+objectives must use the same aggregator, since per-seed values are collected
+per metric. `POST /experiments/` validates all of this
+(`pylib/seed_aggregation.py`) and answers 422 naming the field, and the GUI
+launch wizard sets it per objective in step 4 (*Objectives*).
 
 ---
 

@@ -37,6 +37,23 @@ class ExperimentRepository:
                  "end_time": 1, "parameters.simulation.synthetic": 1}
             ))
 
+    def find_by_strategy(self, strategy: str) -> list[dict[str, Any]]:
+        """Every experiment run by one strategy, without its heavy fields.
+
+        The scalability page lists benchmarks, which are experiments whose
+        ``parameters.strategy`` says so; the generic listing does not carry the
+        strategy, and widening it would change a contract every page reads.
+        """
+        with self.connection.connect() as db:
+            return list(db["experiments"].find(
+                {"parameters.strategy": strategy},
+                {"_id": 1, "name": 1, "status": 1, "system_message": 1,
+                 "created_time": 1, "start_time": 1, "end_time": 1,
+                 "parameters.benchmark": 1, "parameters.simulation.duration": 1,
+                 "parameters.problem.name": 1, "benchmark_workload": 1},
+                sort=[("_id", -1)],
+            ))
+
     def find_startable_by_status(self, status: EnumStatus) -> list[dict[str, Any]]:
         with self.connection.connect() as db:
             return list(db["experiments"].find({"status": status}))

@@ -24,6 +24,9 @@ from pylib.db.models.infra import OCCUPIED_STATUSES, EnumAuthMethod
 from pylib.db.repositories.infra import HostWithdrawing, RemovalConflicted
 
 from api.dependencies import get_factory
+from api.mappers.topology import topology_from_documents
+from pylib.db.models.enums import EnumStatus
+from pylib.timeutil import utc_now
 
 # Where Cooja lives inside the stock image; a worker may override it.
 DEFAULT_REMOTE_DIR = "/opt/contiki-ng/tools/cooja"
@@ -35,6 +38,7 @@ from api.domain.infra import (
     AcceptedDto,
     HostDetailDto,
     HostDto,
+    MachineDto,
     OverviewDto,
     PublicKeyDto,
     ResourceDto,
@@ -50,9 +54,11 @@ from api.schemas.infra import (
 from api.mappers.infra import (
     PlaintextRefused,
     as_bool,
+    as_max_concurrent,
     dotted_update,
     host_from_mongo,
     host_to_mongo,
+    machines_from_snapshot,
     occupancy_from_snapshot,
     overview_from_snapshot,
     public_key_from_mongo,
@@ -113,12 +119,109 @@ def get_overview(
             (r.get("probe") or {}).get("cooja_jar_sha256")
             for r in factory.resource_repo.find_all()
         ]
-        return overview_from_snapshot(snapshot, builds)
+        return overview_from_snapshot(
+            snapshot, builds, host_documents=factory.host_repo.find_all())
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Physical machines ────────────────────────────────────────────────────────
+
+def _machine_limits(factory: MongoRepository) -> dict[str, int]:
+    repo = getattr(factory, "machine_repo", None)
+    limits = repo.limits() if repo is not None else {}
+    return limits if isinstance(limits, dict) else {}
+
+
+@router.get("/machines", response_model=list[MachineDto])
+def list_machines(factory: MongoRepository = Depends(get_factory)) -> list[MachineDto]:
+    """The physical machines behind the hosts, with their limits.
+
+    Several hosts can be one machine — VMs on one hypervisor — and then they
+    compete for its CPUs. A limit set here caps the simulations the machine
+    runs at once, across all its hosts, whatever the placement policy.
+    """
+    return machines_from_snapshot(
+        factory.host_repo.inventory_snapshot(), _machine_limits(factory))
+
+
+@router.put("/machines/{machine:path}", response_model=MachineDto)
+def set_machine_limit(
+    machine: str,
+    body: dict = Body(..., description=(
+        '`{"max_concurrent": <whole number from 1, or null>}`. Null removes '
+        "the limit. Applies from the next placement.")),
+    factory: MongoRepository = Depends(get_factory),
+) -> MachineDto:
+    """Set or clear how many simulations one machine may run at once."""
+    if not isinstance(body, dict) or set(body) != {"max_concurrent"}:
+        raise HTTPException(
+            status_code=422, detail='send exactly {"max_concurrent": <int or null>}')
+    try:
+        limit = as_max_concurrent(body["max_concurrent"])
+    except PlaintextRefused as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    machines = {m["machine"]: m for m in machines_from_snapshot(
+        factory.host_repo.inventory_snapshot(), _machine_limits(factory))}
+    if machine not in machines:
+        # A typo would otherwise create a limit that nothing ever matches.
+        raise HTTPException(
+            status_code=404,
+            detail=f"no host runs on a machine called {machine!r}; known: "
+                   + ", ".join(sorted(machines)))
+    factory.machine_repo.set_limit(machine, limit)
+    return {**machines[machine], "max_concurrent": limit}
+
+
 # ── Hosts ────────────────────────────────────────────────────────────────────
+
+@router.get("/topology")
+def get_topology(factory: MongoRepository = Depends(get_factory)) -> dict:
+    """The pool as a graph — master-node, hosts, workers — and what runs where.
+
+    Built for a page that polls while experiments run, so it is a fixed
+    number of queries however large the pool is: every host, every worker,
+    then the simulations occupying workers and their experiments and
+    generations in one ``$in`` each. Asking each worker separately was one
+    request per container per refresh.
+    """
+    hosts = factory.host_repo.find_all()
+    resources = factory.resource_repo.find_all()
+    schedulable = {
+        str(row["_id"]): bool(row.get("schedulable"))
+        for row in factory.host_repo.inventory_snapshot()
+    }
+    occupied = {s.value for s in OCCUPIED_STATUSES}
+    sim_ids = [r["current_simulation_id"] for r in resources
+               if r.get("status") in occupied and r.get("current_simulation_id")]
+
+    with factory.simulation_repo.connection.connect() as db:
+        simulations = list(db["simulations"].find(
+            {"_id": {"$in": sim_ids}},
+            {"experiment_id": 1, "generation_id": 1, "status": 1,
+             "random_seed": 1, "start_time": 1, "assigned_at": 1},
+        )) if sim_ids else []
+        running = list(db["experiments"].find(
+            {"status": EnumStatus.RUNNING},
+            {"name": 1, "status": 1, "parameters.strategy": 1}))
+        exp_ids = {s["experiment_id"] for s in simulations if s.get("experiment_id")}
+        exp_ids -= {e["_id"] for e in running}
+        experiments = running + (list(db["experiments"].find(
+            {"_id": {"$in": list(exp_ids)}}, {"name": 1})) if exp_ids else [])
+        gen_ids = [s["generation_id"] for s in simulations if s.get("generation_id")]
+        generations = list(db["generations"].find(
+            {"_id": {"$in": gen_ids}}, {"index": 1})) if gen_ids else []
+
+    master_repo = getattr(factory, "master_repo", None)
+    master = master_repo.get() if master_repo is not None else None
+
+    return topology_from_documents(
+        hosts=hosts, schedulable=schedulable, resources=resources,
+        simulations=simulations, experiments=experiments,
+        generations=generations, running_experiments=running, now=utc_now(),
+        master=master if isinstance(master, dict) else None)
+
 
 @router.get("/hosts", response_model=list[HostDto])
 def list_hosts(

@@ -39,6 +39,8 @@ export type SimulationStatus = "Waiting" | "Running" | "Done" | "Error";
 export interface ObjectiveItem {
   metric_name: string;
   goal: "min" | "max" | string;
+  /** Absent means simulation.aggregator, else mean. */
+  aggregator?: SeedAggregatorSpec;
 }
 
 export interface MetricItem {
@@ -91,10 +93,18 @@ export interface SyntheticConfigDto {
   noise_std?: number;
 }
 
+/** Seed aggregator (Ψa), see pylib/seed_aggregation.py. Only trimmed_mean takes a parameter. */
+export type SeedAggregatorKind = "mean" | "median" | "trimmed_mean" | "min" | "max";
+export type SeedAggregatorSpec =
+  | SeedAggregatorKind
+  | { kind: SeedAggregatorKind; trim?: number };
+
 export interface SimulationParamsDto {
   duration?: number;
   random_seeds?: number[];
   random_seeds_count?: number;
+  /** Experiment-wide default for objectives without their own; absent means mean. */
+  aggregator?: SeedAggregatorSpec;
   synthetic?: SyntheticConfigDto;
   // See AlgorithmParamsDto for why this is `unknown`.
   [k: string]: unknown;
@@ -241,6 +251,11 @@ export interface PlacementWorkerDto {
   failed: number;
   active: number;
   share: number;
+  /**
+   * Mean `end_time - start_time` of the runs that finished Done, in seconds;
+   * `null` when none did. Failed runs stop at arbitrary points and are left out.
+   */
+  mean_duration_sec?: number | null;
 }
 
 export interface PlacementHostDto {
@@ -251,6 +266,8 @@ export interface PlacementHostDto {
   failed: number;
   active: number;
   share: number;
+  /** Weighted by run across the host's workers, not a mean of their means. */
+  mean_duration_sec?: number | null;
   workers: PlacementWorkerDto[];
 }
 

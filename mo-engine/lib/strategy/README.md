@@ -92,6 +92,39 @@ evolutionary search.
 > described below — synthetic batch experiments are evaluated by the
 > master-node (`master-node/lib/synthetic_data.py`), not in-process.
 
+## Scalability benchmark (`usl_benchmark.py`)
+
+Not an optimisation: it measures the infrastructure. The same simulation — one
+chromosome, one seed — runs in **waves** of `N` identical copies, one
+generation per wave, for each level in `parameters.benchmark.levels`. The
+timings are fitted to the Universal Scalability Law by `pylib/scalability.py`
+and served by `GET /scalability/{id}`.
+
+```json
+"parameters": {
+  "strategy": "usl_benchmark",
+  "benchmark": { "levels": [1, 2, 4, 8, 14], "repetitions": 3 },
+  "simulation": { "duration": 60, "random_seeds": [123456] }
+}
+```
+
+Created by `POST /scalability`, not by the experiment wizard, and deliberately
+absent from `Step2Experiment.vue`.
+
+| Choice | Why |
+|---|---|
+| Identical work in every simulation | Different work would show up as different timing and be read as a property of the infrastructure |
+| Repetitions alternate ascending/descending | A drift in the machines lands on every level instead of biasing one end |
+| Each wave tagged `benchmark: {level, repetition, wave}` | The analysis reads what the engine ran instead of inferring it |
+| Workload persisted after its firmware is resolved | Resolving can rewrite the MAC gene; resolving per simulation recorded one network and ran another |
+| A wave with no result stops the benchmark | The workload does not run; more waves would only measure failures. A wave with *some* failures is reported invalid and the benchmark continues |
+
+The adapter gets its RNG through `set_ga_operator_configs(rng, {})`:
+`build_adapter` hands the RNG over only together with GA settings, and a
+benchmark has none.
+
+---
+
 ## Analytical fast-path (`analytical.py`)
 
 For analytical problems (P0 synthetic benchmarks — DTLZ2/ZDT1/SCH1) the
@@ -103,8 +136,10 @@ instead of being delegated to simulation:
   the strategy calls `analytical_objectives()` and inserts the `Individual`
   with its objectives already filled — **no `Simulation` document is created**
   and the master-node is never involved.
-- The benchmark is evaluated once per simulation seed and averaged (mean),
-  mirroring the multi-seed aggregation used for simulation-based problems.
+- The benchmark is evaluated once per simulation seed and each objective's
+  per-seed values are collapsed with that objective's seed aggregator
+  (`objectives[i].aggregator`, else `simulation.aggregator`, else mean), the
+  same ones used for simulation-based problems.
 - Observation noise is reproducible: the RNG is seeded per
   `(seed, genome_hash)` pair, so re-evaluations and genome-cache hits are
   always consistent.

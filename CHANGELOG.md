@@ -5,6 +5,246 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Choosing the seed aggregator per objective
+
+The engine has long accepted `parameters.simulation.aggregator` (Ψa) — how the
+seeds of one individual become a single objective value — but one function
+for every metric, and nothing in the GUI set or showed it, so every experiment
+launched from the wizard used the mean. A pessimistic evaluation needs a
+different function per metric: the maximum latency, but the minimum
+throughput.
+
+### Added
+
+- **A seed aggregator per objective**, `parameters.objectives[i].aggregator`.
+  `simulation.aggregator` stays as the default for objectives that do not name
+  one, so existing experiments run as before. A metric listed in two
+  objectives must use the same aggregator, since per-seed values are collected
+  per metric.
+- **Seed aggregation in the launch wizard.** Each row of step 4 (*Objectives*)
+  picks mean, median, trimmed mean, minimum or maximum *across seeds*. The
+  trimmed mean takes a trim per end and says how many seeds it drops for the
+  current list — with eight seeds a trim of 0.1 drops none and equals the
+  mean. Minimum and maximum say, from the objective's goal, whether the
+  individual is judged by its worst seed or its best.
+- **The aggregator is shown** on each objective in the experiment detail
+  (`mean (default)` when the experiment records none) and in the comparison
+  table.
+
+### Changed
+
+- **`POST /experiments/` rejects an invalid aggregator with 422**, naming the
+  field. The engine applies them only once the first generation's simulations
+  are done, so a typo cost a generation of runs before failing. Unknown
+  parameters are rejected too: `{"kind": "trimmed_mean", "trimm": 0.1}` used
+  to run as a plain mean.
+- **The seed aggregator moved to `pylib/seed_aggregation.py`**, out of
+  `statistics.py`, so the API can validate it without installing pandas.
+
+### Fixed
+
+- **Analytical problems (P0) use the configured aggregators.** They always
+  averaged the per-seed benchmark values, whatever the experiment said. The
+  mean is computed exactly as before.
+
+---
+
+## [Unreleased] — Using a mixed pool efficiently
+
+Measured on the deployment: in the last NSGA-III run with eight VMs of one
+machine and a desktop added to the local host, the pool took **121 min against
+~109 min estimated for the local host alone**. Two causes, both fixed here:
+the VMs' machine was overloaded (its throughput peaks at five simulations at
+once and falls after), and the scheduler gave work to slow hosts at the tail
+of every generation, leaving the local host idle for 9.6 min on average while
+they finished.
+
+### Added
+
+- **`earliest_completion` placement policy**, now what `docker-compose.yaml`
+  sets. It plans when the waiting work would finish — each job to whichever
+  worker finishes it first, counting when busy ones free up — and places the
+  head of the queue only on a worker that plan uses now; otherwise the job
+  waits for the faster worker. Waiting is bounded: a run past twice its
+  expected time, or with no estimate, is not waited on. New work wakes a
+  waiting decision.
+- **Per-machine concurrency limits.** Hosts are grouped into physical machines
+  — by an explicit `machine` label, else by SSH address, which groups
+  port-forwarded VMs — and a limit caps the simulations a machine runs at once
+  across all its hosts, for every policy. `GET/PUT /infra/machines`, a
+  *Physical machines* card on the Infrastructure page, and a *Physical
+  machine* field in the host form.
+- **USL per physical machine** on the scalability page. In a wave a machine
+  holding `k` simulations ran `k` at once, so its throughput at `k` is `k`
+  over its mean held time; each machine gets its own fit, speed relative to
+  the fastest, and — when the measurements reach a peak — a recommended limit
+  that can be applied from the table.
+
+### Changed
+
+- **The pool-wide USL curve is flagged when machines differ in speed.** It
+  assumes interchangeable units; on a mixed pool the dispatcher fills the
+  fastest machine first, and past its size the fit reads slower machines as
+  contention or coherency. Measured: the batch curve bent at exactly the
+  local host's six workers, and the fit called it a peak at 8 (R² 0.57).
+
+---
+
+## [Unreleased] — Reaching hosts reliably
+
+Prompted by a deployment where SSH to every VM worked from a terminal and the
+master-node saw none of them. The master-node container had kept the DNS
+servers of the network its machine was on when it started; every lookup
+failed, and every remote host was counted as failing and taken offline.
+
+### Fixed
+
+- **A name that does not resolve is told apart from a host that does not
+  answer.** Hop 1 resolves the name itself, with a 5 s timeout, and raises
+  `NameResolutionFailed` saying whether the master-node's resolver did not
+  answer or the name does not exist.
+- **The master-node's DNS failing is no longer the hosts failing.** While the
+  resolver answers for none of the hosts' names, a host reached by name is
+  recorded as *not measured* — status, failure count and backoff unchanged.
+  One name failing while others resolve is still that host's failure.
+- **The last address that worked is used while DNS is down**, for hosts with a
+  pinned key only: a different machine at that address fails the pin. Kept on
+  the host (`resolved_address`), so it survives a restart.
+- **A worker's recent probe is no longer trusted when its host's first hop
+  fails in the same turn.** After the VMs' host keys were regenerated, the pin
+  refused every session and seven of eight hosts stayed online, each with a
+  worker available, until the probe aged out (up to 5 min) — and an
+  unreachable host stayed in the pool the same way instead of going offline
+  after the failure threshold. Measuring opens no connection: the pool
+  re-raises the failure it already has.
+
+### Added
+
+- **Self-restart to renew stale DNS servers** (`DNS_SELF_RESTART`, on by
+  default in Docker): after `DNS_RESTART_AFTER_SEC` (300) of a resolver that
+  answers nothing, and only with no worker reserved or busy, the master-node
+  exits with status 75 and its restart policy starts a new container. At most
+  once per `DNS_RESTART_MIN_INTERVAL_SEC` (3600), recorded in the database so
+  the guard survives the restart it guards.
+- **A master-node heartbeat** (`master_status` collection) with the resolver's
+  state. The Topology page reads liveness from it — a master whose hosts are
+  all disabled or backing off no longer looks dead — and flags the master in
+  amber with a banner when DNS is failing.
+- **Hosts sharing an SSH host key are flagged** on the Infrastructure page
+  (`shared_host_keys` in `GET /infra/overview`): cloned VM images that kept
+  their keys, which pinning cannot tell apart. The banner and the master-node
+  README give the commands to regenerate the keys and clear the pins.
+
+### Changed
+
+- **Hosts are checked concurrently** (`INFRA_CHECK_PARALLEL`, 8). Serially, a
+  cycle with eight hosts down took 3 min 44 s, delaying the reservation sweep
+  and the reconciliation behind it.
+- **A health check's handshake times out after 8 s**
+  (`INFRA_CONNECT_TIMEOUT_SEC`), banner included; a simulation's connection
+  keeps 20 s.
+- **A remote host that keeps failing is retried less often**: once offline it
+  waits one interval, then two, four, … up to `INFRA_BACKOFF_MAX_SEC` (600 s).
+  An operator's check, an access edit or re-enabling the host skip the wait;
+  the Topology tooltip shows when the next check is due.
+
+---
+
+## [Unreleased] — Infrastructure topology page
+
+A **Topology** page draws the pool as a graph — master-node, hosts, Cooja
+workers — coloured by status and refreshed every 3 s, so a run can be watched
+moving through it.
+
+### Added
+
+- **`GET /infra/topology`**: the graph and what runs on each worker — its
+  simulation, experiment, generation and seed — in a fixed number of queries
+  however large the pool is. The per-worker `/resources/{id}/simulation`
+  route was one request per container per refresh.
+- **Master-node liveness**, which no document records: its health cycle
+  writes `last_check` on every enabled host every cycle, even an unreachable
+  one, so when no host has been checked for 120 s the cycle is not running.
+  The page says so in a banner.
+- **The page**: master on the left, one line per host, each host's workers
+  beside it. Status by colour (free, running, degraded/held/withdrawing,
+  failing, disabled); each running experiment gets a ring colour, stable
+  while it runs, so two experiments sharing the pool are told apart. A panel
+  lists the running experiments with their workers per host, including those
+  still waiting for one.
+
+Three choices in how it is drawn:
+
+- **Fixed positions**, not a force layout: a picture refreshed every few
+  seconds whose nodes move each time cannot be followed.
+- **Left to right**, because the pool grows by hosts. A row of hosts across the
+  top ran out of width at ten, with every box overlapping its neighbours.
+- **Hidden cartesian axes** rather than a fitted view, which scaled x and y
+  independently and stretched the symbols into ellipses.
+
+Names and messages in tooltips come from operators and remote machines and
+are rendered as HTML by ECharts, so they are escaped.
+
+---
+
+## [Unreleased] — Scalability benchmark (USL)
+
+A new **Scalability** page measures how the simulation infrastructure scales,
+by running one simulation at increasing concurrency and fitting the
+[Universal Scalability Law](https://www.perfdynamics.com/Manifesto/USLscalability.html)
+to the time each wave takes.
+
+### Added
+
+- **A benchmark strategy, `usl_benchmark`.** One chromosome and one seed, run
+  in waves of `N` identical simulations for each level `N`, one generation per
+  wave. Reusing the generation means the master-node places, runs, recovers
+  and closes a wave exactly as it does any optimisation, so what is measured
+  is the real path, not a model of it. Repetitions alternate ascending and
+  descending order, so a drift in the machines lands on every level instead of
+  biasing one end. A wave in which nothing produced a result stops the
+  benchmark: the workload does not run, and further waves would only measure
+  failures.
+- **The workload comes from a saved problem.** The chromosome defined in the
+  problem editor when there is one, otherwise one feasible network drawn with
+  a fixed seed. It is recorded on the experiment (`benchmark_workload`) after
+  its firmware is resolved, so a restart resumes with the same network and the
+  recorded chromosome is the one that runs.
+- **Two throughputs, both fitted.** *Batch* is `N ÷ makespan`, from the first
+  placement of a wave to its last result — what a batch actually costs.
+  *Per simulation* is `N ÷ mean held time` (Little's law) — insensitive to one
+  straggler, so it isolates contention. The gap between them is the cost of
+  the slowest container in the wave.
+- **The fit** (`pylib/usl.py`) estimates `λ`, contention `σ ∈ [0, 1]` and
+  coherency `κ ≥ 0` by a bounded search with a closed-form `λ`, using NumPy
+  only. It reports `N* = √((1 − σ)/κ)` and the throughput there when `κ > 0`,
+  the ceiling `λ/σ` when there is no peak, and whether the peak lies inside
+  the tested range or is extrapolated. With two levels only, `κ` is held at
+  zero and the status says so.
+- **API:** `POST /scalability` (validated body; answers with the number of
+  waves and simulations before anything runs), `GET /scalability`,
+  `GET /scalability/{id}` (waves, both fits and the sampled curve, computed on
+  demand so a running benchmark already has one).
+- **GUI:** the page proposes levels from the workers that can take work
+  (powers of two, then the whole pool), warns when a level exceeds the pool,
+  and shows the measured waves, the model, linear scaling and the peak, with
+  the extrapolated range shaded. The pool counts only hosts the dispatcher
+  will place on: the overview's totals include hosts that are disabled or out
+  of contact, and proposing their containers would plan waves that queue.
+  The y-axis follows the data rather than the linear reference, so a peak
+  stays legible instead of being squashed against the floor.
+- **A benchmark's own experiment page** points to its analysis instead of
+  drawing Pareto and convergence charts for an experiment with no objectives.
+
+### Changed
+
+- The experiment wizard's metric conversion moved to
+  `services/defaultDataConversion.ts`, shared with the benchmark: the
+  master-node evaluates metrics after every run, and two copies of that list
+  would drift.
+
+---
+
 ## [Unreleased] — Distributed Cooja resources
 
 Simulations can now run on Cooja containers hosted on other machines, with the
@@ -212,7 +452,12 @@ containers seeded as before.
   placed on a host being removed, so a registration that had already read it
   cannot leave a worker behind without one.
 - **Two registrations may not point at the same worker.** Address, port and
-  directory are compared across every host before one is accepted.
+  directory are compared across every host before one is accepted. A host is
+  identified by its SSH **address and port**, as the connection plan reaches
+  it: two VMs behind one gateway (`gateway:2197`, `gateway:2198`) are two
+  machines, and their containers may share an internal port. Keying the host
+  on its address alone refused such an edit with a 409 naming the other VM's
+  worker, and blocked any edit of two workers that already matched.
 - **Validation is uniform across the infrastructure routes**: unknown fields
   at the root of a body, textual and fractional ports, booleans sent as
   strings and nulls sent where text is expected are all refused with a 422.

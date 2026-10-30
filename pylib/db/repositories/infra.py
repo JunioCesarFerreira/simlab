@@ -5,7 +5,7 @@ the invariants that two simulations never share a container, and that a health
 check never steals a container from a running simulation, are enforced by the
 query filters themselves. No caller can get them wrong by forgetting a check.
 
-Three repositories:
+Five repositories:
 
 * ``HostRepository`` — registrations, check/discovery requests, and the
   inventory snapshot the scheduler reads.
@@ -13,6 +13,10 @@ Three repositories:
   reserve/start/release cycle.
 * ``InfraCryptoRepository`` — the published public key, so the browser can seal
   a credential against the key the master-node actually holds.
+* ``MasterStatusRepository`` — the master-node's own heartbeat and the state of
+  its DNS resolver, which no host document can carry.
+* ``MachineRepository`` — per physical machine settings, today the limit on
+  how many simulations it runs at once across all of its hosts.
 """
 import logging
 from datetime import datetime
@@ -27,6 +31,8 @@ from pylib.db.connection import MongoDBConnection
 from pylib.timeutil import utc_now
 from pylib.db.models.infra import (
     CRYPTO_COLLECTION,
+    MACHINES_COLLECTION,
+    MASTER_STATUS_COLLECTION,
     target_fingerprint,
     HOSTS_COLLECTION,
     OCCUPIED_STATUSES,
@@ -258,7 +264,7 @@ class HostRepository:
             return False
         protected = {
             "status", "last_check", "last_check_message", "consecutive_failures",
-            "created_time", "_id",
+            "backoff_until", "resolved_address", "created_time", "_id",
         }
         payload = {k: v for k, v in updates.items() if k not in protected}
         if not payload:
@@ -287,10 +293,13 @@ class HostRepository:
         if oid is None:
             return 0
         with self.connection.connect() as db:
+            # The backoff goes with it: it was earned by the configuration
+            # that just changed, and the operator who changed it is waiting to
+            # see whether the new one works.
             doc = db[HOSTS_COLLECTION].find_one_and_update(
                 {"_id": oid},
                 {"$inc": {"config_version": 1},
-                 "$set": {"updated_time": utc_now()}},
+                 "$set": {"updated_time": utc_now(), "backoff_until": None}},
                 return_document=ReturnDocument.AFTER,
                 projection={"config_version": 1},
             )
@@ -347,6 +356,9 @@ class HostRepository:
             updates["status"] = EnumHostStatus.DISABLED.value
         with self.connection.connect() as db:
             if enabled:
+                # Measured at the next cycle, not after whatever backoff it
+                # had accumulated before it was switched off.
+                updates["backoff_until"] = None
                 db[HOSTS_COLLECTION].update_one(
                     {"_id": oid, "status": EnumHostStatus.DISABLED.value},
                     {"$set": {
@@ -564,8 +576,13 @@ class HostRepository:
         status: EnumHostStatus,
         message: str = "",
         reset_failures: bool = False,
+        backoff_until: Optional[datetime] = None,
     ) -> bool:
-        """Record the outcome of a reachability check."""
+        """Record the outcome of a reachability check.
+
+        ``backoff_until`` is written every time — ``None`` clears it — so a
+        host that recovers is checked at the normal pace again at once.
+        """
         oid = _oid(host_id)
         if oid is None:
             return False
@@ -575,6 +592,7 @@ class HostRepository:
                 "status": status.value,
                 "last_check": now,
                 "last_check_message": message,
+                "backoff_until": backoff_until,
                 "updated_time": now,
             }
         }
@@ -588,6 +606,51 @@ class HostRepository:
             res = db[HOSTS_COLLECTION].update_one(
                 {"_id": oid, "enabled": True}, update)
             return res.matched_count > 0
+
+    def mark_check_inconclusive(self, host_id: Any, message: str) -> bool:
+        """Record a check that learned nothing about the host.
+
+        For a failure on the master-node's side — its DNS resolver not
+        answering. The status, the failure count and the backoff stay as they
+        were: counting it against the host took every host reached by name
+        offline at once, for a fault none of them had. ``last_check`` still
+        moves, because the check did run.
+        """
+        oid = _oid(host_id)
+        if oid is None:
+            return False
+        now = utc_now()
+        with self.connection.connect() as db:
+            res = db[HOSTS_COLLECTION].update_one(
+                {"_id": oid, "enabled": True},
+                {"$set": {"last_check": now, "last_check_message": message}},
+            )
+            return res.matched_count > 0
+
+    def record_resolved_address(self, host_id: Any, name: str, ip: str) -> bool:
+        """Keep the address a connection to ``name`` last succeeded on.
+
+        Written only when it changed, so a host that keeps its address costs
+        no write per cycle. Read back at startup: an address learned before a
+        restart is what lets the master-node reach a pinned host while its
+        DNS is down.
+        """
+        oid = _oid(host_id)
+        if oid is None or not name or not ip:
+            return False
+        with self.connection.connect() as db:
+            res = db[HOSTS_COLLECTION].update_one(
+                {
+                    "_id": oid,
+                    "$or": [
+                        {"resolved_address.ip": {"$ne": ip}},
+                        {"resolved_address.name": {"$ne": name}},
+                    ],
+                },
+                {"$set": {"resolved_address": {
+                    "name": name, "ip": ip, "since": utc_now()}}},
+            )
+            return res.modified_count > 0
 
     # ── requests from the API (D4/D6) ──────────────────────────────────────
 
@@ -667,7 +730,8 @@ class HostRepository:
                     "foreignField": "host_id",
                     "as": "_res",
                     "pipeline": [{"$project": {
-                        "status": 1, "enabled": 1, "mean_duration_sec": 1}}],
+                        "status": 1, "enabled": 1, "mean_duration_sec": 1,
+                        "started_at": 1}}],
                 }
             },
             {
@@ -755,6 +819,35 @@ class HostRepository:
                         }},
                         "as": "r", "in": "$$r.mean_duration_sec",
                     }}},
+                    # Per worker, for a policy that plans when work will
+                    # finish: what each free worker is expected to take, and
+                    # how far each occupied one is into its run. `started_at`
+                    # rather than `reserved_at`, which the preparation's
+                    # heartbeat keeps renewing; a reserved worker has none
+                    # yet and is read as just started.
+                    "free_durations": {"$map": {
+                        "input": {"$filter": {
+                            "input": "$_res", "as": "r",
+                            "cond": {"$and": [
+                                {"$eq": [_ENABLED, True]},
+                                {"$eq": ["$$r.status", available]},
+                            ]},
+                        }},
+                        "as": "r",
+                        "in": {"$ifNull": ["$$r.mean_duration_sec", None]},
+                    }},
+                    "occupied_workers": {"$map": {
+                        "input": {"$filter": {
+                            "input": "$_res", "as": "r",
+                            "cond": {"$in": ["$$r.status", _OCCUPIED]},
+                        }},
+                        "as": "r",
+                        "in": {
+                            "mean_duration_sec": {
+                                "$ifNull": ["$$r.mean_duration_sec", None]},
+                            "started_at": {"$ifNull": ["$$r.started_at", None]},
+                        },
+                    }},
                     "schedulable": {
                         "$and": [
                             {"$eq": ["$enabled", True]},
@@ -2093,6 +2186,108 @@ class InfraCryptoRepository:
                     },
                     "$setOnInsert": {"created_at": now},
                 },
+                upsert=True,
+            )
+
+
+class MasterStatusRepository:
+    """What the master-node says about itself, in one document.
+
+    Its liveness used to be inferred from the hosts' ``last_check``, which
+    stops moving when every host is disabled or backing off — a healthy
+    master then looked dead. And a resolver that stopped answering belongs to
+    no host at all. Both are written here, once per health cycle.
+    """
+
+    DOC_ID = "master-node"
+    #: Restarts kept for display; the loop guard only needs the last one.
+    RESTARTS_KEPT = 10
+
+    def __init__(self, connection: MongoDBConnection):
+        self.connection = connection
+
+    def get(self) -> Optional[dict[str, Any]]:
+        with self.connection.connect() as db:
+            return db[MASTER_STATUS_COLLECTION].find_one({"_id": self.DOC_ID})
+
+    def heartbeat(
+        self, *, resolver: Optional[dict[str, Any]] = None,
+        cycle_sec: Optional[float] = None,
+    ) -> None:
+        now = utc_now()
+        fields: dict[str, Any] = {"heartbeat_at": now}
+        if resolver is not None:
+            fields["resolver"] = resolver
+        if cycle_sec is not None:
+            fields["cycle_sec"] = round(float(cycle_sec), 3)
+        with self.connection.connect() as db:
+            db[MASTER_STATUS_COLLECTION].update_one(
+                {"_id": self.DOC_ID},
+                {"$set": fields, "$setOnInsert": {"created_at": now}},
+                upsert=True,
+            )
+
+    def record_restart(self, reason: str) -> datetime:
+        """Write down a restart the master-node is about to do to itself.
+
+        Written *before* exiting: it is what keeps the next process from
+        restarting again for the same reason straight away.
+        """
+        now = utc_now()
+        entry = {"at": now, "reason": reason}
+        with self.connection.connect() as db:
+            db[MASTER_STATUS_COLLECTION].update_one(
+                {"_id": self.DOC_ID},
+                {
+                    "$set": {"last_restart": entry},
+                    "$push": {"restarts": {
+                        "$each": [entry], "$slice": -self.RESTARTS_KEPT}},
+                    "$setOnInsert": {"created_at": now},
+                },
+                upsert=True,
+            )
+        return now
+
+
+class MachineRepository:
+    """Settings that belong to a physical machine rather than to a host.
+
+    One document per machine label (``machine_of``). Today it carries only
+    ``max_concurrent``: how many simulations the machine runs at once across
+    every host on it. Absent or null means no limit.
+    """
+
+    def __init__(self, connection: MongoDBConnection):
+        self.connection = connection
+
+    def limits(self) -> dict[str, int]:
+        """Every machine that has a limit, as ``{label: max_concurrent}``."""
+        with self.connection.connect() as db:
+            return {
+                str(doc["_id"]): int(doc["max_concurrent"])
+                for doc in db[MACHINES_COLLECTION].find(
+                    {"max_concurrent": {"$type": "number"}})
+            }
+
+    def find_all(self) -> list[dict[str, Any]]:
+        with self.connection.connect() as db:
+            return list(db[MACHINES_COLLECTION].find({}))
+
+    def set_limit(self, machine: str, max_concurrent: Optional[int]) -> None:
+        """Set or clear a machine's limit. ``None`` removes it."""
+        if not machine:
+            raise ValueError("a machine needs a label")
+        if max_concurrent is not None and int(max_concurrent) < 1:
+            raise ValueError("a limit below one would stop the machine entirely")
+        now = utc_now()
+        with self.connection.connect() as db:
+            db[MACHINES_COLLECTION].update_one(
+                {"_id": machine},
+                {"$set": {
+                    "max_concurrent": None if max_concurrent is None else int(max_concurrent),
+                    "updated_time": now,
+                 },
+                 "$setOnInsert": {"created_time": now}},
                 upsert=True,
             )
 

@@ -1,6 +1,7 @@
 """Unit tests for pylib.statistics — the layer that turns raw simulation logs
 into objective values. Errors here silently corrupt every experiment result,
-so the aggregation registry and cross-seed aggregators are covered directly.
+so the aggregation registry is covered directly. The cross-seed aggregators
+live in pylib.seed_aggregation (test_seed_aggregation.py).
 """
 import logging
 import math
@@ -17,14 +18,7 @@ from pylib.statistics import (
     sum_rate,
     inverse_of,
     sum_all,
-    resolve_aggregator,
-    aggregate_seed_values,
     evaluate_config,
-    _agg_mean,
-    _agg_median,
-    _agg_trimmed_mean,
-    _agg_min,
-    _agg_max,
 )
 
 log = logging.getLogger("test")
@@ -131,59 +125,6 @@ class TestSumRate:
 
     def test_missing_column_is_nan(self):
         assert math.isnan(sum_rate(pd.DataFrame({"root_time_now": [1]}), "vol"))
-
-
-# ── Cross-seed aggregators ───────────────────────────────────────────────────
-
-class TestAggregators:
-    def test_mean(self):
-        assert _agg_mean([1.0, 2.0, 3.0], {}) == pytest.approx(2.0)
-
-    def test_median_odd_even(self):
-        assert _agg_median([3.0, 1.0, 2.0], {}) == pytest.approx(2.0)
-        assert _agg_median([1.0, 2.0, 3.0, 4.0], {}) == pytest.approx(2.5)
-
-    def test_trimmed_mean_removes_extremes(self):
-        # trim=0.2 of 5 → k=floor(1.0)=1 → drop 1 each side → mean(2,3,4)=3
-        vals = [1.0, 2.0, 3.0, 4.0, 100.0]
-        assert _agg_trimmed_mean(vals, {"trim": 0.2}) == pytest.approx(3.0)
-
-    def test_trimmed_mean_invalid_trim_raises(self):
-        with pytest.raises(ValueError):
-            _agg_trimmed_mean([1.0, 2.0], {"trim": 0.7})
-
-    def test_min_max(self):
-        assert _agg_min([3.0, 1.0, 2.0], {}) == 1.0
-        assert _agg_max([3.0, 1.0, 2.0], {}) == 3.0
-
-    @pytest.mark.parametrize("fn", [_agg_mean, _agg_median, _agg_min, _agg_max])
-    def test_empty_raises(self, fn):
-        with pytest.raises(ValueError):
-            fn([], {})
-
-
-# ── resolve_aggregator / aggregate_seed_values ───────────────────────────────
-
-class TestResolveAggregator:
-    def test_string_spec(self):
-        assert resolve_aggregator("mean") == ("mean", {})
-
-    def test_dict_spec(self):
-        kind, params = resolve_aggregator({"kind": "trimmed_mean", "trim": 0.1})
-        assert kind == "trimmed_mean"
-        assert params == {"trim": 0.1}
-
-    def test_unknown_kind_raises(self):
-        with pytest.raises(ValueError):
-            resolve_aggregator("does_not_exist")
-
-    def test_bad_type_raises(self):
-        with pytest.raises(TypeError):
-            resolve_aggregator(42)  # type: ignore[arg-type]
-
-    def test_aggregate_seed_values_end_to_end(self):
-        assert aggregate_seed_values([2.0, 4.0, 6.0], "mean") == pytest.approx(4.0)
-        assert aggregate_seed_values([1.0, 5.0], "max") == 5.0
 
 
 # ── evaluate_config (dispatch integration) ───────────────────────────────────
