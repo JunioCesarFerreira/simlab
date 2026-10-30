@@ -8,6 +8,7 @@ from .builder import (
     DEFAULT_TREE_COST,
     TreeCostWeights,
     active_components,
+    build_sink_rooted_mst,
     build_sink_rooted_tree,
     edge_cost,
 )
@@ -63,6 +64,7 @@ __all__ = [
     "TreeOperators",
     "TwoLevelTree",
     "active_components",
+    "build_sink_rooted_mst",
     "build_sink_rooted_tree",
     "edge_cost",
     "mask_from_tree",

@@ -20,14 +20,18 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
-# Two descriptor vectors closer than this are treated as identical, so an exact
-# structural match returns the stored objectives instead of a weighted blend.
+# Descriptor equality is not genome identity. Matching summaries can have
+# different objectives, so every match contributes to the collision variance.
 EXACT_MATCH_TOLERANCE = 1e-12
 
 
 @dataclass(frozen=True, slots=True)
 class ObjectivePrediction:
-    """Estimated objective vector plus everything needed to audit it."""
+    """Estimated objectives and diagnostics, not a calibrated confidence band.
+
+    ``exact`` means descriptor equality only; it never authorises cache reuse.
+    ``confidence`` is a distance score, not a probability of correctness.
+    """
 
     mean: np.ndarray
     uncertainty: np.ndarray
@@ -147,28 +151,27 @@ class WeightedKNNEstimator:
             )
 
         distances = np.linalg.norm(self._X - query, axis=1)
-        k = min(self.k, distances.shape[0])
-        order = np.argsort(distances, kind="stable")[:k]
-        d_sel = distances[order]
-        y_sel = self._Y[order]
-
-        exact_mask = d_sel <= EXACT_MATCH_TOLERANCE
-        if bool(np.any(exact_mask)):
-            # An identical structure is known: report it verbatim rather than
-            # blending it with distant neighbours.
-            y_exact = y_sel[exact_mask]
+        exact_indices = np.flatnonzero(distances <= EXACT_MATCH_TOLERANCE)
+        if exact_indices.size:
+            # Do not truncate collisions to k: that would make the estimate
+            # depend on insertion order and could hide known disagreement.
+            y_exact = self._Y[exact_indices]
             mean = y_exact.mean(axis=0)
             sigma = y_exact.std(axis=0)
             return ObjectivePrediction(
                 mean=mean,
                 uncertainty=sigma,
-                neighbors=tuple(int(i) for i in order[exact_mask]),
-                neighbor_distances=tuple(float(d) for d in d_sel[exact_mask]),
+                neighbors=tuple(int(i) for i in exact_indices),
+                neighbor_distances=tuple(float(d) for d in distances[exact_indices]),
                 descriptor_distance=0.0,
                 confidence=1.0,
                 exact=True,
             )
 
+        k = min(self.k, distances.shape[0])
+        order = np.argsort(distances, kind="stable")[:k]
+        d_sel = distances[order]
+        y_sel = self._Y[order]
         weights = 1.0 / (d_sel + self.epsilon)
         total = float(weights.sum())
         mean = (weights[:, None] * y_sel).sum(axis=0) / total

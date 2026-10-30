@@ -19,6 +19,7 @@ from .topology import (
     TopologyDescriptors,
     TopologyRepair,
     TreeCostWeights,
+    build_sink_rooted_tree,
 )
 
 log = logging.getLogger(__name__)
@@ -160,8 +161,12 @@ class Problem2TopologyAwareAdapter(Problem2DiscreteMobilityAdapter):
 
     def descriptors(self, chromosome: ChromosomeP2) -> TopologyDescriptors:
         """Cheap descriptors ``phi(x)``; deterministic for scenario+chromosome."""
-        tree = self.build_tree(chromosome)
-        return self._descriptor_extractor.extract(chromosome.mask, tree)
+        # The repair tree may use evolving routing weights. Regression must
+        # always see the same geometry-only tree, including after a restart.
+        tree = build_sink_rooted_tree(self._scenario, chromosome.mask)
+        return self._descriptor_extractor.extract(
+            chromosome.mask, tree, mac_protocol=chromosome.mac_protocol,
+        )
 
     def observe_simulated(self, chromosome: ChromosomeP2, key: str | None = None) -> bool:
         """Fold a really-simulated individual into the routing knowledge."""

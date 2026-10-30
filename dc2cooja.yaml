@@ -12,3 +12,17 @@ services:
     restart: unless-stopped
     ports:
       - "2223:22"
+
+  cooja-worker3:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja-worker3
+    restart: unless-stopped
+    ports:
+      - "2224:22"
+
+  cooja-worker4:
+    image: juniocesarferreira/simulation-cooja:v1.1
+    container_name: cooja-worker4
+    restart: unless-stopped
+    ports:
+      - "2225:22"

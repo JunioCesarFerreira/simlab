@@ -1,0 +1,20 @@
+% Beamer frame; include in a presentation configured for Portuguese/UTF-8.
+% Proposal: learned variation preferences and calibrated screening are future work.
+\begin{frame}{Proposta: como funciona o ciclo evolutivo}
+\small
+\begin{enumerate}
+    \item \textbf{Inicializar:} construir árvores conectadas ao sink
+          (MST como semente) e simular a população inicial.
+    \item \textbf{Variar:} cruzar, podar e expandir árvores preservando
+          conectividade, reduzindo reparos.
+    \item \textbf{Estimar:} usar indivíduos semelhantes já simulados
+          para prever objetivos e indicar incerteza.
+    \item \textbf{Avaliar:} simular promissores ou incertos; adiar os
+          provavelmente dominados, simulando uma amostra para auditoria.
+    \item \textbf{Aprender:} comparar pais e filhos simulados e favorecer
+          variações historicamente úteis na próxima geração.
+\end{enumerate}
+\medskip
+\centering
+\textbf{Somente resultados simulados alimentam o aprendizado.}
+\end{frame}

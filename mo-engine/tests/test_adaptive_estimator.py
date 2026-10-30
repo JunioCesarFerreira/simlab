@@ -44,6 +44,21 @@ class TestContract:
 
 
 class TestPrediction:
+    @pytest.mark.parametrize("k", [1, 2, 7])
+    def test_descriptor_collisions_use_all_matches_even_beyond_k(self, k):
+        # Different deployments can share the same summary descriptors. The
+        # first k records must not hide the disagreement of later matches.
+        X = [[0.0]] * 8 + [[1.0]]
+        Y = [[10.0]] * 7 + [[90.0], [1000.0]]
+        prediction = _fit(k=k, X=X, Y=Y).predict([0.0])
+        reverse = _fit(k=k, X=X[::-1], Y=Y[::-1]).predict([0.0])
+
+        assert len(prediction.neighbors) == 8
+        np.testing.assert_allclose(prediction.mean, [20.0])
+        np.testing.assert_allclose(prediction.uncertainty, np.std(Y[:8], axis=0))
+        np.testing.assert_allclose(reverse.mean, prediction.mean)
+        np.testing.assert_allclose(reverse.uncertainty, prediction.uncertainty)
+
     def test_exact_neighbour_is_returned_verbatim(self):
         estimator = _fit(
             k=3,

@@ -56,7 +56,7 @@ def build_sink_rooted_tree(
     weights: TreeCostWeights = DEFAULT_TREE_COST,
     routing: Optional[RoutingKnowledge] = None,
 ) -> ParentArrayTree:
-    """Return the minimum-cost sink-rooted tree over the active relays.
+    """Return a shortest-path tree from the sink over the active relays.
 
     Relays that cannot reach the sink through other *active* relays are kept in
     the tree as **detached** nodes, which is exactly the signal the repair pass
@@ -100,6 +100,47 @@ def build_sink_rooted_tree(
     # Link in increasing depth order so every parent is attached first.
     for node in sorted(settled, key=lambda n: (dist[n], n)):
         tree.link(node, best_parent[node])
+    return tree
+
+
+def build_sink_rooted_mst(
+    scenario: ScenarioTopology, mask: Sequence[int]
+) -> ParentArrayTree:
+    """Experimental geometric MST, rooted at the sink, using Prim's algorithm.
+
+    Minimises the sum of squared normalised edge distances, not path costs
+    from the sink and not simulated energy/latency. Only active candidates
+    and admissible radio edges participate. Unreachable active nodes stay
+    detached; this function neither activates bridges nor repairs the mask.
+    Thus, on a disconnected graph it spans only the sink component.
+
+    Ties are ordered by (cost, child, parent). The default genetic operators
+    and regression descriptors deliberately keep their existing trees.
+    """
+    if len(mask) != scenario.n_candidates:
+        raise ValueError("Mask length must match the candidate count.")
+    active = {i for i, bit in enumerate(mask) if bit}
+    tree = ParentArrayTree(SINK_NODE)
+    for node in sorted(active):
+        tree.add_node(node, None)
+
+    frontier = [
+        (edge_cost(scenario, SINK_NODE, node), node, SINK_NODE)
+        for node in sorted(scenario.sink_neighbours & active)
+    ]
+    heapq.heapify(frontier)
+    attached: set[int] = set()
+    while frontier:
+        _, node, parent = heapq.heappop(frontier)
+        if node in attached:
+            continue
+        tree.link(node, parent)
+        attached.add(node)
+        for neighbour in scenario.adjacency[node]:
+            if neighbour in active and neighbour not in attached:
+                heapq.heappush(frontier, (
+                    edge_cost(scenario, node, neighbour), neighbour, node,
+                ))
     return tree
 
 

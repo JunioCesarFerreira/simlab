@@ -25,7 +25,7 @@ from .rooted_tree import SINK_NODE, ParentArrayTree
 from .routing import RoutingKnowledge
 from .scenario import ScenarioTopology
 
-#: Names of the structural descriptors, in the exact order of ``vector()``.
+#: Fixed predictor inputs (geometry plus MAC), in ``vector()`` order.
 STRUCTURAL_DESCRIPTOR_NAMES: tuple[str, ...] = (
     "active_relays",
     "relay_ratio",
@@ -47,6 +47,7 @@ STRUCTURAL_DESCRIPTOR_NAMES: tuple[str, ...] = (
     "minimum_temporal_connectivity",
     "mean_temporal_connectivity",
     "critical_time_slices",
+    "mac_protocol",
 )
 
 #: Names of the history-dependent descriptors (never part of ``vector()``).
@@ -67,7 +68,7 @@ class TopologyDescriptors:
     historical: dict[str, float] = field(default_factory=dict)
 
     def vector(self) -> np.ndarray:
-        """Estimator input: the structural block, in canonical order."""
+        """Estimator input: fixed geometry/MAC attributes in canonical order."""
         return np.asarray(
             [self.structural[name] for name in STRUCTURAL_DESCRIPTOR_NAMES],
             dtype=float,
@@ -101,6 +102,8 @@ class TopologyDescriptorExtractor:
         self,
         mask: Sequence[int],
         tree: Optional[ParentArrayTree] = None,
+        *,
+        mac_protocol: int = 0,
     ) -> TopologyDescriptors:
         """Return the descriptors of the individual encoded by ``mask``."""
         scenario = self.scenario
@@ -113,6 +116,7 @@ class TopologyDescriptorExtractor:
         components = self._component_count(active)
 
         structural: dict[str, float] = {
+            "mac_protocol": float(mac_protocol),
             "active_relays": float(n_active),
             "relay_ratio": n_active / n_candidates,
             "number_of_edges": float(edges),

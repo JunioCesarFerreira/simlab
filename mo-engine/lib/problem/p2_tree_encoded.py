@@ -57,10 +57,10 @@ class Problem2TreeEncodedAdapter(Problem2TopologyAwareAdapter):
     ``ChromosomeP2Tree`` carries ``tree_parents`` alongside ``mask``, and the
     tree is genotype only: equality and hashing ignore it, because two trees
     over the same relay set deploy identical motes and would run identical
-    simulations. Concretely this means a tree-encoded experiment shares
-    ``genome_cache`` entries with a mask-encoded one, and the descriptors
-    ``phi(x)`` keep using the **canonical** shortest-path tree of the mask
-    (inherited ``build_tree``) so they stay a deterministic function of
+    simulations. The two variants therefore have compatible genome-cache
+    keys (cache lookup itself is scoped to an experiment). The inherited
+    ``descriptors`` method uses the geometry-only **canonical** shortest-path
+    tree of the mask so the regression features stay a deterministic function of
     ``scenario + chromosome``, as the estimator requires. The genotype tree is
     reachable through :meth:`genotype_tree`.
     """

@@ -312,6 +312,37 @@ class TestTopologyRepair:
 # Descriptors
 # ---------------------------------------------------------------------------
 class TestDescriptors:
+    def test_mac_protocol_is_part_of_the_predictor_input(self):
+        adapter = _adapter(_grid_problem())
+        mask = [1] * 25
+        first = adapter.descriptors(ChromosomeP2(mac_protocol=0, mask=mask))
+        second = adapter.descriptors(ChromosomeP2(mac_protocol=1, mask=mask))
+        assert list(first.vector()) != list(second.vector())
+        assert first.structural["mac_protocol"] == 0.0
+        assert second.structural["mac_protocol"] == 1.0
+
+    def test_history_weight_cannot_change_regression_descriptors(self):
+        from lib.problem.topology import RoutingObservation
+
+        problem = _grid_problem()
+        problem["topology_heuristic"] = {"tree_routing_importance_weight": 100.0}
+        adapter = _adapter(problem)
+        chromosome = ChromosomeP2(mac_protocol=0, mask=[1] * 25)
+        before = adapter.descriptors(chromosome)
+        # Strongly favour a long perimeter path that differs from the
+        # geometry-only canonical tree. Repair may use it; regression may not.
+        path = [
+            12, 7, 2, 1, 0, 5, 10, 15, 20, 21, 22, 23, 24,
+            19, 14, 9, 4, 3, 8, 13, 18, 17, 16, 11, 6,
+        ]
+        links = tuple(zip(path, [SINK_NODE] + path[:-1]))
+        adapter.routing_knowledge.observe(RoutingObservation(links=links))
+        after = adapter.descriptors(chromosome)
+
+        assert before.structural == after.structural
+        assert list(before.vector()) == list(after.vector())
+        assert after.historical["routing_importance_max"] > 0.0
+
     def test_same_chromosome_yields_identical_descriptors(self):
         adapter = _adapter(_grid_problem())
         chromosome = adapter.random_individual_generator(1)[0]

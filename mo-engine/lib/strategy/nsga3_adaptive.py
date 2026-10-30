@@ -855,10 +855,10 @@ class NSGA3AdaptiveSimulationStrategy(NSGA3LoopStrategy):
         """Environmental selection restricted to really-evaluated individuals.
 
         With ``require_simulated_survivors`` (the default), any individual that
-        is still only estimated is excluded from ``R_t`` — promotion already
-        measured every estimate that could have survived, so what remains is
-        provably outside the survivor set.  The filter is skipped when it would
-        starve the selection, which can only happen in a degenerate run.
+        is still only estimated is excluded from ``R_t``. Promotion considers
+        survival under predicted values; a false negative may still be lost.
+        This protects objective provenance, not Pareto recall. The filter is
+        skipped when it would starve selection, weakening even that invariant.
         """
         if not self._adaptive_config.require_simulated_survivors:
             return super()._select_next_parents(R_population, R_objectives)

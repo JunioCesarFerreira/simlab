@@ -1,5 +1,9 @@
 # Adaptive Simulation Budget
 
+See the [MST and inter-generation learning review (Portuguese)](PROPOSTA_MST_APRENDIZADO.md)
+and its [annotated reading list](REFERENCIAS_MST_APRENDIZADO.md) for the distinction
+between MST/SPT, the statistical limitations of screening, and the validation plan.
+
 > **Hypothesis under test.** Topological knowledge + simulation history +
 > uncertainty ⟶ a better allocation of the simulation budget.
 >
@@ -26,8 +30,9 @@ untouched:
 
 The **phenotype** is unchanged in every variant: the binary mask over the
 candidate set `Q`, hashed the same way, encoded to Cooja the same way. That is
-what keeps results comparable one-to-one with a classic P2 run and lets the
-three variants share `genome_cache` entries.
+what keeps results comparable one-to-one with a classic P2 run and gives the
+three variants compatible genome keys. Cache lookup is currently scoped to an
+experiment; matching hashes do not automatically reuse another experiment's data.
 
 `problem2_tree_encoded` additionally stores the sink-rooted tree *inside* the
 chromosome (`ChromosomeP2Tree.tree_parents`), which is genotype only — ignored
@@ -202,8 +207,9 @@ stay identical to `ChromosomeP2`, because two trees over the same relay set
 deploy the same motes and would run the same simulation. Consequences, all
 intended:
 
-* a tree-encoded experiment **shares `genome_cache` entries** with a
-  mask-encoded one — results transfer both ways;
+* tree-encoded and mask-encoded individuals have compatible `genome_cache`
+  keys; transfer across experiments would additionally require verified
+  simulation-context compatibility and explicit cache import;
 * `Individual.individual_id` is unchanged, so nothing downstream notices;
 * `to_dict` still emits the array, so the exact tree survives a restart, and
   `chromosome_from_dict` falls back to the canonical tree when it is absent;
@@ -216,6 +222,10 @@ canonical tree is rebuilt — so a tree-encoded run can be seeded from a
 mask-encoded population.
 
 ### Measured effect
+
+The table below records an earlier illustrative run. For the current review's
+commands, per-seed raw results and limitations, see the
+[reproducible MST review](../../experiments/adaptive-simulation/mst-review/README.md).
 
 `experiments/adaptive-simulation/run_encoding_comparison.py`, NSGA-III on all
 three encodings, population 20, 8 generations, averaged over 3 seeds:
@@ -238,8 +248,9 @@ not from Cooja.
 
 ## 5. Descriptors φ(x)
 
-20 **structural** descriptors, deterministic for a fixed `scenario + chromosome`
-and computed entirely from the pre-computed caches:
+21 fixed descriptors: 20 **structural** descriptors plus the MAC gene,
+deterministic for a fixed `scenario + chromosome`. Geometry comes entirely
+from the pre-computed caches:
 
 ```
 active_relays  relay_ratio  number_of_edges  mean/min/max_degree
@@ -248,6 +259,7 @@ mean/max_tree_depth  tree_leaves  tree_branching_factor
 mean/max_distance_to_sink  mean/max_hop_count
 trajectory_coverage_ratio
 minimum/mean_temporal_connectivity  critical_time_slices
+mac_protocol
 ```
 
 plus a **historical** block that is computed, persisted and used for novelty,
@@ -261,6 +273,11 @@ nearest_evaluated_hamming_distance  nearest_evaluated_descriptor_distance
 Reason: their value for a fixed chromosome drifts as the knowledge base grows,
 which would silently invalidate every descriptor stored in earlier generations.
 Normalisation is min-max, fitted by the estimator on its own training set.
+The tree used by regression is always the geometry-only canonical SPT, even
+when the repair tree uses historical routing weights. MAC is included because
+equal relay masks with different MACs need not have equal simulated objectives.
+On resume, descriptors are recomputed from cached chromosomes; old 20-component
+vectors must not be mixed with the current 21-component vectors.
 
 ---
 
@@ -301,10 +318,16 @@ f̂_j(x) = Σ w_i f_j(x_i) / Σ w_i
 σ̂_j(x) = sqrt( Σ w_i (f_j(x_i) − f̂_j(x))² / Σ w_i )
 ```
 
-An exact structural match (distance 0) short-circuits to the stored objectives
-rather than blending them with distant neighbours. Fewer than `k` samples uses
-what exists; an untrained estimator returns `None`, which the policy reads as
-"simulate".
+A descriptor match (distance 0) aggregates **all** matching training records,
+even if there are more than `k`, instead of blending with distant neighbours.
+Different genomes may have identical summaries and conflicting objectives;
+their disagreement must not be hidden by insertion-order truncation. This is
+not an exact genome-cache hit. Fewer than `k` samples uses what exists; an
+untrained estimator returns `None`, which the policy reads as "simulate".
+
+The deviation is a heuristic uncertainty score, not a calibrated prediction
+interval. In particular, `kappa=1.96` does **not** imply 95% coverage, and
+`confidence` is a distance score rather than a probability of correctness.
 
 No neural network, no Gaussian process, no extra dependency — deliberately, so
 the first version is auditable.
@@ -364,6 +387,11 @@ individual still only estimated is excluded from the environmental selection.
 Combined with promotion, every individual entering `P_{t+1}` carries simulated
 or exact-cache objectives, so the evolutionary state is never contaminated. The
 filter is skipped, with a warning, only if it would starve the selection.
+
+This protects the provenance of selected objective values when the filter is
+effective; it does not bound lost Pareto quality. A good individual predicted
+to be bad can miss promotion entirely. Random audits and independent validation
+are still necessary, and the starvation fallback weakens the invariant above.
 
 An estimated individual additionally:
 
@@ -490,9 +518,9 @@ becomes irrelevant because nothing repairs:
 }
 ```
 
-**Choosing kappa.** Larger κ ⇒ more conservative ⇒ fewer skips. On a
-three-objective landscape the 95% band (1.96) is conservative enough that
-little is skipped once the population converges onto the front. Sweep it on
+**Choosing kappa.** Larger κ widens the heuristic band and tends to reduce
+screening skips; changed search trajectories can change total savings. No
+coverage level follows from the default 1.96. Sweep it on
 your own scenario with
 [`experiments/adaptive-simulation/run_comparison.py`](../../experiments/adaptive-simulation/run_comparison.py)
 before fixing it for a campaign.

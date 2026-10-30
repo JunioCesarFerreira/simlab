@@ -37,6 +37,7 @@ python experiments/adaptive-simulation/run_comparison.py \
 
 ```bash
 python experiments/adaptive-simulation/run_encoding_comparison.py --repeats 3
+python experiments/adaptive-simulation/run_encoding_comparison.py --repeats 3 --json encoding.json
 ```
 
 Only `numpy` and `pymongo` (for `bson.ObjectId`) are needed — both already in
@@ -51,6 +52,11 @@ encoding whose operators cannot produce an infeasible individual. It also
 asserts the invariant directly, by rebuilding the sink-rooted tree of every
 persisted chromosome and counting the disconnected ones (must be zero for all
 three).
+
+The JSON report also compares geometric MST and shortest-path skeletons of the
+same persisted masks. It does not replace the genotype trees or run a new
+optimizer arm. The [MST review evidence](mst-review/README.md) and
+[proposal](../../docs/markdown/PROPOSTA_MST_APRENDIZADO.md) explain the limits.
 
 ## What it reports
 
@@ -73,7 +79,7 @@ estimate $L(x) = \hat f(x) - \kappa\hat\sigma(x)$ is *clearly* dominated by a
 really-evaluated solution. Larger κ ⇒ more conservative ⇒ fewer skips.
 
 The sweep exists because the useful operating point is problem-dependent. On a
-three-objective landscape the 95% band (κ = 1.96, the default) is conservative
+three-objective landscape the heuristic band (κ = 1.96, the default) is conservative
 enough that little gets skipped once the population converges onto the front —
 most offspring are then genuinely near-front and *deserve* a simulation. The
 savings come from the regions where the estimator is confident and the candidate
@@ -81,6 +87,8 @@ is clearly bad, and how large those regions are depends on how orderable the
 objective landscape is.
 
 Run the sweep on your own scenario before fixing κ for a campaign.
+The k-NN neighbor deviation is not calibrated: 1.96 does not establish 95%
+coverage. Audit results are diagnostics, not a bound on lost Pareto quality.
 
 ## The stand-in evaluator
 
@@ -104,5 +112,6 @@ one would show implausibly large savings.
 **These numbers characterise the mechanism, not Cooja.** The absolute reduction
 on a real campaign depends on the noise floor of the metrics, the number of
 seeds per individual and how quickly the population converges. What transfers
-is the shape of the trade-off, and the guarantee that quality is bounded by the
-promotion step.
+is a testable cost/quality trade-off. Promotion ensures measured values for the
+individuals it promotes; it cannot recover every good individual predicted to
+be poor, so it does not guarantee a bound on quality loss.

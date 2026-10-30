@@ -340,9 +340,9 @@ def main() -> int:
         )
     print("-" * 78)
     print(" sims   = real evaluations (Simulation documents actually executed)")
-    print(" reduct = 1 - N_adaptive / N_baseline, over the new individuals of the run")
+    print(" reduct = avoided / eligible new individuals in the adaptive run itself")
     print(" HVrat  = hypervolume(adaptive front) / hypervolume(baseline front)")
-    print(" fskip  = fraction of audited skips whose real objectives were non-dominated")
+    print(" fskip  = scored dominated predictions later found non-dominated (not audits alone)")
     print("=" * 78)
 
     if args.json:
