@@ -194,15 +194,15 @@
         <div class="target-row">
           <label>
             Confidence (%)
-            <input v-model.number="confidencePct" type="number" min="80" max="99.9" step="0.5" />
+            <input v-model.number="confidencePct" type="number" min="80" max="99.9" step="any" />
           </label>
           <label>
             Relative error (%)
-            <input v-model.number="errorPct" type="number" min="0.1" max="100" step="0.5" />
+            <input v-model.number="errorPct" type="number" min="0.1" max="100" step="any" />
           </label>
           <label>
             Reliability
-            <input v-model.number="reliability" type="number" min="0.5" max="0.99" step="0.01" />
+            <input v-model.number="reliability" type="number" min="0.5" max="0.99" step="any" />
           </label>
           <label>
             Control repeats
