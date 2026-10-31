@@ -58,14 +58,19 @@ export function studyCost(seeds: number, chromosomes: number, replicates: number
   return { main, control, total: main + control, overLimit: main > MAX_SIMULATIONS };
 }
 
-/** Hours for `total` simulations on `pool` workers, when there is history to say so. */
+/**
+ * Hours for `total` simulations on `pool` workers, when there is history to say so.
+ *
+ * In whole rounds of the pool: five simulations on twelve workers still take
+ * as long as one simulation does.
+ */
 export function estimateHours(
   total: number,
   meanSeconds: number | null | undefined,
   pool: number,
 ): number | null {
   if (!meanSeconds || pool < 1) return null;
-  return (total * meanSeconds) / pool / 3600;
+  return (Math.ceil(total / pool) * meanSeconds) / 3600;
 }
 
 export function formatHours(hours: number): string {

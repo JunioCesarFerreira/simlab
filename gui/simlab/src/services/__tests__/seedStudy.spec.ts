@@ -56,6 +56,10 @@ describe("estimateHours", () => {
     expect(estimateHours(640, 145, 40)).toBeCloseTo(0.644, 2);
   });
 
+  it("never promises less than one simulation takes", () => {
+    expect(estimateHours(5, 360, 12)).toBeCloseTo(0.1, 3);
+  });
+
   it("says nothing with no history or no pool", () => {
     expect(estimateHours(640, null, 40)).toBeNull();
     expect(estimateHours(640, 145, 0)).toBeNull();
