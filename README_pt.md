@@ -339,6 +339,9 @@ Todos os arquivos e metadados permanecem armazenados no MongoDB/GridFS, garantin
 * **Guia de Rastreabilidade de Firmware**
   Cada experimento guarda uma cópia imutável do firmware com que foi executado, armazenada no GridFS e pertencente apenas a ele — veja [docs/markdown/FIRMWARE_TRACEABILITY.md](./docs/markdown/FIRMWARE_TRACEABILITY.md). A cópia é feita no início do experimento, sobrevive a edições ou à exclusão do repositório de fontes compartilhado, e pode ser visualizada e baixada na página do experimento na GUI.
 
+* **Guia do Estudo de Seeds**
+  Quantas seeds uma instância exige para relatar um valor e para ordenar soluções, medido na página **Seed Study** — veja [docs/markdown/SEED_STUDY.md](./docs/markdown/SEED_STUDY.md).
+
 * **Changelog**
   Atualizações e novas funcionalidades estão documentadas em [`CHANGELOG.md`](./CHANGELOG.md).
 

@@ -5,6 +5,40 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Measuring how many seeds an instance needs
+
+The number of seeds of an experiment was a guess. Measured on P1 with 156
+individuals and 43 seeds, it is two different questions: reporting the latency
+of one solution within ±5% takes about 244 seeds, and ranking solutions with
+reliability 0.90 takes 6. With the 2 seeds of most experiments so far, the
+reliability of the ranking is 0.70 to 0.83.
+
+### Added
+
+- **Seed Study page.** Runs a panel of solutions under a list of seeds, generated
+  or imported, and shows the distribution of every metric, the seeds needed to
+  report a value (`n*`) and to rank solutions (`m*`), and the scope both hold in.
+  Targets can change without simulating again. See
+  [docs/markdown/SEED_STUDY.md](./docs/markdown/SEED_STUDY.md).
+- **`seed_study` strategy**, a batch that chooses a panel of distinct feasible
+  chromosomes, records them as they run, and repeats the first seed in a
+  generation of its own to test determinism.
+- **`/seed-studies` routes**, with validation, an analysis computed on demand and
+  cached by its results, and a long-format CSV export.
+- **`pylib/seed_study.py`**: reproducible seed lists, stable by prefix and apart
+  in the low 16 bits the firmware sees; intervals, Stein's two-stage form and a
+  resampling curve for the real aggregator; generalizability analysis of a
+  crossed panel.
+
+### Changed
+
+- **`scipy` is a dependency of the REST API**, for the statistics of the analysis.
+- The seeds file parser is shared by the launch wizard and the seed study.
+- `generation_repo.latest_per_seed` exposes the one-result-per-seed rule, and
+  batch subclasses can choose their chromosomes through `_input_chromosomes`.
+
+---
+
 ## [Unreleased] — Choosing the seed aggregator per objective
 
 The engine has long accepted `parameters.simulation.aggregator` (Ψa) — how the

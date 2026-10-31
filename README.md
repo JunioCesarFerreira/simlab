@@ -341,6 +341,9 @@ All raw outputs, logs, and metadata are stored in MongoDB/GridFS for reproducibi
 * **Firmware Traceability Guide**
   Every experiment keeps an immutable copy of the firmware it ran with, stored in GridFS and owned by that experiment alone — see [docs/markdown/FIRMWARE_TRACEABILITY.md](./docs/markdown/FIRMWARE_TRACEABILITY.md). The snapshot is taken when the experiment starts, survives later edits or deletion of the shared source repository, and is browsable and downloadable from the experiment page in the GUI.
 
+* **Seed Study Guide**
+  How many seeds an instance needs to report a value and to rank solutions, measured from the **Seed Study** page — see [docs/markdown/SEED_STUDY.md](./docs/markdown/SEED_STUDY.md).
+
 * **Changelog**
   Recent updates and feature additions are documented in the [`CHANGELOG.md`](./CHANGELOG.md) file.
 

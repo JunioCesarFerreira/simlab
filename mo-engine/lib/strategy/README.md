@@ -123,6 +123,35 @@ The adapter gets its RNG through `set_ga_operator_configs(rng, {})`:
 `build_adapter` hands the RNG over only together with GA settings, and a
 benchmark has none.
 
+## Seed study (`seed_study.py`)
+
+Not an optimisation either: it measures how many seeds an instance needs. A
+panel of chromosomes runs under a list of seeds, in one generation, as a batch
+does; `pylib/seed_study.py` analyses the results and `GET /seed-studies/{id}`
+serves them. See [SEED_STUDY.md](../../../docs/markdown/SEED_STUDY.md).
+
+```json
+"parameters": {
+  "strategy": "seed_study",
+  "random_seed": 7741,
+  "simulation": { "duration": 180, "random_seeds": [336157, 667370],
+                  "incomplete_objective": "accept" },
+  "seed_study": { "panel": { "source": "generated", "size": 20 },
+                  "control_replicates": 2 }
+}
+```
+
+Created by `POST /seed-studies`, and absent from `Step2Experiment.vue` for the
+same reason as the benchmark.
+
+| Choice | Why |
+|---|---|
+| Inherits `BatchStrategy` | One generation, fixed chromosomes, several seeds, with the replica gate and the resume that come with it |
+| Panel persisted after its firmware is resolved | Resolving can rewrite the MAC gene, and the recorded chromosome must be the one that ran. Regenerating on a restart gives the same panel only while the generator draws the same numbers in the same order |
+| Distinct by hash after resolving | Two draws can become one chromosome, and a batch skips a duplicate without an error, which would shrink the panel in silence |
+| Control in a generation of its own, `seed_study: {role: "control"}` | In the main one the repeats would be collapsed, since reading keeps one result per individual and seed. It records no `expected_seeds`, which count seeds |
+| A failed control does not fail the study | The measurements are good. The analysis reports what was not compared |
+
 ---
 
 ## Analytical fast-path (`analytical.py`)
