@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  absoluteParam,
   checkSeeds,
   estimateHours,
   formatHours,
@@ -12,6 +13,7 @@ import {
   formatValue,
   headline,
   metricStatus,
+  nearZeroMetrics,
   normalityLabel,
   progress,
   scopeSentence,
@@ -121,6 +123,24 @@ describe("formatting", () => {
   it("formats an interval", () => {
     expect(formatInterval([183.5, 243.3])).toBe("[183.5, 243.3]");
     expect(formatInterval(null)).toBe("—");
+  });
+});
+
+describe("absolute targets", () => {
+  it("are sent as the route reads them", () => {
+    expect(absoluteParam({ latency: 5, delta: 0.5 })).toBe("latency:5,delta:0.5");
+  });
+
+  it("are left out when there are none", () => {
+    expect(absoluteParam({})).toBeUndefined();
+    expect(absoluteParam()).toBeUndefined();
+  });
+
+  it("are asked for where a relative error means nothing", () => {
+    const metric = (name: string, statuses: string[]) =>
+      ({ name, summary: { statuses } }) as unknown as StudyMetric;
+
+    expect(nearZeroMetrics([metric("a", ["ok"]), metric("b", ["near_zero_mean"])])).toEqual(["b"]);
   });
 });
 

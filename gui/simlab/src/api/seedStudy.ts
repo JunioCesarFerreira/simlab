@@ -6,6 +6,7 @@
  * and a key it does not declare could be dropped on the way in.
  */
 import client from "./client";
+import { absoluteParam } from "../services/seedStudy";
 import type {
   MetricDetail,
   StudyCreateInput,
@@ -24,10 +25,11 @@ export async function listStudies(signal?: AbortSignal): Promise<StudySummary[]>
 export async function getStudy(
   id: string,
   targets?: StudyTargets | null,
+  absolute?: Record<string, number>,
   signal?: AbortSignal,
 ): Promise<StudyDetail> {
   const { data } = await client.get<StudyDetail>(`/seed-studies/${id}`, {
-    params: targets ?? undefined,
+    params: { ...targets, absolute: absoluteParam(absolute) },
     signal,
   });
   return data;
@@ -38,6 +40,7 @@ export async function getStudyMetric(
   metric: string,
   chromosome: string,
   targets?: StudyTargets | null,
+  absolute?: number,
   signal?: AbortSignal,
 ): Promise<MetricDetail> {
   const { data } = await client.get<MetricDetail>(
@@ -47,6 +50,7 @@ export async function getStudyMetric(
         chromosome,
         confidence: targets?.confidence,
         relative_error: targets?.relative_error,
+        absolute,
       },
       signal,
     },

@@ -221,6 +221,19 @@ export function headline(detail: StudyDetail): string {
   return "The panel gives no number of seeds to rank these solutions.";
 }
 
+/** The absolute half-widths of a request, as the route reads them. */
+export function absoluteParam(absolute?: Record<string, number>): string | undefined {
+  const parts = Object.entries(absolute ?? {}).map(([metric, value]) => `${metric}:${value}`);
+  return parts.length ? parts.join(",") : undefined;
+}
+
+/** Metrics whose mean is too close to zero for a relative error to mean anything. */
+export function nearZeroMetrics(metrics: StudyMetric[]): string[] {
+  return metrics
+    .filter((metric) => metric.summary.statuses.includes("near_zero_mean"))
+    .map((metric) => metric.name);
+}
+
 export function chromosomeLabel(hash: string, index: number): string {
   return `#${index + 1} · ${hash.slice(0, 8)}`;
 }

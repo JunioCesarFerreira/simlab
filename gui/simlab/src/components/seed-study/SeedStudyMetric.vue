@@ -226,6 +226,8 @@ const props = defineProps<{
   detail: StudyDetail;
   metric: StudyMetric;
   targets: StudyTargets;
+  /** Absolute half-width of this metric, when a relative one means nothing. */
+  absolute?: number;
 }>();
 
 const chromosome = ref(props.detail.panel[0] ?? "");
@@ -279,6 +281,7 @@ async function load() {
       props.metric.name,
       chromosome.value,
       props.targets,
+      props.absolute,
       controller.signal,
     );
     if (inFlight === controller) data.value = next;
@@ -298,6 +301,7 @@ watch(
     props.detail.finished,
     props.targets.confidence,
     props.targets.relative_error,
+    props.absolute,
   ],
   load,
   { immediate: true },

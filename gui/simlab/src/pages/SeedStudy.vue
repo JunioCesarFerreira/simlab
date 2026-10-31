@@ -61,7 +61,7 @@
     </section>
 
     <section v-if="detail" class="card">
-      <SeedStudyResult :detail="detail" @targets="onTargets" />
+      <SeedStudyResult :detail="detail" @targets="onTargets" @absolute="onAbsolute" />
     </section>
     <p v-else-if="selectedId && detailLoading" class="muted">Loading study…</p>
   </div>
@@ -88,6 +88,7 @@ const studies = ref<StudySummary[]>([]);
 const detail = ref<StudyDetail | null>(null);
 const selectedId = ref<string | null>((route.query.id as string) || null);
 const targets = ref<StudyTargets | null>(null);
+const absolute = ref<Record<string, number>>({});
 const pool = ref(0);
 const loading = ref(false);
 const detailLoading = ref(false);
@@ -136,7 +137,7 @@ async function loadDetail(signal?: AbortSignal) {
   if (!selectedId.value) return;
   detailLoading.value = true;
   try {
-    detail.value = await getStudy(selectedId.value, targets.value, signal);
+    detail.value = await getStudy(selectedId.value, targets.value, absolute.value, signal);
   } finally {
     detailLoading.value = false;
   }
@@ -146,6 +147,7 @@ async function select(id: string) {
   selectedId.value = id;
   detail.value = null;
   targets.value = null;
+  absolute.value = {};
   router.replace({ query: { ...route.query, id } });
   try {
     await loadDetail();
@@ -155,14 +157,23 @@ async function select(id: string) {
 }
 
 /** New targets recompute the analysis from the same runs. */
-async function onTargets(next: StudyTargets) {
-  targets.value = next;
+async function reload() {
   try {
     await loadDetail();
     error.value = "";
   } catch (e) {
     error.value = describe(e);
   }
+}
+
+function onTargets(next: StudyTargets) {
+  targets.value = next;
+  return reload();
+}
+
+function onAbsolute(next: Record<string, number>) {
+  absolute.value = next;
+  return reload();
 }
 
 async function onCreated(created: StudyCreated) {
@@ -172,6 +183,7 @@ async function onCreated(created: StudyCreated) {
     `${created.simulations} simulation(s). The analysis fills in as they finish.`;
   selectedId.value = created.id;
   targets.value = null;
+  absolute.value = {};
   await load();
 }
 

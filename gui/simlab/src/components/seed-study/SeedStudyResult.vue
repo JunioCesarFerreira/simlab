@@ -103,6 +103,20 @@
         <small>Recalculated from the same runs. Nothing is simulated again.</small>
       </div>
 
+      <div v-if="needsAbsolute.length" class="targets">
+        <label v-for="name in needsAbsolute" :key="name">
+          Absolute error, {{ name }}
+          <input
+            :value="absolute[name]"
+            type="number"
+            min="0"
+            step="any"
+            @change="setAbsolute(name, ($event.target as HTMLInputElement).valueAsNumber)"
+          />
+        </label>
+        <small>The mean is close to zero, so these need an error in the metric's own unit.</small>
+      </div>
+
       <details v-if="analysis.warnings.length" class="advisories" open>
         <summary>Notes on this analysis ({{ analysis.warnings.length }})</summary>
         <ul class="alerts">
@@ -168,6 +182,7 @@
         :detail="detail"
         :metric="selected"
         :targets="targets"
+        :absolute="absolute[selected.name]"
       />
 
       <details v-if="analysis.front_stability" class="advisories">
@@ -238,6 +253,7 @@ import {
   formatValue,
   headline,
   metricStatus,
+  nearZeroMetrics,
   normalityLabel,
   scopeSentence,
   statusInfo,
@@ -246,7 +262,7 @@ import type { StudyDetail, StudyMetric, StudyTargets } from "../../types/seedStu
 import SeedStudyMetric from "./SeedStudyMetric.vue";
 
 const props = defineProps<{ detail: StudyDetail }>();
-const emit = defineEmits<{ targets: [StudyTargets] }>();
+const emit = defineEmits<{ targets: [StudyTargets]; absolute: [Record<string, number>] }>();
 
 const analysis = computed(() => props.detail.analysis);
 const recommendation = computed(() => props.detail.analysis!.recommendation);
@@ -258,6 +274,20 @@ const selected = computed(() => {
   return metrics.find((m) => m.name === selectedName.value) ?? metrics[0] ?? null;
 });
 
+const absolute = ref<Record<string, number>>({});
+// Kept once given: the metric stops reading as near zero as soon as it has one.
+const needsAbsolute = computed(() => [
+  ...new Set([...nearZeroMetrics(analysis.value?.metrics ?? []), ...Object.keys(absolute.value)]),
+]);
+
+function setAbsolute(metric: string, value: number) {
+  const next = { ...absolute.value };
+  if (value > 0) next[metric] = value;
+  else delete next[metric];
+  absolute.value = next;
+  emit("absolute", next);
+}
+
 const confidencePct = ref(0);
 const errorPct = ref(0);
 const reliabilityValue = ref(0);
@@ -268,7 +298,13 @@ function syncTargets() {
   reliabilityValue.value = targets.value.reliability;
 }
 syncTargets();
-watch(() => props.detail.id, syncTargets);
+watch(
+  () => props.detail.id,
+  () => {
+    syncTargets();
+    absolute.value = {};
+  },
+);
 
 let debounce: ReturnType<typeof setTimeout> | null = null;
 
