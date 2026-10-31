@@ -127,8 +127,24 @@ class BatchStrategy(EngineStrategy):
             self._objective_keys, self._objective_goals,
         )
 
-        # Chromosomes provided as input. Accepted both under ``parameters.chromosomes``
-        # and at the experiment root (``experiment.chromosomes``) for flexibility.
+        self._chromosomes: list[Chromosome] = self._input_chromosomes(experiment)
+        logger.info("[Batch] Loaded %d chromosomes from input.", len(self._chromosomes))
+
+        self._exp_id: ObjectId | None = None
+        self._generation_id: ObjectId | None = None
+        self._lock = threading.Lock()
+        self._sim_done_count: int = 0
+        self._count_sims_inserted: int = 0
+        self._map_genome_objectives: dict[Chromosome, list[float]] = {}
+        self._inserted_genomes: set[str] = set()
+
+    def _input_chromosomes(self, experiment: dict) -> list[Chromosome]:
+        """The chromosomes of the batch, overridden by strategies that choose them.
+
+        Accepted both under ``parameters.chromosomes`` and at the experiment
+        root (``experiment.chromosomes``) for flexibility.
+        """
+        params = experiment.get("parameters", {}) or {}
         raw_chromosomes = (
             params.get("chromosomes")
             or experiment.get("chromosomes")
@@ -139,18 +155,7 @@ class BatchStrategy(EngineStrategy):
                 "Batch strategy requires a non-empty list of chromosomes "
                 "in parameters.chromosomes."
             )
-        self._chromosomes: list[Chromosome] = [
-            chromosome_from_dict(self._problem_name, c) for c in raw_chromosomes
-        ]
-        logger.info("[Batch] Loaded %d chromosomes from input.", len(self._chromosomes))
-
-        self._exp_id: ObjectId | None = None
-        self._generation_id: ObjectId | None = None
-        self._lock = threading.Lock()
-        self._sim_done_count: int = 0
-        self._count_sims_inserted: int = 0
-        self._map_genome_objectives: dict[Chromosome, list[float]] = {}
-        self._inserted_genomes: set[str] = set()
+        return [chromosome_from_dict(self._problem_name, c) for c in raw_chromosomes]
 
     # ------------------------------
     # EngineStrategy interface
