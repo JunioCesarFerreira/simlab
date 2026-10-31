@@ -7,26 +7,34 @@ from scipy import stats
 
 from pylib.seed_aggregation import AGGREGATOR_DISPATCH, aggregate_seed_values
 from pylib.seed_study import (
+    _estimates_diverge,
     DEFAULT_GUARD,
     LOW16,
     MAX_SEEDS,
     SEED_LIMIT,
     aggregate_rows,
     analyse_panel,
+    analyse_study,
     balanced_matrix,
     bca_interval,
     boxplot,
     ci_mean_t,
     clopper_pearson,
+    compare_control,
     describe,
     diagnose_seeds,
+    failure_kind,
+    failure_summary,
     first_reliable,
     front_stability,
     generate_seeds,
+    group_aliases,
     histogram,
     holm,
     m_star,
     median_interval,
+    metric_detail,
+    metric_status,
     n_star,
     outlier_flags,
     pigeonhole_interval,
@@ -552,3 +560,335 @@ class TestAnalysePanel:
 
     def test_one_chromosome_is_not_a_panel(self):
         assert self._run(np.ones((1, 5))) is None
+
+
+SEEDS = list(range(100, 130))
+OBJECTIVES = [{"metric_name": "latency", "goal": "min", "aggregator": "mean"},
+              {"metric_name": "throughput", "goal": "max", "aggregator": "mean"}]
+
+
+def study(K=1, n=30, **over):
+    rng = np.random.default_rng(71)
+    values = {
+        "latency": 200 + 20 * rng.normal(0, 1, (K, 1)) + 30 * rng.normal(0, 1, (K, n)),
+        "throughput": 3000 + 100 * rng.normal(0, 1, (K, 1)) + 50 * rng.normal(0, 1, (K, n)),
+    }
+    values.update(over)
+    return values
+
+
+def analysed(values, K=1, n=30, objectives=OBJECTIVES, **kwargs):
+    return analyse_study(values, seeds=list(range(100, 100 + n)),
+                         chromosomes=[f"c{i}" for i in range(K)],
+                         objectives=objectives, **kwargs)
+
+
+def named(result, name):
+    return next(m for m in result["metrics"] if m["name"] == name)
+
+
+class TestMetricStatus:
+    def test_a_metric_that_varies_is_usable(self):
+        assert metric_status(np.array([[1.0, 2.0, 3.0]])) == "ok"
+
+    def test_a_constant_metric(self):
+        assert metric_status(np.zeros((2, 5))) == "constant"
+
+    def test_constant_means_with_each_solution_not_between_them(self):
+        """Different per chromosome and equal per seed: the seed changes nothing."""
+        assert metric_status(np.array([[1.0, 1.0], [2.0, 2.0]])) == "constant"
+
+    def test_a_wrapped_subtraction_is_not_a_measurement(self):
+        assert metric_status(np.array([[1.0, 1.8e19, 3.0]])) == "overflow_suspect"
+
+    def test_nothing_measured_yet(self):
+        assert metric_status(np.full((2, 3), np.nan)) == "no_data"
+
+    def test_one_seed_each_is_not_a_constant(self):
+        """A study that has just started must not read as "the seed changes nothing"."""
+        assert metric_status(np.array([[1.0, np.nan], [np.nan, 2.0]])) == "no_data"
+
+
+class TestAliases:
+    def test_copies_go_under_the_first_name(self):
+        same = np.array([[1.0, 2.0, 3.0]])
+        groups = group_aliases({"a": same, "b": same.copy(), "c": same + 1}, ["a", "b", "c"])
+
+        assert groups == {"a": ["b"], "c": []}
+
+    def test_metrics_that_are_always_zero_are_not_copies(self):
+        groups = group_aliases({"a": np.zeros((1, 3)), "b": np.zeros((1, 3))}, ["a", "b"])
+
+        assert groups == {}
+
+
+class TestAnalyseStudy:
+    def test_one_chromosome_answers_precision_and_not_ranking(self):
+        result = analysed(study())
+
+        report = result["recommendation"]["report"]["by_objective"]
+        optimise = result["recommendation"]["optimise"]
+        assert report["latency"]["value"] > 1
+        assert optimise["by_objective"]["latency"]["value"] is None
+        assert optimise["max"] is None
+        assert named(result, "latency")["panel"] is None
+
+    def test_a_panel_answers_both(self):
+        result = analysed(study(K=20), K=20)
+
+        optimise = result["recommendation"]["optimise"]
+        assert optimise["by_objective"]["latency"]["method"] == "generalizability"
+        assert optimise["max"] == max(
+            row["value"] for row in optimise["by_objective"].values())
+        assert result["front_stability"]
+
+    def test_objectives_come_first(self):
+        values = {"hops": np.random.default_rng(1).normal(3, 1, (1, 30)), **study()}
+
+        result = analysed(values)
+
+        assert [m["name"] for m in result["metrics"]] == ["latency", "throughput", "hops"]
+
+    def test_only_objectives_get_a_recommendation(self):
+        values = {"hops": np.random.default_rng(1).normal(3, 1, (1, 30)), **study()}
+
+        result = analysed(values)
+
+        assert set(result["recommendation"]["report"]["by_objective"]) == {
+            "latency", "throughput"}
+        assert named(result, "hops")["is_objective"] is False
+
+    def test_a_copy_of_an_objective_is_counted_once(self):
+        values = study()
+        values["rtt_latency"] = values["latency"].copy()
+
+        result = analysed(values)
+
+        assert named(result, "latency")["aliases"] == ["rtt_latency"]
+        assert [m["name"] for m in result["metrics"]].count("rtt_latency") == 0
+
+    def test_a_defective_metric_stays_visible_with_no_recommendation(self):
+        """The proposal's point: 1,409 seeds is what ignoring this would recommend."""
+        values = study()
+        values["latency"][0, 3] = 1.8e19
+
+        result = analysed(values)
+
+        assert named(result, "latency")["status"] == "overflow_suspect"
+        assert result["recommendation"]["report"]["by_objective"]["latency"]["value"] is None
+        assert "overflow_suspect" in {w["code"] for w in result["warnings"]}
+
+    def test_a_metric_that_is_always_zero_says_so(self):
+        values = {**study(), "bytes_tx": np.zeros((1, 30))}
+
+        metric = named(analysed(values), "bytes_tx")
+
+        assert metric["status"] == "constant" and metric["all_zero"] is True
+
+    def test_an_extrapolation_is_said(self):
+        values = study()
+        values["latency"] = 200 + 80 * (values["latency"] - values["latency"].mean()) / 30
+
+        result = analysed(values)
+
+        codes = {w["code"]: w for w in result["warnings"]}
+        assert "extrapolated" in codes
+        assert codes["extrapolated"]["metric"] == "latency"
+
+    def test_normal_data_does_not_read_as_a_disagreement(self):
+        rows = []
+        for seed in range(40):
+            rng = np.random.default_rng(seed)
+            values = {"latency": rng.normal(200, 24, (1, 60))}
+            result = analysed(values, n=60, objectives=OBJECTIVES[:1])
+            rows.append("divergent_estimates" in {w["code"] for w in result["warnings"]})
+
+        assert sum(rows) <= 2
+
+    @pytest.mark.parametrize("value, empirical, expected", [
+        (40, 20, True),
+        (40, 36, False),
+        (3, 2, False),
+        (100, 20, False),
+    ], ids=["far apart", "close", "a seed apart", "past the sample"])
+    def test_when_the_two_estimates_disagree(self, value, empirical, expected):
+        rows = [{"n_star": {"value": value, "empirical": empirical}}]
+
+        assert _estimates_diverge(rows, 60) is expected
+
+    def test_a_mean_near_zero_needs_an_absolute_target(self):
+        values = {"delta": np.random.default_rng(2).normal(0, 1, (1, 30))}
+        objectives = [{"metric_name": "delta", "goal": "min"}]
+
+        relative = analysed(values, objectives=objectives)
+        given = analysed(values, objectives=objectives, absolute={"delta": 0.5})
+
+        row = named(relative, "delta")["by_chromosome"][0]["n_star"]
+        assert row["status"] == "near_zero_mean" and row["value"] is None
+        assert "near_zero_mean" in {w["code"] for w in relative["warnings"]}
+        assert named(given, "delta")["by_chromosome"][0]["n_star"]["value"] > 1
+
+    def test_a_maximum_has_no_precision_target(self):
+        objectives = [{"metric_name": "latency", "goal": "min", "aggregator": "max"}]
+
+        result = analysed({"latency": study()["latency"]}, objectives=objectives)
+
+        report = result["recommendation"]["report"]["by_objective"]["latency"]
+        assert report["value"] is None and report["method"] == "none"
+        assert "aggregator_no_precision" in {w["code"] for w in result["warnings"]}
+
+    def test_a_median_is_answered_by_resampling(self):
+        objectives = [{"metric_name": "throughput", "goal": "max", "aggregator": "median"}]
+
+        result = analysed({"throughput": study()["throughput"]}, objectives=objectives)
+
+        report = result["recommendation"]["report"]["by_objective"]["throughput"]
+        assert report["method"] == "empirical" and report["value"] >= 2
+
+    def test_several_objectives_ask_for_more_together(self):
+        result = analysed(study())
+
+        report = result["recommendation"]["report"]
+        assert report["joint"]["confidence"] == pytest.approx(0.975)
+        assert report["joint"]["value"] > max(
+            row["value"] for row in report["by_objective"].values())
+
+    def test_a_study_still_running_can_be_read(self):
+        values = study()
+        for matrix in values.values():
+            matrix[:, 5:] = np.nan
+
+        result = analysed(values)
+
+        row = named(result, "latency")["by_chromosome"][0]
+        assert row["n"] == 5 and row["ci_mean_t"] is None
+        assert row["n_star"]["status"] == "indicative"
+        assert named(result, "latency")["observed"] == 5
+
+    def test_the_same_data_gives_the_same_numbers(self):
+        first = analysed(study(K=5), K=5)
+        second = analysed(study(K=5), K=5)
+
+        assert first == second
+
+    def test_a_small_panel_and_few_seeds_are_warned_about(self):
+        codes = {w["code"] for w in analysed(study(K=4, n=12), K=4, n=12)["warnings"]}
+
+        assert {"small_panel", "few_seeds"} <= codes
+
+    def test_a_panel_with_holes_says_what_it_left_out(self):
+        values = study(K=12)
+        for matrix in values.values():
+            matrix[2, 7] = np.nan
+
+        result = analysed(values, K=12)
+
+        assert "panel_unbalanced" in {w["code"] for w in result["warnings"]}
+
+    def test_it_can_be_serialised(self):
+        import json
+
+        json.dumps(analysed(study(K=3), K=3), allow_nan=False)
+
+
+class TestMetricDetail:
+    def _detail(self, values, spec="mean"):
+        seeds = list(range(100, 100 + len(values)))
+        return metric_detail(values, seeds=seeds, simulation_ids=[f"s{s}" for s in seeds],
+                             genome_hash="c0", metric="latency", spec=spec)
+
+    def test_every_chart_has_its_data(self):
+        values = list(np.random.default_rng(1).normal(200, 30, 30))
+
+        out = self._detail(values)
+
+        assert len(out["values"]) == 30 and len(out["qq"]) == 30
+        assert sum(b["count"] for b in out["histogram"]) == 30
+        assert len(out["running"]) == 29
+        assert out["precision"]["curve"][0]["k"] == 2
+        assert out["box"]["q1"] < out["box"]["q3"]
+
+    def test_intervals_appear_as_the_sample_allows(self):
+        values = list(np.random.default_rng(1).normal(200, 30, 30))
+
+        intervals = self._detail(values)["intervals"]
+
+        assert intervals["mean_t"] and intervals["mean_bca"] and intervals["sd_bca"]
+        assert intervals["p90_upper"] is not None
+        assert intervals["p95_upper"] is None, "59 seeds are needed for it"
+
+    def test_n_star_carries_the_range_from_the_interval_of_sd(self):
+        values = list(np.random.default_rng(1).normal(200, 30, 30))
+
+        n_star_row = self._detail(values)["n_star"]
+
+        assert n_star_row["range"][0] <= n_star_row["value"] <= n_star_row["range"][1]
+
+    def test_seeds_with_no_result_keep_their_place_in_the_order(self):
+        values = [1.0, None, 3.0, 4.0, 2.0]
+
+        out = self._detail(values)
+
+        assert [v["order"] for v in out["values"]] == [0, 2, 3, 4]
+        assert [v["seed"] for v in out["values"]] == [100, 102, 103, 104]
+        assert out["summary"]["n"] == 4
+
+    def test_a_value_links_back_to_its_simulation(self):
+        assert self._detail([1.0, 2.0, 3.0])["values"][1]["simulation_id"] == "s101"
+
+    def test_nothing_measured(self):
+        out = self._detail([None, None, None])
+
+        assert out["values"] == [] and out["summary"]["mean"] is None
+
+
+class TestCompareControl:
+    def test_identical_repeats(self):
+        out = compare_control({"c": {"m": 1.5}}, {"c": [{"m": 1.5}, {"m": 1.5}]}, ["m"])
+
+        assert out["checked"] and out["identical"]
+        assert out["replicates"] == 2 and out["compared"] == 1
+
+    def test_a_divergence_names_where(self):
+        out = compare_control({"c": {"m": 1.5}}, {"c": [{"m": 1.5}, {"m": 1.6}]}, ["m"])
+
+        assert out["identical"] is False
+        assert out["divergent"] == [
+            {"genome_hash": "c", "metric": "m", "values": [1.5, 1.5, 1.6]}]
+
+    def test_the_repeats_are_compared_when_the_main_run_failed(self):
+        out = compare_control({}, {"c": [{"m": 1.5}, {"m": 1.5}]}, ["m"])
+
+        assert out["checked"] and out["identical"]
+
+    def test_no_control_yet(self):
+        out = compare_control({"c": {"m": 1.5}}, {}, ["m"])
+
+        assert out["checked"] is False and out["identical"] is False
+
+
+class TestFailures:
+    @pytest.mark.parametrize("message, kind", [
+        ("Could not reach vm8/vm8-cooja1: host", "infrastructure"),
+        ("Recovered: the master-node restarted", "infrastructure"),
+        ("could not fetch /opt/contiki-ng/tools/cooja/COOJA.testlog", "infrastructure"),
+        ("the run process disappeared without recording an exit code", "infrastructure"),
+        ("Cooja exited with code 1", "execution"),
+        ("", "execution"),
+        (None, "execution"),
+    ])
+    def test_where_a_failure_comes_from(self, message, kind):
+        assert failure_kind(message) == kind
+
+    def test_a_rate_over_every_attempt(self):
+        attempts = [{"status": "Done"}] * 28 + [
+            {"status": "Error", "system_message": "Could not reach vm"},
+            {"status": "Error", "system_message": "boom"},
+            {"status": "Running"},
+        ]
+
+        out = failure_summary(attempts, 0.95)
+
+        assert out["attempts"] == 30 and out["failed"] == 2
+        assert out["by_kind"] == {"infrastructure": 1, "execution": 1}
+        assert out["rate_ci"][0] < 2 / 30 < out["rate_ci"][1]
