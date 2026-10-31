@@ -14,7 +14,14 @@
  * silently renders nothing.
  */
 import * as echarts from "echarts/core";
-import { GraphChart, LineChart, ParallelChart, ScatterChart } from "echarts/charts";
+import {
+  BarChart,
+  BoxplotChart,
+  GraphChart,
+  LineChart,
+  ParallelChart,
+  ScatterChart,
+} from "echarts/charts";
 import {
   DataZoomComponent,
   GridComponent,
@@ -46,6 +53,9 @@ echarts.use([
   MarkAreaComponent,
   MarkLineComponent,
   MarkPointComponent,
+  // The distributions of a seed study.
+  BarChart,
+  BoxplotChart,
   CanvasRenderer,
   SVGRenderer,
 ]);
