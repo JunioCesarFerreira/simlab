@@ -136,8 +136,8 @@
           </small>
           <small v-if="seedCheck.lowCollisions || seedCheck.closePairs" class="hint hint--warn">
             {{ seedCheck.lowCollisions }} pair(s) with the same low 16 bits and
-            {{ seedCheck.closePairs }} close pair(s): the firmware only sees those bits, so these
-            seeds are not fully independent.
+            {{ seedCheck.closePairs }} close pair(s). The firmware only sees those bits, and
+            generated lists avoid this. No effect was measured on P1, so read it as a caution.
           </small>
         </template>
       </fieldset>

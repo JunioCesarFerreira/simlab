@@ -484,7 +484,8 @@ def _top_warnings(determinism: dict, completeness: dict, diagnostics: dict,
         warnings.append({"code": "seed_structure", "metric": None, "message": (
             f"The list has {diagnostics['low16_collisions']} pair(s) with the same low 16 "
             f"bits and {diagnostics['consecutive_pairs']} close pair(s). The firmware only "
-            "sees those bits, so these seeds are not fully independent.")})
+            "sees those bits. No effect of this was measured on P1, with 20 pairs on one "
+            "solution, so read it as a caution.")})
     if len(provenance["images"]) > 1:
         warnings.append({"code": "mixed_images", "metric": None, "message": (
             f"This study ran on {len(provenance['images'])} worker images. What a seed "

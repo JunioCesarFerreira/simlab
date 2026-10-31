@@ -60,10 +60,19 @@ Read before interpreting a low variation. In
 | Radio, UDGM with success ratio 1.0 | **None**: no random loss |
 
 So the distribution measured is internal variability, not channel variability.
-A low CV means the result is stable *in this radio model*. Generated lists keep
-their low 16 bits at least 64 apart, and an imported list that does not is
-accepted with a warning. Changing the image can change what a seed means, so a
-study only holds for the image it ran on.
+A low CV means the result is stable *in this radio model*. Changing the image
+can change what a seed means, so a study only holds for the image it ran on.
+
+The 16 bits do not make seeds that share them equivalent. Cooja saves only the
+`data`, `bss` and `common` sections of the mote library per mote, so the state
+of the libc `rand()` is outside them and shared between motes, and the boot order
+comes from the whole seed. Measured on P1 with one solution and 20 triples
+`s, s+1, s+65536`, under the Spearman correlation between the pairs, 21 of 22
+tests gave no sign of resemblance; `total_sent` had ρ ≈ 0.45 for both pairs, which
+does not survive a correction for 22 tests. That sample detects a strong
+resemblance, not a weak one. So generated lists still keep their low 16 bits at
+least 64 apart, which costs nothing, and an imported list that does not is
+accepted with a caution.
 
 ## Reading the result
 
@@ -204,3 +213,6 @@ is then conditional on the seeds that finished.
 - **End to end without Cooja.** A synthetic study with `noise_std = 0.02`, 20
   solutions and 30 seeds returned S ≈ 0.02, σ_e ≈ 0.02 and σ_b ≈ 0 through the
   API, the engine and the master-node.
+- **Determinism beyond P1.** Studies on P2 and P3 reproduced every metric on the
+  repeated seed. P4 has no saved instance yet, and the control of its first study
+  will answer for it.

@@ -178,6 +178,11 @@ export const METRIC_STATUS: Record<string, { label: string; tone: Tone; hint: st
   no_data: { label: "no data", tone: "muted", hint: "Nothing measured yet." },
 };
 
+/** Most study-level warnings undermine the result. This one is only a caution. */
+export function warningTone(code: string): Tone {
+  return code === "seed_structure" ? "warn" : "bad";
+}
+
 export function statusInfo(status: string): { label: string; tone: Tone; hint: string } {
   return METRIC_STATUS[status] ?? { label: status, tone: "muted", hint: "" };
 }

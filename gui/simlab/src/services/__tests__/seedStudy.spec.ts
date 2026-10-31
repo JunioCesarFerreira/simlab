@@ -19,6 +19,7 @@ import {
   scopeSentence,
   statusInfo,
   studyCost,
+  warningTone,
 } from "../seedStudy";
 import {
   bySolutionOption,
@@ -150,6 +151,13 @@ describe("normalityLabel", () => {
     expect(normalityLabel(0)).toBe("not rejected");
     expect(normalityLabel(0.2)).toBe("doubtful");
     expect(normalityLabel(0.7)).toBe("rejected");
+  });
+});
+
+describe("warningTone", () => {
+  it("reads a control that diverged as a problem and seed structure as a caution", () => {
+    expect(warningTone("non_deterministic")).toBe("bad");
+    expect(warningTone("seed_structure")).toBe("warn");
   });
 });
 

@@ -25,7 +25,11 @@
     </header>
 
     <ul v-if="detail.top_warnings.length" class="alerts">
-      <li v-for="w in detail.top_warnings" :key="w.code" class="alert alert--bad">
+      <li
+        v-for="w in detail.top_warnings"
+        :key="w.code"
+        :class="['alert', `alert--${warningTone(w.code)}`]"
+      >
         {{ w.message }}
       </li>
     </ul>
@@ -259,6 +263,7 @@ import {
   normalityLabel,
   scopeSentence,
   statusInfo,
+  warningTone,
 } from "../../services/seedStudy";
 import type { StudyDetail, StudyMetric, StudyTargets } from "../../types/seedStudy";
 import SeedStudyMetric from "./SeedStudyMetric.vue";
