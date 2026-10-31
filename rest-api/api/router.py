@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from api.endpoints import experiment, simulation, generation, source, files, campaign, problems, synthetic, infra, scalability
+from api.endpoints import experiment, simulation, generation, source, files, campaign, problems, synthetic, infra, scalability, seed_study
 from api.auth import get_api_key
 
 api_router = APIRouter(dependencies=[Depends(get_api_key)])
@@ -14,3 +14,5 @@ api_router.include_router(synthetic.router, prefix="/synthetic", tags=["syntheti
 api_router.include_router(infra.router, prefix="/infra", tags=["infrastructure"])
 api_router.include_router(
     scalability.router, prefix="/scalability", tags=["scalability"])
+api_router.include_router(
+    seed_study.router, prefix="/seed-studies", tags=["seed-studies"])
