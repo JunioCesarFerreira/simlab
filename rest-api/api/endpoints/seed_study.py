@@ -273,6 +273,7 @@ def _summary(doc: dict, finished: Optional[int] = None) -> dict:
         "problem": (params.get("problem") or {}).get("name"),
         "duration": simulation.get("duration"),
         "panel_source": recorded.get("source") or panel.get("source"),
+        "synthetic": bool((simulation.get("synthetic") or {}).get("enabled")),
         "objectives": params.get("objectives") or [],
         "targets": study.get("targets") or seed_study.DEFAULT_TARGETS,
         **plan,

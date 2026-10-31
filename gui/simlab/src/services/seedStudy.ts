@@ -209,7 +209,7 @@ export function headline(detail: StudyDetail): string {
   const analysis = detail.analysis;
   if (!analysis) return "No result yet.";
   const seeds = analysis.recommendation.optimise.max;
-  if (seeds !== null) return `Use ${seeds} seeds to optimise.`;
+  if (seeds !== null) return `Use ${seeds} seed${seeds === 1 ? "" : "s"} to optimise.`;
   if (analysis.shape.chromosomes < 2) {
     return "One solution measures its own noise. Ranking solutions needs a panel.";
   }

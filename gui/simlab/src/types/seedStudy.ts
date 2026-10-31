@@ -58,6 +58,7 @@ export interface StudySummary extends StudyPlan {
   problem: string | null;
   duration: number | null;
   panel_source: string | null;
+  synthetic: boolean;
   objectives: ObjectiveItem[];
   targets: StudyTargets;
   finished?: number;

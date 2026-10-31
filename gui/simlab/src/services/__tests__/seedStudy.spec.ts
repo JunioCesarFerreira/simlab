@@ -145,11 +145,14 @@ describe("statuses", () => {
   });
 
   it("uses the recommendation of an objective", () => {
-    const metric = { status: "ok", summary: { statuses: ["indicative"] } } as unknown as StudyMetric;
+    const metric = {
+      status: "ok",
+      summary: { statuses: ["indicative"] },
+    } as unknown as StudyMetric;
 
-    expect(
-      metricStatus(metric, { status: "ok", value: 8, p90: 9, max: 9, method: "t" }),
-    ).toBe("ok");
+    expect(metricStatus(metric, { status: "ok", value: 8, p90: 9, max: 9, method: "t" })).toBe(
+      "ok",
+    );
   });
 });
 
@@ -162,6 +165,17 @@ describe("the sentences of the recommendation", () => {
 
   it("gives the number of seeds to optimise", () => {
     expect(headline(detail())).toBe("Use 8 seeds to optimise.");
+  });
+
+  it("says one seed in the singular", () => {
+    const flat = detail({
+      analysis: {
+        shape: { chromosomes: 20, seeds: 30 },
+        recommendation: { optimise: { max: 1, by_objective: {} } },
+      },
+    } as unknown as Partial<StudyDetail>);
+
+    expect(headline(flat)).toBe("Use 1 seed to optimise.");
   });
 
   it("does not answer ranking from one solution", () => {

@@ -35,6 +35,7 @@ const routes: RouteRecordRaw[] = [
   { path: "/infrastructure", component: () => import("../../pages/Infrastructure.vue") },
   { path: "/topology", component: () => import("../../pages/Topology.vue") },
   { path: "/scalability", component: () => import("../../pages/Scalability.vue") },
+  { path: "/seed-study", component: () => import("../../pages/SeedStudy.vue") },
   // Catch-all: unknown URLs render a 404 page instead of a blank shell
   { path: "/:pathMatch(.*)*", component: () => import("../../pages/NotFound.vue") },
 ];

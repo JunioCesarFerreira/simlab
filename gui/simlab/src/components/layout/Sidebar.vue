@@ -45,6 +45,10 @@
         <span class="nav-icon">⟋</span>
         Scalability
       </RouterLink>
+      <RouterLink to="/seed-study" class="nav-link">
+        <span class="nav-icon">⁂</span>
+        Seed Study
+      </RouterLink>
     </div>
 
     <div class="sidebar-footer">

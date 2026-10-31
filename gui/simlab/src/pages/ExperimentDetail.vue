@@ -259,6 +259,16 @@
             <RouterLink :to="`/scalability?id=${props.id}`">Scalability page</RouterLink>.
           </div>
         </div>
+        <!-- Likewise for a seed study: it compares seeds, not solutions, and
+             what it measures is on its own page. -->
+        <div v-else-if="isSeedStudy" class="charts-panel">
+          <div class="card benchmark-pointer">
+            This experiment is a <strong>seed study</strong>: it runs the same solutions under a
+            list of seeds to measure how many seeds they need. Its distributions and
+            recommendation are on the
+            <RouterLink :to="`/seed-study?id=${props.id}`">Seed Study page</RouterLink>.
+          </div>
+        </div>
         <!-- Charts panel -->
         <div v-else class="charts-panel">
           <ResizableChartCard v-model="paretoH" label="Pareto front chart">
@@ -531,6 +541,7 @@ const isSynthetic = computed(
   () => store.experiment?.parameters?.simulation?.synthetic?.enabled ?? false,
 );
 const isBenchmark = computed(() => store.experiment?.parameters?.strategy === "usl_benchmark");
+const isSeedStudy = computed(() => store.experiment?.parameters?.strategy === "seed_study");
 const syntheticBench = computed(
   () => store.experiment?.parameters?.simulation?.synthetic?.bench ?? "Synthetic",
 );

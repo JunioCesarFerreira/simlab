@@ -196,13 +196,16 @@ export function orderOption(detail: MetricDetail, c: Palette): EChartsOption {
           itemStyle: { color: v.flag ? c.gd : c.hv },
         })),
         symbolSize: 8,
-        markLine: detail.summary.mean === null ? undefined : {
-          silent: true,
-          symbol: "none",
-          lineStyle: { type: "dashed", color: c.muted },
-          label: { color: c.muted, fontSize: 11, formatter: "mean" },
-          data: [{ yAxis: detail.summary.mean }],
-        },
+        markLine:
+          detail.summary.mean === null
+            ? undefined
+            : {
+                silent: true,
+                symbol: "none",
+                lineStyle: { type: "dashed", color: c.muted },
+                label: { color: c.muted, fontSize: 11, formatter: "mean" },
+                data: [{ yAxis: detail.summary.mean }],
+              },
       },
     ],
   };
@@ -214,8 +217,11 @@ export function runningOption(detail: MetricDetail, c: Palette): EChartsOption {
     type: "line" as const,
     data: detail.running.map((point) => [point.n, point[key]]),
     showSymbol: false,
-    lineStyle: { width: dashed ? 1 : 2, type: dashed ? ("dashed" as const) : ("solid" as const),
-                 color: dashed ? c.muted : c.hv },
+    lineStyle: {
+      width: dashed ? 1 : 2,
+      type: dashed ? ("dashed" as const) : ("solid" as const),
+      color: dashed ? c.muted : c.hv,
+    },
     itemStyle: { color: dashed ? c.muted : c.hv },
   });
   return {
@@ -280,11 +286,7 @@ export function precisionOption(
   };
 }
 
-export function reliabilityOption(
-  panel: PanelAnalysis,
-  target: number,
-  c: Palette,
-): EChartsOption {
+export function reliabilityOption(panel: PanelAnalysis, target: number, c: Palette): EChartsOption {
   return {
     ...base(c),
     legend: {
@@ -347,7 +349,7 @@ export function bySolutionOption(metric: StudyMetric, c: Palette): EChartsOption
     series: [
       {
         type: "boxplot",
-        data: rows.map(({ row }) => [row.p5, row.q1, row.median, row.q3, row.p95]),
+        data: rows.map(({ row }) => [row.p5!, row.q1!, row.median!, row.q3!, row.p95!]),
         itemStyle: { color: c.hvArea, borderColor: c.hv },
       },
     ],
