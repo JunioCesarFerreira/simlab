@@ -140,6 +140,18 @@ class TestDescribe:
         assert out["cv"] == pytest.approx(math.sqrt(2.5) / 3)
         assert out["iqr"] == 2
 
+    def test_its_shape_is_the_one_scipy_computes(self):
+        values = np.random.default_rng(1).lognormal(0, 0.6, 30)
+
+        out = describe(values)
+
+        assert out["skewness"] == pytest.approx(stats.skew(values, bias=False))
+        assert out["excess_kurtosis"] == pytest.approx(stats.kurtosis(values, bias=False))
+
+    def test_too_few_values_for_a_shape(self):
+        assert describe(np.array([1.0, 2.0]))["skewness"] is None
+        assert describe(np.array([1.0, 2.0, 4.0]))["excess_kurtosis"] is None
+
     def test_a_single_value_has_no_dispersion_to_report(self):
         out = describe(np.array([7.0]))
 

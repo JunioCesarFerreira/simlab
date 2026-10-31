@@ -157,10 +157,27 @@ def _number(value: Any) -> Optional[float]:
     return number if math.isfinite(number) else None
 
 
+def _shape(values: np.ndarray) -> tuple[Optional[float], Optional[float]]:
+    """Bias-corrected skewness and excess kurtosis (G₁ and G₂).
+
+    Written out because a study takes these once per metric and chromosome, and
+    through ``scipy.stats`` they were half the time of the whole analysis.
+    """
+    n = values.size
+    centred = values - values.mean()
+    m2 = float((centred ** 2).mean())
+    if n < 3 or m2 == 0:
+        return None, None
+    skewness = float((centred ** 3).mean()) / m2 ** 1.5 * math.sqrt(n * (n - 1)) / (n - 2)
+    if n < 4:
+        return _number(skewness), None
+    kurtosis = float((centred ** 4).mean()) / m2 ** 2 - 3
+    return _number(skewness), _number(
+        (n - 1) / ((n - 2) * (n - 3)) * ((n + 1) * kurtosis + 6))
+
+
 def describe(values: np.ndarray) -> dict[str, Optional[float]]:
     """Descriptive statistics. Quantiles are type 7, as in ``pylib.statistics``."""
-    from scipy import stats
-
     n = int(values.size)
     out: dict[str, Optional[float]] = {
         key: None for key in ("min", "max", "mean", "sd", "cv", "median", "q1", "q3", "iqr",
@@ -177,10 +194,7 @@ def describe(values: np.ndarray) -> dict[str, Optional[float]]:
         sd = float(values.std(ddof=1))
         out["sd"] = sd
         out["cv"] = _number(sd / abs(mean)) if mean else None
-        if sd > 0 and n >= 3:
-            out["skewness"] = _number(stats.skew(values, bias=False))
-        if sd > 0 and n >= 4:
-            out["excess_kurtosis"] = _number(stats.kurtosis(values, bias=False))
+        out["skewness"], out["excess_kurtosis"] = _shape(values)
     return out
 
 
