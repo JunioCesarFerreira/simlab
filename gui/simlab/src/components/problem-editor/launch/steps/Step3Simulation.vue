@@ -81,6 +81,7 @@
 </template>
 
 <script setup lang="ts">
+import { parseSeedFile, serializeSeedFile } from '../../../../lib/seedFile'
 import { ref, computed, onBeforeUnmount } from 'vue'
 
 export interface Step3Value {
@@ -153,7 +154,7 @@ function flash(msg: string, ok: boolean) {
 }
 
 function exportSeeds() {
-  const content = JSON.stringify({ seeds: props.modelValue.randomSeeds }, null, 2)
+  const content = serializeSeedFile(props.modelValue.randomSeeds)
   const blob = new Blob([content], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -175,25 +176,14 @@ function handleImport(event: Event) {
 
   const reader = new FileReader()
   reader.onload = (e) => {
-    try {
-      const raw = JSON.parse(e.target?.result as string)
-      // Accept either { seeds: [...] } or a bare array
-      const arr: unknown = Array.isArray(raw) ? raw : raw?.seeds
-      if (!Array.isArray(arr) || arr.length === 0) {
-        flash('Invalid file — expected { "seeds": [...] }', false)
-        return
-      }
-      const seeds = arr.map((v) => parseInt(String(v), 10))
-      if (seeds.some((v) => !Number.isInteger(v) || isNaN(v))) {
-        flash('Invalid file — seeds must be integers', false)
-        return
-      }
-      const unique = [...new Set(seeds)]
-      emit('update:modelValue', { ...props.modelValue, randomSeeds: unique })
-      flash(`✓ Imported ${unique.length} seed${unique.length !== 1 ? 's' : ''}`, true)
-    } catch {
-      flash('Invalid JSON file', false)
+    const parsed = parseSeedFile(e.target?.result as string)
+    if (!parsed.ok) {
+      flash(parsed.error, false)
+      return
     }
+    const unique = [...new Set(parsed.seeds)]
+    emit('update:modelValue', { ...props.modelValue, randomSeeds: unique })
+    flash(`✓ Imported ${unique.length} seed${unique.length !== 1 ? 's' : ''}`, true)
   }
   reader.readAsText(file)
 }
