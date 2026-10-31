@@ -47,21 +47,23 @@
         <div class="answer__columns">
           <div class="answer__column">
             <h4>To rank solutions (optimisation)</h4>
-            <p class="answer__hint">Reliability of {{ targets.reliability }}.</p>
-            <ul class="numbers">
-              <li v-for="(row, name) in recommendation.optimise.by_objective" :key="name">
-                <span class="numbers__name">{{ name }}</span>
-                <strong>{{ row.value ?? "—" }}</strong>
-                <small v-if="row.ci"> {{ row.ci[0] ?? "—" }} to {{ row.ci[1] ?? "∞" }} </small>
-              </li>
-            </ul>
+            <template v-if="detail.chromosomes > 1">
+              <p class="answer__hint">Reliability of {{ targets.reliability }}.</p>
+              <ul class="numbers">
+                <li v-for="(row, name) in recommendation.optimise.by_objective" :key="name">
+                  <span class="numbers__name">{{ name }}</span>
+                  <strong>{{ row.value ?? "—" }}</strong>
+                  <small v-if="row.ci"> {{ row.ci[0] ?? "—" }} to {{ row.ci[1] ?? "∞" }} </small>
+                </li>
+              </ul>
+            </template>
+            <p v-else class="answer__hint">
+              Needs a panel: how many seeds rank solutions depends on how much they differ.
+            </p>
           </div>
           <div class="answer__column">
             <h4>To report one solution's value</h4>
-            <p class="answer__hint">
-              ±{{ percent(targets.relative_error) }}, {{ percent(targets.confidence) }}
-              confidence. Median across the panel.
-            </p>
+            <p class="answer__hint">{{ reportHint }}</p>
             <ul class="numbers">
               <li v-for="(row, name) in recommendation.report.by_objective" :key="name">
                 <span class="numbers__name">{{ name }}</span>
@@ -362,6 +364,11 @@ const failureHint = computed(() => {
       ? `. Rate within ${formatPercent(interval[0])} to ${formatPercent(interval[1])}.`
       : "")
   );
+});
+
+const reportHint = computed(() => {
+  const target = `±${percent(targets.value.relative_error)}, ${percent(targets.value.confidence)} confidence`;
+  return props.detail.chromosomes > 1 ? `${target}. Median across the panel.` : `${target}.`;
 });
 
 function percent(value: number): string {

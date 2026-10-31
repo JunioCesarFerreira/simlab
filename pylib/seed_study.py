@@ -929,6 +929,8 @@ def analyse_study(values: Mapping[str, np.ndarray], *, seeds: Sequence[int],
     by_name = {m["name"]: m for m in metrics}
     by_name.update({alias: by_name[main] for alias, main in alias_of.items() if main in by_name})
 
+    # What ran so far, not what was planned: a running study is read too.
+    observed_seeds = max((row["n"] for m in metrics for row in m["by_chromosome"]), default=0)
     report: dict[str, Any] = {}
     optimise: dict[str, Any] = {}
     for objective in objective_names:
@@ -944,7 +946,7 @@ def analyse_study(values: Mapping[str, np.ndarray], *, seeds: Sequence[int],
             "p90": math.ceil(spread["p90"]) if spread else None,
             "max": math.ceil(spread["max"]) if spread else None,
             "method": method,
-            "status": _report_status(metric, spread, n),
+            "status": _report_status(metric, spread, observed_seeds),
         }
         panel = metric["panel"]
         optimise[objective] = {
@@ -952,7 +954,7 @@ def analyse_study(values: Mapping[str, np.ndarray], *, seeds: Sequence[int],
             "ci": panel["m_star"]["ci"] if panel else None,
             "method": panel["m_star"]["method"] if panel else None,
         }
-        _warn_objective(warnings, objective, metric, report[objective], n, K)
+        _warn_objective(warnings, objective, metric, report[objective], observed_seeds, K)
 
     joint = _joint_precision(values, objective_names, spec_of, seeds, confidence, gamma, absolute)
     needed = [row["value"] for row in optimise.values() if row["value"] is not None]
@@ -1057,7 +1059,7 @@ def _warn_objective(warnings: list[dict[str, Any]], name: str, metric: Mapping[s
         warnings.append(_warning(
             "extrapolated",
             f"Estimating {name} takes about {report['value']} seeds, more than the {n} "
-            "that ran: the number is an extrapolation.", name))
+            "that have run: the number is an extrapolation.", name))
 
     if report["method"] == "t" and _estimates_diverge(metric["by_chromosome"], n):
         warnings.append(_warning(

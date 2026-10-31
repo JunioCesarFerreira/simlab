@@ -789,6 +789,16 @@ class TestAnalyseStudy:
         assert row["n_star"]["status"] == "indicative"
         assert named(result, "latency")["observed"] == 5
 
+    def test_a_running_study_measures_against_what_has_run(self):
+        """Not against the plan: 40 seeds are an extrapolation of 12 that ran."""
+        values = {"latency": np.random.default_rng(9).normal(200, 40, (1, 60))}
+        values["latency"][:, 12:] = np.nan
+
+        result = analysed(values, n=60, objectives=OBJECTIVES[:1])
+
+        warning = next(w for w in result["warnings"] if w["code"] == "extrapolated")
+        assert "the 12 that have run" in warning["message"]
+
     def test_the_same_data_gives_the_same_numbers(self):
         first = analysed(study(K=5), K=5)
         second = analysed(study(K=5), K=5)
