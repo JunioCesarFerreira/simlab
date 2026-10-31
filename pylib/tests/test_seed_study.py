@@ -12,27 +12,36 @@ from pylib.seed_study import (
     MAX_SEEDS,
     SEED_LIMIT,
     aggregate_rows,
+    analyse_panel,
+    balanced_matrix,
     bca_interval,
     boxplot,
     ci_mean_t,
     clopper_pearson,
     describe,
     diagnose_seeds,
+    first_reliable,
+    front_stability,
     generate_seeds,
     histogram,
     holm,
+    m_star,
     median_interval,
     n_star,
     outlier_flags,
+    pigeonhole_interval,
     precision_curve,
     qq_points,
     quantile_upper_limit,
+    rank_stability,
     relative_half_width,
+    reliability_at,
     running_interval,
     shapiro_p,
     stein_n,
     study_rng,
     validate_seeds,
+    variance_components,
 )
 
 
@@ -345,3 +354,201 @@ class TestCoverage:
             hits += low <= truth <= high
 
         assert hits / 300 == pytest.approx(0.95, abs=0.06)
+
+
+def crossed(rng, K, n, individual=1.0, seed=0.0, residual=1.0):
+    """Data from the model of the study, with known components."""
+    return (10.0
+            + rng.normal(0, math.sqrt(individual), (K, 1))
+            + rng.normal(0, math.sqrt(seed), (1, n))
+            + rng.normal(0, math.sqrt(residual), (K, n)))
+
+
+class TestBalancedMatrix:
+    def test_a_complete_matrix_is_left_alone(self):
+        values = np.arange(12.0).reshape(3, 4)
+
+        block, rows, columns = balanced_matrix(values)
+
+        assert block.shape == (3, 4) and rows == [0, 1, 2] and columns == [0, 1, 2, 3]
+
+    def test_a_single_hole_costs_one_seed(self):
+        values = np.arange(12.0).reshape(3, 4)
+        values[1, 2] = np.nan
+
+        block, rows, columns = balanced_matrix(values)
+
+        assert block.shape == (3, 3) and columns == [0, 1, 3]
+
+    def test_a_chromosome_that_failed_everywhere_costs_only_itself(self):
+        values = np.arange(20.0).reshape(4, 5)
+        values[2, :4] = np.nan
+
+        block, rows, columns = balanced_matrix(values)
+
+        assert rows == [0, 1, 3] and columns == [0, 1, 2, 3, 4]
+
+
+class TestVarianceComponents:
+    def test_a_table_worked_by_hand(self):
+        """Grand mean 5, chromosome means 3 and 7, seed means 4 and 6.
+
+        SS chromosome = 2·(4 + 4) = 16 and SS seed = 2·(1 + 1) = 4, out of a
+        total of 20: an additive table leaves no residual.
+        """
+        values = np.array([[2.0, 4.0], [6.0, 8.0]])
+
+        out = variance_components(values)
+
+        assert out["residual"] == pytest.approx(0.0)
+        assert out["individual"] == pytest.approx(16 / 2)
+        assert out["seed"] == pytest.approx(4 / 2)
+        assert out["shares"]["individual"] == pytest.approx(0.8)
+
+    def test_the_model_recovers_what_was_simulated(self):
+        rng = np.random.default_rng(21)
+        runs = [variance_components(crossed(rng, 40, 40, 4.0, 0.25, 9.0))
+                for _ in range(200)]
+
+        assert np.mean([r["individual"] for r in runs]) == pytest.approx(4.0, rel=0.1)
+        assert np.mean([r["seed"] for r in runs]) == pytest.approx(0.25, rel=0.2)
+        assert np.mean([r["residual"] for r in runs]) == pytest.approx(9.0, rel=0.02)
+
+    def test_a_negative_estimate_is_zero(self):
+        rng = np.random.default_rng(1)
+        out = variance_components(rng.normal(0, 1, (2, 200)))
+
+        assert out["individual"] >= 0 and out["seed"] >= 0
+
+
+class TestReliability:
+    def test_the_projection_by_hand(self):
+        components = {"individual": 4.0, "seed": 1.0, "residual": 2.0}
+
+        e_rho2, phi = reliability_at(components, 2)
+
+        assert e_rho2 == pytest.approx(4 / 5)
+        assert phi == pytest.approx(4 / 5.5)
+
+    def test_m_star_is_the_smallest_that_reaches_the_target(self):
+        components = {"individual": 1.0, "seed": 0.0, "residual": 1.0}
+
+        needed = m_star(components, 0.9)
+
+        assert needed == 9
+        assert reliability_at(components, 9)[0] == pytest.approx(0.9)
+        assert reliability_at(components, 8)[0] < 0.9
+
+    def test_no_signal_has_no_answer(self):
+        components = {"individual": 0.0, "seed": 0.0, "residual": 1.0}
+
+        assert m_star(components, 0.9) is None
+        assert reliability_at(components, 3) == (None, None)
+
+    def test_m_star_reproduces_the_proposal_from_its_shares(self):
+        """Eρ²(1) of 0.64 means a ratio of 0.5625, so 0.90 takes 6 seeds."""
+        components = {"individual": 0.64, "seed": 0.0, "residual": 0.36}
+
+        assert m_star(components, 0.90) == 6
+
+
+class TestPigeonhole:
+    def test_the_interval_contains_the_truth_most_of_the_time(self):
+        rng = np.random.default_rng(31)
+        truth = 9
+        hits = 0
+        for _ in range(40):
+            low, high = pigeonhole_interval(crossed(rng, 30, 30), 0.9, 0.95, rng,
+                                            resamples=200)
+            hits += low <= truth and (high is None or truth <= high)
+
+        assert hits >= 34
+
+
+class TestRankStability:
+    def test_rankings_agree_more_with_more_seeds(self):
+        rng = np.random.default_rng(41)
+        values = crossed(rng, 30, 40)
+
+        rows = rank_stability(values, "mean", rng)
+
+        assert [r["k"] for r in rows] == [1, 2, 3, 5, 8, 13, 20]
+        assert rows[-1]["spearman"] > rows[0]["spearman"] + 0.3
+
+    def test_it_agrees_with_the_model(self):
+        """Spearman between sets of k seeds estimates Eρ²(k).
+
+        Averaged over panels: one panel's spread is itself a draw, and it moves
+        both numbers together.
+        """
+        rng = np.random.default_rng(42)
+        fifth = [next(r["spearman"] for r in rank_stability(crossed(rng, 60, 40), "mean", rng)
+                      if r["k"] == 5)
+                 for _ in range(30)]
+
+        assert np.mean(fifth) == pytest.approx(5 / 6, abs=0.03)
+
+    def test_first_reliable(self):
+        rows = [{"k": 1, "spearman": 0.5}, {"k": 2, "spearman": 0.95}]
+
+        assert first_reliable(rows, 0.9) == 2
+        assert first_reliable(rows, 0.99) is None
+
+
+class TestFrontStability:
+    def test_a_noiseless_panel_has_one_front(self):
+        rng = np.random.default_rng(51)
+        first = np.array([[1.0], [2.0], [3.0]]) * np.ones((3, 6))
+        second = np.array([[3.0], [2.0], [1.0]]) * np.ones((3, 6))
+
+        rows = front_stability(np.stack([first, second]), ["mean", "mean"], [1, 1], rng,
+                               draws=5)
+
+        assert all(r["jaccard"] == 1 for r in rows)
+
+    def test_the_goal_decides_which_side_is_better(self):
+        rng = np.random.default_rng(52)
+        layer = np.array([[1.0], [2.0]]) * np.ones((2, 4))
+
+        rows = front_stability(np.stack([layer, layer]), ["mean", "mean"], [-1, 1], rng,
+                               draws=3)
+
+        assert rows[0]["jaccard"] == 1
+
+
+class TestAnalysePanel:
+    def _run(self, values, spec="mean", with_interval=False):
+        return analyse_panel(values, reliability=0.9, confidence=0.95, spec=spec,
+                             rng=np.random.default_rng(1), with_interval=with_interval)
+
+    def test_it_answers_with_the_model_for_the_mean(self):
+        out = self._run(crossed(np.random.default_rng(61), 40, 40), with_interval=True)
+
+        assert out["m_star"]["method"] == "generalizability"
+        assert out["m_star"]["value"] == pytest.approx(9, abs=4)
+        assert out["signal"] is True
+        assert out["reliability"][0]["m"] == 1
+
+    def test_another_aggregator_is_answered_by_the_ranking(self):
+        out = self._run(crossed(np.random.default_rng(62), 40, 40), spec="median")
+
+        assert out["m_star"]["method"] == "rank_stability"
+        assert out["m_star"]["ci"] is None
+
+    def test_holes_are_reported(self):
+        values = crossed(np.random.default_rng(63), 12, 12)
+        values[3, 4] = np.nan
+
+        out = self._run(values)
+
+        assert out["used"]["dropped_seeds"] == [4] or out["used"]["dropped_chromosomes"] == [3]
+
+    def test_a_panel_with_no_signal_has_no_m_star(self):
+        values = np.array([[1.0, 2.0, 3.0], [3.0, 2.0, 1.0]])
+
+        out = self._run(values)
+
+        assert out["signal"] is False and out["m_star"]["value"] is None
+
+    def test_one_chromosome_is_not_a_panel(self):
+        assert self._run(np.ones((1, 5))) is None

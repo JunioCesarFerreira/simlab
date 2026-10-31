@@ -454,3 +454,240 @@ def running_interval(values: np.ndarray, confidence: float) -> list[dict[str, fl
         points.append({"n": i, "mean": mean, "low": mean - float(half),
                        "high": mean + float(half)})
     return points
+
+
+# ── ranking solutions: a panel of chromosomes × seeds ──────────────────────
+
+
+def balanced_matrix(values: np.ndarray) -> tuple[np.ndarray, list[int], list[int]]:
+    """The largest-looking complete block of a chromosome × seed matrix.
+
+    The crossed model needs every cell. A hole is closed by removing the row
+    or column with the highest share of missing cells, one at a time, so one
+    chromosome that failed on most seeds does not cost the study those seeds.
+    Returns the block and the row and column indices kept.
+    """
+    rows = list(range(values.shape[0]))
+    columns = list(range(values.shape[1]))
+    missing = np.isnan(values)
+    while rows and columns:
+        block = missing[np.ix_(rows, columns)]
+        if not block.any():
+            break
+        by_row, by_column = block.mean(axis=1), block.mean(axis=0)
+        if by_row.max() >= by_column.max():
+            rows.pop(int(by_row.argmax()))
+        else:
+            columns.pop(int(by_column.argmax()))
+    return values[np.ix_(rows, columns)], rows, columns
+
+
+def variance_components(values: np.ndarray) -> dict[str, Any]:
+    """The crossed model ``y = μ + aᵢ + bₛ + eᵢₛ``, one observation per cell.
+
+    Negative estimates are set to zero, as usual for random effects. ``e``
+    holds the interaction too: with one run per cell they cannot be told
+    apart, and the determinism of the simulator is what makes that harmless.
+    """
+    K, n = values.shape
+    grand = values.mean()
+    by_chromosome = values.mean(axis=1) - grand
+    by_seed = values.mean(axis=0) - grand
+    total = float(((values - grand) ** 2).sum())
+    ss_chromosome = float(n * (by_chromosome ** 2).sum())
+    ss_seed = float(K * (by_seed ** 2).sum())
+    ss_residual = max(0.0, total - ss_chromosome - ss_seed)
+    ms_chromosome = ss_chromosome / (K - 1)
+    ms_seed = ss_seed / (n - 1)
+    ms_residual = ss_residual / ((K - 1) * (n - 1))
+    return {
+        "individual": max(0.0, (ms_chromosome - ms_residual) / n),
+        "seed": max(0.0, (ms_seed - ms_residual) / K),
+        "residual": ms_residual,
+        "shares": {
+            "individual": ss_chromosome / total if total else 0.0,
+            "seed": ss_seed / total if total else 0.0,
+            "residual": ss_residual / total if total else 0.0,
+        },
+    }
+
+
+def reliability_at(components: Mapping[str, Any], m: int) -> tuple[Optional[float], Optional[float]]:
+    """``Eρ²`` and ``Φ`` with ``m`` seeds (the D study of generalizability theory).
+
+    ``Eρ²`` is for ordering solutions evaluated with the same seeds, which is
+    how the strategies work. ``Φ`` is for comparing one with an absolute
+    threshold, so the main effect of the seed counts against it too.
+    """
+    individual = components["individual"]
+    if individual <= 0:
+        return None, None
+    residual = components["residual"]
+    seed = components["seed"]
+    return (individual / (individual + residual / m),
+            individual / (individual + (seed + residual) / m))
+
+
+def m_star(components: Mapping[str, Any], reliability: float) -> Optional[int]:
+    """Smallest ``m`` with ``Eρ²(m) ≥ reliability``, ``None`` with no signal.
+
+    Rounded after a small allowance so a value that is whole up to floating
+    point does not gain a seed.
+    """
+    individual = components["individual"]
+    if individual <= 0:
+        return None
+    ratio = reliability / (1 - reliability) * components["residual"] / individual
+    return max(1, math.ceil(ratio - 1e-9))
+
+
+def pigeonhole_interval(values: np.ndarray, reliability: float, confidence: float,
+                        rng: np.random.Generator,
+                        resamples: int = 1000) -> Optional[list[Optional[int]]]:
+    """Interval of ``m*`` by resampling chromosomes and seeds independently.
+
+    The crossed design has two sources of sampling, so resampling only one of
+    them understates the error; the pigeonhole bootstrap errs on the wide
+    side. ``None`` for the upper end means some resamples had no signal left.
+    """
+    K, n = values.shape
+    estimates = np.empty(resamples)
+    for b in range(resamples):
+        rows = rng.integers(0, K, K)
+        columns = rng.integers(0, n, n)
+        sample = values[np.ix_(rows, columns)]
+        found = m_star(variance_components(sample), reliability)
+        estimates[b] = math.inf if found is None else found
+    alpha = 1 - confidence
+    low, high = np.quantile(estimates, [alpha / 2, 1 - alpha / 2], method="lower")
+    return [int(low) if math.isfinite(low) else None,
+            int(high) if math.isfinite(high) else None]
+
+
+def _disjoint_sizes(n: int) -> list[int]:
+    """Set sizes for comparing two disjoint sets of seeds, Fibonacci up to n/2."""
+    sizes: list[int] = []
+    a, b = 1, 2
+    while a <= n // 2:
+        sizes.append(a)
+        a, b = b, a + b
+    if n // 2 >= 1 and (not sizes or sizes[-1] != n // 2):
+        sizes.append(n // 2)
+    return sizes
+
+
+def _disjoint_draws(n: int, k: int, draws: int, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
+    order = np.argsort(rng.random((draws, n)), axis=1)
+    return order[:, :k], order[:, k:2 * k]
+
+
+def rank_stability(values: np.ndarray, spec: "str | dict[str, Any]", rng: np.random.Generator,
+                   draws: int = 200) -> list[dict[str, float]]:
+    """Spearman correlation between the rankings of two disjoint sets of ``k`` seeds.
+
+    Rests on no variance model, so it is the check on ``Eρ²``, which is a
+    *mean* reliability for a panel whose variance is known not to be
+    homogeneous, and the only answer for an aggregator other than the mean.
+    """
+    from scipy import stats
+
+    K, n = values.shape
+    out: list[dict[str, float]] = []
+    for k in _disjoint_sizes(n):
+        first, second = _disjoint_draws(n, k, draws, rng)
+        a = stats.rankdata(aggregate_rows(values[:, first], spec), axis=0).T
+        b = stats.rankdata(aggregate_rows(values[:, second], spec), axis=0).T
+        a = a - a.mean(axis=1, keepdims=True)
+        b = b - b.mean(axis=1, keepdims=True)
+        scale = np.sqrt((a ** 2).sum(axis=1) * (b ** 2).sum(axis=1))
+        usable = scale > 0
+        if usable.any():
+            correlation = (a[usable] * b[usable]).sum(axis=1) / scale[usable]
+            out.append({"k": k, "spearman": float(correlation.mean())})
+    return out
+
+
+def first_reliable(stability: Sequence[Mapping[str, float]], reliability: float) -> Optional[int]:
+    """The smallest size whose rankings agree at least this much."""
+    return next((int(row["k"]) for row in stability if row["spearman"] >= reliability), None)
+
+
+def _front_mask(points: np.ndarray) -> np.ndarray:
+    """Non-dominated rows of ``points``, every column minimised."""
+    no_worse = (points[:, None, :] <= points[None, :, :]).all(axis=2)
+    better = (points[:, None, :] < points[None, :, :]).any(axis=2)
+    return ~(no_worse & better).any(axis=0)
+
+
+def front_stability(cube: np.ndarray, specs: Sequence["str | dict[str, Any]"],
+                    goals: Sequence[int], rng: np.random.Generator,
+                    draws: int = 100) -> list[dict[str, float]]:
+    """Jaccard similarity of the Pareto fronts of two disjoint sets of seeds.
+
+    A diagnostic, never a stopping rule: with many near-ties, membership in
+    the front keeps changing after the ranking has settled (0.57 with 21
+    seeds in the data the proposal was measured on, while Spearman was 0.96).
+
+    ``cube`` is objectives × chromosomes × seeds; ``goals`` is +1 to minimise.
+    """
+    n = cube.shape[2]
+    out: list[dict[str, float]] = []
+    for k in _disjoint_sizes(n):
+        first, second = _disjoint_draws(n, k, draws, rng)
+        scores: list[float] = []
+        for b in range(draws):
+            front_a = _front_mask(np.stack(
+                [goal * aggregate_rows(layer[:, first[b]], spec)
+                 for layer, spec, goal in zip(cube, specs, goals)], axis=1))
+            front_b = _front_mask(np.stack(
+                [goal * aggregate_rows(layer[:, second[b]], spec)
+                 for layer, spec, goal in zip(cube, specs, goals)], axis=1))
+            union = (front_a | front_b).sum()
+            scores.append(float((front_a & front_b).sum() / union) if union else 1.0)
+        out.append({"k": k, "jaccard": float(np.mean(scores))})
+    return out
+
+
+def analyse_panel(values: np.ndarray, *, reliability: float, confidence: float,
+                  spec: "str | dict[str, Any]", rng: np.random.Generator,
+                  with_interval: bool) -> Optional[dict[str, Any]]:
+    """Components, reliability curve and ``m*`` of one metric, or ``None``.
+
+    ``values`` is chromosomes × seeds, with NaN where nothing was measured.
+    The projection is a statement about the mean, so another aggregator is
+    answered by the ranking of disjoint sets instead.
+    """
+    block, rows, columns = balanced_matrix(values)
+    if block.shape[0] < 2 or block.shape[1] < 2:
+        return None
+    components = variance_components(block)
+    needed = m_star(components, reliability)
+    limit = min(100, max(block.shape[1], needed or 0))
+    curve = []
+    for m in range(1, limit + 1):
+        e_rho2, phi = reliability_at(components, m)
+        curve.append({"m": m, "e_rho2": e_rho2, "phi": phi})
+    stability = rank_stability(block, spec, rng)
+    by_rank = first_reliable(stability, reliability)
+    kind, _ = resolve_aggregator(spec)
+    if kind == "mean":
+        value, method = needed, "generalizability"
+    else:
+        value, method = by_rank, "rank_stability"
+    interval = None
+    if with_interval and kind == "mean" and needed is not None:
+        interval = pigeonhole_interval(block, reliability, confidence, rng)
+    return {
+        "used": {
+            "chromosomes": int(block.shape[0]), "seeds": int(block.shape[1]),
+            "dropped_chromosomes": sorted(set(range(values.shape[0])) - set(rows)),
+            "dropped_seeds": sorted(set(range(values.shape[1])) - set(columns)),
+        },
+        "components": {k: components[k] for k in ("individual", "seed", "residual")},
+        "shares": components["shares"],
+        "reliability": curve,
+        "m_star": {"value": value, "ci": interval, "method": method},
+        "m_rank": by_rank,
+        "rank_stability": stability,
+        "signal": components["individual"] > 0,
+    }
