@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from typing import Callable, Optional, TypedDict
+from typing import Callable, Iterable, Optional, TypedDict
 from bson import ObjectId, errors
 from pymongo import ReturnDocument
 
@@ -98,6 +98,29 @@ def _ended_after(candidate: dict, kept: dict) -> bool:
         return as_aware(new_end) > as_aware(old_end)
     except TypeError:
         return False
+
+
+def latest_per_seed(simulations: Iterable[dict]) -> list[dict]:
+    """One result per individual and seed, out of the ``Done`` documents given.
+
+    A replica that was repeated can leave two ``Done`` documents for one seed
+    — the collection of a run that was adopted and then published again, say —
+    and using both would weigh that seed twice while the completeness record,
+    which counts seeds, still said two of two. The later result wins: it is
+    the one the repetition was for.
+    """
+    latest: dict[tuple, dict] = {}
+    for sim in simulations:
+        key = (sim.get("individual_id", ""), sim.get("random_seed"))
+        if key[1] is None:
+            # No seed to deduplicate by — legacy documents. Kept, under a
+            # key of their own, so nothing is silently dropped.
+            latest[(key[0], id(sim))] = sim
+            continue
+        kept = latest.get(key)
+        if kept is None or _ended_after(sim, kept):
+            latest[key] = sim
+    return list(latest.values())
 
 
 def _reason_for(
@@ -558,27 +581,9 @@ class GenerationRepository:
                  "random_seed": 1, "end_time": 1}
             ))
 
-        # One result per seed. A replica that was repeated can leave two
-        # ``Done`` documents for one seed — the collection of a run that was
-        # adopted and then published again, say — and appending both would
-        # weigh that seed twice in the mean while the completeness record,
-        # which counts seeds, still said two of two. The later result wins:
-        # it is the one the repetition was for.
-        latest: dict[tuple[str, Any], dict] = {}
-        for sim in sims:
-            key = (sim.get("individual_id", ""), sim.get("random_seed"))
-            if key[1] is None:
-                # No seed to deduplicate by — legacy documents. Kept, under a
-                # key of their own, so nothing is silently dropped.
-                latest[(key[0], id(sim))] = sim
-                continue
-            kept = latest.get(key)
-            if kept is None or _ended_after(sim, kept):
-                latest[key] = sim
-
         # Accumulate per individual
         accumulated: dict[str, dict[str, list[float]]] = {}
-        for sim in latest.values():
+        for sim in latest_per_seed(sims):
             ind_id = sim.get("individual_id", "")
             metrics_map = sim.get("network_metrics") or {}
             if ind_id not in accumulated:

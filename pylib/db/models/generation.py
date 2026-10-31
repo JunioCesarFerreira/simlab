@@ -26,6 +26,10 @@ class Generation(TypedDict):
     # written before the field existed; consumers must fall back rather than
     # assume an empty selection.
     survivors: NotRequired[list[str]]
+    # ``{"role": "control"}`` on the generation of a seed study that repeats a
+    # seed to test determinism. Such a generation records no ``expected_seeds``:
+    # its replicas repeat a seed on purpose, and the plan counts seeds.
+    seed_study: NotRequired[dict]
     # Snapshot of the engine's random generator taken when this generation was
     # enqueued — i.e. before any draw belonging to it. Every library seed
     # (DEAP, pymoo) is derived from that one generator. Stateful backends also
