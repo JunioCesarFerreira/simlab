@@ -613,6 +613,13 @@ class TestMetricStatus:
     def test_a_wrapped_subtraction_is_not_a_measurement(self):
         assert metric_status(np.array([[1.0, 1.8e19, 3.0]])) == "overflow_suspect"
 
+    def test_a_mean_diluted_by_many_rows_is_still_not_a_measurement(self):
+        """Measured: one wrapped row in a run's mean gave r2n_latency 1e18."""
+        assert metric_status(np.array([[120.0, 1.12e18, 90.0]])) == "overflow_suspect"
+
+    def test_the_largest_real_metrics_are_far_from_it(self):
+        assert metric_status(np.array([[5.6e6, 5.7e6, 1.2e9]])) == "ok"
+
     def test_nothing_measured_yet(self):
         assert metric_status(np.full((2, 3), np.nan)) == "no_data"
 
@@ -850,6 +857,14 @@ class TestMetricDetail:
         assert intervals["mean_t"] and intervals["mean_bca"] and intervals["sd_bca"]
         assert intervals["p90_upper"] is not None
         assert intervals["p95_upper"] is None, "59 seeds are needed for it"
+
+    def test_a_handful_of_seeds_gets_no_interval(self):
+        """Below 10 the proposal shows values, mean and S. An interval on four
+        seeds would be a number with no meaning."""
+        out = self._detail([120.0, 130.0, 150.0, 170.0])
+
+        assert out["intervals"]["mean_t"] is None and out["intervals"]["mean_bca"] is None
+        assert out["summary"]["mean"] == 142.5
 
     def test_n_star_carries_the_range_from_the_interval_of_sd(self):
         values = list(np.random.default_rng(1).normal(200, 30, 30))

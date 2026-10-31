@@ -157,7 +157,7 @@ export const METRIC_STATUS: Record<string, { label: string; tone: Tone; hint: st
   overflow_suspect: {
     label: "measurement defect",
     tone: "bad",
-    hint: "Values near 2⁶³: an unsigned subtraction wrapped around. No number of seeds fixes a defective measurement.",
+    hint: "Values past 2⁵⁰: an unsigned subtraction wrapped around. No number of seeds fixes a defective measurement.",
   },
   near_zero_mean: {
     label: "near zero",

@@ -711,8 +711,10 @@ def analyse_panel(values: np.ndarray, *, reliability: float, confidence: float,
 # ── a whole study ──────────────────────────────────────────────────────────
 
 #: A metric at this size is an unsigned subtraction that wrapped around, not a
-#: measurement: ``n2r_latency`` subtracts clocks that are not synchronised.
-OVERFLOW_LIMIT = 2.0**63
+#: measurement: ``n2r_latency`` subtracts clocks that are not synchronised. Far
+#: below 2⁶⁴ because a run reports the mean of many rows, and one wrapped row
+#: among them gives 1e18 (measured on ``r2n_latency`` with four seeds).
+OVERFLOW_LIMIT = 2.0**50
 #: What each number of seeds allows a report to claim.
 MIN_FOR_INTERVALS = 10
 MIN_FOR_SHAPE = 30
@@ -1039,7 +1041,7 @@ def _warn_objective(warnings: list[dict[str, Any]], name: str, metric: Mapping[s
     status = metric["status"]
     if status == "overflow_suspect":
         warnings.append(_warning(
-            status, f"{name} holds values near 2⁶³: an unsigned subtraction wrapped "
+            status, f"{name} holds values past 2⁵⁰: an unsigned subtraction wrapped "
             "around. It is a measurement defect, so no number of seeds is recommended.", name))
     elif status == "constant":
         warnings.append(_warning(
@@ -1144,16 +1146,18 @@ def metric_detail(y_by_seed: Sequence[Optional[float]], *, seeds: Sequence[int],
     if y.size < 2:
         return out
 
-    sd_interval = bca_interval(y, "sd", confidence, rng)
-    out["intervals"] = {
-        "mean_t": ci_mean_t(y, confidence),
-        "mean_bca": bca_interval(y, "mean", confidence, rng),
-        "sd_bca": sd_interval,
-        "median": median_interval(y, confidence),
-        "p90_upper": quantile_upper_limit(y, 0.90, confidence),
-        "p95_upper": quantile_upper_limit(y, 0.95, confidence),
-        "p99_upper": quantile_upper_limit(y, 0.99, confidence),
-    }
+    sd_interval = None
+    if y.size >= MIN_FOR_INTERVALS:
+        sd_interval = bca_interval(y, "sd", confidence, rng)
+        out["intervals"] = {
+            "mean_t": ci_mean_t(y, confidence),
+            "mean_bca": bca_interval(y, "mean", confidence, rng),
+            "sd_bca": sd_interval,
+            "median": median_interval(y, confidence),
+            "p90_upper": quantile_upper_limit(y, 0.90, confidence),
+            "p95_upper": quantile_upper_limit(y, 0.95, confidence),
+            "p99_upper": quantile_upper_limit(y, 0.99, confidence),
+        }
     precision = _precision_of(y, spec=spec, confidence=confidence, gamma=gamma,
                               absolute=absolute, planned=len(seeds), rng=None)
     tolerance = _tolerance(y, spec, gamma, absolute)

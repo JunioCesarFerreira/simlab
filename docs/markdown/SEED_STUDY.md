@@ -93,7 +93,7 @@ of the distributions.
 | `extrapolated` | `n*` is past the seeds that ran |
 | `indicative` | `n*` is more than three times the seeds that ran, or fewer than 10 ran |
 | `constant` | Does not change with the seed. "Always zero" says it carries nothing |
-| `measurement defect` | Values near 2⁶³: an unsigned subtraction wrapped around. No recommendation |
+| `measurement defect` | Values past 2⁵⁰: an unsigned subtraction wrapped around, even if diluted in a run's mean. No recommendation |
 | `near zero` | The interval of the mean contains zero, so a relative error has no meaning. The page asks for an absolute one |
 | `no precision target` | A minimum or maximum, whose expected value moves with the number of seeds. The Precision chart shows how it moves |
 | `beyond the sample` | Resampling did not reach the target within the seeds that ran |
