@@ -18,6 +18,7 @@ from lib.strategy.nsga3_pymoo import NSGA3PymooStrategy
 from lib.strategy.nsga2_deap import NSGA2DeapStrategy
 from lib.strategy.nsga2_pymoo import NSGA2PymooStrategy
 from lib.strategy.usl_benchmark import STRATEGY_NAME as USL_BENCHMARK, UslBenchmarkStrategy
+from lib.strategy.seed_study import STRATEGY_NAME as SEED_STUDY, SeedStudyStrategy
 
 # --------------------------- Logging --------------------------------
 logging.basicConfig(
@@ -61,6 +62,9 @@ def select_strategy(exp_doc: dict) -> EngineStrategy:
     # deliberately absent from Step2Experiment.vue.
     if exp_type == USL_BENCHMARK:
         return UslBenchmarkStrategy(exp_doc, mongo)
+    # Launched from the Seed Study page, for the same reason.
+    if exp_type == SEED_STUDY:
+        return SeedStudyStrategy(exp_doc, mongo)
     raise ValueError(f"[mo-engine] Experiment type unknown: {exp_type}")
 
 
