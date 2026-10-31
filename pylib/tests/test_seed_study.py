@@ -649,6 +649,18 @@ class TestAnalyseStudy:
 
         assert [m["name"] for m in result["metrics"]] == ["latency", "throughput", "hops"]
 
+    def test_one_extreme_chromosome_does_not_mark_the_typical_answer(self):
+        """Measured on a synthetic panel: a mean near zero on one chromosome read
+        as "indicative" for an objective whose median answer was 8 seeds."""
+        values = {"latency": 200 + 10 * np.random.default_rng(3).normal(0, 1, (12, 30))}
+        values["latency"][0] = values["latency"][0] / 200 + 0.2
+
+        result = analysed(values, K=12, objectives=OBJECTIVES[:1])
+
+        report = result["recommendation"]["report"]["by_objective"]["latency"]
+        assert report["status"] == "ok"
+        assert report["max"] > report["value"]
+
     def test_only_objectives_get_a_recommendation(self):
         values = {"hops": np.random.default_rng(1).normal(3, 1, (1, 30)), **study()}
 

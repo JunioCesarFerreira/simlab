@@ -560,3 +560,26 @@ class TestListing:
         assert rows[0]["simulations"] == 100 and rows[0]["finished"] == 11
         assert rows[0]["panel_source"] == "generated"
         assert mock_factory.experiment_repo.find_by_strategy.call_args.args[0] == "seed_study"
+
+
+class TestEstimate:
+    def test_it_averages_recent_runs_of_that_duration(self, client, mock_factory):
+        mock_factory.simulation_repo.connection = connection_returning([
+            {"start_time": T0, "end_time": T0 + timedelta(seconds=100)},
+            {"start_time": T0, "end_time": T0 + timedelta(seconds=300)},
+            {"start_time": None, "end_time": T0},
+        ])
+
+        data = client.get(f"{BASE}/estimate", params={"duration": 180}).json()
+
+        assert data == {"samples": 2, "mean_seconds": 200}
+
+    def test_no_history_means_no_estimate(self, client, mock_factory):
+        mock_factory.simulation_repo.connection = connection_returning([])
+
+        data = client.get(f"{BASE}/estimate", params={"duration": 180}).json()
+
+        assert data == {"samples": 0, "mean_seconds": None}
+
+    def test_a_duration_out_of_range_is_refused(self, client):
+        assert client.get(f"{BASE}/estimate", params={"duration": 2}).status_code == 422

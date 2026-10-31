@@ -163,7 +163,7 @@ def describe(values: np.ndarray) -> dict[str, Optional[float]]:
 
     n = int(values.size)
     out: dict[str, Optional[float]] = {
-        key: None for key in ("min", "max", "mean", "sd", "cv", "median", "iqr",
+        key: None for key in ("min", "max", "mean", "sd", "cv", "median", "q1", "q3", "iqr",
                               "p5", "p95", "skewness", "excess_kurtosis")}
     out["n"] = n
     if n == 0:
@@ -171,7 +171,8 @@ def describe(values: np.ndarray) -> dict[str, Optional[float]]:
     mean = float(values.mean())
     p5, q1, median, q3, p95 = np.percentile(values, [5, 25, 50, 75, 95])
     out.update(min=float(values.min()), max=float(values.max()), mean=mean,
-               median=float(median), iqr=float(q3 - q1), p5=float(p5), p95=float(p95))
+               median=float(median), q1=float(q1), q3=float(q3), iqr=float(q3 - q1),
+               p5=float(p5), p95=float(p95))
     if n >= 2:
         sd = float(values.std(ddof=1))
         out["sd"] = sd
@@ -929,10 +930,7 @@ def analyse_study(values: Mapping[str, np.ndarray], *, seeds: Sequence[int],
             "p90": math.ceil(spread["p90"]) if spread else None,
             "max": math.ceil(spread["max"]) if spread else None,
             "method": method,
-            "status": metric["status"] if metric["status"] != "ok" else
-                      next(iter(s for s in ("indicative", "near_zero_mean", "extrapolated",
-                                            "beyond_sample", "not_applicable")
-                                if s in metric["summary"]["statuses"]), "ok"),
+            "status": _report_status(metric, spread, n),
         }
         panel = metric["panel"]
         optimise[objective] = {
@@ -980,6 +978,24 @@ def analyse_study(values: Mapping[str, np.ndarray], *, seeds: Sequence[int],
             "optimise": {"by_objective": optimise, "max": max(needed) if needed else None},
         },
     }
+
+
+def _report_status(metric: Mapping[str, Any], spread: Optional[Mapping[str, float]],
+                   n: int) -> str:
+    """How far to trust the number reported, read on that number.
+
+    On a panel, one chromosome near zero must not mark the typical answer as a
+    long extrapolation, so the rule applies to the median across chromosomes.
+    """
+    if metric["status"] != "ok":
+        return metric["status"]
+    if spread is None:
+        statuses = metric["summary"]["statuses"]
+        return next((s for s in ("not_applicable", "near_zero_mean", "beyond_sample",
+                                 "too_few") if s in statuses), "ok")
+    if spread["p50"] > INDICATIVE_FACTOR * n or n < MIN_FOR_INTERVALS:
+        return "indicative"
+    return "extrapolated" if spread["p50"] > n else "ok"
 
 
 def _estimates_diverge(rows: Sequence[Mapping[str, Any]], n: int) -> bool:

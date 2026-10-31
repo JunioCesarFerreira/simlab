@@ -45,6 +45,7 @@ MAX_CONTROL_REPLICATES = 5
 #: left out: with mobile nodes it reports the last parent switch of the run.
 PARENT_SWITCHES = "parent_switches"
 MAX_LISTED_HOLES = 200
+ESTIMATE_SAMPLE = 200
 
 #: One entry per study, at most a few per set of targets while someone explores.
 _cache = MetricsCache(max_entries=64, max_bytes=64 * 1024 * 1024)
@@ -295,6 +296,28 @@ def list_studies(factory: MongoRepository = Depends(get_factory)) -> list[dict]:
     return [_summary(doc, finished.get(doc["_id"], 0)) for doc in docs]
 
 
+@router.get("/estimate")
+def estimate(
+    duration: int = Query(..., ge=DURATION_RANGE[0], le=DURATION_RANGE[1]),
+    factory: MongoRepository = Depends(get_factory),
+) -> dict:
+    """How long one simulation of this duration has been taking on the pool.
+
+    Only for the cost shown before a study starts, so it is read from recent
+    runs and says how many. The number of simulations is exact; the time is not.
+    """
+    with factory.simulation_repo.connection.connect() as db:
+        runs = list(db["simulations"].find(
+            {"status": EnumStatus.DONE, "parameters.duration": duration,
+             "assigned_host_name": {"$nin": [None, ""]}},
+            {"start_time": 1, "end_time": 1},
+            sort=[("_id", -1)], limit=ESTIMATE_SAMPLE))
+    seconds = [(r["end_time"] - r["start_time"]).total_seconds() for r in runs
+               if r.get("start_time") and r.get("end_time")]
+    return {"samples": len(seconds),
+            "mean_seconds": sum(seconds) / len(seconds) if seconds else None}
+
+
 def _study_or_error(experiment_id: str, factory: MongoRepository) -> tuple[ObjectId, dict]:
     try:
         oid = ObjectId(experiment_id)
@@ -435,7 +458,7 @@ def _provenance(doc: dict, results: _Results, factory: MongoRepository) -> dict[
         "firmware": snapshot.get("status") or snapshot.get("state"),
         "seeds": (params.get("seed_study") or {}).get("seeds"),
         "panel": {k: v for k, v in (doc.get("seed_study_panel") or {}).items()
-                  if k != "chromosomes"},
+                  if k not in ("chromosomes", "genome_hashes")},
     }
 
 
