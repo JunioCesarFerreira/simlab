@@ -210,6 +210,9 @@ async function apply(machine: MachineFit) {
 }
 
 .table-wrap {
+  /* Contains the .sr-only header: an absolute box with no positioned
+     ancestor escapes the shell's scroll area and grows the page itself. */
+  position: relative;
   overflow-x: auto;
 }
 
