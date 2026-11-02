@@ -13,6 +13,7 @@ import type {
   StudyCreated,
   StudyDetail,
   StudyEstimate,
+  StudySolutions,
   StudySummary,
   StudyTargets,
 } from "../types/seedStudy";
@@ -55,6 +56,11 @@ export async function getStudyMetric(
       signal,
     },
   );
+  return data;
+}
+
+export async function getStudySolutions(id: string, signal?: AbortSignal): Promise<StudySolutions> {
+  const { data } = await client.get<StudySolutions>(`/seed-studies/${id}/solutions`, { signal });
   return data;
 }
 

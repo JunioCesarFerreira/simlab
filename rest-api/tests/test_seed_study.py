@@ -541,6 +541,36 @@ class TestExport:
         assert lines[1].startswith(f"a,{SEEDS[0]},0,")
 
 
+class TestSolutions:
+    def test_the_panel_is_served_with_its_instance(self, client, mock_factory):
+        setup_study(mock_factory, [])
+        doc = mock_factory.experiment_repo.get.return_value
+        doc["seed_study_panel"]["chromosomes"] = [
+            {"mac_protocol": 0, "relays": [{"x": 1.0, "y": 2.0}]},
+            {"mac_protocol": 0, "relays": [{"x": 3.0, "y": 4.0}]},
+        ]
+
+        data = client.get(f"{BASE}/{EXP_ID}/solutions").json()
+
+        assert data["problem"] == {"name": "problem1"}
+        assert [s["genome_hash"] for s in data["solutions"]] == ["a", "b"]
+        assert data["solutions"][1]["chromosome"]["relays"] == [{"x": 3.0, "y": 4.0}]
+
+    def test_before_the_panel_is_chosen_there_is_nothing_to_draw(self, client, mock_factory):
+        setup_study(mock_factory, [])
+        mock_factory.experiment_repo.get.return_value.pop("seed_study_panel")
+
+        data = client.get(f"{BASE}/{EXP_ID}/solutions").json()
+
+        assert data["solutions"] == []
+
+    def test_an_experiment_that_is_not_a_study_is_a_404(self, client, mock_factory):
+        mock_factory.experiment_repo.get.return_value = {
+            "_id": ObjectId(EXP_ID), "parameters": {"strategy": "nsga2"}}
+
+        assert client.get(f"{BASE}/{EXP_ID}/solutions").status_code == 404
+
+
 class TestListing:
     def test_progress_is_reported_per_study(self, client, mock_factory):
         oid = ObjectId(EXP_ID)

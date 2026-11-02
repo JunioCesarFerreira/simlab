@@ -244,6 +244,11 @@
       </details>
     </template>
     <p v-else class="muted">No result yet. The analysis fills in as simulations finish.</p>
+
+    <details class="advisories" open>
+      <summary>Solutions in the panel ({{ detail.chromosomes }})</summary>
+      <SeedStudySolutions :detail="detail" />
+    </details>
   </section>
 </template>
 
@@ -267,6 +272,7 @@ import {
 } from "../../services/seedStudy";
 import type { StudyDetail, StudyMetric, StudyTargets } from "../../types/seedStudy";
 import SeedStudyMetric from "./SeedStudyMetric.vue";
+import SeedStudySolutions from "./SeedStudySolutions.vue";
 
 const props = defineProps<{ detail: StudyDetail }>();
 const emit = defineEmits<{ targets: [StudyTargets]; absolute: [Record<string, number>] }>();

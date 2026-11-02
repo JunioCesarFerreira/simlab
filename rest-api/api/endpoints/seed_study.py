@@ -611,6 +611,27 @@ def get_metric(
             absolute=absolute))
 
 
+@router.get("/{experiment_id}/solutions")
+def get_solutions(
+    experiment_id: str,
+    factory: MongoRepository = Depends(get_factory),
+) -> dict:
+    """The instance and the solutions of the panel, to draw them.
+
+    Read from the panel as recorded, so a solution is shown as it ran: after its
+    firmware was resolved. Empty until the engine has chosen the panel.
+    """
+    _, doc = _study_or_error(experiment_id, factory)
+    panel = doc.get("seed_study_panel") or {}
+    hashes = list(panel.get("genome_hashes") or [])
+    chromosomes = list(panel.get("chromosomes") or [])
+    return {
+        "problem": (doc.get("parameters") or {}).get("problem") or {},
+        "solutions": [{"genome_hash": h, "chromosome": c}
+                      for h, c in zip(hashes, chromosomes)],
+    }
+
+
 @router.get("/{experiment_id}/values.csv")
 def export_values(
     experiment_id: str,

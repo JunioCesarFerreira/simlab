@@ -251,6 +251,12 @@ export interface MetricDetail {
   };
 }
 
+/** The instance and the panel as recorded, to draw each solution. */
+export interface StudySolutions {
+  problem: Record<string, unknown>;
+  solutions: { genome_hash: string; chromosome: Record<string, unknown> }[];
+}
+
 export interface StudyEstimate {
   samples: number;
   mean_seconds: number | null;
