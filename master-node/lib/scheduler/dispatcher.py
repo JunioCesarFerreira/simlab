@@ -89,9 +89,13 @@ class Dispatcher:
         self._held_failures = 0
         self._rr_cursor = 0
         self._stop = threading.Event()
-        self._last_starved_log = 0.0
-        self._last_deferred_log = 0.0
-        self._last_rescan = 0.0
+        # "Never", not zero. `time.monotonic()` counts from the machine's boot,
+        # so zero meant "at boot": on a machine up for less than the interval
+        # — a CI runner, a host that just restarted — the first rescan and
+        # the first log were withheld until the clock caught up.
+        self._last_starved_log = float("-inf")
+        self._last_deferred_log = float("-inf")
+        self._last_rescan = float("-inf")
         # Set while the held job is waiting for a faster worker rather than
         # for any worker: new work is then a reason to decide again.
         self._deferred = False

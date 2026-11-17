@@ -433,6 +433,22 @@ class TestRescanningWhatTheQueueLost:
 
         assert mongo.simulation_repo.find_pending.call_count == 1
 
+    def test_the_first_rescan_does_not_wait_for_the_machine_s_uptime(
+            self, monkeypatch):
+        """`time.monotonic()` counts from boot. Starting the "last rescan" at
+        zero meant the first one waited until the machine had been up for a
+        whole interval — which passed on a workstation up for days and failed
+        on a freshly booted CI runner."""
+        monkeypatch.setattr(
+            "lib.scheduler.dispatcher.time.monotonic", lambda: 120.0)
+        mongo = FakeMongo()
+        mongo.simulation_repo.find_pending.return_value = []
+        dispatcher, _ = make_dispatcher(mongo, rescan_interval_sec=3600)
+
+        dispatcher.step()
+
+        assert mongo.simulation_repo.find_pending.call_count == 1
+
     def test_it_does_not_run_while_a_job_is_held(self):
         # Holding means there is no capacity; re-reading would only add
         # duplicates behind a job that cannot be placed yet.
