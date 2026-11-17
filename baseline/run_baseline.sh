@@ -39,7 +39,7 @@ SSH_USER="root"
 SSH_PASS="root"  # default credentials of the Cooja image
 JVM_XMS="${COOJA_JVM_XMS:-4g}"
 JVM_XMX="${COOJA_JVM_XMX:-4g}"
-SIM_TIMEOUT="${SIM_TIMEOUT_SEC:-3600}"
+SIM_TIMEOUT="${SIM_TIMEOUT_SEC:-10800}"  # same default as the master-node
 
 mkdir -p "$RESULTS_DIR"
 

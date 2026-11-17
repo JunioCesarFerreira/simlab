@@ -117,7 +117,10 @@ class Settings:
             hostnames = ["localhost" for _ in range(default_n)]
             ports = [2231 + i for i in range(default_n)]
 
-        sim_timeout_sec = int(os.getenv("SIM_TIMEOUT_SEC", "3600"))
+        # 3 h: the longest simulated duration in use (180 min) run at real
+        # time. A TSCH simulation of 27 motes and 180 min takes about an hour
+        # on a loaded machine, which the previous 3600 s cut off.
+        sim_timeout_sec = int(os.getenv("SIM_TIMEOUT_SEC", "10800"))
         jvm_xms = os.getenv("COOJA_JVM_XMS", "1g")
         jvm_xmx = os.getenv("COOJA_JVM_XMX", "2g")
 
@@ -597,12 +600,21 @@ def run_cooja_simulation(
             # have nothing to do with the run — and falling through to the
             # generic handler wrote the simulation off while its testlog sat
             # in GridFS, referenced by nothing.
+            # How many sensor nodes the run had, for the node_coverage kind:
+            # the CSV has rows only for nodes whose reports reached the root.
+            # Best-effort; without it that one kind gives NaN.
+            try:
+                deployed = rpl_dodag.count_deployed_nodes(log_path) or None
+            except Exception:
+                log.exception("[%s] could not count the deployed nodes", where)
+                deployed = None
             try:
                 df = pd.read_csv(csv_path)
                 exp_id = sim["experiment_id"]
                 cfg = mongo.experiment_repo.get_metrics_data_conversion(
                     str(exp_id))
-                net_meas = statistics.evaluate_config(df, cfg, log)
+                net_meas = statistics.evaluate_config(
+                    df, cfg, log, deployed_nodes=deployed)
             except Exception as error:
                 raise CollectionFailed(
                     f"the result was stored but could not be evaluated: {error}",

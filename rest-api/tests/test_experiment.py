@@ -97,6 +97,23 @@ class TestCreateExperiment:
             "objectives": [objective, {"metric_name": "throughput", "goal": "max"}],
         }}
 
+    def test_metric_parameters_are_stored(self, client, mock_factory):
+        """denominator, q and scale reach the database. A key the DTO did not
+        declare would be dropped by validation, and the metric would turn
+        into NaN on the master-node without any error."""
+        metrics = [
+            {"name": "power_mw", "kind": "ratio_sum", "column": "total_energy_mj",
+             "denominator": "energy_time_ms", "scale": 1000},
+            {"name": "latency_p95", "kind": "quantile", "column": "latency", "q": 0.95},
+        ]
+        mock_factory.experiment_repo.insert.return_value = ObjectId(EXP_ID)
+        payload = {**_VALID_PAYLOAD, "data_conversion_config": {
+            "node_col": "node", "time_col": "root_time_now", "metrics": metrics}}
+        resp = client.post(f"{BASE}/", json=payload)
+        assert resp.status_code == 200
+        doc = mock_factory.experiment_repo.insert.call_args.args[0]
+        assert doc["data_conversion_config"]["metrics"] == metrics
+
     _VALID = ["mean", "median", "min", "max", {"kind": "trimmed_mean", "trim": 0.2}]
     _INVALID = ["average", {"kind": "trimmed_mean", "trim": 0.5}, {"kind": "trimmed_mean", "trimm": 0.1}]
 

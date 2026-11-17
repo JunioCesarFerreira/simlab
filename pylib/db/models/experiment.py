@@ -10,6 +10,7 @@ class MetricItem(TypedDict):
     # Optional parameters (validated according to the type)
     q: Optional[float]      # required if kind == QUANTILE (0<q<=1)
     scale: Optional[float]  # required if kind == INVERSE_MEDIAN (scale>0)
+    denominator: NotRequired[str]  # required if kind is ratio_sum or ratio_sum_max (a CSV column)
 
 
 class ObjetiveItem(TypedDict):

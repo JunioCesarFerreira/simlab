@@ -242,7 +242,7 @@
                 class="param-row"
               >
                 <span class="pk">{{ m.name }}</span>
-                <span class="pv">{{ m.kind }} / {{ m.column }}</span>
+                <span class="pv">{{ m.kind }} / {{ m.column }}<template v-if="m.denominator"> ÷ {{ m.denominator }}</template></span>
               </div>
             </div>
           </details>

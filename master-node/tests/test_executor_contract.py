@@ -65,7 +65,7 @@ def wired(entry, monkeypatch, tmp_path):
         entry.cooja_files, "convert_cooja_log_to_csv",
         lambda log_path, csv_path: Path(csv_path).write_text("node,time\n1,0\n"))
     monkeypatch.setattr(
-        entry.statistics, "evaluate_config", lambda df, cfg, log: {"latency": 1.0})
+        entry.statistics, "evaluate_config", lambda df, cfg, log, **_: {"latency": 1.0})
     monkeypatch.setattr(
         entry.rpl_dodag, "analyze_dodag_full", lambda path: None)
 

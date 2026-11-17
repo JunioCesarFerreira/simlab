@@ -49,6 +49,8 @@ export interface MetricItem {
   column: string;
   q?: number;
   scale?: number;
+  /** CSV column the ratio kinds divide by (ratio_sum, ratio_sum_max). */
+  denominator?: string;
 }
 
 export interface DataConversionConfigDto {

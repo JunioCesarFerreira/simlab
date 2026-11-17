@@ -12,6 +12,9 @@ class MetricItemDto(TypedDict):
     column: str
     q: NotRequired[float]
     scale: NotRequired[float]
+    # ratio_sum / ratio_sum_max divide by this CSV column. Declared so that
+    # validation keeps it: an undeclared key would be dropped on the way in.
+    denominator: NotRequired[str]
 
 
 class DataConversionConfigDto(TypedDict):

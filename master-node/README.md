@@ -395,7 +395,7 @@ documents — and a failure of the second used to propagate back and mark the
 | `DB_NAME` | `simlab` | Database name |
 | `IS_DOCKER` | `false` | If `true`, seeded hostnames are `cooja1..coojaN` on port 22; otherwise `localhost` on ports `2231+i` |
 | `NUMBER_OF_CONTAINERS` | `8` | How many local containers to **seed** on first start. Not a thread count any more: the pool comes from the inventory, and discovery maintains it |
-| `SIM_TIMEOUT_SEC` | `3600` | How long one simulation may run, and the cutoff for recovering one left `RUNNING` with no container holding it. `0` disables both |
+| `SIM_TIMEOUT_SEC` | `10800` | How long one simulation may run (wall clock), and the cutoff for recovering one left `RUNNING` with no container holding it. `0` disables both. 3 h is a 180-min simulation at real time; a TSCH simulation of 27 motes and 180 min takes about an hour on a loaded machine |
 | `SCHED_POLICY` | `least_loaded_host` | Placement policy — see *Placement policies* below. `least_loaded_host`, `fastest_then_least_loaded` or `earliest_completion` (what `docker-compose.yaml` sets) |
 | `RUN_POLL_INTERVAL_SEC` | `5` | How often a running simulation is checked on. One cheap round trip each time |
 | `INFRA_CHECK_INTERVAL_SEC` | `30` | Health cycle interval |

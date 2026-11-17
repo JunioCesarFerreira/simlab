@@ -62,17 +62,13 @@
           <label class="field-label">Kind <span class="required">*</span></label>
           <select
             :value="m.kind"
+            :class="{ invalid: showValidation && !metricKind(m.kind) }"
             @change="updateMetric(i, 'kind', ($event.target as HTMLSelectElement).value)"
           >
             <option value="">Select...</option>
-            <option value="mean">mean</option>
-            <option value="sum_all">sum_all</option>
-            <option value="sum_last_minus_first">sum_last_minus_first</option>
-            <option value="max">max</option>
-            <option value="min">min</option>
-            <option value="last">last</option>
-            <option value="percentile">percentile</option>
+            <option v-for="k in METRIC_KINDS" :key="k.value" :value="k.value">{{ k.value }}</option>
           </select>
+          <span v-if="metricKind(m.kind)" class="kind-hint">{{ metricKind(m.kind)?.hint }}</span>
         </div>
         <div class="field-group">
           <label class="field-label">CSV column <span class="required">*</span></label>
@@ -84,23 +80,34 @@
             @input="updateMetric(i, 'column', ($event.target as HTMLInputElement).value)"
           />
         </div>
-        <div v-if="m.kind === 'percentile'" class="field-group">
-          <label class="field-label">Percentile (q)</label>
+        <div v-if="uses(m, 'denominator')" class="field-group">
+          <label class="field-label">Denominator column <span class="required">*</span></label>
+          <input
+            :value="m.denominator ?? ''"
+            type="text"
+            placeholder="e.g. energy_time_ms"
+            :class="{ invalid: showValidation && !(m.denominator ?? '').trim() }"
+            @input="updateMetric(i, 'denominator', ($event.target as HTMLInputElement).value)"
+          />
+        </div>
+        <div v-if="uses(m, 'q')" class="field-group">
+          <label class="field-label">Quantile (q)</label>
           <input
             :value="m.q ?? ''"
             type="number"
-            min="0" max="100" step="0.1"
-            placeholder="e.g. 95"
+            min="0" max="1" step="0.01"
+            placeholder="0.5 if empty; e.g. 0.95"
+            :class="{ invalid: showValidation && m.q !== undefined && !(m.q > 0 && m.q <= 1) }"
             @input="updateMetricNum(i, 'q', ($event.target as HTMLInputElement).value)"
           />
         </div>
-        <div class="field-group">
+        <div v-if="uses(m, 'scale')" class="field-group">
           <label class="field-label">Scale</label>
           <input
             :value="m.scale ?? ''"
             type="number"
             step="any"
-            placeholder="e.g. 1.0"
+            placeholder="1.0 if empty"
             @input="updateMetricNum(i, 'scale', ($event.target as HTMLInputElement).value)"
           />
         </div>
@@ -109,15 +116,18 @@
 
     <datalist id="metric-name-suggestions">
       <option value="energy" />
+      <option value="power_mw" />
       <option value="latency" />
+      <option value="latency_mean" />
+      <option value="latency_p95" />
       <option value="throughput" />
+      <option value="delivery_ratio" />
+      <option value="node_coverage" />
       <option value="cpu_energy_mj" />
       <option value="lpm_energy_mj" />
       <option value="radio_tx_energy_mj" />
       <option value="radio_rx_energy_mj" />
       <option value="total_sent" />
-      <option value="total_received" />
-      <option value="rtt_latency" />
     </datalist>
 
     <button class="add-metric-btn" @click="addMetric">+ Add metric</button>
@@ -126,8 +136,13 @@
 
 <script setup lang="ts">
 import type { DataConversionConfigDto, MetricItem } from '../../../../types/simlab'
+import { METRIC_KINDS, metricKind, type MetricKind } from '../../../../services/metricKinds'
 
 const props = defineProps<{ modelValue: DataConversionConfigDto; showValidation: boolean }>()
+
+function uses(m: MetricItem, field: MetricKind['uses'][number]): boolean {
+  return metricKind(m.kind)?.uses.includes(field) ?? false
+}
 const emit = defineEmits<{ 'update:modelValue': [v: DataConversionConfigDto] }>()
 
 function updateHeader(field: 'node_col' | 'time_col', value: string) {
@@ -179,7 +194,8 @@ input, select {
   outline: none; width: 100%;
 }
 input:focus, select:focus { border-color: var(--color-primary); }
-input.invalid { border-color: #ef4444; }
+input.invalid, select.invalid { border-color: #ef4444; }
+.kind-hint { font-size: 11px; color: var(--color-text-muted); line-height: 1.4; }
 .empty-metrics { font-size: 13px; color: var(--color-text-muted); text-align: center; padding: 16px; background: var(--color-bg); border: 1px dashed var(--color-border); border-radius: var(--radius-md); }
 .metric-card {
   border: 1px solid var(--color-border); border-radius: var(--radius-md);

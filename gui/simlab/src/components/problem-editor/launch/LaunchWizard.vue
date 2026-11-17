@@ -112,6 +112,7 @@ import { useProblemStore } from '../../../app/stores/problemStore'
 import { capabilitiesFor, defaultExtraParams } from '../../../lib/problemCapabilities'
 import { exportProblem } from '../../../services/exportProblemJson'
 import { defaultDataConversion } from '../../../services/defaultDataConversion'
+import { isMetricItemComplete } from '../../../services/metricKinds'
 import {
   DEFAULT_SEED_AGGREGATOR,
   conflictingAggregatorMetrics,
@@ -204,8 +205,10 @@ const form = reactive<{
     randomSeeds: [336157, 667370, 35239, 873465, 987654, 123456, 493499, 5343],
   },
   objectives: [
+    // Median one-way delay, mean power per reporting node, reports delivered
+    // (docs/markdown/FIRMWARE_METRICS.md, "Comparing CSMA and TSCH").
     { metric_name: 'latency',    goal: 'min', aggregator: DEFAULT_SEED_AGGREGATOR },
-    { metric_name: 'energy',     goal: 'min', aggregator: DEFAULT_SEED_AGGREGATOR },
+    { metric_name: 'power_mw',   goal: 'min', aggregator: DEFAULT_SEED_AGGREGATOR },
     { metric_name: 'throughput', goal: 'max', aggregator: DEFAULT_SEED_AGGREGATOR },
   ],
   dataConversion: defaultDataConversion(),
@@ -230,7 +233,7 @@ const canProceed = computed((): boolean => {
     case 5: return (
       form.dataConversion.node_col.trim().length > 0 &&
       form.dataConversion.time_col.trim().length > 0 &&
-      form.dataConversion.metrics.every(m => m.name.trim() && m.kind && m.column.trim())
+      form.dataConversion.metrics.every(isMetricItemComplete)
     )
     default: return false
   }

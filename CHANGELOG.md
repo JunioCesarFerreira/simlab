@@ -5,6 +5,137 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Firmware v2 and how each metric is obtained
+
+An audit of the firmware every experiment had run so far (`rpl-udp-csma`, 97.5%
+of the 29,630 simulations in the reference database, and `rpl-udp-tsch`) found
+that several metrics did not measure what their names say. The largest: under
+CSMA the root's burst of pings overflowed the MAC's two neighbour queues and
+dropped many of them without a log line (78% in the instance replayed in
+Cooja); nodes that never got one reported a latency of 0, which the mean
+averaged in. On 60 simulations the share of zero rows correlated −0.90 with
+`latency`. The three latencies the firmware reported (`rtt_latency`, `r2n_latency`,
+`n2r_latency`) could not be compared across MACs: the one-way pair subtracted clocks
+that start at each mote's own boot, up to 1 s apart. The other findings, with their
+measurements, are in the new document below.
+
+Firmware v1 is not touched: the snapshot of every finished experiment holds its
+digests and three papers cite its results. The fixes are a new firmware version.
+
+### Added
+
+- **Firmware v2**: `firmware/rpl-udp-csma-v2` and `firmware/rpl-udp-tsch-v2`. The two
+  hold the same sources, byte for byte, and differ only in the MAC in the
+  `Makefile`. Compared with v1:
+  - The nodes report raw cumulative counters, and the root derives energy and
+    per-report deltas from them. A lost report no longer takes the energy of its
+    interval with it, the energy is no longer truncated to whole mJ (v1 recorded a
+    quarter of the TX energy in the run measured), and it includes the supply
+    voltage that v1 left out.
+  - **One latency**: the one-way delay of each report, node to root. The node writes
+    the Cooja simulation time (`RTIMER_NOW()`, the same on every mote and under both
+    MACs) into the report; the root subtracts it from the time the report arrives and
+    prints `latency`. The root sends no probes any more, so `rtt_latency`,
+    `r2n_latency` and `n2r_latency` are gone, and so is the ping traffic that the
+    MACs handled so differently: on one TSCH instance the same firmware with the
+    probes delivered 617 reports from 21 nodes, and without them 6,416 from 20.
+    The firmware refuses to build outside Cooja, where this clock is not shared.
+  - `bytes_tx`, `bytes_rx` and `server_bytes_rx` are cumulative, so their growth is no
+    longer always 0. `throughput` counts reports only; v1 also counted the pongs
+    (32% of it on average). `hops` counts links, one more than in v1. The columns
+    that existed only because of the probes (`node_time`, `total_received`, `bytes_rx`,
+    `server_sent`, `pongs_received`, `rtt_samples`) are gone.
+  - Packets carry a type byte and fixed-width fields; the root no longer dereferences
+    a null pointer past 100 nodes (the limit is now 200); the report jitter is drawn
+    again every period; the node prints its address once.
+  - Each record carries `"fw_version":2`.
+- **`docs/markdown/FIRMWARE_METRICS.md`**: how each metric is obtained, from the mote
+  to the objective, with the default conversion metric by metric, what v1 and v2
+  measure, the limitations that remain, what can and cannot be compared between CSMA
+  and TSCH (section 8, measured on two topologies replayed under both MACs), and how
+  to compare results across versions.
+- **`pylib/tests/test_firmware_v2.py`** pins the digests of v1, checks that the two v2
+  variants share their sources, that the root prints every column the default
+  conversion reads, that there is exactly one latency and it uses the simulation
+  clock on both ends, and runs real v2 log lines through the converter and the
+  conversion.
+- **`upload-firmware.py` takes repository names** (`python upload-firmware.py
+  rpl-udp-csma-v2`) and uploads the four repositories when given none.
+
+### Changed
+
+- **The default data conversion has 16 metrics, and says how much of the network the
+  others describe.** Out: `rtt_latency`, `r2n_latency`, `n2r_latency`, `total_received`,
+  `bytes_rx` and `server_sent`, because the columns they read came from the probes
+  (`server_sent` also read `server_received`, so it was a copy of `throughput`). In:
+  - `latency` is the **median** one-way delay; `latency_mean` and `latency_p95` keep the
+    tail in view. Under TSCH the mean was about four times the median.
+  - `power_mw`: mean power of a node that reported, its energy over the node-time that
+    energy covers (the root prints the new column `energy_time_ms`). Unlike `energy`, it
+    does not grow with how many nodes reported or for how long.
+  - `delivery_ratio` (reports received over generated) and `node_coverage` (fraction of
+    the sensor nodes heard from at all). Latency, power and hops exist only for the
+    reports and nodes these two count.
+  - Counters (`throughput`, `total_sent`, `bytes_tx`, `server_bytes_rx`) are summed with
+    the new `sum_max`, which counts every report; `sum_last_minus_first` left each node's
+    first out, a larger share under TSCH, where a node may deliver a few dozen.
+  The wizard's default objectives are now `latency` (median), `power_mw` and
+  `throughput`. Applies to experiments created from now on; the stored conversion of
+  finished experiments is not rewritten. **With the v1 firmware the latency metrics and
+  `power_mw` are NaN under the default conversion** (v1 has `rtt_latency` and no
+  `energy_time_ms`): repoint them in steps 4 and 5 of the launch wizard
+  (FIRMWARE_METRICS.md §9).
+- **New data conversion kinds** in `pylib/statistics.py`: `sum_max`, `ratio_sum`,
+  `ratio_sum_max` (a second column in the new `denominator` field) and `node_coverage`.
+  The master-node counts the sensor motes in the testlog and passes the number to
+  `evaluate_config`, because the CSV has no row for a node that never reached the root.
+  `denominator` is declared in the API's `MetricItemDto`; undeclared, validation would
+  drop it and the metric would be NaN.
+- **The wizard offers the kinds the evaluator knows, and nothing else**
+  (`gui/simlab/src/services/metricKinds.ts`). It offered `max`, `min`, `last` and
+  `percentile`, which `statistics.py` never had, so a metric using one was NaN without
+  failing the run; it did not offer `median` or `quantile`, which it had. No stored
+  experiment used the missing ones. A Python test compares the two lists; step 5 shows
+  the fields each kind uses (`q`, `denominator`, `scale`) and validates them.
+- **`rpl-udp-tsch-v2` uses one shared TSCH cell every 3 slots**
+  (`TSCH_SCHEDULE_CONF_DEFAULT_LENGTH 3` in the `project-conf.h` the two v2 variants
+  share; CSMA builds do not read it). Contiki-NG's default of 7 congests at this load
+  (Investigated, below). A test pins the setting.
+- **`firmware/README.md`** describes each firmware directory and lists what v2 changes
+  from v1.
+- **`SIM_TIMEOUT_SEC` defaults to 10800 s (was 3600)**, in the master-node and in
+  `baseline/run_baseline.sh`; `docker-compose.yaml` passes it through, so `.env` can set
+  it. With a shared cell every 3 slots, a TSCH simulation of 27 motes and 180 min took
+  3,585–3,589 s with 12 running at once (TSCH v1: median 1,058 s), and the first v2
+  experiment lost 10 of its first 12 TSCH simulations to the 3600 s limit.
+
+### Investigated
+
+- **Why TSCH nodes go silent** (FIRMWARE_METRICS.md §8.1). Under Contiki-NG's default
+  minimal schedule (one shared cell every 7 slots) the queues toward the relays fill up
+  while the network forms (6,690 drops for a full queue in one 180-minute run), the
+  DAO-ACK misses RPL-lite's retransmission window, and the node repairs locally, drops
+  its route and stops reporting; 169 of the 176 long gaps of that run contain such a
+  repair. Keepalives wait in the same queues, so nodes also lose synchronisation and
+  leave the network. With a shared cell every 3 slots, the value of Contiki-NG's own
+  6TiSCH example, there was no full queue, and in six runs (two topologies, three seeds
+  each) TSCH delivered what CSMA delivers (all 26 nodes, 886–894 reports per node, 97%
+  delivery) at a fifth of the power (12.0–12.4 mW against 64.5), with a median latency of
+  86–92 ms against 60–68 ms. With the default, the same runs ranged from 46 to 321
+  reports per node.
+  Orchestra with its default rules used the least power and delivered less (§8 has both
+  tables). `rpl-udp-tsch-v2` now uses a shared cell every 3 slots (Changed, above).
+
+### Not done
+
+- v2 has been validated in Cooja (180-minute simulations of two topologies, three
+  seeds each, under both MACs, built without warnings, every default metric finite
+  through the real converter) but no experiment has used it yet. Moving an experiment
+  to v2 changes the objective values, and so may the ordering the optimiser saw;
+  replay a sample of v1 individuals under v2 before comparing.
+
+---
+
 ## [Unreleased] — Choosing the seed aggregator per objective
 
 The engine has long accepted `parameters.simulation.aggregator` (Ψa) — how the
