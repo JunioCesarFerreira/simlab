@@ -5,6 +5,24 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Workers held for a simulation that was deleted
+
+### Fixed
+
+- **A worker no longer stays `busy` for good when its simulation is deleted.**
+  The resolver of held workers (`resolve_held_workers` in
+  `master-node/lib/health.py`) refused to free any worker whose container still
+  had a `COOJA.testlog`, to protect an uncollected result. When the simulation
+  itself had been deleted, nothing could ever collect those bytes —
+  `util/recover_result.py` publishes onto the simulation — so the worker was
+  re-probed every cycle and never released. Four workers (`vm1`–`vm4-cooja1`)
+  sat like that for a day after their experiment was deleted. The resolver now
+  clears the hold when the simulation is confirmed absent. A failed read, a hold
+  without a simulation id, or a process still alive keep the worker held as
+  before.
+
+---
+
 ## [Unreleased] — Firmware v2 and how each metric is obtained
 
 An audit of the firmware every experiment had run so far (`rpl-udp-csma`, 97.5%

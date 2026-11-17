@@ -62,6 +62,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Callable, Optional
 
+from bson import ObjectId
+
 from lib.credentials import CredentialError, SecretOpener
 from lib.discovery import discover_host, unavailable_report
 from lib.dns_watch import ResolverStatus, ResolverWatch, RestartDecision
@@ -472,6 +474,9 @@ class HealthMonitor:
         or unreachable — stays held. A testlog sitting there is an uncollected
         result, and letting the worker take the next simulation is what
         deletes it.
+
+        The one exception is bytes nobody can collect: a testlog whose
+        simulation has been deleted. See :meth:`_simulation_deleted`.
         """
         if self._inspect_run is None:
             return []
@@ -512,11 +517,18 @@ class HealthMonitor:
                     name, record.get("kind", "?"), pid)
                 continue
             if state.testlog_bytes > 0:
+                if not self._simulation_deleted(record, name):
+                    log.warning(
+                        "Worker %s is held for %s and still has %d bytes of "
+                        "testlog; leaving it so the result is not destroyed",
+                        name, record.get("kind", "?"), state.testlog_bytes)
+                    continue
                 log.warning(
-                    "Worker %s is held for %s and still has %d bytes of "
-                    "testlog; leaving it so the result is not destroyed",
-                    name, record.get("kind", "?"), state.testlog_bytes)
-                continue
+                    "Worker %s is held for %s with %d bytes of testlog, but "
+                    "simulation %s no longer exists; nothing can collect "
+                    "them, so they are no reason to keep it",
+                    name, record.get("kind", "?"), state.testlog_bytes,
+                    record.get("simulation_id"))
             if self._unresolved_result(record, name):
                 continue
             if self._mongo.resource_repo.clear_held_for(resource["_id"]):
@@ -528,6 +540,34 @@ class HealthMonitor:
         if freed and self._on_capacity is not None:
             self._on_capacity()
         return freed
+
+    def _simulation_deleted(self, record: dict, name: str) -> bool:
+        """Whether the simulation a hold was made for no longer exists.
+
+        The testlog check protects an uncollected result, and the only way to
+        collect one is through its simulation: ``util/recover_result.py``
+        publishes onto that document. Once the document is gone — its
+        experiment was deleted while the run was still on the container —
+        the bytes belong to nothing, and the check that was protecting them
+        held the worker ``busy`` for good. Four workers sat like that for a
+        day, re-probed every cycle, with no operator action that could
+        resolve them short of clearing the hold by hand.
+
+        Only a *confirmed* absence counts: no id recorded, an id that is not
+        one, or a read that failed all answer ``False`` and the hold stays.
+        A live process is not covered by this — the caller still refuses
+        that one first, whatever happened to the simulation.
+        """
+        simulation_id = record.get("simulation_id")
+        if not simulation_id or not ObjectId.is_valid(str(simulation_id)):
+            return False
+        try:
+            return self._mongo.simulation_repo.get(str(simulation_id)) is None
+        except Exception:
+            log.exception(
+                "Could not re-read simulation %s; leaving %s held",
+                simulation_id, name)
+            return False
 
     def _unresolved_result(self, record: dict, name: str) -> bool:
         """Whether a held worker is still waiting on a decision about a result.

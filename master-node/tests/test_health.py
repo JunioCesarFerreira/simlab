@@ -1184,6 +1184,62 @@ class TestResolvingHeldWorkers:
         assert monitor.resolve_held_workers() == []
         mongo.resource_repo.clear_held_for.assert_not_called()
 
+    def _leftover_for(self, simulation_id, get):
+        """A worker with bytes left behind, for a simulation read by ``get``."""
+        held = self._held()
+        held["held_for"]["simulation_id"] = simulation_id
+        monitor, mongo, _ = self._monitor(
+            RunState(alive=False, finished=True, exit_code=0,
+                     testlog_bytes=10_679_963), held=held)
+        if isinstance(get, Exception):
+            mongo.simulation_repo.get.side_effect = get
+        else:
+            mongo.simulation_repo.get.return_value = get
+        return monitor, mongo
+
+    def test_leftover_bytes_of_a_deleted_simulation_do_not_hold_it(self):
+        """Nothing can collect them: the recovery tool publishes onto the
+        simulation, and it is gone. The incident this covers: four workers
+        sat ``busy`` for a day after their experiment was deleted, each with
+        ~10 MB of testlog, re-probed every cycle and never released."""
+        monitor, mongo = self._leftover_for(SIM_ID, None)
+
+        assert monitor.resolve_held_workers() == ["cooja1"]
+        mongo.simulation_repo.get.assert_called_with(str(SIM_ID))
+        mongo.resource_repo.clear_held_for.assert_called_once()
+
+    def test_leftover_bytes_of_an_existing_simulation_stay_held(self):
+        monitor, mongo = self._leftover_for(
+            SIM_ID, {"_id": SIM_ID, "status": "Error"})
+
+        assert monitor.resolve_held_workers() == []
+        mongo.resource_repo.clear_held_for.assert_not_called()
+
+    def test_a_failed_read_is_not_taken_for_a_deletion(self):
+        monitor, mongo = self._leftover_for(SIM_ID, RuntimeError("db down"))
+
+        assert monitor.resolve_held_workers() == []
+        mongo.resource_repo.clear_held_for.assert_not_called()
+
+    def test_no_recorded_simulation_is_not_taken_for_a_deletion(self):
+        monitor, mongo = self._leftover_for(None, None)
+
+        assert monitor.resolve_held_workers() == []
+        mongo.simulation_repo.get.assert_not_called()
+        mongo.resource_repo.clear_held_for.assert_not_called()
+
+    def test_a_live_process_of_a_deleted_simulation_stays_held(self):
+        """Deletion explains the bytes, not a JVM still running."""
+        held = self._held()
+        held["held_for"]["simulation_id"] = SIM_ID
+        monitor, mongo, _ = self._monitor(
+            RunState(alive=True, finished=False, testlog_bytes=4096),
+            held=held)
+        mongo.simulation_repo.get.return_value = None
+
+        assert monitor.resolve_held_workers() == []
+        mongo.resource_repo.clear_held_for.assert_not_called()
+
     def test_an_unreachable_container_stays_held(self):
         """Unreachable is the absence of an answer, not an answer."""
         monitor, mongo, _ = self._monitor(None)
