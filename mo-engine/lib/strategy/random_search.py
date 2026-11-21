@@ -22,6 +22,7 @@ from lib.util.build_input_sim_cooja import create_files
 from lib.nsga import fast_nondominated_sort
 from lib.problem.adapter import ProblemAdapter, Chromosome
 from lib.problem.resolve import build_adapter
+from lib.problem.mac_gene import pin_mac_gene
 from .analytical import analytical_objectives
 from pylib import benchmarks
 from pylib.timeutil import utc_now
@@ -32,7 +33,12 @@ from lib.strategy.completeness import (
     ReplicaGate,
     ReplicaPolicy,
     annotate,
+    evaluation_of,
+    front_validity,
+    front_warning,
     is_usable,
+    objective_vector,
+    refuse,
     reused,
     without_simulations,
 )
@@ -116,6 +122,11 @@ class RandomSearchStrategy(EngineStrategy):
             algorithm_config,
             self._rng,
         )
+        # With a single firmware source the MAC gene cannot express anything;
+        # pin it where chromosomes are made so the stored gene is the one that
+        # ran and two phenotypes never hash apart. See lib/problem/mac_gene.py.
+        self._problem_adapter = pin_mac_gene(
+            self._problem_adapter, self.source_repository_options)
 
         self._metric_conv_config = experiment.get("data_conversion_config", {}) or {}
 
@@ -672,6 +683,8 @@ class RandomSearchStrategy(EngineStrategy):
                     ind.get_hash(),
                 )
                 self._map_genome_objectives[ind] = worst_objectives
+                completeness[ind.get_hash()] = refuse(
+                    record, "no aggregated metrics for this individual")
                 continue
             obj_vector = self._extract_objectives_to_minimization(ind_metrics)
             if obj_vector is None:
@@ -680,6 +693,8 @@ class RandomSearchStrategy(EngineStrategy):
                     ind.get_hash(),
                 )
                 self._map_genome_objectives[ind] = worst_objectives
+                completeness[ind.get_hash()] = refuse(
+                    record, "a metric is missing or not a finite number")
             else:
                 self._map_genome_objectives[ind] = obj_vector
 
@@ -694,6 +709,7 @@ class RandomSearchStrategy(EngineStrategy):
                     pareto_items.append({
                         "chromosome": genome.to_dict(),
                         "objectives": self._objectives_to_original(objectives),
+                        "evaluation": evaluation_of(self._genome_completeness_cache.get(genome.get_hash())),
                     })
                     all_objectives.append(objectives)
                 pareto_fronts = fast_nondominated_sort(all_objectives)
@@ -772,14 +788,13 @@ class RandomSearchStrategy(EngineStrategy):
     def _extract_objectives_to_minimization(
         self, sim_metrics_map: dict[str, float],
     ) -> Optional[list[float]]:
-        obj_vector: list[float] = []
-        for key, goal in zip(self._objective_keys, self._objective_goals):
-            metric_value = sim_metrics_map.get(key)
-            if metric_value is None:
-                logger.warning("[RandomSearch] Missing metric '%s'.", key)
-                return None
-            obj_vector.append(metric_value * goal)
-        return obj_vector
+        # NaN and infinity are refused here, not only None: a NaN vector is
+        # never dominated, so it would enter front 0 and corrupt the sort.
+        vector, reason = objective_vector(
+            sim_metrics_map, self._objective_keys, self._objective_goals)
+        if vector is None:
+            logger.warning("[RandomSearch] Cannot compute objective vector: %s.", reason)
+        return vector
 
     # ------------------------------
     # Simulation and topology helpers
@@ -878,6 +893,11 @@ class RandomSearchStrategy(EngineStrategy):
     ) -> None:
         assert self._exp_id is not None
         if pareto_front is not None:
+            validity = front_validity(pareto_front)
+            warning = front_warning(validity)
+            if warning:
+                logger.warning("[RandomSearch] Experiment %s: %s", self._exp_id, warning)
+                system_msg = f"{system_msg} {warning}" if system_msg else warning
             logger.info("[RandomSearch] Experiment %s completed.", self._exp_id)
             self.mongo.experiment_repo.update(str(self._exp_id), {
                 "status": EnumStatus.DONE,
@@ -886,6 +906,7 @@ class RandomSearchStrategy(EngineStrategy):
                     if system_msg is not None
                     else f"Experiment {self._exp_id} completed.",
                 "pareto_front": pareto_front,
+                "pareto_front_validity": validity,
             })
         else:
             logger.error("[RandomSearch] Experiment %s finished with error.", self._exp_id)

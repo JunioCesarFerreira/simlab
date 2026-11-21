@@ -15,7 +15,7 @@
 import { ref, computed, watch, onMounted } from "vue";
 import { useEChart } from "../../composables/useEChart";
 import { useTheme } from "../../composables/useTheme";
-import { PENALTY_THRESHOLD } from "../../types/simlab";
+import { isPenalized } from "../../types/simlab";
 import type { ParetoFrontItemDto, FloatMap } from "../../types/simlab";
 import { stableStringify } from "../../utils/stableStringify";
 import { chartExportFilename } from "../../utils/chartExport";
@@ -73,7 +73,7 @@ interface ResolvedItem {
 
 const resolvedItems = computed<ResolvedItem[]>(() =>
   (props.paretoFront ?? []).flatMap((item) => {
-    if (Object.values(item.objectives).some((v) => v >= PENALTY_THRESHOLD)) return [];
+    if (isPenalized(Object.values(item.objectives), item.evaluation)) return [];
     const individualId =
       props.chromosomeMap?.get(stableStringify(item.chromosome)) ?? "";
     return [{ individualId, objectives: item.objectives }];

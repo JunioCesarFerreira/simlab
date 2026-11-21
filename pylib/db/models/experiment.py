@@ -51,6 +51,8 @@ class Parameters(TypedDict):
 class ParetoFrontItem(TypedDict):
     chromosome: dict[str, Any]
     objectives: dict[str, float]
+    #: {state, objective_used, valid} — see pylib.evaluation_validity.
+    evaluation: NotRequired[dict[str, Any]]
 
 
 class RuntimeMetricsArtifact(TypedDict):
@@ -129,6 +131,8 @@ class Experiment(TypedDict):
     source_repository_options: dict[str, ObjectId]
     data_conversion_config: DataConversionConfig
     pareto_front: Optional[list[ParetoFrontItem]]
+    #: {items, valid, infeasible, refused}: what the stored front rests on.
+    pareto_front_validity: Optional[dict[str, int]]
     analysis_files: dict[str, ObjectId]
     runtime_metrics: Optional[RuntimeMetrics]
     firmware_snapshot: Optional[FirmwareSnapshot]

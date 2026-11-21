@@ -56,6 +56,7 @@ def test_final_front_uses_final_population_only(cls):
     # neither set — it must NOT appear in the reported front either.
     archive_only = _FakeChromosome("archive-only")
 
+    strat._genome_completeness_cache = {}
     strat._map_genome_objectives = {
         fp1: [0.1, 0.9],
         fp2: [0.9, 0.1],

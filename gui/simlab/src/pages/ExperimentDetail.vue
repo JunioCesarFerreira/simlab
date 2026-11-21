@@ -627,7 +627,7 @@ const rankInput = computed(() => {
     for (const ind of gen.population) {
       if (seen.has(ind.individual_id)) continue;
       seen.add(ind.individual_id);
-      if (isPenalized(ind.objectives)) continue;
+      if (isPenalized(ind.objectives, ind.completeness)) continue;
       points.push({ id: ind.individual_id, objectives: [...ind.objectives] });
     }
   }
@@ -652,7 +652,7 @@ const displayedParetoFront = computed<ParetoFrontItemDto[] | null | undefined>((
     objectives: Object.fromEntries(ind.objectives.map((v, i) => [names[i] ?? `obj${i}`, v])),
   });
 
-  const valid = gen.population.filter((ind) => !isPenalized(ind.objectives));
+  const valid = gen.population.filter((ind) => !isPenalized(ind.objectives, ind.completeness));
   // Without goals domination can't be evaluated — fall back to all feasible points
   if (goals.length === 0) return valid.map(toItem);
 

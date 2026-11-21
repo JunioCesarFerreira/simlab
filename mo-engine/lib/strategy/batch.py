@@ -23,6 +23,7 @@ from lib.nsga import fast_nondominated_sort
 from lib.problem.adapter import ProblemAdapter, Chromosome
 from lib.problem.chromosomes import chromosome_from_dict
 from lib.problem.resolve import build_adapter
+from lib.problem.mac_gene import pin_mac, pinned_mac_protocol
 from pylib.timeutil import utc_now
 from pylib.seed_aggregation import objective_aggregators
 from lib.strategy.completeness import (
@@ -31,7 +32,12 @@ from lib.strategy.completeness import (
     ReplicaGate,
     ReplicaPolicy,
     annotate,
+    evaluation_of,
+    front_validity,
+    front_warning,
     is_usable,
+    objective_vector,
+    refuse,
     reused,
     without_simulations,
 )
@@ -139,8 +145,13 @@ class BatchStrategy(EngineStrategy):
                 "Batch strategy requires a non-empty list of chromosomes "
                 "in parameters.chromosomes."
             )
+        # With a single firmware source the MAC gene of an input chromosome
+        # cannot be honoured; store the gene that will run, not the one that
+        # was asked for. See lib/problem/mac_gene.py.
+        mac = pinned_mac_protocol(self.source_repository_options)
         self._chromosomes: list[Chromosome] = [
-            chromosome_from_dict(self._problem_name, c) for c in raw_chromosomes
+            pin_mac(chromosome_from_dict(self._problem_name, c), mac)
+            for c in raw_chromosomes
         ]
         logger.info("[Batch] Loaded %d chromosomes from input.", len(self._chromosomes))
 
@@ -151,6 +162,10 @@ class BatchStrategy(EngineStrategy):
         self._count_sims_inserted: int = 0
         self._map_genome_objectives: dict[Chromosome, list[float]] = {}
         self._inserted_genomes: set[str] = set()
+        #: Hash -> the completeness record stored with that genome's vector.
+        #: The Pareto items read it to say whether they are a measurement, a
+        #: constraint penalty or a placeholder.
+        self._evidence: dict[str, Optional[dict]] = {}
 
     # ------------------------------
     # EngineStrategy interface
@@ -353,6 +368,10 @@ class BatchStrategy(EngineStrategy):
             )
             if penalty is not None:
                 self._map_genome_objectives[genome] = penalty
+                penalty_record = without_simulations(
+                    STATE_INFEASIBLE,
+                    "the individual violates a constraint; no simulation was run")
+                self._evidence[genome_hash] = penalty_record
                 ind_doc: Individual = {
                     "experiment_id": exp_oid,
                     "generation_id": gen_oid,
@@ -360,6 +379,9 @@ class BatchStrategy(EngineStrategy):
                     "chromosome": genome.to_dict(),
                     "objectives": self._objectives_list_to_original(penalty),
                     "topology_picture_id": None,
+                    # Without it the vector was told from a measurement only
+                    # by its magnitude.
+                    "completeness": penalty_record,
                 }
                 self.mongo.individual_repo.insert(ind_doc)
                 self._inserted_genomes.add(genome_hash)
@@ -491,6 +513,8 @@ class BatchStrategy(EngineStrategy):
                     ind.get_hash(),
                 )
                 self._map_genome_objectives[ind] = worst_objectives
+                completeness[ind.get_hash()] = refuse(
+                    record, "no aggregated metrics for this individual")
                 continue
             obj_vector = self._extract_objectives_to_minimization(ind_metrics)
             if obj_vector is None:
@@ -499,6 +523,8 @@ class BatchStrategy(EngineStrategy):
                     ind.get_hash(),
                 )
                 self._map_genome_objectives[ind] = worst_objectives
+                completeness[ind.get_hash()] = refuse(
+                    record, "a metric is missing or not a finite number")
             else:
                 self._map_genome_objectives[ind] = obj_vector
 
@@ -511,6 +537,7 @@ class BatchStrategy(EngineStrategy):
                 pareto_items.append({
                     "chromosome": genome.to_dict(),
                     "objectives": self._objectives_to_original(objectives),
+                    "evaluation": evaluation_of(self._evidence.get(genome.get_hash())),
                 })
                 all_objectives.append(objectives)
 
@@ -536,6 +563,16 @@ class BatchStrategy(EngineStrategy):
                 continue
             genome_hash = genome.get_hash()
             record = (completeness or {}).get(genome_hash)
+            if record is None:
+                # An infeasible genome has no simulations to count; its record
+                # was written at enqueue and must not be replaced by `unknown`.
+                record = self._evidence.get(genome_hash)
+            evidence = annotate(
+                record,
+                usable=is_usable(record, self._replica_policy),
+                policy=self._replica_policy,
+            )
+            self._evidence[genome_hash] = evidence
             # The objectives and the evidence behind them in one write: stored
             # separately, a reader could see a vector whose completeness had
             # not been written yet and have no way to know that.
@@ -543,11 +580,7 @@ class BatchStrategy(EngineStrategy):
                 genome_hash,
                 self._generation_id,
                 self._objectives_list_to_original(objectives),
-                annotate(
-                    record,
-                    usable=is_usable(record, self._replica_policy),
-                    policy=self._replica_policy,
-                ),
+                evidence,
             )
 
     # ------------------------------
@@ -563,16 +596,15 @@ class BatchStrategy(EngineStrategy):
         }
 
     def _extract_objectives_to_minimization(
-        self, sim_metrics_map: dict[str, float]
+        self, sim_metrics_map: dict[str, float],
     ) -> Optional[list[float]]:
-        obj_vector: list[float] = []
-        for key, goal in zip(self._objective_keys, self._objective_goals):
-            metric_value = sim_metrics_map.get(key)
-            if metric_value is None:
-                logger.warning("[Batch] Missing metric '%s'.", key)
-                return None
-            obj_vector.append(metric_value * goal)
-        return obj_vector
+        # NaN and infinity are refused here, not only None: a NaN vector is
+        # never dominated, so it would enter front 0 and corrupt the sort.
+        vector, reason = objective_vector(
+            sim_metrics_map, self._objective_keys, self._objective_goals)
+        if vector is None:
+            logger.warning("[Batch] Cannot compute objective vector: %s.", reason)
+        return vector
 
     # ------------------------------
     # Simulation and topology helpers
@@ -694,6 +726,11 @@ class BatchStrategy(EngineStrategy):
     ) -> None:
         assert self._exp_id is not None
         if pareto_front is not None:
+            validity = front_validity(pareto_front)
+            warning = front_warning(validity)
+            if warning:
+                logger.warning("[Batch] Experiment %s: %s", self._exp_id, warning)
+                system_msg = f"{system_msg} {warning}" if system_msg else warning
             logger.info("[Batch] Experiment %s completed.", self._exp_id)
             self.mongo.experiment_repo.update(str(self._exp_id), {
                 "status": EnumStatus.DONE,
@@ -702,6 +739,7 @@ class BatchStrategy(EngineStrategy):
                     if system_msg is not None
                     else f"Experiment {self._exp_id} completed.",
                 "pareto_front": pareto_front,
+                "pareto_front_validity": validity,
             })
         else:
             logger.error("[Batch] Experiment %s finished with error.", self._exp_id)

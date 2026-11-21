@@ -1,4 +1,5 @@
 import logging
+import math
 from datetime import datetime
 from typing import Callable, Optional, TypedDict
 from bson import ObjectId, errors
@@ -83,6 +84,23 @@ class ReplicaCompleteness(TypedDict):
     state: str
 
 
+def _is_finite_number(value: object) -> bool:
+    """Whether a stored metric is a number an objective can rest on.
+
+    ``statistics`` returns NaN for a column that is absent or empty, and the
+    master publishes the simulation as ``Done`` regardless. Counted as
+    present, that NaN made the evaluation ``complete`` and reached the sort,
+    where it is never dominated. A non-finite value is therefore *absent* for
+    every count and every mean in this module.
+    """
+    if value is None or isinstance(value, (str, bytes)):
+        return False
+    try:
+        return math.isfinite(float(value))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return False
+
+
 def _ended_after(candidate: dict, kept: dict) -> bool:
     """Whether ``candidate`` is the later of two results for one seed.
 
@@ -136,7 +154,7 @@ def _reason_for(
             "(nothing to repeat)")
     if thin_metrics:
         parts.append(
-            "finished replicas are missing "
+            "finished replicas are missing (or carry a non-finite) "
             + ", ".join(thin_metrics)
             + " (nothing to repeat)")
     if not parts:
@@ -175,7 +193,10 @@ def _completeness_of(
                 done_seeds.add(seed)
             measured = run.get("network_metrics") or {}
             for metric in metrics:
-                if metric in measured and seed is not None:
+                # Present means present *and finite*: a NaN is not a replica
+                # this objective can rest on.
+                if (seed is not None and metric in measured
+                        and _is_finite_number(measured[metric])):
                     metric_seeds[metric].add(seed)
         elif status in (EnumStatus.ERROR, EnumStatus.CANCELLED):
             if seed is not None:
@@ -584,7 +605,12 @@ class GenerationRepository:
             if ind_id not in accumulated:
                 accumulated[ind_id] = {}
             for m in metrics:
-                if m in metrics_map:
+                # Same rule as the completeness count: a non-finite value is
+                # not a sample. Averaged in, one NaN made the whole aggregate
+                # NaN; under the default policy the count above already
+                # refuses the individual, and under ``accept`` the mean is
+                # taken over the finite replicas that do exist.
+                if m in metrics_map and _is_finite_number(metrics_map[m]):
                     accumulated[ind_id].setdefault(m, []).append(float(metrics_map[m]))
 
         # Aggregate per seed using Ψa

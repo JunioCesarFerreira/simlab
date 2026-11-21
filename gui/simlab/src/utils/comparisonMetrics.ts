@@ -2,9 +2,11 @@ import type { ParetoFrontItemDto, ObjectiveItem } from '../types/simlab';
 import { isPenalized } from '../types/simlab';
 
 export function extractFront(items: ParetoFrontItemDto[], objectives: ObjectiveItem[]): number[][] {
+  // Excluded by the item's evidence when it carries one; by magnitude only for
+  // fronts written before the engine recorded it.
   return items
-    .map(item => objectives.map(o => item.objectives[o.metric_name] ?? 0))
-    .filter(vals => !isPenalized(vals));
+    .filter(item => !isPenalized(Object.values(item.objectives), item.evaluation))
+    .map(item => objectives.map(o => item.objectives[o.metric_name] ?? 0));
 }
 
 // Returns true if a Pareto-dominates b

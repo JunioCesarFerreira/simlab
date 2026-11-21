@@ -44,5 +44,11 @@ def test_bulk_query_groups_interleaved_generations_and_projects_metrics(objectiv
     repository = IndividualRepository(connection)
     grouped = repository.find_grouped_by_experiment(exp, objectives_only=objectives_only)
     assert grouped == {a: [records[0], records[2]], b: [records[1]]}
-    projection = {"_id": 0, "generation_id": 1, "individual_id": 1, "objectives": 1} if objectives_only else None
+    # The verdict on each vector travels with it: charts and indicators drop
+    # penalties by their evidence record, not by magnitude.
+    projection = {
+        "_id": 0, "generation_id": 1, "individual_id": 1, "objectives": 1,
+        "completeness.state": 1, "completeness.objective_used": 1,
+        "completeness.refused": 1,
+    } if objectives_only else None
     collection.find.assert_called_once_with({"experiment_id": exp}, projection)

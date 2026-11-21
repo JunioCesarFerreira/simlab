@@ -5,6 +5,49 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Validity guards: NaN, infeasible fronts, the MAC gene, penalty filtering
+
+Found in the repository review of 2026-11-18. None of them affected the stored
+results of the papers (no finished simulation has a non-finite metric), but each
+one could silently change a future result.
+
+### Fixed
+
+- **A non-finite metric can no longer reach the optimiser.** `statistics` returns
+  NaN for an absent or empty column and the master publishes the simulation as
+  `Done`; the completeness count took the NaN as present and the aggregate
+  averaged it, and the strategies rejected only `None`. A NaN vector is never
+  dominated, so it entered front 0 and randomised NSGA-III niching through the
+  ideal point. Now a non-finite value is *absent* for the completeness count and
+  the seed aggregate (`pylib/db/repositories/generation.py`), and the four
+  strategies refuse a non-finite objective (`objective_vector` in
+  `mo-engine/lib/strategy/completeness.py`). A vector the strategy had to replace
+  by the worst placeholder is now recorded with `refused` and
+  `objective_used: false`; before, the record said the placeholder was used.
+- **A front made only of penalties is no longer reported as a plain success.**
+  Every Pareto item carries `evaluation` (`state`, `objective_used`, `valid`), and
+  the experiment carries `pareto_front_validity` (`items`, `valid`, `infeasible`,
+  `refused`). When no item is valid the system message says so ("Completed
+  WITHOUT a valid solution…"). A P2 run with 100% coverage required had ended
+  `Done`, "completed", with 63 front items at ~1e9.
+- **The MAC gene is the one that ran.** With a single firmware source the
+  strategies kept only the source id and threw away the adjusted chromosome, so
+  the stored gene drifted (152 of 210 individuals recorded "TSCH" in a CSMA-only
+  P2 run) and two hashes could share one phenotype. The gene is now pinned where
+  chromosomes are made (`mo-engine/lib/problem/mac_gene.py`), and batch input is
+  pinned on load. Chromosomes read back on a resume are not touched.
+- **Penalties are filtered by their evidence, not their size.** The REST
+  indicators, `pareto-analysis` and the GUI dropped any vector with an objective
+  ≥ 1e8, which also drops a legitimate value (energy already reaches 1.8e7) and
+  keeps a placeholder below it. They now read the `completeness` record of an
+  individual and the `evaluation` of a Pareto item (`pylib/evaluation_validity.py`,
+  mirrored in `pareto-analysis/lib/metrics.py` and `gui/simlab/src/types/simlab.ts`);
+  the magnitude rule remains only for documents written before the evidence existed.
+  Non-finite vectors are always excluded. Batch infeasible individuals now store
+  their `infeasible` record too.
+
+---
+
 ## [Unreleased] — Workers held for a simulation that was deleted
 
 ### Fixed

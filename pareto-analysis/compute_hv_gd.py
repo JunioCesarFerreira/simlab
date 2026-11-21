@@ -116,7 +116,13 @@ def main() -> None:
 
     # Penalized, duplicate and dominated rows would corrupt IGD, which averages
     # over the reference front rather than minimizing over it.
-    reference_front = metrics.sanitize_reference_front(reference_rows)
+    reference_front = metrics.sanitize_reference_front(
+        reference_rows,
+        penalty_threshold=(
+            metrics.legacy_threshold_for([p.get("evaluation") for p in stored_pf])
+            if reference_kind == "final_front" else metrics.PENALTY_THRESHOLD
+        ),
+    )
     if reference_front.size == 0:
         print(_empty())
         return

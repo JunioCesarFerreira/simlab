@@ -19,12 +19,18 @@ reference front's ideal-nadir range by default.
 """
 from __future__ import annotations
 
-from typing import Iterable, Sequence
+import math
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 import numpy as np
 import moocore
 
+# Magnitude marker for documents WITHOUT an evidence record only. Anything the
+# engine wrote since it stores `completeness` (individuals) and `evaluation`
+# (Pareto items) is filtered by that record: see is_excluded. Standalone copy
+# of pylib.evaluation_validity, held to it by tests/test_metrics_parity.py.
 PENALTY_THRESHOLD = 1.0e8
+STATE_INFEASIBLE = "infeasible"
 
 
 def is_penalized(objectives: Sequence[float], threshold: float = PENALTY_THRESHOLD) -> bool:
@@ -32,22 +38,76 @@ def is_penalized(objectives: Sequence[float], threshold: float = PENALTY_THRESHO
     return any(abs(float(v)) >= threshold for v in objectives)
 
 
+def is_valid_evaluation(record: Optional[Mapping[str, Any]]) -> bool:
+    """Whether the evidence record says the vector is a measurement."""
+    if not record:
+        return True
+    if "valid" in record:
+        return bool(record["valid"])
+    if record.get("state") == STATE_INFEASIBLE:
+        return False
+    if record.get("refused"):
+        return False
+    return bool(record.get("objective_used", True))
+
+
+def has_evidence(record: Any) -> bool:
+    return isinstance(record, Mapping) and bool(record)
+
+
+def all_finite(objectives: Sequence[Any]) -> bool:
+    try:
+        return all(math.isfinite(float(v)) for v in objectives)
+    except (TypeError, ValueError):
+        return False
+
+
+def is_excluded(
+    objectives: Sequence[Any],
+    record: Optional[Mapping[str, Any]] = None,
+    *,
+    legacy_threshold: float = PENALTY_THRESHOLD,
+) -> bool:
+    """Non-finite, or excluded by the evidence record; by magnitude only when
+    there is no record (legacy documents)."""
+    if not all_finite(objectives):
+        return True
+    if has_evidence(record):
+        return not is_valid_evaluation(record)
+    return any(abs(float(v)) >= legacy_threshold for v in objectives)
+
+
+def legacy_threshold_for(records: Sequence[Optional[Mapping[str, Any]]]) -> float:
+    """The magnitude rule to apply to rows whose records were already used.
+
+    When every row carried evidence (and the invalid ones were dropped by it),
+    no magnitude rule is applied at all: a legitimate value above 1e8 is a
+    measurement. Otherwise the legacy marker stands.
+    """
+    if records and all(has_evidence(r) for r in records):
+        return math.inf
+    return PENALTY_THRESHOLD
+
+
 def sanitize_reference_front(
     rows: Iterable[Sequence[float]],
     *,
     penalty_threshold: float = PENALTY_THRESHOLD,
+    records: Optional[Sequence[Optional[Mapping[str, Any]]]] = None,
 ) -> np.ndarray:
-    """Drop penalised rows, deduplicate, keep only the non-dominated ones.
+    """Drop penalised and non-finite rows, deduplicate, keep the non-dominated.
 
     IGD averages over the reference, so a single penalised row at 1e9 would
     drag the mean to 1e9. GD hides the same contamination because it minimises
-    over the reference instead.
+    over the reference instead. ``records`` (parallel to ``rows``) decides per
+    row; rows without one fall back to the magnitude rule.
     """
     kept: list[list[float]] = []
     seen: set[tuple] = set()
-    for row in rows:
+    for index, row in enumerate(rows):
         vals = [float(v) for v in row]
-        if is_penalized(vals, penalty_threshold):
+        record = records[index] if records is not None else None
+        if is_excluded(vals, record, legacy_threshold=penalty_threshold):
             continue
         key = tuple(vals)
         if key in seen:

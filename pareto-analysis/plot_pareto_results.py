@@ -919,7 +919,12 @@ def main():
 
     # Penalized, duplicate and dominated rows would corrupt IGD, which averages
     # over the reference front rather than minimizing over it.
-    reference_front_min = metrics.sanitize_reference_front(reference_front_min)
+    reference_front_min = metrics.sanitize_reference_front(
+        reference_front_min,
+        penalty_threshold=metrics.legacy_threshold_for(
+            [p.get("evaluation") for p in stored_pareto]
+        ) if stored_pareto else metrics.PENALTY_THRESHOLD,
+    )
     if reference_front_min.size == 0:
         raise SystemExit(
             "[ERROR] The reference front is empty after dropping penalized, "

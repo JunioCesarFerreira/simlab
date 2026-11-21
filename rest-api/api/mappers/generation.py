@@ -16,6 +16,9 @@ _COMPLETENESS_FIELDS = (
     "absent_seeds", "thin_metrics",
     "per_metric", "attempts", "objective_used", "policy",
     "reused", "source", "reason",
+    # Set when the engine could not turn the measurements into a vector (a
+    # metric missing or non-finite); the stored vector is a placeholder.
+    "refused",
 )
 
 

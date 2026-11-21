@@ -590,11 +590,10 @@ def plot_pareto_results(
 
 # ── HV/GD inline helpers ──────────────────────────────────────────────────────
 
-_PENALTY_THRESHOLD = moo_metrics.PENALTY_THRESHOLD
-
-
-def _is_penalized(objs: list[float]) -> bool:
-    return any(abs(v) >= _PENALTY_THRESHOLD for v in objs)
+def _is_excluded(objs: list[float], record: Optional[dict] = None) -> bool:
+    """Penalty, placeholder or non-finite: decided by the stored evidence,
+    by magnitude only for documents written before the evidence existed."""
+    return moo_metrics.is_excluded(objs, record)
 
 
 def _front_rows(objs_list: list[list[float]], minimize: list[bool]) -> list[list[float]]:
@@ -691,9 +690,9 @@ def get_hv_gd(
         objectives, minimize, population, normalize, include_cumulative,
         (doc.get("parameters") or {}).get("objectives"),
         ((doc.get("parameters") or {}).get("simulation") or {}).get("synthetic"),
-        [p.get("objectives") for p in doc.get("pareto_front") or []],
+        [[p.get("objectives"), p.get("evaluation")] for p in doc.get("pareto_front") or []],
         [[g["index"], g.get("survivors"),
-          [[i.get("individual_id"), i.get("objectives")]
+          [[i.get("individual_id"), i.get("objectives"), i.get("completeness")]
            for i in individuals.get(g["_id"], [])]] for g in gens],
     ]
     return hv_gd_cache.get_or_compute(
@@ -749,7 +748,7 @@ def _compute_hv_gd(
             if len(raw) <= max(objective_columns):
                 continue
             objs = [float(raw[i]) for i in objective_columns]
-            if _is_penalized(objs) or not np.isfinite(objs).all():
+            if _is_excluded(objs, ind.get("completeness")):
                 continue
             valid.append(objs)
             ind_hash = ind.get("individual_id")
@@ -798,6 +797,9 @@ def _compute_hv_gd(
 
     reference_kind = "final_front"
     reference_front = None
+    # Evidence parallel to the empirical reference rows; None for an
+    # analytical front, which has no stored items to vouch for.
+    ref_records: Optional[list[Optional[dict]]] = None
     hv_ref: list[float] = []
     # Theoretical ideal-nadir range, when the benchmark provides one. Used both
     # to normalise the indicators (instead of the sampled reference's extremes,
@@ -844,6 +846,7 @@ def _compute_hv_gd(
         if not stored_pf:
             return _empty_hv_gd()
         ref_min_rows: list[list[float]] = []
+        ref_records = []
         for p in stored_pf:
             objs_dict: dict = p.get("objectives") or {}
             # A row missing an objective is dropped rather than defaulted: a
@@ -855,13 +858,15 @@ def _compute_hv_gd(
                 float(objs_dict[o]) if minimize_bools[i] else -float(objs_dict[o])
                 for i, o in enumerate(objectives)
             ])
+            ref_records.append(p.get("evaluation"))
         reference_front = ref_min_rows
 
     # Penalised, duplicate and dominated rows are stripped before the front is
     # used as a reference. IGD averages over the reference, so a single
     # penalised row (≥ 1e8) would dominate the mean outright — GD never exposed
     # this because it minimises over the reference instead.
-    reference_front = moo_metrics.sanitize_reference_front(reference_front)
+    reference_front = moo_metrics.sanitize_reference_front(
+        reference_front, records=ref_records)
     if reference_front.size == 0:
         return _empty_hv_gd()
 

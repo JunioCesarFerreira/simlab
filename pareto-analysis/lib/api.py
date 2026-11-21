@@ -3,9 +3,7 @@ import requests
 from pathlib import Path
 from typing import Any
 
-# Individuals whose ANY objective (absolute value) exceeds this threshold
-# are considered penalized and excluded from all analyses.
-PENALTY_THRESHOLD = 1e8
+from lib.metrics import PENALTY_THRESHOLD, is_excluded, is_valid_evaluation  # noqa: F401
 
 # The REST API no longer publishes a host port: everything goes through the
 # nginx reverse proxy over TLS. Override per environment with SIMLAB_API_BASE.
@@ -53,10 +51,6 @@ def build_session(api_key: str) -> requests.Session:
     return s
 
 
-def _is_penalized(raw_objectives: list[float]) -> bool:
-    return any(abs(v) >= PENALTY_THRESHOLD for v in raw_objectives)
-
-
 def get_generations_from_experiment(
     session: requests.Session,
     api_base: str,
@@ -79,7 +73,9 @@ def get_generations_from_experiment(
             # build a short objectives dict and KeyError later.
             if len(raw_objs) < len(label_objectives):
                 continue
-            if _is_penalized(raw_objs):
+            # Penalty, placeholder or non-finite: decided by the evidence stored
+            # with the vector; by magnitude only for legacy individuals.
+            if is_excluded(raw_objs, ind.get("completeness")):
                 continue
             valid.append({
                 "id": ind["id"],
@@ -105,7 +101,11 @@ def get_experiment_pareto_front(
     url = f"{api_base}/experiments/{experiment_id}"
     resp = session.get(url, timeout=30)
     resp.raise_for_status()
-    return resp.json().get("pareto_front") or []
+    items = resp.json().get("pareto_front") or []
+    # Items the engine marked as a penalty or a placeholder are not part of a
+    # result. Items written before the mark existed carry no `evaluation`, and
+    # the reference-front sanitiser applies the legacy magnitude rule to them.
+    return [item for item in items if is_valid_evaluation(item.get("evaluation"))]
 
 
 def upload_analysis_file_api(

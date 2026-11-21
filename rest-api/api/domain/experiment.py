@@ -26,6 +26,10 @@ class DataConversionConfigDto(TypedDict):
 class ParetoFrontItemDto(TypedDict):
     chromosome: dict[str, Any]
     objectives: dict[str, float]
+    #: {state, objective_used, valid}: whether the vector is a measurement, a
+    #: constraint penalty or a placeholder. Absent on fronts written before
+    #: the engine recorded it.
+    evaluation: NotRequired[Optional[dict[str, Any]]]
 
 
 class RuntimeMetricsArtifactDto(TypedDict, total=False):
@@ -139,6 +143,8 @@ class ExperimentDto(TypedDict):
     source_repository_options: dict[str, str]
     data_conversion_config: DataConversionConfigDto
     pareto_front: Optional[list[ParetoFrontItemDto]]
+    #: {items, valid, infeasible, refused} for the stored front.
+    pareto_front_validity: NotRequired[Optional[dict[str, int]]]
     generations: NotRequired[list[GenerationDto]]
     analysis_files: NotRequired[dict[str, str]]
     runtime_metrics: NotRequired[Optional[RuntimeMetricsDto]]
@@ -158,6 +164,7 @@ class ExperimentFullDto(TypedDict):
     source_repository_options: dict[str, str]
     data_conversion_config: DataConversionConfigDto
     pareto_front: Optional[list[ParetoFrontItemDto]]
+    pareto_front_validity: NotRequired[Optional[dict[str, int]]]
     analysis_files: NotRequired[dict[str, str]]
     runtime_metrics: NotRequired[Optional[RuntimeMetricsDto]]
     firmware_snapshot: NotRequired[Optional[FirmwareSnapshotDto]]
