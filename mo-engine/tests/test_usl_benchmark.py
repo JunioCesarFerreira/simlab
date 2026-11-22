@@ -242,6 +242,12 @@ class TestTheFirstWave:
         assert gen["benchmark"]["level"] == 3
         assert len(store.wave_simulations(gen["_id"])) == 3
 
+    def test_its_simulations_tell_the_scheduler_they_are_a_benchmark(self, store):
+        """A wave only measures N if the scheduler does not queue it."""
+        started(store, levels=(3,))
+
+        assert all(sim["benchmark"] is True for sim in store.simulations)
+
     def test_the_generation_is_written_before_its_simulations(self, store):
         """A fast worker can finish a simulation before the last one is
         inserted; the close has to land on a document that exists."""

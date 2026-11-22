@@ -18,12 +18,14 @@ import pytest
 from bson import ObjectId
 
 from lib.scheduler.dispatcher import Dispatcher
+from lib.scheduler.workload import workload_of
 from lib.scheduler.policy import (
     EarliestCompletionPolicy,
     FastestThenLeastLoadedPolicy,
     HostLoad,
     LeastLoadedHostPolicy,
 )
+from pylib.timeutil import utc_now
 
 SIM_ID = "507f1f77bcf86cd799430003"
 SIM_OID = ObjectId(SIM_ID)
@@ -652,8 +654,8 @@ class TestTheOrderingInsideTheHostFollowsThePolicy:
         dispatcher.submit(SIM_ID)
         dispatcher.step()
 
-        assert mongo.resource_repo.find_free_by_host.call_args.kwargs == {
-            "prefer_fastest": False}
+        asked = mongo.resource_repo.find_free_by_host.call_args.kwargs
+        assert asked["prefer_fastest"] is False
 
     def test_a_speed_aware_policy_does(self):
         mongo = FakeMongo()
@@ -662,8 +664,8 @@ class TestTheOrderingInsideTheHostFollowsThePolicy:
         dispatcher.submit(SIM_ID)
 
         assert dispatcher.step() is True
-        assert mongo.resource_repo.find_free_by_host.call_args.kwargs == {
-            "prefer_fastest": True}
+        asked = mongo.resource_repo.find_free_by_host.call_args.kwargs
+        assert asked["prefer_fastest"] is True
 
     def test_a_policy_that_does_not_declare_it_is_treated_as_not_wanting_it(
             self):
@@ -679,8 +681,8 @@ class TestTheOrderingInsideTheHostFollowsThePolicy:
         dispatcher.submit(SIM_ID)
         dispatcher.step()
 
-        assert mongo.resource_repo.find_free_by_host.call_args.kwargs == {
-            "prefer_fastest": False}
+        asked = mongo.resource_repo.find_free_by_host.call_args.kwargs
+        assert asked["prefer_fastest"] is False
 
 
 # ── Machine limits and planned completion ────────────────────────────────────
@@ -689,7 +691,8 @@ def detailed(host_id, name, *, free=(), busy=(), machine=None):
     """A snapshot row with the per-worker detail the planner reads."""
     row = {"_id": host_id, "name": name, "free": len(free), "active": len(busy),
            "schedulable": True, "free_durations": list(free),
-           "occupied_workers": [{"mean_duration_sec": d, "started_at": None}
+           "occupied_workers": [{"mean_duration_sec": d, "expected_sec": d,
+                                 "started_at": None}
                                 for d in busy]}
     if machine:
         row["machine"] = machine
@@ -769,3 +772,60 @@ class TestPlannedCompletion:
 
         # The ranked policy only sees the free host, and takes it.
         assert dispatcher.step() is True
+
+
+class TestEstimatesFollowTheWorkload:
+    def test_the_decision_reads_the_estimates_of_the_job_being_placed(self):
+        sim = {**waiting_sim(), "source_repository_id": ObjectId(),
+               "parameters": {"duration": 60}}
+        mongo = FakeMongo(sim=sim)
+        dispatcher, _ = make_dispatcher(mongo, policy=FastestThenLeastLoadedPolicy())
+        dispatcher.submit(SIM_ID)
+
+        assert dispatcher.step() is True
+
+        asked = mongo.host_repo.inventory_snapshot.call_args.kwargs["workload"]
+        assert asked == workload_of(sim)
+        assert mongo.resource_repo.find_free_by_host.call_args.kwargs["workload"] == asked
+
+    def test_the_reservation_records_what_this_job_should_take(self):
+        sim = {**waiting_sim(), "parameters": {"duration": 60}}
+        key = workload_of(sim)
+        worker = {"_id": RES_1, "name": "cooja1", "mean_duration_sec": 1400.0,
+                  "durations": {key: {"mean": 21.0, "samples": 3, "at": utc_now()}}}
+        seen = {}
+
+        def reserve(rid, sim_oid, attempt, **kwargs):
+            seen.update(kwargs)
+            return {"_id": rid, "name": "cooja1"}
+
+        mongo = FakeMongo(sim=sim, free=[worker], reserve=reserve)
+        dispatcher, _ = make_dispatcher(mongo)
+        dispatcher.submit(SIM_ID)
+        dispatcher.step()
+
+        assert seen["expected_sec"] == 21.0
+
+    def test_a_benchmark_is_never_held_for_a_faster_worker(self):
+        """A wave of N measures concurrency N only if the N run at once."""
+        mongo = FakeMongo(
+            sim={**waiting_sim(), "benchmark": True},
+            inventory=[detailed(HOST_A, "fast", busy=(30.0,)),
+                       detailed(HOST_B, "slow", free=(90.0,))])
+        dispatcher, started = make_dispatcher(mongo, policy=EarliestCompletionPolicy())
+        dispatcher.submit(SIM_ID)
+
+        assert dispatcher.step() is True
+        assert len(started) == 1
+
+    def test_a_benchmark_still_respects_a_machine_limit(self):
+        mongo = FakeMongo(
+            sim={**waiting_sim(), "benchmark": True},
+            inventory=[detailed(HOST_A, "a", free=(90.0,), busy=(30.0,), machine="m")])
+        mongo.machine_repo = MagicMock()
+        mongo.machine_repo.limits.return_value = {"m": 1}
+        dispatcher, started = make_dispatcher(mongo, policy=EarliestCompletionPolicy())
+        dispatcher.submit(SIM_ID)
+
+        assert dispatcher.step() is False
+        assert started == []

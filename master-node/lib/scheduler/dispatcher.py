@@ -22,6 +22,8 @@ are skipped once they do — whatever the policy. And a policy that **plans
 completion** may decide that a busy, faster worker will finish the job before
 any free one would; the job then waits for it, and new work arriving wakes
 the decision, since a longer queue can make the slower worker worth using.
+A scalability benchmark is never held that way: it measures what happens
+when N simulations run at once, and waiting is what would make them not.
 """
 import logging
 import queue
@@ -34,8 +36,10 @@ from bson import ObjectId
 
 from lib.scheduler.inventory import apply_machine_limits, describe_loads, snapshot_loads
 from lib.scheduler.policy import Policy, build_policy
+from lib.scheduler.workload import workload_of
 from pylib.db.models.enums import EnumStatus
 from pylib.db.models.infra import operator_configured
+from pylib.db.repositories.infra import duration_estimate
 
 log = logging.getLogger(__name__)
 
@@ -274,8 +278,12 @@ class Dispatcher:
             return False
 
         limits = self._machine_limits()
-        loads = apply_machine_limits(snapshot_loads(self._mongo.host_repo), limits)
-        planner = getattr(self._policy, "plan", None)
+        workload = workload_of(sim)
+        loads = apply_machine_limits(
+            snapshot_loads(self._mongo.host_repo, workload=workload), limits)
+        # A benchmark takes any free worker, the fastest first; only capacity
+        # and machine limits can make it wait.
+        planner = None if sim.get("benchmark") else getattr(self._policy, "plan", None)
         self._deferred = False
         if planner is not None:
             plan = planner(loads, waiting=self.pending, limits=limits,
@@ -291,7 +299,7 @@ class Dispatcher:
             self._log_starvation(sim_id, loads)
             return _NO_CAPACITY
 
-        placement = self._claim(chosen, sim_oid)
+        placement = self._claim(chosen, sim_oid, workload)
         if placement is None:
             # The host looked free a moment ago and no longer is. Re-deciding
             # beats waiting: another host may still have room.
@@ -393,7 +401,9 @@ class Dispatcher:
             return False
         return True
 
-    def _claim(self, chosen: Any, sim_oid: ObjectId) -> Optional[tuple[dict, dict, str]]:
+    def _claim(
+        self, chosen: Any, sim_oid: ObjectId, workload: str
+    ) -> Optional[tuple[dict, dict, str]]:
         """Reserve a free container on the chosen host, atomically.
 
         Walks that host's free containers because another dispatcher — or the
@@ -423,11 +433,12 @@ class Dispatcher:
         # finishing soonest must not then be handed its slowest container.
         prefer_fastest = bool(getattr(self._policy, "prefers_fastest", False))
         for candidate in self._mongo.resource_repo.find_free_by_host(
-                chosen.host_id, prefer_fastest=prefer_fastest):
+                chosen.host_id, prefer_fastest=prefer_fastest, workload=workload):
             attempt_id = uuid.uuid4().hex
             reserved = self._mongo.resource_repo.reserve(
                 candidate["_id"], sim_oid, attempt_id,
-                expect_config_version=config_version)
+                expect_config_version=config_version,
+                expected_sec=duration_estimate(candidate, workload))
             if reserved is None:
                 continue  # lost the race for this one; try the next
 

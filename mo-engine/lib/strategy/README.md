@@ -182,6 +182,8 @@ absent from `Step2Experiment.vue`.
 | Repetitions alternate ascending/descending | A drift in the machines lands on every level instead of biasing one end |
 | Each wave tagged `benchmark: {level, repetition, wave}` | The analysis reads what the engine ran instead of inferring it |
 | Workload persisted after its firmware is resolved | Resolving can rewrite the MAC gene; resolving per simulation recorded one network and ran another |
+| Each simulation carries `benchmark: true` | The master-node then never holds it for a faster worker |
+| A wave counts only if its N ran at the same time | A wave that queued measured a lower concurrency. It is reported invalid, with the concurrency it reached |
 | A wave with no result stops the benchmark | The workload does not run; more waves would only measure failures. A wave with *some* failures is reported invalid and the benchmark continues |
 
 The adapter gets its RNG through `set_ga_operator_configs(rng, {})`:

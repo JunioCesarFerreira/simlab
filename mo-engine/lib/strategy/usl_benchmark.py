@@ -333,6 +333,8 @@ class UslBenchmarkStrategy(EngineStrategy):
             "pos_file_id": files.get("pos_file_id", ""),
             "csc_file_id": files.get("csc_file_id", ""),
             "source_repository_id": self._source_id,
+            # Never held for a faster worker: see the dispatcher.
+            "benchmark": True,
             "log_cooja_id": "",
             "runtime_log_id": "",
             "csv_log_id": "",

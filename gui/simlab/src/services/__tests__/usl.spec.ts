@@ -117,7 +117,7 @@ describe("benchmarkCost", () => {
   });
 
   it("names the levels larger than the pool", () => {
-    // Their waves queue, so they measure the pool full rather than at N.
+    // Their waves queue, so they are not measurements of N.
     expect(benchmarkCost([1, 8, 16], 1, 12).beyondPool).toEqual([16]);
   });
 });

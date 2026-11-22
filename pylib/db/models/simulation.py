@@ -1,4 +1,4 @@
-from typing import Optional, TypedDict
+from typing import NotRequired, Optional, TypedDict
 from datetime import datetime
 from bson import ObjectId
 
@@ -35,3 +35,6 @@ class Simulation(TypedDict):
     attempt_id: str
     assigned_at: datetime
     remote_pid: Optional[int]
+    # One copy of a scalability wave. The scheduler never holds it for a
+    # faster worker: the wave only measures N if its N run at the same time.
+    benchmark: NotRequired[bool]

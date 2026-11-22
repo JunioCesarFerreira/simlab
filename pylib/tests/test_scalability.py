@@ -325,3 +325,31 @@ class TestPerMachine:
         result = scalability.analyse(generations, sims)
 
         assert result["machines"] == [] and result["heterogeneous_pool"] is False
+
+
+class TestAWaveMeasuresTheConcurrencyItRanAt:
+    def test_a_wave_that_queued_is_not_a_measurement(self):
+        """2026-11-22: waves of 4 to 24 ran two at a time and were fitted as N."""
+        result = scalability.measure_wave(wave(4), [
+            run(0, 100), run(0, 100), run(100, 100), run(101, 100),
+        ])
+
+        assert result["valid"] is False
+        assert "at most 2 of 4" in result["reason"]
+        assert result["throughput"]["batch"] is None
+
+    def test_a_wave_dispatched_serially_still_runs_at_once(self):
+        result = scalability.measure_wave(wave(3), [run(0, 100), run(40, 100), run(99, 100)])
+
+        assert result["valid"] is True
+
+    def test_the_tested_range_is_what_was_measured(self):
+        """A queued level must not turn an extrapolated peak into a measured one."""
+        generations, by_gen = benchmark(0.5, 0.05, 0.004)
+        queued = wave(64, index=99)
+        by_gen[str(queued["_id"])] = [run(10 * i, 10) for i in range(64)]
+
+        fitted = scalability.analyse([*generations, queued], by_gen)["fits"]["batch"]
+
+        assert fitted["n_peak"] > 8
+        assert fitted["peak_within_tested"] is False

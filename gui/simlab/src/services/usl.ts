@@ -111,8 +111,8 @@ export function parseLevels(text: string): ParsedLevels {
 export interface BenchmarkCost {
   waves: number;
   simulations: number;
-  /** Levels larger than the pool: their waves queue, so they measure the
-   *  pool at full occupancy rather than at that concurrency. */
+  /** Levels larger than the pool: their waves queue, so they do not run at
+   *  that concurrency and are not counted as measurements. */
   beyondPool: number[];
 }
 

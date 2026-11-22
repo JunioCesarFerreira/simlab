@@ -83,7 +83,7 @@
       <strong>{{ cost.simulations }}</strong> simulation(s)
       <span v-if="cost.beyondPool.length" class="cost__warn">
         · levels {{ cost.beyondPool.join(", ") }} exceed the {{ pool }} available workers: their
-        waves will queue, and measure the pool at full occupancy rather than at that N.
+        waves will queue, so they will not run at that N and will not count as measurements.
       </span>
     </p>
 

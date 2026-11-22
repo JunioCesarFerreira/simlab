@@ -587,19 +587,32 @@ workers of different speeds that greedy is optimal for the makespan.
   its expected time; a run past that, or with no estimate, is not waited on.
 - **New work wakes a waiting decision**: a longer queue can make a slower
   worker worth using.
-- A worker never measured is sampled first, as with the ranked policy.
+- A worker never measured on the job's workload, or not in the last 24 hours,
+  is sampled first, as with the ranked policy.
+- **A scalability benchmark is never held.** Its simulations carry
+  `benchmark: true` and go to the fastest free worker at once: waiting would
+  change the very concurrency the wave measures. Machine limits still apply.
 - The log says why a job waits: `Holding <id> for a faster worker: …`.
 
 What it trades: a slower host is idle more of the time, by design. Its
-estimate is the worker's own mean held time, so a host measured while
+estimate is the worker's own mean held time on that workload, so a host measured while
 overloaded starts out pessimistic and converges as its runs get shorter.
 
 ### Where the estimate comes from
 
 Each successful run records how long the container was **held** — connection,
-upload, run, collection — into `mean_duration_sec` on the worker, as an
+upload, run, collection — into `durations.<workload>` on the worker, as an
 exponentially weighted mean (`DURATION_ALPHA = 0.2`, roughly the last ten
-runs). Three deliberate choices:
+runs). `mean_duration_sec`, over every workload, is still written for display;
+placement does not read it. Five deliberate choices:
+
+- **One estimate per workload.** Held time follows the work far more than the
+  worker: 21 s for CSMA over 60 simulated minutes, 1437 s for TSCH over 180.
+  The key (`lib/scheduler/workload.py`) is the firmware, the simulated duration
+  and the number of nodes to within a factor of two.
+- **An estimate expires after 24 hours** (`DURATION_FRESH_SEC`) and the next
+  sample replaces it. A worker that looked slow is not placed on, so nothing
+  else would ever correct it.
 
 - **Held time, not the simulation's own `start_time`/`end_time`.** The two
   transfers are most of what makes a remote worker slower, and the simulation

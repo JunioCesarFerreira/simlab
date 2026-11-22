@@ -5,6 +5,32 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Placement compares like with like, and a benchmark runs at N
+
+### Fixed
+
+- **`earliest_completion` no longer starves the pool after a change of
+  workload.** A worker had one mean held time for every kind of job, and kinds
+  differ by up to 70x here. After long runs, the first worker to run a short job
+  looked up to 100 times faster than the rest, which were then held back and
+  never measured again. The estimate is now kept per workload (firmware,
+  simulated duration, network size to within a factor of two), and one older
+  than 24 hours is sampled again. A busy worker's remaining time is that of the
+  job it runs.
+- **A scalability wave runs at its N.** Its simulations are never held for a
+  faster worker: only capacity and machine limits can make them wait.
+- **A wave that did not run at N is not a measurement.** It is reported invalid
+  with the concurrency it reached, and does not extend the tested range.
+  - The benchmark of 2026-11-22 (`scalability · p1-ind1`) ran at most two
+    simulations at once: 56 of its 65 waves are no longer counted.
+  - The five earlier benchmarks in the reference database ran every wave at
+    N, and their analysis is unchanged.
+
+Deploy the master-node and the mo-engine together. The estimates start empty,
+so each worker is sampled once per workload after the deploy.
+
+---
+
 ## [Unreleased] — One strategy per experiment when the engine starts
 
 ### Fixed

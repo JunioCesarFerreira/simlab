@@ -22,9 +22,10 @@ They agree on a uniform pool. On a pool whose hosts differ in speed they do
 not, and the gap between them is itself a measurement: it is the cost of the
 slowest machine in the wave.
 
-Only a wave whose every simulation produced a result is measured. A wave with
-a failure ran fewer than ``N`` simulations to completion, so ``N`` is not the
-concurrency it measured.
+Only a wave whose every simulation produced a result, with all ``N`` running
+at the same time, is measured. A wave with a failure ran fewer than ``N``
+simulations to completion, and a wave that queued ran fewer at once: in both
+``N`` is not the concurrency it measured.
 
 Per machine
 -----------
@@ -69,6 +70,19 @@ def _seconds(later: Optional[datetime], earlier: Optional[datetime]) -> Optional
         return (as_aware(later) - as_aware(earlier)).total_seconds()
     except TypeError:
         return None
+
+
+def _most_at_once(runs: list[dict]) -> int:
+    """The most of ``runs`` that held a worker at the same instant."""
+    # An end sorts before a start at the same instant: that worker was reused.
+    changes = sorted(
+        [(as_aware(s["assigned_at"]), 1) for s in runs]
+        + [(as_aware(s["end_time"]), -1) for s in runs])
+    current = most = 0
+    for _, change in changes:
+        current += change
+        most = max(most, current)
+    return most
 
 
 def measure_wave(generation: dict, simulations: Iterable[dict]) -> dict:
@@ -127,6 +141,14 @@ def measure_wave(generation: dict, simulations: Iterable[dict]) -> dict:
     makespan = (last - first).total_seconds()
     if makespan <= 0:
         out["reason"] = "the wave has no measurable duration"
+        return out
+
+    at_once = _most_at_once(done)
+    if at_once < level:
+        out["reason"] = (
+            f"at most {at_once} of {level} simulations ran at the same time "
+            "(the others queued), so this wave did not run at concurrency "
+            f"{level}")
         return out
 
     mean_held = sum(held) / len(held)
@@ -272,7 +294,8 @@ def analyse(
         points = [(w["level"], w["throughput"][metric])
                   for w in waves if w["valid"] and w["throughput"][metric]]
         fitted = usl.fit([p[0] for p in points], [p[1] for p in points])
-        tested = sorted({w["level"] for w in waves}) or (planned_levels or [1])
+        # What was measured: a level whose waves all queued was not tested.
+        tested = sorted({n for n, _ in points}) or (planned_levels or [1])
         fits[metric] = {
             **fitted.to_dict(),
             "levels": summarize_levels(waves, metric),

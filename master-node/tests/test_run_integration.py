@@ -861,6 +861,8 @@ class TestTheOccupancyIsMeasuredOnTheRealPath:
         resource_id, seconds = mongo.resource_repo.record_duration.call_args.args
         assert resource_id == RES_ID
         assert seconds > 0
+        # Under the key of the work that was timed, not of whatever runs next.
+        assert mongo.resource_repo.record_duration.call_args.kwargs["workload"]
 
     def test_a_failed_run_records_nothing(self, wire):
         """A run that aborted in five seconds would otherwise make the worst

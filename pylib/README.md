@@ -115,9 +115,11 @@ The first two were written as prose first and did not hold:
   duplicate retry identities, index creation fails visibly; inspect and resolve
   those records before upgrading, preserving their results and audit history.
 * **A worker's occupancy is measured, not assumed.** `record_duration` folds
-  each completed run into an exponentially weighted mean on the worker, and
-  `inventory_snapshot` publishes the fastest free container per host and the
-  expected time of each free and occupied worker. Only the speed-aware
+  each completed run into an exponentially weighted mean on the worker, one
+  per workload, and `inventory_snapshot(workload=...)` publishes the fastest
+  free container per host and the expected time of each free and occupied
+  worker for that workload, leaving out what is older than 24 hours. Without
+  a workload it publishes the worker-wide means, for display. Only the speed-aware
   scheduling policies read them, so they are advisory: a stale or missing value
   costs a worse placement and nothing else. A missing
   value is *unknown*, never "infinitely slow" — a pool that has just been
