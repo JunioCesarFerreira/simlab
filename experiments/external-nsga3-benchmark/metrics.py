@@ -6,7 +6,12 @@ Implements:
     (``pylib/moo_metrics.py``, pareto-analysis).
   * Generational Distance (GD)        — Veldhuizen & Lamont, 1998.
   * Inverted Generational Distance (IGD) — Coello & Sierra, 2004.
-  * Coverage (set-coverage operator C(A,B)) — Zitzler & Thiele, 1998.
+  * IGD+ — Ishibuchi et al., 2015: IGD with the part of each distance that
+    lies on the dominated side removed, so it is weakly Pareto compliant.
+    ``moocore``, as ``pylib/moo_metrics.py``.
+
+And the comparison of two methods over independent runs: the two-sided
+Mann–Whitney U test and the Vargha–Delaney Â12 effect size.
 
 All metrics assume *minimisation* of every objective.
 """
@@ -68,20 +73,16 @@ def inverted_generational_distance(front: np.ndarray, ref_front: np.ndarray) -> 
     return float(nearest.mean())
 
 
-def coverage(front_a: np.ndarray, front_b: np.ndarray) -> float:
+def igd_plus(front: np.ndarray, ref_front: np.ndarray) -> float:
     """
-    Zitzler & Thiele C-metric: fraction of points in B that are weakly
-    dominated by at least one point in A.  C(A, B) ∈ [0, 1].
+    IGD+ = mean over reference points r of min over a of ||max(a - r, 0)||.
+    Smaller is better. It replaces the coverage C(A, R) against the true
+    front, which is 0 by construction: no feasible point dominates a
+    Pareto-optimal one.
     """
-    if front_a.size == 0 or front_b.size == 0:
-        return 0.0
-    a = np.asarray(front_a, dtype=float)
-    b = np.asarray(front_b, dtype=float)
-    dominated = 0
-    for bp in b:
-        if np.any(np.all(a <= bp, axis=1) & np.any(a < bp, axis=1)):
-            dominated += 1
-    return float(dominated) / float(len(b))
+    if front.size == 0 or ref_front.size == 0:
+        return float("nan")
+    return float(moocore.igd_plus(np.asarray(front, dtype=float), ref=np.asarray(ref_front, dtype=float)))
 
 
 # ── Multi-run statistics ─────────────────────────────────────────────────────
@@ -100,40 +101,37 @@ def summary(values) -> dict:
             "ci95": 1.96 * std / math.sqrt(n) if n > 1 else 0.0}
 
 
-def wilcoxon_pvalue(a, b) -> float:
-    """Two-sided paired Wilcoxon signed-rank p-value (scipy if available, else a
-    numpy-only normal approximation). ``nan`` for degenerate input."""
+def mann_whitney_pvalue(a, b) -> float:
+    """Two-sided Mann–Whitney U p-value of two independent samples.
+
+    The runs of two methods share nothing but a seed number (each library
+    draws from its own generator), so a paired test has nothing to pair.
+    Exact when there are no ties and the samples are small. ``nan`` when a
+    sample is empty or every value is equal.
+    """
+    from scipy.stats import mannwhitneyu
+
     a = np.asarray(list(a), dtype=float)
     b = np.asarray(list(b), dtype=float)
-    if a.shape != b.shape or a.size == 0:
+    a, b = a[np.isfinite(a)], b[np.isfinite(b)]
+    if a.size == 0 or b.size == 0 or np.unique(np.concatenate([a, b])).size == 1:
         return float("nan")
-    d = a - b
-    d = d[d != 0]
-    n = int(d.size)
-    if n == 0:
+    return float(mannwhitneyu(a, b, alternative="two-sided").pvalue)
+
+
+def a12_lower(a, b) -> float:
+    """Vargha–Delaney Â12 for a metric where lower is better: the probability
+    that a run of ``a`` scores lower than a run of ``b``, ties counting half.
+    0.5 is no difference; Vargha and Delaney call 0.56, 0.64 and 0.71 (and
+    their mirrors) small, medium and large."""
+    a = np.asarray(list(a), dtype=float)
+    b = np.asarray(list(b), dtype=float)
+    a, b = a[np.isfinite(a)], b[np.isfinite(b)]
+    if a.size == 0 or b.size == 0:
         return float("nan")
-    try:
-        from scipy.stats import wilcoxon
-        return float(wilcoxon(a, b).pvalue)
-    except Exception:
-        pass
-    order = np.argsort(np.abs(d), kind="mergesort")
-    sx = np.abs(d)[order]
-    ranks = np.empty(n, dtype=float)
-    i = 0
-    while i < n:
-        j = i
-        while j + 1 < n and sx[j + 1] == sx[i]:
-            j += 1
-        ranks[order[i:j + 1]] = (i + j) / 2.0 + 1.0
-        i = j + 1
-    w_plus = float(ranks[d > 0].sum())
-    mean = n * (n + 1) / 4.0
-    var = n * (n + 1) * (2 * n + 1) / 24.0
-    if var <= 0:
-        return float("nan")
-    z = (w_plus - mean) / math.sqrt(var)
-    return float(math.erfc(abs(z) / math.sqrt(2.0)))
+    lower = (a[:, None] < b[None, :]).sum()
+    ties = (a[:, None] == b[None, :]).sum()
+    return float((lower + 0.5 * ties) / (a.size * b.size))
 
 
 def dtlz2_reference_front(M: int, n_points: int = 1000, rng: np.random.Generator | None = None) -> np.ndarray:

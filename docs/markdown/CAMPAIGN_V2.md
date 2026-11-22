@@ -287,18 +287,18 @@ by the clock. Instead:
 ### CE — Implementation check (paper 1 Table 3; synthetic)
 
 - **Setup:** DTLZ2 (and the other benchmarks of the table), 30 seeds per implementation
-  (SimLab, DEAP, pymoo), `divisions` stated explicitly (12 in the benchmark; the engine's
-  default is 10).
+  (SimLab, DEAP, pymoo), divisions and population per M as in Deb & Jain
+  ([table](../../experiments/external-nsga3-benchmark/README.md#reproducibility-notes); the
+  engine's default is 10 divisions).
+- **Indicators:** HV, GD, IGD and IGD+. IGD+ replaces the Coverage of the paper, which is 0
+  by construction against the true front.
 - **Tests:**
-  - Unpaired Mann–Whitney with Â12. With 5 seeds and a paired Wilcoxon, the smallest
-    attainable p was 0.0625.
+  - Unpaired Mann–Whitney with Â12 on the per-run IGD, as `regenerate_table3.py` writes
+    them. With 5 seeds and a paired Wilcoxon, the smallest attainable p was 0.0625.
   - Equivalence claimed only through TOST with a margin declared beforehand.
 - **README:** corrected on 2026-11-22: it no longer says "same algorithmic code that runs in
   production". Only sorting, niching and the operators are shared; the variation loop is
   reimplemented.
-- **Before running:** the script's Coverage column is 0 by construction and its p-value is a
-  paired test
-  ([known issues](../../experiments/external-nsga3-benchmark/README.md#known-issues)).
 
 ---
 

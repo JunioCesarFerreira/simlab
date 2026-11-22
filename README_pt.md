@@ -521,7 +521,6 @@ resultado deve ser lido. Cada um está descrito no documento indicado.
 | Telemetria | A varredura periódica não repete coletas `unavailable`/`failed` | [Métricas de execução](docs/markdown/RUNTIME_METRICS.md#known-issues) |
 | API | `GET /files/simulations/{id}/topology` responde 500 | [API REST](rest-api/README.md#known-issues) |
 | Indicadores | As CLIs medem descendentes; a GUI mede sobreviventes por padrão | [pareto-analysis](pareto-analysis/README.md#known-issues) |
-| Tabela 3 | A coluna Coverage é 0 por construção, e o p-valor pareia execuções que não são pareadas | [Benchmark](experiments/external-nsga3-benchmark/README.md#known-issues) |
 
 ---
 

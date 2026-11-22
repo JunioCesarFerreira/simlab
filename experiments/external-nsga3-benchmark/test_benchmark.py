@@ -16,7 +16,7 @@ from pymoo.core.population import Population
 from pymoo.core.problem import Problem
 
 import regenerate_table3
-from metrics import hypervolume, non_dominated
+from metrics import a12_lower, hypervolume, igd_plus, mann_whitney_pvalue, non_dominated
 from run_deap import _tournament, run_deap
 from run_native import run_native
 from run_pymoo import build_algorithm, run_pymoo
@@ -33,6 +33,36 @@ def quiet(call, *args, **kwargs):
 def test_hypervolume_is_exact_and_ignores_what_does_not_dominate_the_reference():
     assert hypervolume(np.array([[0.5, 0.5]]), np.array([1.0, 1.0])) == 0.25
     assert hypervolume(np.array([[0.5, 0.5], [1.2, 0.1]]), np.array([1.0, 1.0])) == 0.25
+
+
+def test_igd_plus_ignores_what_is_better_than_the_reference():
+    ref = np.array([[0.0, 1.0], [1.0, 0.0]])
+    # IGD would count the distance to the better point; IGD+ does not.
+    assert igd_plus(np.array([[0.0, 0.5], [0.5, 0.0]]), ref) == 0.0
+    assert igd_plus(np.array([[0.0, 2.0], [2.0, 0.0]]), ref) == pytest.approx(1.0)
+
+
+def test_mann_whitney_and_a12_compare_independent_samples():
+    low, high = [1.0, 2.0, 3.0, 4.0, 5.0], [6.0, 7.0, 8.0, 9.0, 10.0]
+    # 5 against 5 with no overlap: the exact two-sided p is 2 / C(10, 5).
+    assert mann_whitney_pvalue(low, high) == pytest.approx(2 / 252)
+    assert a12_lower(low, high) == 1.0 and a12_lower(high, low) == 0.0
+    assert a12_lower([1.0, 2.0], [2.0, 1.0]) == 0.5
+    assert np.isnan(mann_whitney_pvalue([1.0, 1.0], [1.0, 1.0]))
+
+
+@pytest.mark.parametrize("M", sorted(regenerate_table3.DIVISIONS))
+def test_every_m_has_a_direction_for_each_individual_at_most(M):
+    divisions = regenerate_table3.DIVISIONS[M]
+    directions = regenerate_table3.reference_directions(M, divisions)
+    pop = regenerate_table3.population_for(M, divisions)
+    assert directions < pop <= directions + 4 and pop % 4 == 0
+    assert directions <= 250
+
+
+def test_deb_and_jain_settings_are_kept():
+    assert regenerate_table3.population_for(3, regenerate_table3.DIVISIONS[3]) == 92
+    assert regenerate_table3.population_for(5, regenerate_table3.DIVISIONS[5]) == 212
 
 
 def test_non_dominated_keeps_one_copy_of_each_point():
@@ -97,3 +127,19 @@ def test_the_table_is_written(tmp_path, monkeypatch):
     assert (table["mean_hv"] <= regenerate_table3.HV_REFERENCE ** table["M"] + 1e-9).all()
     # Three generations are too few for (6, 14) to reach the box: 0 there.
     assert (table[table["M"] <= 5]["mean_hv"] > 0).all()
+    assert "mean_coverage" not in table and (table["mean_igd_plus"] >= 0).all()
+    others = table[table["method"] != "nsga3_func"]
+    assert others["igd_a12_vs_native"].between(0, 1).all()
+    assert table[table["method"] == "nsga3_func"]["igd_a12_vs_native"].isna().all()
+
+
+def test_the_table_uses_the_sizes_per_m(tmp_path, monkeypatch):
+    out = tmp_path / "table3.csv"
+    monkeypatch.setattr("sys.argv", [
+        "regenerate_table3.py", "--seeds", "1", "--generations", "1",
+        "--methods", "native", "--out", str(out)])
+    quiet(regenerate_table3.main)
+
+    table = pd.read_csv(out)
+    assert (table["directions"] < table["pop_size"]).all()
+    assert table.set_index("M")["pop_size"].to_dict() == {2: 104, 3: 92, 4: 124, 5: 212, 6: 128}

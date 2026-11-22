@@ -5,6 +5,21 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Table 3 measures what separates the methods
+
+### Changed
+
+- **IGD+ replaces Coverage.** Coverage was C(A, R) against the true DTLZ2
+  front, 0 by construction: no feasible point dominates a Pareto-optimal one.
+- **Methods are compared with an unpaired test.** `igd_p_vs_native` is the
+  two-sided Mann–Whitney U and `igd_a12_vs_native` the Vargha–Delaney Â12; the
+  paired Wilcoxon paired runs that share only a seed number.
+- **Population and divisions depend on M**, as in Deb & Jain: the population is
+  the smallest multiple of four above the number of directions. One setting
+  (12 divisions, 92 individuals) gave 455 to 6188 directions for M ≥ 4.
+
+---
+
 ## [Unreleased] — P3 enforces its constraints
 
 ### Fixed

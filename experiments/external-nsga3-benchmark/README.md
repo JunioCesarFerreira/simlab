@@ -41,7 +41,7 @@ python run_deap.py
 python run_pymoo.py
 
 # 3. Regenerate the full Table 3
-python regenerate_table3.py --seeds 5 --pop-size 92 --generations 400
+python regenerate_table3.py --seeds 30 --generations 400
 # Output: results/table3.csv
 
 # 4. Tests (pytest is not in requirements.txt)
@@ -53,13 +53,13 @@ python -m pytest -q test_benchmark.py
 | File | Role |
 |---|---|
 | `dtlz2.py`               | Shared DTLZ2 implementation (equivalent to `pylib/benchmarks.py`) |
-| `metrics.py`             | HV (exact, `moocore`) / GD / IGD / Coverage; non-dominated filter; analytical reference front sampler |
+| `metrics.py`             | HV (exact, `moocore`) / GD / IGD / IGD+; non-dominated filter; Mann–Whitney and Â12; analytical reference front sampler |
 | `run_native.py`          | SimLab native NSGA-III runner (re-uses `mo-engine/lib/nsga/`) |
 | `run_deap.py`            | DEAP-based NSGA-III runner |
 | `run_pymoo.py`           | pymoo-based NSGA-III runner |
 | `regenerate_table3.py`   | Top-level: runs each method on Table 3's `(M, k)` grid with `--seeds` repetitions, writes `results/table3.csv` |
 | `requirements.txt`       | Standalone dependency manifest |
-| `test_benchmark.py`      | The runners vary alike and return their population; the table is written |
+| `test_benchmark.py`      | The runners vary alike and return their population; the metrics, the sizes per M; the table is written |
 
 ## Reproducibility notes
 
@@ -85,20 +85,40 @@ python -m pytest -q test_benchmark.py
 * HV is exact (`moocore`, as the platform) with the reference point fixed at
   1.1 per objective, 1.1 × the DTLZ2 nadir, as the platform's `/hv-gd`. It is
   comparable between methods and seeds for the same `M`.
-* Reference points (Das & Dennis): `divisions=12` here. The platform's
-  default is 10.
-* Default `(pop_size, n_generations) = (92, 400)` mirrors common
-  evolutionary-MOO practice for DTLZ2 in the literature.
+* Reference directions (Das & Dennis) and population depend on `M`, as in
+  Deb & Jain (2014): the population is the smallest multiple of four above
+  the number of directions H, so each direction can hold an individual.
+
+  | M | divisions | H | population |
+  |---|---|---|---|
+  | 2 | 99 | 100 | 104 |
+  | 3 | 12 | 91 | 92 |
+  | 4 | 7 | 120 | 124 |
+  | 5 | 6 | 210 | 212 |
+  | 6 | 4 | 126 | 128 |
+
+  M = 3 and M = 5 are Deb & Jain's settings for DTLZ; the others follow the same
+  rule for an H of the same order. `--divisions` and `--pop-size` impose one
+  value for every M. The platform's default is 10 divisions.
+* 400 generations for every cell, at least what Deb & Jain use for DTLZ2 up to
+  M = 5 (250 and 350).
 
 ## Mapping to Table 3 of the paper
 
 The CSV produced by `regenerate_table3.py` has one row per
-`(M, k, method)` cell: `M`, `k`, `method`, the `mean_` and `std_` of `hv`,
-`gd`, `igd` and `coverage`, `elapsed_s`, `n_seeds` and `igd_p_vs_native`. The
-number of variables is `n = M − 1 + k`. The manuscript's layout is:
+`(M, k, method)` cell: `M`, `k`, `method`, `divisions`, `directions`,
+`pop_size`, the `mean_` and `std_` of `hv`, `gd`, `igd` and `igd_plus`,
+`elapsed_s`, `n_seeds`, and against the native method on the per-run IGD,
+`igd_p_vs_native` (two-sided Mann–Whitney U) and `igd_a12_vs_native` (the
+probability that a run of the method has a lower IGD than a run of the native
+one; 0.5 is no difference). The number of variables is `n = M − 1 + k`.
+
+The manuscript's layout had a Coverage column: C(A, R) against the true front,
+which is 0 by construction, since no feasible point dominates a Pareto-optimal
+one. IGD+ takes its place:
 
 ```
-#Obj   k      Method               Mean HV   Mean GD   Mean IGD   Coverage
+#Obj   k      Method               Mean HV   Mean GD   Mean IGD   Mean IGD+
  2      1     nsga3_func           ...       ...       ...        ...
         1     nsga3_deap_func      ...       ...       ...        ...
         1     nsga3_pymoo_func     ...       ...       ...        ...
@@ -114,8 +134,13 @@ The grid is:
 
 * DEAP's `selNSGA3` and pymoo's `NSGA3` use slightly different default
   reference-direction layouts; we standardise on Das & Dennis with the same
-  `divisions` parameter. With 5 seeds, the smallest two-sided p of the exact
-  paired Wilcoxon test is 0.0625: 5 seeds cannot show a difference at 0.05.
+  `divisions` parameter.
+* The comparison is unpaired: the runs of two methods share nothing but a seed
+  number, since each library draws from its own generator. With 5 runs per
+  method the smallest two-sided p of the exact test is 2/252 ≈ 0.008; the
+  campaign uses 30. A p-value says whether a difference is detectable, Â12 how
+  large it is; neither shows equivalence, which needs a margin declared
+  beforehand (TOST).
 * HV is not comparable between different `M`: the box it is measured in grows
   as 1.1^M.
 * GD here is the RMS of the nearest distances in raw units, **not** the
@@ -126,12 +151,4 @@ The grid is:
 
 ## Known issues
 
-* **Coverage is 0 by construction.** It is C(A, R) with R sampled on the true
-  DTLZ2 front, and no feasible point dominates a Pareto-optimal one: a
-  converged run gives 0.0. The column does not separate the methods.
-* **The p-value pairs runs that share nothing but a seed number**: each library
-  draws from its own generator, so the paired Wilcoxon has no pairing to rest
-  on. The campaign plans an unpaired test
-  ([CE](../../docs/markdown/CAMPAIGN_V2.md#ce--implementation-check-paper-1-table-3-synthetic)).
-* With a population of 92 and 12 divisions there are more reference directions
-  than individuals for M ≥ 4 (455 to 6188); pymoo warns about it.
+None known.
