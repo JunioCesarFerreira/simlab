@@ -14,10 +14,6 @@ The scripts here are **independent of the SimLab runtime** — there is no
 MongoDB, no master-node, no Cooja. They evaluate NSGA-III on the analytical
 DTLZ2 benchmark on a clean Python environment.
 
-> **The single command is currently broken**: `regenerate_table3.py` does not
-> import with the pinned DEAP. The three runners work on their own. See
-> [Known issues](#known-issues).
-
 ## Why "external"?
 
 DEAP and pymoo are runtime dependencies of the mo-engine, for the strategies
@@ -44,9 +40,12 @@ python run_native.py
 python run_deap.py
 python run_pymoo.py
 
-# 3. Regenerate the full Table 3 (fails today, see Known issues)
+# 3. Regenerate the full Table 3
 python regenerate_table3.py --seeds 5 --pop-size 92 --generations 400
 # Output: results/table3.csv
+
+# 4. Tests (pytest is not in requirements.txt)
+python -m pytest -q test_benchmark.py
 ```
 
 ## Files
@@ -54,12 +53,13 @@ python regenerate_table3.py --seeds 5 --pop-size 92 --generations 400
 | File | Role |
 |---|---|
 | `dtlz2.py`               | Shared DTLZ2 implementation (equivalent to `pylib/benchmarks.py`) |
-| `metrics.py`             | HV / GD / IGD / Coverage; analytical reference front sampler |
+| `metrics.py`             | HV (exact, `moocore`) / GD / IGD / Coverage; non-dominated filter; analytical reference front sampler |
 | `run_native.py`          | SimLab native NSGA-III runner (re-uses `mo-engine/lib/nsga/`) |
 | `run_deap.py`            | DEAP-based NSGA-III runner |
 | `run_pymoo.py`           | pymoo-based NSGA-III runner |
 | `regenerate_table3.py`   | Top-level: runs each method on Table 3's `(M, k)` grid with `--seeds` repetitions, writes `results/table3.csv` |
 | `requirements.txt`       | Standalone dependency manifest |
+| `test_benchmark.py`      | The runners vary alike and return their population; the table is written |
 
 ## Reproducibility notes
 
@@ -73,6 +73,18 @@ python regenerate_table3.py --seeds 5 --pop-size 92 --generations 400
   modules. The loop around them is **reimplemented**: SBX is applied per gene
   with probability 0.5 and the tournament breaks ties differently, so
   `nsga3_func` is not the code path of a platform experiment.
+* The three runners share the variation around the environmental selection:
+  binary tournament on non-domination rank for mating (pymoo's default for
+  NSGA3 is a random pick, and DEAP's example has no mating selection), SBX
+  with probability 0.9 per pair and 0.5 per variable (η = 20), polynomial
+  mutation with probability 1/n per variable (η = 25), and no removal of
+  duplicates. Each library keeps its own implementation of those operators
+  and its own environmental selection.
+* Each runner returns its final population. Every indicator is computed on the
+  non-dominated set of that population, for all three methods.
+* HV is exact (`moocore`, as the platform) with the reference point fixed at
+  1.1 per objective, 1.1 × the DTLZ2 nadir, as the platform's `/hv-gd`. It is
+  comparable between methods and seeds for the same `M`.
 * Reference points (Das & Dennis): `divisions=12` here. The platform's
   default is 10.
 * Default `(pop_size, n_generations) = (92, 400)` mirrors common
@@ -102,11 +114,10 @@ The grid is:
 
 * DEAP's `selNSGA3` and pymoo's `NSGA3` use slightly different default
   reference-direction layouts; we standardise on Das & Dennis with the same
-  `divisions` parameter. They still differ in variation and in what they
-  return (below). With 5 seeds, the smallest two-sided p of the exact paired
-  Wilcoxon test is 0.0625: 5 seeds cannot show a difference at 0.05.
-* HV reference point: each run uses its own `worst_observed + 0.1` per
-  dimension, so HV is **not** comparable between methods, seeds or `M`.
+  `divisions` parameter. With 5 seeds, the smallest two-sided p of the exact
+  paired Wilcoxon test is 0.0625: 5 seeds cannot show a difference at 0.05.
+* HV is not comparable between different `M`: the box it is measured in grows
+  as 1.1^M.
 * GD here is the RMS of the nearest distances in raw units, **not** the
   platform's normalised mean (p = 1).
 * This benchmark is **implementation validation evidence**. It does not go
@@ -115,14 +126,12 @@ The grid is:
 
 ## Known issues
 
-* **`regenerate_table3.py` fails on import**: `metrics.py` imports
-  `deap.tools._hypervolume`, which DEAP 1.4.4 does not have. It fails with
-  `--methods native` too.
-* **The runners do not share parameters.** In pymoo, `PM(prob=1/n)` is the
-  probability per *individual* (the per-variable one keeps its default), while
-  the other two use `1/n` per variable. The DEAP runner has no mating
-  tournament.
-* **They do not return the same set**: native and DEAP return the whole final
-  population, pymoo only its non-dominated solutions.
+* **Coverage is 0 by construction.** It is C(A, R) with R sampled on the true
+  DTLZ2 front, and no feasible point dominates a Pareto-optimal one: a
+  converged run gives 0.0. The column does not separate the methods.
+* **The p-value pairs runs that share nothing but a seed number**: each library
+  draws from its own generator, so the paired Wilcoxon has no pairing to rest
+  on. The campaign plans an unpaired test
+  ([CE](../../docs/markdown/CAMPAIGN_V2.md#ce--implementation-check-paper-1-table-3-synthetic)).
 * With a population of 92 and 12 divisions there are more reference directions
   than individuals for M ≥ 4 (455 to 6188); pymoo warns about it.

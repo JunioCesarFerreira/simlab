@@ -37,6 +37,7 @@ from metrics import (
     generational_distance,
     hypervolume,
     inverted_generational_distance,
+    non_dominated,
     summary,
     wilcoxon_pvalue,
 )
@@ -74,12 +75,18 @@ TABLE3_GRID: list[tuple[int, int]] = [
 ]
 
 
-def evaluate_front(front: np.ndarray, M: int) -> dict[str, float]:
+#: HV reference point: 1.1 × the DTLZ2 nadir (1, …, 1), the same for every
+#: method and seed, as the platform's /hv-gd. One derived from each run's own
+#: worst point made HV incomparable between the rows of the table.
+HV_REFERENCE = 1.1
+
+
+def evaluate_front(population: np.ndarray, M: int) -> dict[str, float]:
+    """Indicators of the non-dominated set of a final population."""
+    front = non_dominated(population)
     ref = dtlz2_reference_front(M, n_points=2000)
-    # Reference point for HV: slightly beyond the worst observed value per dim
-    worst = front.max(axis=0) + 0.1
     return {
-        "hv": hypervolume(front, worst),
+        "hv": hypervolume(front, np.full(M, HV_REFERENCE)),
         "gd": generational_distance(front, ref),
         "igd": inverted_generational_distance(front, ref),
         "coverage": coverage(front, ref),

@@ -2,8 +2,8 @@
 Pareto-quality metrics used by Table 3 of the SimLab paper.
 
 Implements:
-  * Hypervolume (HV) using the ``deap.tools._hypervolume.hv`` helper, which
-    the pinned DEAP 1.4.4 does not have (pareto-analysis uses ``moocore``).
+  * Hypervolume (HV), exact, with ``moocore`` as the platform
+    (``pylib/moo_metrics.py``, pareto-analysis).
   * Generational Distance (GD)        — Veldhuizen & Lamont, 1998.
   * Inverted Generational Distance (IGD) — Coello & Sierra, 2004.
   * Coverage (set-coverage operator C(A,B)) — Zitzler & Thiele, 1998.
@@ -14,15 +14,28 @@ from __future__ import annotations
 
 import math
 
+import moocore
 import numpy as np
-from deap.tools._hypervolume import hv as deap_hv
+
+
+def non_dominated(front: np.ndarray) -> np.ndarray:
+    """The non-dominated rows of ``front``, one copy of each.
+
+    Every method is measured on this set of its final population: the runners
+    return the whole population, and pymoo's own result is a different set.
+    """
+    a = np.asarray(front, dtype=float)
+    if a.size == 0:
+        return a
+    return a[moocore.is_nondominated(a)]
 
 
 def hypervolume(front: np.ndarray, ref_point: np.ndarray) -> float:
-    """HV of `front` w.r.t. `ref_point` (worst corner)."""
+    """HV of `front` w.r.t. `ref_point` (worst corner). Points that do not
+    dominate it add nothing."""
     if front.size == 0:
         return 0.0
-    return float(deap_hv.hypervolume(np.asarray(front, dtype=float), np.asarray(ref_point, dtype=float)))
+    return float(moocore.hypervolume(np.asarray(front, dtype=float), ref=np.asarray(ref_point, dtype=float)))
 
 
 def generational_distance(front: np.ndarray, ref_front: np.ndarray) -> float:

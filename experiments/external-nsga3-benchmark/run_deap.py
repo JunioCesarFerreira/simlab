@@ -49,6 +49,21 @@ def _build_deap_toolbox(M: int, n_var: int, eta_cx: float, eta_mt: float,
     return tb
 
 
+def _ranks(pop) -> list[int]:
+    """Non-domination rank of each individual, 0 for the first front."""
+    rank: dict[int, int] = {}
+    for r, front in enumerate(tools.sortNondominated(pop, len(pop))):
+        for ind in front:
+            rank[id(ind)] = r
+    return [rank[id(ind)] for ind in pop]
+
+
+def _tournament(pop, ranks: list[int]):
+    """Binary tournament on rank, the first drawn on a tie, as run_native."""
+    a, b = random.sample(range(len(pop)), 2)
+    return pop[a] if ranks[a] <= ranks[b] else pop[b]
+
+
 def run_deap(
     M: int,
     k: int,
@@ -76,7 +91,10 @@ def run_deap(
         ind.fitness.values = tb.evaluate(ind)
 
     for _gen in range(n_generations):
-        offspring = [tb.clone(ind) for ind in pop]
+        # Mating selection, as in the other two runners. DEAP's own NSGA-III
+        # example has none: it varies the population in its stored order.
+        ranks = _ranks(pop)
+        offspring = [tb.clone(_tournament(pop, ranks)) for _ in range(pop_size)]
         # Variation: in-place mating + mutation
         for i in range(0, len(offspring) - 1, 2):
             if random.random() < prob_cx:
@@ -85,6 +103,9 @@ def run_deap(
             tb.mutate(offspring[i + 1])
             del offspring[i].fitness.values
             del offspring[i + 1].fitness.values
+        if len(offspring) % 2:
+            tb.mutate(offspring[-1])
+            del offspring[-1].fitness.values
         # Evaluate invalid fitnesses
         for ind in offspring:
             if not ind.fitness.valid:

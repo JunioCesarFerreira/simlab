@@ -5,6 +5,28 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Table 3 compares the three NSGA-III alike
+
+### Fixed
+
+- **`regenerate_table3.py` runs.** It imported `deap.tools._hypervolume`,
+  which DEAP 1.4.4 does not have. HV is now exact with `moocore`, as on the
+  platform.
+- **The three runners vary alike.** pymoo mutated 1/n² of the variables
+  (`PM(prob=1/n)` is per individual) instead of 1/n, picked parents at random
+  and removed duplicates; DEAP had no mating selection. All three now use a
+  binary tournament on rank, SBX 0.9 per pair and 0.5 per variable, mutation
+  1/n per variable, and keep duplicates.
+- **The three are measured on the same set.** pymoo returned part of the
+  first front of the combined population, taken before survival (127 points
+  for a population of 92 at M = 5); the others, the whole population. Each
+  runner returns its final population, and the indicators use its
+  non-dominated set.
+- **HV is comparable between methods.** Its reference point came from each
+  run's own worst point; it is 1.1 × the DTLZ2 nadir for all, as `/hv-gd`.
+
+---
+
 ## [Unreleased] — The baseline runs one simulation per container
 
 ### Fixed

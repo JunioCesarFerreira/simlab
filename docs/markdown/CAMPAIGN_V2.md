@@ -296,8 +296,8 @@ by the clock. Instead:
 - **README:** corrected on 2026-11-22: it no longer says "same algorithmic code that runs in
   production". Only sorting, niching and the operators are shared; the variation loop is
   reimplemented.
-- **Before running:** `regenerate_table3.py` does not import with the pinned DEAP, and the
-  three runners do not use the same parameters or return the same set
+- **Before running:** the script's Coverage column is 0 by construction and its p-value is a
+  paired test
   ([known issues](../../experiments/external-nsga3-benchmark/README.md#known-issues)).
 
 ---
