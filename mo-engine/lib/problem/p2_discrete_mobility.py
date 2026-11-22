@@ -57,11 +57,12 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
         # sample_trajectories uses step = R/2 so no gap larger than R can be missed.
         R = self.problem.radius_of_reach
         sampled = sample_trajectories(self.problem.mobile_nodes, step=R / 2)
-        self._coverage_matrix: CoverageMatrix = build_coverage_matrix(
-            sampled, self.problem.candidates, R
-        )
-        self._candidate_cover_bits: list[int] = build_candidate_cover_bits(
-            self._coverage_matrix, len(self.problem.candidates)
+        # The sink is installed in every solution, so it covers as in P1: it is
+        # the last column of the matrix, always active and never a gene.
+        positions = [*self.problem.candidates, self.problem.sink]
+        self._coverage_matrix: CoverageMatrix = build_coverage_matrix(sampled, positions, R)
+        self._cover_bits: list[int] = build_candidate_cover_bits(
+            self._coverage_matrix, len(positions)
         )
         log.info(
             f"[P2] Coverage matrix built: {len(sampled)} sampled points x "
@@ -70,9 +71,18 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
         )
 
 
+    @staticmethod
+    def _with_sink(mask: list[int]) -> list[int]:
+        """The mask over the matrix's columns: the candidates, then the active sink."""
+        return [*mask, 1]
+
     def coverage_score(self, mask: list[int]) -> float:
-        """Return the trajectory coverage score in [0, 100] (percent) for a given mask."""
-        return check_coverage(self._coverage_matrix, mask)
+        """
+        Return the trajectory coverage score in [0, 100] (percent) for a given mask.
+
+        A point is covered by an active candidate or by the sink.
+        """
+        return check_coverage(self._coverage_matrix, self._with_sink(mask))
 
     def penalty_objectives(self, chromosome: ChromosomeP2, n_objectives: int) -> list[float] | None:
         """
@@ -131,13 +141,14 @@ class Problem2DiscreteMobilityAdapter(ProblemAdapter):
             return mask
 
         threshold = self.problem.min_coverage_percentage
-        if check_coverage(self._coverage_matrix, mask) >= threshold:
+        if self.coverage_score(mask) >= threshold:
             return mask
 
-        repaired = greedy_coverage_repair_mask(
+        # The repair only activates, so the sink's bit stays 1; drop it afterwards.
+        *repaired, _ = greedy_coverage_repair_mask(
             self._coverage_matrix,
-            self._candidate_cover_bits,
-            mask,
+            self._cover_bits,
+            self._with_sink(mask),
             threshold,
             self._repair_coverage_budget,
         )

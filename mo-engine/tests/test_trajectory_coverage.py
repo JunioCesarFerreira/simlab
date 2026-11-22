@@ -99,7 +99,7 @@ def test_p2_score_range_and_full_coverage():
     assert check_coverage(matrix, full_mask) == pytest.approx(100.0)
 
     empty_mask = [0] * len(candidates)
-    # Sink is NOT part of the P2 matrix — all-zero mask gives 0 coverage here.
+    # This matrix has candidates only; the P2 adapter is what adds the sink.
     assert check_coverage(matrix, empty_mask) == 0.0
 
 
@@ -121,8 +121,8 @@ def test_p2_vacuous_empty_matrix():
 def test_p1_and_p2_agree_on_same_geometry():
     """
     Same sink, trajectory, radius and active positions → same score.
-    (P2's matrix does not include the sink, so we exclude it from P1 too
-    by placing it outside coverage range.)
+    (This matrix holds candidates only, so the sink is placed out of range in
+    P1. The adapters, sink included, are compared further down.)
     """
     far_sink = (1000.0, 1000.0)
     positions = [(10.0, 0.0), (30.0, 0.0), (50.0, 0.0)]
@@ -283,27 +283,59 @@ def test_p1_and_p2_penalty_match_for_equivalent_setup():
     P1 and P2 adapters fed with the same geometry and min_pct must yield
     the same penalty value for an equivalent infeasible chromosome.
     """
-    candidates = [(50.0, 0.0)]  # only the middle — neither end covered
+    candidates = [(50.0, 0.0)]  # only the middle — the far end stays uncovered
     min_pct = 100.0
 
     p1_adapter = build_test_adapter({**_p1_problem(min_pct=min_pct), "number_of_relays": 1})
     p2_adapter = build_test_adapter(_p2_problem(min_pct=min_pct, candidates=candidates))
 
-    # Use a far sink for P1 so only the single relay matters — equal to P2's no-sink matrix.
-    # Build an alternate P1 adapter with far sink:
-    p1_far = build_test_adapter({
-        **_p1_problem(min_pct=min_pct),
-        "number_of_relays": 1,
-        "sink": (1000.0, 1000.0),
-    })
-
     c1 = ChromosomeP1(mac_protocol=0, relays=[(50.0, 0.0)])
     c2 = ChromosomeP2(mac_protocol=0, mask=[1])
 
-    p1 = p1_far.penalty_objectives(c1, n_objectives=2)
+    p1 = p1_adapter.penalty_objectives(c1, n_objectives=2)
     p2 = p2_adapter.penalty_objectives(c2, n_objectives=2)
 
     assert p1 is not None and p2 is not None
     assert p1[0] == pytest.approx(p2[0], rel=1e-6)
-    # silence unused-var warning
-    _ = p1_adapter
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# The sink covers in P2 as it does in P1
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_p2_sink_alone_covers_like_p1():
+    problem = _p2_problem(0.0, [(100.0, 0.0)])
+    adapter = build_test_adapter(problem)
+    p1 = TrajectoryConstraintP1(_SINK, _mobile_nodes(), _R, _REGION)
+
+    assert adapter.coverage_score([0]) > 0.0
+    assert adapter.coverage_score([0]) == pytest.approx(p1.check_coverage([]))
+
+
+def test_p2_feasible_when_only_the_sink_reaches_the_trajectory():
+    problem = _p2_problem(100.0, [(100.0, 0.0)])
+    problem["mobile_nodes"][0]["path_segments"] = [("8 * t", "0")]
+    adapter = build_test_adapter(problem)
+
+    chrm = ChromosomeP2(mac_protocol=0, mask=[0])
+    assert adapter.penalty_objectives(chrm, n_objectives=2) is None
+
+
+@pytest.mark.parametrize("seed", range(30))
+def test_p2_adapter_agrees_with_p1_sink_included(seed):
+    rng = random.Random(seed)
+
+    def point():
+        return (rng.uniform(_REGION[0], _REGION[2]), rng.uniform(_REGION[1], _REGION[3]))
+
+    sink = point()
+    candidates = [point() for _ in range(rng.randint(1, 8))]
+    mask = [rng.randint(0, 1) for _ in candidates]
+    problem = {**_p2_problem(0.0, candidates), "sink": sink}
+
+    p1 = TrajectoryConstraintP1(sink, _mobile_nodes(), _R, _REGION)
+    active = [q for q, bit in zip(candidates, mask) if bit]
+
+    assert build_test_adapter(problem).coverage_score(mask) == pytest.approx(
+        p1.check_coverage(active)
+    )

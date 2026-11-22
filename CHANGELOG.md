@@ -5,6 +5,28 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Problem 2 counts the sink as coverage
+
+### Fixed
+
+- **In P2 the sink now covers the trajectory, as in P1.** The coverage matrix
+  held only the candidates, so a point within range of the sink alone counted
+  as uncovered: the same geometry could be feasible in P1 and infeasible in P2.
+  The sink is now an always-active column of the matrix. It is not a gene, and
+  the chromosome and its hash are unchanged.
+  - **Effect on a verdict:** coverage can only stay equal or rise. An instance
+    whose trajectory only the sink reaches accepts a network without relays.
+  - **Effect on a search:** the greedy coverage repair no longer counts as gain
+    what the sink already covers, so it can activate different candidates. The
+    same seed therefore does not reproduce a P2 run made before this change,
+    even where no verdict changes.
+  - **Stored results:** recomputed over the eight P2 experiments in the
+    reference database (2,357 individuals): no coverage value and no
+    feasibility verdict changes. `p2-sc nsga3 1seed` stays infeasible: four of
+    its 404 samples are out of range of every candidate and of the sink.
+
+---
+
 ## [Unreleased] — Firmware v2 runs several times faster in Cooja, same output
 
 ### Changed

@@ -388,6 +388,5 @@ Both are fixed at build time.
 - **P4 cannot be launched**: the export writes neither `nodes`, `sink_base` nor
   `sojourns`. See [the problems](../../mo-engine/lib/problem/README.md#known-limitations).
 - **The editor has no field for P3's `g`**, which the engine does not read either.
-- **Two hints are inexact:** *pm_tau* is the probability of mutating the whole
-  dwell-time vector, not each time, and the coverage hint of α in P2 does not
-  say that the sink is left out.
+- **The *pm_tau* hint is inexact:** it is the probability of mutating the whole
+  dwell-time vector, not each time.

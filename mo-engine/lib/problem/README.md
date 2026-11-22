@@ -16,7 +16,7 @@ does not yet enforce part of it, [Known Limitations](#known-limitations) says so
 |---|---|---|
 | P0 | `p0_synthetic.py` | Runs in-process |
 | P1 | `p1_continuous_mobility.py` | Runs |
-| P2 | `p2_discrete_mobility.py` | Runs; the sink is left out of the coverage check |
+| P2 | `p2_discrete_mobility.py` | Runs |
 | P3 | `p3_target_coverage.py` | Runs; the constraints are only partly enforced |
 | P4 | `p4_mobile_sink_collection.py` | **Does not run end to end** |
 
@@ -112,8 +112,8 @@ A discrete variant of Problem 1, where fixed motes can only be placed at predefi
 * Homogeneous communication and interference radii $R_{\text{com}}$ and $R_{\text{inter}}$;
 * A required **coverage level** $\alpha \in [0, 100]$, in percent (JSON key
   `min_coverage_percentage`, optional, default $100$), with the same
-  discretization as in Problem 1. The implementation counts only the active
-  candidates as coverage, **not the sink**.
+  discretization as in Problem 1: a sample is covered when it lies within
+  $R_{\text{com}}$ of the sink or of an active candidate.
 
 **Goal.**
 Determine the **smallest subset** $P \subset Q$ of fixed mote positions such that, for all times $t \in \mathbb{R}_+$, each mobile mote can communicate with the sink via a multi-hop path with hop lengths bounded by $R_{\text{com}}$.
@@ -441,11 +441,11 @@ Mutation therefore does not break connectivity. Coverage can still fall below $\
 
 ### P2.4. Coverage Repair (optional)
 
-In addition to connectivity, Problem P2 carries a **trajectory coverage constraint**: the active candidates must cover at least $\alpha$ (`min_coverage_percentage`, a *problem* parameter — not a GA knob) of the sampled trajectory points, otherwise the individual is penalized by `penalty_objectives` and skips simulation.
+In addition to connectivity, Problem P2 carries a **trajectory coverage constraint**: the sink and the active candidates must cover at least $\alpha$ (`min_coverage_percentage`, a *problem* parameter — not a GA knob) of the sampled trajectory points, otherwise the individual is penalized by `penalty_objectives` and skips simulation.
 
 When the algorithm parameter `apply_coverage_repair` is enabled (default `true`), a **greedy set-cover repair** is applied after every connectivity repair (random generation, crossover, and mutation):
 
-1. The per-candidate coverage bitsets are precomputed once per problem instance (`build_candidate_cover_bits`), transposing the bitset coverage matrix.
+1. The coverage bitsets of the candidates and of the sink are precomputed once per problem instance (`build_candidate_cover_bits`), transposing the bitset coverage matrix. The sink is always active and is not a gene, so what it covers needs no relay.
 2. While the coverage is below the threshold and at most `repair_coverage_budget` activations (default 8) have been spent, the inactive candidate covering the most still-uncovered points is activated (ties break on the lowest index — fully deterministic, activation-only, never deactivates genes).
 3. If any candidate was activated, [**Connectivity Repair via Rooted Growth**](./docs/Connectivity%20Repair%20via%20Rooted%20Growth.md) reconnects the mask to the sink; if that fails, the pre-repair (connected) mask is kept.
 
@@ -575,12 +575,6 @@ operators try to reach $\alpha$; $\alpha$ itself decides *what* feasible means.
 # Known Limitations
 
 Where the code departs from the formulations above.
-
-**Problem 2**
-
-- The coverage matrix is built over the candidates only, so a trajectory point
-  covered just by the sink counts as uncovered. P1 counts the sink. An instance
-  can be infeasible in P2 and feasible in P1 for this reason alone.
 
 **Problem 3**
 
