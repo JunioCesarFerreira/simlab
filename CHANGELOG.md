@@ -31,7 +31,7 @@ This project follows [Semantic Versioning](https://semver.org/).
   - Details: `firmware/README.md`, "Simulation speed". Test:
     `test_v2_tables_hold_64_entries`.
   - The change only reaches experiments after the `-v2` repositories are
-    uploaded again (`python firmware/upload-firmware.py rpl-udp-csma-v2
+    uploaded again (from `firmware/`: `python upload-firmware.py rpl-udp-csma-v2
     rpl-udp-tsch-v2`). The upload creates new records next to the old ones, under
     the same name; the new descriptions end in "64-entry tables". v2 experiments
     that already ran keep the old `project-conf.h` in their snapshot. Their
@@ -135,11 +135,11 @@ digests and three papers cite its results. The fixes are a new firmware version.
     MACs handled so differently: on one TSCH instance the same firmware with the
     probes delivered 617 reports from 21 nodes, and without them 6,416 from 20.
     The firmware refuses to build outside Cooja, where this clock is not shared.
-  - `bytes_tx`, `bytes_rx` and `server_bytes_rx` are cumulative, so their growth is no
+  - `bytes_tx` and `server_bytes_rx` are cumulative, so their growth is no
     longer always 0. `throughput` counts reports only; v1 also counted the pongs
     (32% of it on average). `hops` counts links, one more than in v1. The columns
     that existed only because of the probes (`node_time`, `total_received`, `bytes_rx`,
-    `server_sent`, `pongs_received`, `rtt_samples`) are gone.
+    `server_sent`) are gone.
   - Packets carry a type byte and fixed-width fields; the root no longer dereferences
     a null pointer past 100 nodes (the limit is now 200); the report jitter is drawn
     again every period; the node prints its address once.
@@ -225,7 +225,7 @@ digests and three papers cite its results. The fixes are a new firmware version.
 
 - v2 has been validated in Cooja (180-minute simulations of two topologies, three
   seeds each, under both MACs, built without warnings, every default metric finite
-  through the real converter) but no experiment has used it yet. Moving an experiment
+  through the real converter) but no experiment had used it at the time of this entry. Moving an experiment
   to v2 changes the objective values, and so may the ordering the optimiser saw;
   replay a sample of v1 individuals under v2 before comparing.
 
@@ -769,7 +769,8 @@ containers seeded as before.
   stuck outside SSH needs to return or the master needs to be restarted.
 - **Nothing comes back for a preserved result on its own.**
   `unfetched_result` records the host, worker, container, attempt, directory,
-  file and pid, and the worker is held until a person decides. Automating the
+  file and pid. The worker is held until a person decides only when no copy
+  could be made; with a copy it returns to the pool. Automating the
   collection is deliberately not done: deciding what a half-collected result
   is worth is not a decision to take quietly.
 - **Two registrations for one physical worker are compared over configured
