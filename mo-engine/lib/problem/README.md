@@ -530,13 +530,15 @@ The chromosome is the same as in P2: a binary mask over $Q$ and a MAC gene.
 | Operator | Pipeline |
 |---|---|
 | Random generation | The rooted growth of P2.1, redrawn up to 20 times until the mask is feasible (the three conditions, the sink included) and new in the population. After that the last draw is accepted, and penalised if infeasible |
-| Crossover | Uniform mask crossover → $k$-coverage repair → connectivity repair; uniform MAC inheritance |
-| Mutation | Bit-flip mask mutation → $k$-coverage repair → connectivity repair; bit-flip MAC |
+| Crossover | Uniform mask crossover → $k$-coverage repair → connectivity repair → degree repair; uniform MAC inheritance |
+| Mutation | Bit-flip mask mutation → $k$-coverage repair → connectivity repair → degree repair; bit-flip MAC |
 
 The $k$-coverage repair activates the candidates nearest to each deficient
 target; the connectivity repair then activates paths to the sink. Both only
-activate, so the second keeps what the first achieved. No operator repairs a
-degree below $g$: the penalty does.
+activate, so the second keeps what the first achieved. The degree repair, for
+$g > 1$, activates for each mote short of neighbours its nearest candidates
+within reach, until none is short or none is left: a mote with too few
+candidates around it stays infeasible and is penalised.
 
 ---
 
@@ -613,9 +615,7 @@ operators try to reach $\alpha$; $\alpha$ itself decides *what* feasible means.
 
 Where the code departs from the formulations above.
 
-**Problem 3**
-
-- A degree below $g$ is penalised, not repaired.
+None known.
 
 
 ---

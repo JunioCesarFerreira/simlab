@@ -150,3 +150,38 @@ def test_an_infeasible_individual_is_not_simulated():
 
     assert run.db.experiment["status"] == EnumStatus.DONE
     assert len(infeasible) == 1 and not infeasible & simulated
+
+
+class TestDegreeRepair:
+    # A grid of candidates 10 m apart, reach 12 m: each has up to four neighbours.
+    GRID = {**LINE,
+            "candidates": [[10.0 * x, 10.0 * y] for x in range(1, 4) for y in range(-1, 2)],
+            "targets": [[30.0, 0.0]], "radius_of_cover": 5.0}
+
+    def test_a_mote_short_of_neighbours_gets_them(self):
+        a = adapter({**self.GRID, "g_required": 2})
+        # Only (30, 0) covers the target; the path to the sink gives it one
+        # neighbour, (20, 0). The degree repair adds the rest.
+        child = a.mutate(genome([0] * 9))
+        assert feasible(a, child.mask) and sum(child.mask) > 3
+
+    def test_g_three_cannot_be_met_on_this_grid(self):
+        # Corners have two candidates within reach: penalised, not looped on.
+        a = adapter({**self.GRID, "g_required": 3})
+        child = a.mutate(genome([0] * 9))
+        assert child.mask == [1] * 9 and not feasible(a, child.mask)
+
+    @pytest.mark.parametrize("seed", range(10))
+    def test_children_meet_g_when_the_candidates_allow_it(self, seed):
+        a = adapter({**self.GRID, "g_required": 2}, seed=seed, per_gene_prob=0.3)
+        population = a.random_individual_generator(4)
+        children = [a.mutate(p) for p in population]
+        children += [c for p in zip(population, population[1:]) for c in a.crossover(list(p))]
+        assert all(feasible(a, c.mask) for c in children)
+
+    def test_what_cannot_be_repaired_is_still_penalised(self):
+        # Two candidates only: no mote can have three neighbours.
+        problem = {**TestDegree.PAIR, "g_required": 3}
+        a = adapter(problem)
+        child = a.mutate(genome([1, 1]))
+        assert child.mask == [1, 1] and not feasible(a, child.mask)

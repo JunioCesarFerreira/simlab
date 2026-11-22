@@ -5,6 +5,19 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — P3 repairs the degree
+
+### Fixed
+
+- **A P3 mote short of `g` neighbours gets them.** After the k-coverage and
+  connectivity repairs, the operators switch on the nearest candidates within
+  reach of each such mote, until none is short or none is left. Every candidate
+  switched on is next to a connected mote, so coverage and connectivity hold. A
+  mote with too few candidates around it stays infeasible and is penalised, as
+  before. The stored P3 runs (g = 1) are unaffected.
+
+---
+
 ## [Unreleased] — Mobile motes move as their paths say
 
 ### Fixed

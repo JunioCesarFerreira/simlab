@@ -41,8 +41,8 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
       - Each installed sensor has at least g neighbours within R_com, the sink
         included (``g_required``, default 1).
 
-    The operators repair connectivity and k-coverage; what still violates a
-    constraint, the degree included, is penalised instead of simulated.
+    The operators repair k-coverage, connectivity and the degree; what still
+    violates a constraint is penalised instead of simulated.
     """
     def assert_problem(self, problem: Mapping[str, Any]) -> None:
         # Valida núcleo homogêneo mínimo
@@ -124,12 +124,51 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
         return pop
 
 
-    def _repair(self, mask: list[int], fallback: list[int]) -> list[int]:
-        """k-coverage first, then connectivity to the sink.
+    def _repair_degree(self, mask: list[int]) -> list[int]:
+        """Switch on, for each mote with fewer than g neighbours, its nearest
+        candidates within reach, until it has g or none is left.
 
-        Both only switch candidates on, so the second cannot undo the first.
-        In the opposite order the k-coverage repair could switch on a sensor
-        out of reach and disconnect the network the first had just joined.
+        A candidate switched on lies within reach of a connected mote, so the
+        network stays connected and covered; it may lack neighbours itself, and
+        the loop goes on until nothing changes.
+        """
+        g = self.problem.g_required
+        if g <= 1:
+            return mask
+        Q = [tuple(q) for q in self.problem.candidates]
+        sink = tuple(self.problem.sink)
+        radius = self.problem.radius_of_reach
+        mask = list(mask)
+
+        def degree(i: int) -> int:
+            neighbours = sum(1 for j, bit in enumerate(mask)
+                             if bit == 1 and j != i and math.dist(Q[i], Q[j]) <= radius)
+            return neighbours + (1 if math.dist(Q[i], sink) <= radius else 0)
+
+        changed = True
+        while changed:
+            changed = False
+            for i, bit in enumerate(mask):
+                if bit != 1:
+                    continue
+                missing = g - degree(i)
+                if missing <= 0:
+                    continue
+                spare = sorted(
+                    (j for j, b in enumerate(mask) if b == 0 and math.dist(Q[i], Q[j]) <= radius),
+                    key=lambda j: math.dist(Q[i], Q[j]))
+                for j in spare[:missing]:
+                    mask[j] = 1
+                    changed = True
+        return mask
+
+
+    def _repair(self, mask: list[int], fallback: list[int]) -> list[int]:
+        """k-coverage, then connectivity to the sink, then the degree g.
+
+        Each only switches candidates on, so a later one cannot undo an earlier
+        one. In the opposite order the k-coverage repair could switch on a
+        sensor out of reach and disconnect the network the first had just joined.
         """
         covered = repair_k_coverage(
             self.problem.candidates,
@@ -143,7 +182,7 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
         if err:
             log.error("[P3] Connectivity repair failed; keeping the parent's mask.")
             return list(fallback)
-        return connected
+        return self._repair_degree(connected)
 
 
     def crossover(self, parents: Sequence[ChromosomeP3]) -> list[ChromosomeP3]:
