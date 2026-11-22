@@ -13,8 +13,8 @@ class Generation(TypedDict):
     expected_seeds: NotRequired[list[int]]
     # False from the insert of the generation until every individual and
     # simulation planned for it was written. Found False on resume, the
-    # generation is a fragment and must not be evaluated as if it were whole.
-    # Written by random search only; absent otherwise, and on older documents.
+    # generation is a fragment: the engine finishes writing it before anything
+    # evaluates it (mo-engine/lib/strategy/enqueue.py). Absent on older documents.
     enqueue_complete: NotRequired[bool]
     replica_retries: NotRequired[int]
     # Source simulation ids/reasons for a claimed round whose enqueue has not

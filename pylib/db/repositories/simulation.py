@@ -413,6 +413,13 @@ class SimulationRepository:
                 return doc["_id"]
             return db["simulations"].insert_one(clone).inserted_id
 
+    def find_replicas(self, generation_id: ObjectId) -> list[dict]:
+        """Which replicas of a generation exist, by individual and seed."""
+        with self.connection.connect() as db:
+            return list(db["simulations"].find(
+                {"generation_id": generation_id},
+                {"_id": 0, "individual_id": 1, "random_seed": 1}))
+
     def find_terminal_by_generation(
         self, generation_id: ObjectId
     ) -> list[Simulation]:

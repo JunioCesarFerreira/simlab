@@ -205,7 +205,11 @@ class RandomSearchStrategy(EngineStrategy):
         self._gen_index = 0
         self._load_genome_cache_from_db()
 
-        existing_generations = self.mongo.generation_repo.find_by_experiment(self._exp_id)
+        existing_generations = self._set_aside_cut(
+            self.mongo.generation_repo.find_by_experiment(self._exp_id),
+            inserted=self._inserted_genomes,
+            caches=(self._genome_objectives_cache, self._genome_completeness_cache),
+        )
         if existing_generations:
             self._resume_existing_generation(existing_generations)
         else:
@@ -286,13 +290,6 @@ class RandomSearchStrategy(EngineStrategy):
         """
         last = generations[-1]
         last_index = int(last["index"])
-        if last.get("enqueue_complete") is False:
-            reason = (
-                f"Cannot resume: the engine stopped while enqueueing generation {last_index}, "
-                "which is missing individuals or simulations. Relaunch the experiment."
-            )
-            self.mongo.experiment_repo.update(str(self._exp_id), {"system_message": reason})
-            raise RuntimeError(reason)
         by_generation = self.mongo.individual_repo.find_grouped_by_experiment(self._exp_id)
         if not by_generation.get(last["_id"]):
             raise RuntimeError(
@@ -464,6 +461,9 @@ class RandomSearchStrategy(EngineStrategy):
         individual_id: str,
         config_snapshot: dict,
     ) -> None:
+        if self._has_picture(individual_id):
+            return
+
         def _do():
             try:
                 topo_id = self._plot_topology(exp_oid, gen_index, ind_idx, config_snapshot)
@@ -506,19 +506,19 @@ class RandomSearchStrategy(EngineStrategy):
             # After this generation's draw and before the next one's: where a
             # resume has to put the stream back. Enqueueing itself never draws.
             "rng_state": dump_random_state(self._rng),
-            "enqueue_complete": False,
         }
         # Increment before inserting so the change-stream callback always sees
         # the already-updated index.
         self._gen_index += 1
-        self._generation_id = self.mongo.generation_repo.insert(gen_doc)
+        self._generation_id = gen_oid = self._open_generation(
+            gen_doc, [genome.get_hash() for genome in population], self._sim_rand_seeds)
         # Completeness is measured against this, not against the
         # documents that end up existing: a replica whose creation
         # failed is invisible to a count of what was created.
         self._replica_gate.record_plan(
             self._generation_id, self._sim_rand_seeds)
 
-        if gen_index == 0:
+        if gen_index == 0 and self._adopted is None:
             self.mongo.experiment_repo.update(str(exp_oid), {
                 "status": EnumStatus.RUNNING,
                 "start_time": utc_now(),
@@ -561,7 +561,7 @@ class RandomSearchStrategy(EngineStrategy):
                     # have anything to count for this genome.
                     "completeness": carried,
                 }
-                self.mongo.individual_repo.insert(ind_doc)
+                self._insert_individual(ind_doc)
                 config_topo = self._convert_genome_to_sim_config(
                     genome=genome, gen_index=gen_index, ind_idx=i, seed=first_seed,
                 )
@@ -589,7 +589,7 @@ class RandomSearchStrategy(EngineStrategy):
                     STATE_ANALYTICAL,
                     "the problem is analytical; no simulation was run")
                 self._generation_completeness[genome_hash] = analytical_record
-                self.mongo.individual_repo.insert({
+                self._insert_individual({
                     "experiment_id": exp_oid,
                     "generation_id": gen_oid,
                     "individual_id": genome_hash,
@@ -606,7 +606,7 @@ class RandomSearchStrategy(EngineStrategy):
                 self._genome_completeness_cache[genome_hash] = (
                     analytical_record)
                 try:
-                    self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
+                    self._insert_cache_entry(genome_hash, genome.to_dict())
                     self.mongo.genome_cache_repo.set_objectives(
                         self._exp_id, genome_hash, obj_min,
                         without_simulations(STATE_ANALYTICAL, "the problem is analytical; no simulation was run"))
@@ -638,9 +638,9 @@ class RandomSearchStrategy(EngineStrategy):
                     "topology_picture_id": None,
                     "completeness": penalty_record,
                 }
-                self.mongo.individual_repo.insert(ind_doc)
+                self._insert_individual(ind_doc)
                 self._inserted_genomes.add(genome_hash)
-                self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
+                self._insert_cache_entry(genome_hash, genome.to_dict())
                 self.mongo.genome_cache_repo.set_objectives(
                     self._exp_id, genome_hash, penalty,
                     without_simulations(
@@ -677,19 +677,20 @@ class RandomSearchStrategy(EngineStrategy):
                 "objectives": [],
                 "topology_picture_id": None,
             }
-            self.mongo.individual_repo.insert(ind_doc)
+            self._insert_individual(ind_doc)
             self._inserted_genomes.add(genome_hash)
-            self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
+            self._insert_cache_entry(genome_hash, genome.to_dict())
 
             for seed in self._sim_rand_seeds:
                 config["randomSeed"] = seed
-                self._insert_simulation_db(genome_hash, exp_oid, gen_oid, config)
+                if not self._replica_written(genome_hash, seed):
+                    self._insert_simulation_db(genome_hash, exp_oid, gen_oid, config)
                 sims_inserted += 1
                 logger.info("[RandomSearch] SIM inserted SEED=%s genome=%s", seed, genome_hash)
 
             self._upload_topology_async(exp_oid, gen_oid, gen_index, i, genome_hash, dict(config))
 
-        self.mongo.generation_repo.update(gen_oid, {"enqueue_complete": True})
+        self._generation_written(gen_oid)
 
         all_cached = sims_inserted == 0
         if all_cached:

@@ -156,30 +156,6 @@ def test_a_firmware_run_queues_the_restored_genomes_firmware(monkeypatch):
     assert {s["source_repository_id"] for s in run.db.simulations} == {source}
 
 
-@pytest.mark.parametrize("dies_at", [
-    (2, "plan", 0),
-    (2, "individual", 0),
-    (2, "individual", 3),
-    (2, "simulation", 0),
-    (2, "simulation", 5),
-])
-@pytest.mark.parametrize("closed", [False, True], ids=["open", "closed_by_master"])
-def test_a_generation_cut_while_enqueueing_is_not_passed_off_as_whole(dies_at, closed):
-    """Finishing Done on fewer individuals or seeds than configured is the danger."""
-    run = Run("continuous")
-    run.db.die_while_enqueueing = dies_at
-    with pytest.raises(Killed):
-        run.finish()
-    if closed:
-        run.last["status"] = EnumStatus.DONE
-
-    with pytest.raises(RuntimeError, match="enqueu"):
-        run.restart()
-
-    assert run.db.experiment["status"] != EnumStatus.DONE
-    assert "enqueu" in run.db.experiment["system_message"]
-
-
 def test_a_generation_with_nothing_to_simulate_is_closed_on_resume():
     """Enqueued whole, killed before the engine could close it: no worker will."""
     straight = Run("analytical").finish()

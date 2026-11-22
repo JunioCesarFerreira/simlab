@@ -104,10 +104,8 @@ Two things differ when reading its results:
 - in the last generation, what was decided at enqueue (reused, analytical,
   infeasible) is read back with its evidence, and what rests on simulations is
   derived from them again;
-- a generation is inserted with `enqueue_complete: false`, which turns true
-  once all of it was written. Found false on resume, the generation is a
-  fragment: the experiment ends in `Error`, saying so in `system_message`,
-  rather than finishing on fewer evaluations than configured;
+- a generation cut while being enqueued is finished, as for every strategy
+  ([mo-engine](../../README.md#startup));
 - a checkpoint without `rng_state` (written before 2026-11-22) has its earlier
   draws repeated to position the stream, with a warning in the log.
 

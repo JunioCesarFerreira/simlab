@@ -45,6 +45,7 @@ The engine never directly communicates with the Cooja simulator. Instead, it wri
 │                                                                      │
 │  lib/strategy/                                                       │
 │  ├── base.py          EngineStrategy (ABC)                           │
+│  ├── enqueue.py       writes a generation, or finishes a cut one     │
 │  ├── nsga3.py         NSGA3LoopStrategy  ──────┐  native NDS+niching │
 │  ├── nsga3_deap.py    NSGA3DeapStrategy  ──────┤  DEAP selNSGA3      │
 │  ├── nsga3_pymoo.py   NSGA3PymooStrategy ──────┘  pymoo survival     │
@@ -166,6 +167,15 @@ What a resume restores depends on the strategy:
 | `usl_benchmark` | The last wave and the recorded workload |
 | `random_search` | The population, the archive and the RNG state, so the run continues as it would have ([details](lib/strategy/README.md#random-search)) |
 
+A death in the middle of an enqueue is covered for all of them. A generation is
+inserted with `enqueue_complete: false`, which turns true once all of it is
+written. Found false on resume, it is finished
+([lib/strategy/enqueue.py](lib/strategy/enqueue.py)): the previous generation's
+handler draws the same population again, and only what is missing is written.
+When that cannot be reproduced (the code or the experiment changed since), the
+experiment ends in `Error`, with the difference in `system_message`. A benchmark
+wave finished this way did not run at its N, so it measures as invalid.
+
 ### Known issues
 
 - **A finished experiment does not release its threads.** Its change-stream
@@ -176,9 +186,6 @@ What a resume restores depends on the strategy:
 - **Cancelling a scalability benchmark does not stop it.** `usl_benchmark` does
   not read the cancellation: it runs every wave and then overwrites `Cancelled`
   with `Done`.
-- **An NSGA restart during an enqueue is not detected.** The generation is
-  resumed as a fragment: it can wait for ever or be evaluated with individuals
-  missing.
 - **An empty `parameters.algorithm` fails at start** with
   `AttributeError: ... '_rng'`: the adapter receives the generator only with a
   non-empty configuration.
@@ -285,6 +292,7 @@ mo-engine/
 │   │   ├── usl_benchmark.py     # Scalability benchmark of the infrastructure
 │   │   ├── analytical.py        # In-process evaluation of P0 benchmarks (no simulations)
 │   │   ├── completeness.py      # Replica policy, gate and front validity
+│   │   ├── enqueue.py           # Idempotent enqueue, finished on resume
 │   │   ├── library_rng.py       # Seeds DEAP/pymoo from the engine RNG; RNG checkpoints
 │   │   └── simulation_seeds.py  # Seed utilities
 │   │
@@ -329,7 +337,7 @@ mo-engine/
 
 ### Adding a New Strategy from Scratch
 
-A strategy encapsulates a complete optimisation algorithm. A new one should also use `ReplicaGate` and `pin_mac_gene`, as the existing ones do, and be added to the launch wizard (`Step2Experiment.vue`). The contract is defined by `EngineStrategy` in [lib/strategy/base.py](lib/strategy/base.py).
+A strategy encapsulates a complete optimisation algorithm. A new one should also use `ReplicaGate`, `pin_mac_gene` and the enqueue methods it inherits (`_set_aside_cut`, `_open_generation`, `_generation_written`), as the existing ones do, and be added to the launch wizard (`Step2Experiment.vue`). The contract is defined by `EngineStrategy` in [lib/strategy/base.py](lib/strategy/base.py).
 
 **Step 1 — Implement the ABC:**
 

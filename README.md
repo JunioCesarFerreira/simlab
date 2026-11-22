@@ -513,7 +513,6 @@ read. Each is described in the linked document.
 | `batch` | Cannot be created through `POST /experiments/`: the API drops `parameters.chromosomes` | [Strategies](mo-engine/lib/strategy/README.md#batch) |
 | Engine memory | Threads and memory of finished experiments are not released | [mo-engine](mo-engine/README.md#known-issues) |
 | Benchmark cancellation | Cancelling a scalability benchmark does not stop it | [mo-engine](mo-engine/README.md#known-issues) |
-| NSGA resume | An interrupted enqueue is not detected | [mo-engine](mo-engine/README.md#known-issues) |
 | Problem 3 | `g` is ignored, and infeasible individuals are simulated without penalty | [Problems](mo-engine/lib/problem/README.md#known-limitations) |
 | Problem 4 | Cannot run from the GUI or the API, and its CSC would make a sensor the RPL root | [Problems](mo-engine/lib/problem/README.md#known-limitations) |
 | Empty log | A run in which no report reached the root fails at collection | [master-node](master-node/README.md#known-issues) |

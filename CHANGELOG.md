@@ -5,6 +5,21 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — An engine killed at any write resumes the same run
+
+### Fixed
+
+- **A generation cut while being enqueued is finished on resume.** NSGA-II/III
+  and batch evaluated the fragment as if it were whole or waited on it for
+  ever; a benchmark did the same with a wave; random search refused it. All
+  now write what is missing and nothing twice, and end identical to a run
+  that was never killed. A fragment that cannot be reproduced (the code or the
+  experiment changed since) ends in `Error`, saying what differs.
+- **A generation with nothing to simulate is closed on resume** in NSGA-II/III
+  and batch: killed before closing it, the engine left it `Waiting` for ever.
+
+---
+
 ## [Unreleased] — A resume keeps the evidence behind every vector
 
 ### Fixed

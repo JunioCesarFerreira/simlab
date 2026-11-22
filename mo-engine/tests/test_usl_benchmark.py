@@ -62,6 +62,17 @@ class Store:
                 return next((g for g in outer.generations
                              if str(g["_id"]) == str(gen_id)), None)
 
+            def update(self, gen_id, fields):
+                self.get(gen_id).update(fields)
+                return True
+
+            def close_if_finished(self, gen_id, *, require_simulations=False):
+                sims = outer.wave_simulations(gen_id)
+                if not sims or any(s["status"] == EnumStatus.WAITING for s in sims):
+                    return None
+                self.get(gen_id)["status"] = EnumStatus.DONE
+                return EnumStatus.DONE
+
             def watch_status_terminal(self, callback):
                 return None
 
@@ -69,6 +80,9 @@ class Store:
             def insert(self, ind):
                 outer.individuals.append(dict(ind))
                 return ObjectId()
+
+            def find_by_generation(self, gen_id):
+                return [i for i in outer.individuals if i["generation_id"] == gen_id]
 
         class Collection:
             def count_documents(self, flt):
@@ -93,6 +107,9 @@ class Store:
                 doc["_id"] = ObjectId()
                 outer.simulations.append(doc)
                 return doc["_id"]
+
+            def find_replicas(self, gen_id):
+                return outer.wave_simulations(gen_id)
 
         class Experiments:
             def get(self, exp_id):
@@ -441,3 +458,27 @@ class TestTheRecordedWorkloadIsTheOneThatRuns:
             workload["genome_hash"]}
         assert {s["source_repository_id"] for s in store.simulations} == {TSCH}
         assert store.individuals[0]["individual_id"] == workload["genome_hash"]
+
+
+class TestAWaveCutWhileEnqueueing:
+    @pytest.mark.parametrize("wave", [0, 1])
+    @pytest.mark.parametrize("written", [0, 1, 3, 4])
+    def test_the_restart_finishes_writing_it(self, store, wave, written):
+        levels = (4, 5)
+        strategy = started(store, levels=levels, repetitions=1)
+        if wave:
+            strategy.event_generation_done(store.close(store.generations[0]["_id"]))
+        generation = store.generations[-1]
+        # As the engine left it: some copies written, and not marked as whole.
+        generation["enqueue_complete"] = False
+        keep = {s["_id"] for s in store.wave_simulations(generation["_id"])[:written]}
+        store.simulations = [
+            s for s in store.simulations
+            if s["generation_id"] != generation["_id"] or s["_id"] in keep]
+
+        started(store, levels=levels, repetitions=1)
+
+        assert len(store.generations) == wave + 1
+        assert len(store.wave_simulations(generation["_id"])) == levels[wave]
+        assert len(store.individuals) == wave + 1
+        assert generation["enqueue_complete"] is True

@@ -180,7 +180,8 @@ class BatchStrategy(EngineStrategy):
         if not isinstance(self._exp_id, ObjectId):
             self._exp_id = ObjectId(str(self.experiment.get("_id")))
 
-        existing_generations = self.mongo.generation_repo.find_by_experiment(self._exp_id)
+        existing_generations = self._set_aside_cut(
+            self.mongo.generation_repo.find_by_experiment(self._exp_id))
         if existing_generations:
             last = existing_generations[-1]
             self._generation_id = last["_id"]
@@ -190,6 +191,10 @@ class BatchStrategy(EngineStrategy):
                 self._exp_id, self._generation_id, status,
             )
             self._restore_decided_at_enqueue()
+            if status == EnumStatus.WAITING and not self._count_sims_inserted:
+                # All penalised, and killed before the enqueue could close it.
+                self.mongo.generation_repo.mark_done(self._generation_id)
+                status = EnumStatus.DONE
             self._start_watcher()
             self._start_generation_poll()
             if status in (EnumStatus.DONE, EnumStatus.ERROR):
@@ -366,17 +371,19 @@ class BatchStrategy(EngineStrategy):
             "start_time": utc_now(),
             "end_time": None,
         }
-        self._generation_id = self.mongo.generation_repo.insert(gen_doc)
+        self._generation_id = gen_oid = self._open_generation(
+            gen_doc, [genome.get_hash() for genome in self._chromosomes], self._sim_rand_seeds)
         # Completeness is measured against this, not against the
         # documents that end up existing: a replica whose creation
         # failed is invisible to a count of what was created.
         self._replica_gate.record_plan(
             self._generation_id, self._sim_rand_seeds)
 
-        self.mongo.experiment_repo.update(str(exp_oid), {
-            "status": EnumStatus.RUNNING,
-            "start_time": utc_now(),
-        })
+        if self._adopted is None:
+            self.mongo.experiment_repo.update(str(exp_oid), {
+                "status": EnumStatus.RUNNING,
+                "start_time": utc_now(),
+            })
 
         sims_inserted = 0
         self._sim_done_count = 0
@@ -412,7 +419,7 @@ class BatchStrategy(EngineStrategy):
                     # by its magnitude.
                     "completeness": penalty_record,
                 }
-                self.mongo.individual_repo.insert(ind_doc)
+                self._insert_individual(ind_doc)
                 self._inserted_genomes.add(genome_hash)
                 config_topo = self._convert_genome_to_sim_config(
                     genome=genome, gen_index=gen_index, ind_idx=i, seed=first_seed
@@ -439,12 +446,13 @@ class BatchStrategy(EngineStrategy):
                 "objectives": [],
                 "topology_picture_id": None,
             }
-            self.mongo.individual_repo.insert(ind_doc)
+            self._insert_individual(ind_doc)
             self._inserted_genomes.add(genome_hash)
 
             for seed in self._sim_rand_seeds:
                 config["randomSeed"] = seed
-                self._insert_simulation_db(genome_hash, exp_oid, gen_oid, config)
+                if not self._replica_written(genome_hash, seed):
+                    self._insert_simulation_db(genome_hash, exp_oid, gen_oid, config)
                 sims_inserted += 1
                 logger.info(
                     "[Batch] SIM inserted SEED=%s genome=%s", seed, genome_hash
@@ -453,6 +461,8 @@ class BatchStrategy(EngineStrategy):
             self._upload_topology_async(
                 exp_oid, gen_oid, gen_index, i, genome_hash, dict(config)
             )
+
+        self._generation_written(gen_oid)
 
         all_penalised = sims_inserted == 0
         if all_penalised:
@@ -708,6 +718,9 @@ class BatchStrategy(EngineStrategy):
         individual_id: str,
         config_snapshot: dict,
     ) -> None:
+        if self._has_picture(individual_id):
+            return
+
         def _do():
             try:
                 topo_id = self._plot_topology(exp_oid, gen_index, ind_idx, config_snapshot)

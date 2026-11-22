@@ -80,6 +80,17 @@ def stored(document: dict) -> dict:
     return BSON.encode(document).decode()
 
 
+#: The calls that write, which is where a process can die between two states.
+WRITES = {
+    "experiment_repo": ("update",),
+    "generation_repo": ("insert", "record_plan", "update", "set_survivors", "mark_done",
+                        "close_if_finished"),
+    "individual_repo": ("insert", "update_evaluation"),
+    "simulation_repo": ("insert",),
+    "genome_cache_repo": ("insert", "set_objectives"),
+}
+
+
 class Database:
     """The documents, plus the repository methods the strategy calls."""
 
@@ -101,6 +112,20 @@ class Database:
         self.simulation_repo = _SimulationRepo(self)
         self.genome_cache_repo = _CacheRepo(self)
         self.fs_handler = None
+        self.writes = 0
+        self.die_at_write = None
+        for repository, methods in WRITES.items():
+            target = getattr(self, repository)
+            for method in methods:
+                setattr(target, method, self._counted(getattr(target, method)))
+
+    def _counted(self, write):
+        def counted(*args, **kwargs):
+            self.writes += 1
+            if self.writes == self.die_at_write:
+                raise Killed
+            return write(*args, **kwargs)
+        return counted
 
     def generation(self, oid) -> dict:
         return next(g for g in self.generations if g["_id"] == oid)
@@ -159,6 +184,16 @@ class _GenerationRepo(_Repo):
     def mark_done(self, oid):
         self.db.enqueueing(oid, "close")
         self.db.generation(oid)["status"] = EnumStatus.DONE
+
+    def close_if_finished(self, oid, *, require_simulations=False):
+        sims = self.db.simulations_of(oid)
+        if any(s["status"] == EnumStatus.WAITING for s in sims):
+            return None
+        if require_simulations and not sims:
+            return None
+        ok = all(s["status"] == EnumStatus.DONE for s in sims)
+        self.db.generation(oid)["status"] = EnumStatus.DONE if ok else EnumStatus.ERROR
+        return self.db.generation(oid)["status"]
 
     def pending_retry_round(self, _oid):
         return None
@@ -227,6 +262,9 @@ class _SimulationRepo(_Repo):
         self.db.enqueueing(oid, "simulation", len(self.db.simulations_of(oid)))
         self.db.simulations.append(stored({"_id": ObjectId(), **document}))
 
+    def find_replicas(self, oid):
+        return [stored(s) for s in self.db.simulations_of(oid)]
+
     def find_terminal_by_generation(self, oid):
         return [s for s in self.db.simulations_of(oid) if s["status"] != EnumStatus.WAITING]
 
@@ -253,7 +291,7 @@ class Run:
     """One experiment, the engine processes that serve it, and the workers."""
 
     def __init__(self, problem="repeated", *, strategy=RandomSearchStrategy, seed=42,
-                 simulation=None, outcome=None, parameters=None):
+                 simulation=None, outcome=None, parameters=None, die_at_write=None):
         self.cls = strategy
         self.outcome = outcome
         self.db = Database({
@@ -284,7 +322,14 @@ class Run:
                 **(parameters or {}),
             },
         })
-        self.boot(first=True)
+        self.db.die_at_write = die_at_write
+        self.killed = False
+        try:
+            self.boot(first=True)
+        except Killed:
+            if die_at_write is None:
+                raise
+            self.killed = True
 
     def boot(self, first=False):
         strategy = self.cls(stored(self.db.experiment), self.db)
@@ -302,6 +347,7 @@ class Run:
         self.db.die_before_finish = False
         self.db.die_at_cache_write_of = None
         self.db.die_while_enqueueing = None
+        self.db.die_at_write = None
         # The engine resumes only what it finds Running.
         if self.db.experiment["status"] == EnumStatus.RUNNING:
             self.boot()
@@ -313,8 +359,11 @@ class Run:
     def work(self):
         """The workers deliver whatever the last generation still waits for."""
         generation = self.last
+        simulations = self.db.simulations_of(generation["_id"])
+        if not simulations:
+            return      # the master closes only a generation that has simulations
         ok = True
-        for sim in self.db.simulations_of(generation["_id"]):
+        for sim in simulations:
             if sim["status"] == EnumStatus.WAITING:
                 digest = hashlib.sha1(
                     f"{sim['individual_id']}:{sim['random_seed']}".encode()).digest()
@@ -334,8 +383,18 @@ class Run:
             if self.db.experiment["status"] != EnumStatus.RUNNING:
                 return self
             self.work()
+            if self.last["status"] not in (EnumStatus.DONE, EnumStatus.ERROR):
+                raise AssertionError("the generation never closes: the experiment hangs")
             self.handle()
         raise AssertionError("the experiment never finished")
+
+    def finish_unless_killed(self):
+        if not self.killed:
+            try:
+                self.finish()
+            except Killed:
+                self.killed = True
+        return self
 
     def until(self, checkpoint: int, point: str):
         """Run up to ``checkpoint`` and die at ``point`` of that generation."""

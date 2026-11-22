@@ -207,7 +207,11 @@ class NSGA2LoopStrategy(EngineStrategy):
         # genomes already evaluated are never re-submitted to Cooja.
         self._load_genome_cache_from_db()
 
-        existing_generations = self.mongo.generation_repo.find_by_experiment(self._exp_id)
+        existing_generations = self._set_aside_cut(
+            self.mongo.generation_repo.find_by_experiment(self._exp_id),
+            inserted=self._inserted_genomes,
+            caches=(self._genome_objectives_cache, self._genome_completeness_cache),
+        )
         if existing_generations:
             should_process_terminal = self._resume_existing_generation(existing_generations)
             self._start_watcher()
@@ -388,6 +392,11 @@ class NSGA2LoopStrategy(EngineStrategy):
         self._restore_population_state(generations, last_generation)
 
         status = last_generation.get("status")
+        if status == EnumStatus.WAITING and not self._count_sims_inserted:
+            # Nothing to simulate, and killed before the enqueue could close it:
+            # the master closes only generations that have simulations.
+            self.mongo.generation_repo.mark_done(self._generation_id)
+            status = EnumStatus.DONE
         if status in (EnumStatus.WAITING, EnumStatus.RUNNING):
             logger.info(
                 "[NSGA-II] Resuming experiment %s from existing generation %s (index=%d, status=%s).",
@@ -685,6 +694,9 @@ class NSGA2LoopStrategy(EngineStrategy):
         Generates and uploads the topology image for one individual in a background thread,
         then updates topology_picture_id on the Individual document.
         """
+        if self._has_picture(individual_id):
+            return
+
         def _do():
             try:
                 topo_id = self._plot_topology(exp_oid, gen_index, ind_idx, config_snapshot)
@@ -733,14 +745,15 @@ class NSGA2LoopStrategy(EngineStrategy):
         # Increment before inserting so the change-stream callback (which fires
         # asynchronously) always sees the already-updated index.
         self._gen_index += 1
-        self._generation_id = self.mongo.generation_repo.insert(gen_doc)
+        self._generation_id = gen_oid = self._open_generation(
+            gen_doc, [genome.get_hash() for genome in population], self._sim_rand_seeds)
         # Completeness is measured against this, not against the
         # documents that end up existing: a replica whose creation
         # failed is invisible to a count of what was created.
         self._replica_gate.record_plan(
             self._generation_id, self._sim_rand_seeds)
 
-        if gen_index == 0:
+        if gen_index == 0 and self._adopted is None:
             self.mongo.experiment_repo.update(str(exp_oid), {
                 "status": EnumStatus.RUNNING,
                 "start_time": utc_now()
@@ -787,7 +800,7 @@ class NSGA2LoopStrategy(EngineStrategy):
                     # have anything to count for this genome.
                     "completeness": carried,
                 }
-                self.mongo.individual_repo.insert(ind_doc)
+                self._insert_individual(ind_doc)
                 config_topo = self._convert_genome_to_sim_config(
                     genome=genome, gen_index=gen_index, ind_idx=i, seed=first_seed
                 )
@@ -817,7 +830,7 @@ class NSGA2LoopStrategy(EngineStrategy):
                     STATE_ANALYTICAL,
                     "the problem is analytical; no simulation was run")
                 self._generation_completeness[genome_hash] = analytical_record
-                self.mongo.individual_repo.insert({
+                self._insert_individual({
                     "experiment_id": exp_oid,
                     "generation_id": gen_oid,
                     "individual_id": genome_hash,
@@ -834,7 +847,7 @@ class NSGA2LoopStrategy(EngineStrategy):
                 self._genome_completeness_cache[genome_hash] = (
                     analytical_record)
                 try:
-                    self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
+                    self._insert_cache_entry(genome_hash, genome.to_dict())
                     self.mongo.genome_cache_repo.set_objectives(
                         self._exp_id, genome_hash, obj_min,
                         without_simulations(STATE_ANALYTICAL, "the problem is analytical; no simulation was run"))
@@ -868,10 +881,10 @@ class NSGA2LoopStrategy(EngineStrategy):
                     "topology_picture_id": None,
                     "completeness": penalty_record,
                 }
-                self.mongo.individual_repo.insert(ind_doc)
+                self._insert_individual(ind_doc)
                 self._inserted_genomes.add(genome_hash)
                 try:
-                    self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
+                    self._insert_cache_entry(genome_hash, genome.to_dict())
                     self.mongo.genome_cache_repo.set_objectives(
                     self._exp_id, genome_hash, penalty,
                     without_simulations(
@@ -910,20 +923,23 @@ class NSGA2LoopStrategy(EngineStrategy):
                 "objectives": [],
                 "topology_picture_id": None,
             }
-            self.mongo.individual_repo.insert(ind_doc)
+            self._insert_individual(ind_doc)
             self._inserted_genomes.add(genome_hash)
             try:
-                self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
+                self._insert_cache_entry(genome_hash, genome.to_dict())
             except Exception:
                 logger.warning("genome_cache insert failed for %s; simulation will run uncached.", genome_hash)
 
             for seed in self._sim_rand_seeds:
                 config["randomSeed"] = seed
-                self._insert_simulation_db(genome_hash, exp_oid, gen_oid, config)
+                if not self._replica_written(genome_hash, seed):
+                    self._insert_simulation_db(genome_hash, exp_oid, gen_oid, config)
                 sims_inserted += 1
                 logger.info("SIM inserted SEED=%s genome=%s", seed, genome_hash)
 
             self._upload_topology_async(exp_oid, gen_oid, gen_index, i, genome_hash, dict(config))
+
+        self._generation_written(gen_oid)
 
         # When every genome already had cached objectives there are no simulations
         # to wait for. Mark the generation DONE directly so the change-stream

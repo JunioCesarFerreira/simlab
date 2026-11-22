@@ -212,7 +212,9 @@ class _ResumeHarness:
         """A fresh strategy picking the checkpoint up, as ``start()`` would."""
         self.strategy = self._build()
         replay = self.strategy._resume_existing_generation(self.generations)
-        assert replay == (self.generations[-1]["status"] == EnumStatus.DONE)
+        # P0 has nothing to simulate, so a generation left Waiting is closed
+        # and replayed too: no master would ever close it.
+        assert replay
         return self.strategy
 
 

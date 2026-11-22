@@ -2,8 +2,10 @@ from abc import ABC, abstractmethod
 from pylib.db.models import Experiment
 from pylib.db import MongoRepository
 
+from .enqueue import ResumableEnqueue
 
-class EngineStrategy(ABC):
+
+class EngineStrategy(ResumableEnqueue, ABC):
     def __init__(self, experiment: Experiment, mongo: MongoRepository):
         self.experiment = experiment
         self.mongo = mongo
