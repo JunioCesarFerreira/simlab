@@ -1,8 +1,8 @@
 """Retrospective RPL DODAG analysis from Cooja simulation logs (Phase 1).
 
-The current firmware/Cooja template does **not** timestamp per-node serial lines
-(``Not reachable yet`` / ``Sensor IPv6 = ...``), so the only time-stamped signal
-available in existing logs is the root's per-node JSON metrics stream. Every such
+Logs from before the ``[RPL]`` instrumentation and the ``[t_us=...]`` prefix do
+**not** timestamp per-node serial lines (``Not reachable yet`` / ``Sensor IPv6 = ...``),
+so their only time-stamped signal is the root's per-node JSON metrics stream. Every such
 record carries the reporting node's IPv6 (``node``), the root clock at reception
 (``root_time_now``, ms) and the reported hop distance (``hops``).
 

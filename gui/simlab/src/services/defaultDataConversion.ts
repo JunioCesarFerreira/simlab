@@ -6,9 +6,9 @@ import type { DataConversionConfigDto } from "../types/simlab";
  *
  * Shared by the experiment wizard and the scalability benchmark. The benchmark
  * does not read these metrics — its analysis uses only timestamps — but the
- * master-node evaluates them after every run, and a run whose metrics cannot
- * be evaluated ends in error. Two copies of this list would drift, and the one
- * that drifted would make a benchmark of failures.
+ * master-node evaluates them after every run. A column the firmware does not
+ * print gives NaN without failing the run, so a second copy of this list would
+ * drift in silence.
  *
  * Latency, energy and the counters only exist for reports that reached the
  * root, so the list carries how much of the network they describe:

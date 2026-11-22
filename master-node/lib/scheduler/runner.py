@@ -1136,7 +1136,7 @@ class SimulationRunner:
         *,
         held_for: Optional[dict] = None,
     ) -> None:
-        """Take a worker out of the pool until a person says otherwise.
+        """Take a worker out of the pool until an operator or a probe resolves it.
 
         ``enabled = False`` is the right lever: it is administrative, so a
         successful probe cannot undo it, and the page already explains a

@@ -67,11 +67,11 @@ class NSGA2LoopStrategy(EngineStrategy):
     """
     NSGA-II loop strategy integrated with SimLab.
 
-    - Generates an initial population (fixed 2D mote positions).
+    - Generates an initial population with the problem adapter.
     - Queues simulations in MongoDB (Change Streams trigger execution on the master node).
     - Upon receiving the results (DONE status on the Generation), calculates the objectives,
         performs NSGA-II environmental selection with crowding distance tie-breaking,
-        creates the next generation (offspring via SBX + Polynomial Mutation),
+        creates the next generation (offspring via the adapter's operators),
         and repeats until `number_of_generations` is reached.
     """
     def __init__(self, experiment: dict, mongo):

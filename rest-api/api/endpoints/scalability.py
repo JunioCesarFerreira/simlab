@@ -32,12 +32,13 @@ STRATEGY = "usl_benchmark"
 MAX_LEVEL = 256
 MAX_LEVELS = 32
 MAX_REPETITIONS = 10
+#: The duration is in simulated minutes.
 DURATION_RANGE = (10, 3600)
 
 #: What the master-node needs to turn a run's log into metrics. Not used by
-#: the benchmark's own analysis, which only reads timestamps — but a run
-#: whose metrics cannot be evaluated ends in error, and a benchmark of
-#: failures measures nothing. Sent by the GUI; this is the fallback.
+#: the benchmark's own analysis, which only reads timestamps. A column the
+#: log lacks gives NaN and the run is still Done. Sent by the GUI; this is
+#: the fallback, and it reads the columns of firmware v1.
 DEFAULT_DATA_CONVERSION = {
     "node_col": "node",
     "time_col": "root_time_now",

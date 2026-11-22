@@ -1,3 +1,25 @@
+# Auditoria de NSGA-II/III e métricas — 09/09/2026
+
+> **Registro histórico.** O texto, as linhas citadas e os números descrevem o
+> commit `d4c639f`. Os scripts importam o código atual e, portanto, não
+> reproduzem mais os números guardados em `results/`. Situação dos nove itens
+> em 22/11/2026:
+>
+> | Item | Situação |
+> | --- | --- |
+> | 1. Conjunto medido | Corrigido: sobreviventes persistidos e usados por padrão, com fallback indicado |
+> | 2. Niching do NSGA-III | Corrigido |
+> | 3. SBX limitado | Corrigido |
+> | 4. Parâmetros padrão | Mutação corrigida no wizard sintético (`1.0` e `1/n`); o domínio de SCH1 continua [-5,5] e difere do notebook |
+> | 5. GD e frente esparsa | Corrigido: GD analítico e amplitude teórica; a definição continua diferente da do notebook |
+> | 6. Caminhos de HV | Corrigido para benchmarks; no WSN a referência ainda é de cada execução, e os CLIs medem descendentes |
+> | 7. Sementes e retomada | Corrigido no NSGA-II/III; a [retomada da busca aleatória](../../mo-engine/lib/strategy/README.md#random-search) segue com defeito |
+> | 8. Seleção final | Corrigido |
+> | 9. Defeitos do endpoint | Corrigido na API; os CLIs ainda [mapeiam objetivos por posição](../../pareto-analysis/README.md#known-issues) |
+>
+> A validação atual está na
+> [suíte de regressão](../../mo-engine/tests/regression/README.md).
+
 Análise do SimLab e comparação com NSGA-Studies, realizada em 09/09/2026.
 Código examinado: SimLab `d4c639f`; NSGA-Studies `90201a3`, incluindo o notebook
 local ainda não versionado `notebooks/evaluation/sch1-nsga-metrics.ipynb`.

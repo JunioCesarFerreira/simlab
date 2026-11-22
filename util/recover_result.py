@@ -9,8 +9,9 @@ on the container to a name the next run's cleanup does not know, where the copy
 could be made, and the simulation records ``unfetched_result``: which worker,
 which directory, which file, which process.
 
-Nothing comes back for it automatically, and the worker is **held** out of the
-pool until something does. That is deliberate: deciding what a half-collected
+Nothing comes back for it automatically. Where no copy could be made, the
+worker is **held** out of the pool until something resolves it; with a copy it
+is already back. That is deliberate: deciding what a half-collected
 result is worth is not a decision to automate quietly. This tool is the other
 half of that contract — the procedure that makes the retention resolvable
 rather than permanent.
@@ -28,13 +29,13 @@ What it does
             simulation. Use it to look at the bytes before deciding.
 
 ``publish`` fetches, converts, stores both artifacts in GridFS and records
-            them on the simulation. Refuses a simulation that already carries
-            a result. The worker is *not* released by this: run ``release``
+            them on the simulation. Refuses a simulation that is ``Done``.
+            A held worker is *not* released by this: run ``release``
             once you have confirmed the result is where you want it.
 
-``discard`` records that the result was given up on, with a reason, and
-            releases the worker. The remote bytes are left alone; removing
-            them is a separate decision and a separate command.
+``discard`` records that the result was given up on, with a reason. It does
+            *not* release the worker: run ``release`` if it is held. The remote
+            bytes are left alone; removing them is a separate step.
 
 ``release`` clears the hold on the worker and lets the health cycle measure
             it again. Refuses while the simulation still carries an

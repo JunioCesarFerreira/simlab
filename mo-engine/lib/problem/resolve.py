@@ -45,14 +45,8 @@ def resolve_problem_key(problem: Mapping[str, Any]) -> str:
     """
     Resolve the problem key from a problem document.
 
-    Primary convention:
-      - problem["name"] where name ∈ {"problem1", "problem2", "problem3", "problem4"}
-
-    Backward-compatible aliases (if you still have older stored documents):
-      - problem["problem_type"]
-      - problem["type"]
-      - problem["problem"]["type"]   (nested shape)
-      - problem["parameters"]["problem_type"] (nested shape)
+    The only field read:
+      - problem["name"] where name ∈ {"problem0", "problem1", "problem2", "problem3", "problem4"}
 
     Raises:
       ValueError if no supported field is found or if the value is empty.

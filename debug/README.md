@@ -1,81 +1,89 @@
 # Debug
 
-In this directory, you'll find scripts that are useful for debugging.
+Development and validation aids. None of them is a deployment: for that, use
+the [main stack](../README.md).
 
-- `requests`: These are preformatted JSON files for testing, requiring only ID adjustments to facilitate testing using the API's Swagger.
-
-- `docker`: These are Docker files to facilitate preparing a local environment for debugging.
+- [`requests`](requests): preformatted JSON bodies to test the API from its
+  Swagger. See [Requests](#requests).
+- [`docker`](docker/README.md): Compose files for local debugging
+  environments: `minimal-infra`, `mongo-cooja` and the `remote-host` fixture.
+- [`validation`](validation/README.md): scripts that validate failures of the
+  distributed execution against real services, on disposable infrastructure.
 
 ## Usage
 
-To run SimLab locally using the preconfigured debug `docker-compose` setups. These are intended for testing, experimentation, and small-scale local execution.
-
 ### Prerequisites
 
-- Docker and Docker Compose installed on your machine  
-- (Optional) Ensure ports used in compose files do not conflict with existing services  
+- Docker and Docker Compose installed on your machine
+- The ports and container names of the debug files are free. `minimal-infra`
+  and `mongo-cooja` reuse the main stack's names, so **do not run them while
+  the main stack exists on the machine**.
 
 ### 1. Choose a debug compose setup
 
-Inside the `debug/` directory, you should find (for example):
-
-- `minimal-infra`: This docker-compose can be used to generate a minimal structure for testing on localhost.
-- `mongo-cooja`: Use this docker-compose to create a minimal local MongoDB and three Cooja containers, allowing local Python component execution for debugging and development.
+- `minimal-infra`: MongoDB, REST API, mo-engine, master-node and three Cooja
+  containers. No GUI, proxy or monitoring.
+- `mongo-cooja`: MongoDB, eight Cooja containers, cAdvisor and Prometheus, to
+  run the Python components on the host.
+- `remote-host`: a simulated second host. It is added to the main stack and has
+  its own [procedure](docker/remote-host/README.md).
 
 ### 2. Bring up the services
 
-In a terminal, navigate to the root of the directory, and run:
+From the repository root:
 
 ```bash
-cd debug/<<directory>>
+cd debug/docker/<minimal-infra|mongo-cooja>
+docker compose up -d          # add --build to force rebuilding
 ```
 
-You can add `--build` to force rebuilding, and `-d` to run in detached mode.
-
-To view logs in real time, omit `-d`:
-```bash
-docker-compose up --build -d
-```
+Without `-d`, the logs are shown in real time.
 
 ### 3. Verify running containers
 
-Run:
-
 ```bash
-docker-compose ps
+docker compose ps
 ```
 
-You should see containers like:
-
-* `master_node`
-* `mo_engine`
-* `rest-api`
-* `mongodb`
-* `cooja1` (one or more simulation containers)
-
-Check that their state is **Up** and the ports are mapped correctly.
+`minimal-infra` runs `mongodb`, `rest_api`, `mo_engine`, `master_node` and
+`cooja1`–`cooja3`. Check that their state is **Up**.
 
 ### 4. Interact with the system
 
-* Use the **REST API** (e.g., via browser, `curl`, or Postman) on the configured host port to submit experiments, view status, etc.
-* If synthetic mode is enabled (via `ENABLE_DATA_SYNTHETIC`), results may be generated without launching real simulations.
-* Monitor logs of individual containers:
+* The API of `minimal-infra` is on `http://localhost:8000` (Swagger in `/docs`,
+  key `simlab-api-key42`).
+* With `ENABLE_DATA_SYNTHETIC=True` on the master-node, results are generated
+  without launching real simulations
+  ([SYNTHETIC_MODE.md](../docs/markdown/SYNTHETIC_MODE.md)).
+* Monitor the logs by **service** name:
 
 ```bash
-docker-compose logs master-node
-docker-compose logs mo-engine
+docker compose logs masternode
+docker compose logs moengine
 ```
 
 ### 5. Tear down / cleanup
 
-When finished, stop and remove all containers:
-
 ```bash
-docker-compose down
+docker compose down
 ```
 
-You may also include volumes clean-up if needed:
+`docker compose down -v` also deletes the volumes, and with them the database.
 
-```bash
-docker-compose down -v
-```
+## Requests
+
+Every body needs its ids adjusted (`source_repository_options`). The
+data conversions read firmware v1, so use the v1 repositories with them or
+replace the conversion
+([FIRMWARE_METRICS.md](../docs/markdown/FIRMWARE_METRICS.md)).
+
+| File | State |
+|---|---|
+| `post-nsga3-experiment-p1.json`, `post-nsga3-experiment-p2.json` | NSGA-III examples for P1 and P2 |
+| `post-random-search-experiment-p2.json` | random-search example for P2 |
+| `import-problem-p2.json` | for the GUI's problem import, not for the API |
+| `post-batch-experiment-p2.json` | **Rejected by the API** (422): batch [cannot be created through it](../mo-engine/lib/strategy/README.md#batch) |
+| `post-nsga3-experiment-p3.json` | **Needs fixing:** its conversion does not produce the three objectives it declares, and `simulation.random_seed` is not read (the key is `random_seeds`; seed 123456 is used) |
+| `post-nsga3-experiment-p4.json` | **Invalid for the engine:** no `nodes` and empty `sojourns` ([P4](../mo-engine/lib/problem/README.md#known-limitations)); same seed key problem |
+
+`simulation.duration` is in simulated minutes.

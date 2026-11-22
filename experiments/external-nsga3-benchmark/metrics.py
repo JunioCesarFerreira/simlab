@@ -3,7 +3,7 @@ Pareto-quality metrics used by Table 3 of the SimLab paper.
 
 Implements:
   * Hypervolume (HV) using the ``deap.tools._hypervolume.hv`` helper, which
-    matches the implementation already used by ``pareto-analysis/``.
+    the pinned DEAP 1.4.4 does not have (pareto-analysis uses ``moocore``).
   * Generational Distance (GD)        — Veldhuizen & Lamont, 1998.
   * Inverted Generational Distance (IGD) — Coello & Sierra, 2004.
   * Coverage (set-coverage operator C(A,B)) — Zitzler & Thiele, 1998.

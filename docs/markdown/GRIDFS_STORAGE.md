@@ -6,7 +6,9 @@
 > its simulation output distilled into a ~16.5 GB dataset for deposit. The
 > measurements below are kept because they explain the compression now built
 > into `pylib/db/gridfs.py`, and because the same growth will recur: the ratios
-> are properties of Cooja's output, not of that particular database.
+> are properties of Cooja's output, not of that particular database. Counts,
+> columns and shares describe that database, which ran firmware v1. The current
+> behaviour is described in §6 (Tier 1) and §8.
 
 At the time of measurement, `fs.chunks` held 477 GB of *logical* data across
 281 031 files. This document records where that volume was, and what can be

@@ -22,7 +22,8 @@
 # Defaults:
 #   INPUTS_DIR  = ./inputs        (one subdir per simulation, each must
 #                                  contain simulation.csc and optional
-#                                  positions.dat + firmware/*.c)
+#                                  positions.dat + the firmware files,
+#                                  flat in the same directory)
 #   RESULTS_DIR = ./results
 #   C_MAX       = 10              (must be <= number of cooja* services in
 #                                  docker-compose.baseline.yaml)
@@ -116,7 +117,8 @@ run_one() {
 }
 
 # ---------------------------------------------------------------------------
-# Crude job queue: dispatch each pending simulation to the next free worker.
+# Crude job queue: when any slot frees, dispatch to the next worker round-robin
+# (which is not necessarily the one that freed).
 # This is intentionally naive — no retry, no monitoring, no progress UI.
 # ---------------------------------------------------------------------------
 T_START=$(date +%s)

@@ -269,10 +269,10 @@ def check_coverage(matrix: CoverageMatrix, mask: list[int]) -> float:
 
         covered[i] = OR_j ( matrix[i][j] AND mask[j] )
 
-    and returns an integer in [0, 100] proportional to the fraction of
-    covered points:
+    and returns a number in [0, 100] proportional to the fraction of
+    covered points, not rounded:
 
-        score = round( covered_count / N * 100 )
+        score = covered_count / N * 100
 
     So 100 means full coverage, 0 means no point is covered, and
     intermediate values scale linearly with the coverage ratio.
@@ -288,7 +288,7 @@ def check_coverage(matrix: CoverageMatrix, mask: list[int]) -> float:
 
     Returns
     -------
-    int
+    float
         Coverage score in [0, 100].
     """
     if not matrix:

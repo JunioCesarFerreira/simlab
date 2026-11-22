@@ -5,7 +5,8 @@ Distance (IGD / IGD+) per generation.  Outputs a single JSON object to stdout.
 The metric loop itself lives in ``plot_pareto_results.compute_convergence_metrics``
 — the same function the plotting CLI uses — so the numbers printed here, the
 numbers in the uploaded PNG and the numbers the web GUI reads from
-``GET /experiments/{id}/hv-gd`` all come from one definition.
+``GET /experiments/{id}/hv-gd`` share one definition. The series here measure
+each generation's offspring, which is ``population=offspring`` there.
 """
 import json
 import os

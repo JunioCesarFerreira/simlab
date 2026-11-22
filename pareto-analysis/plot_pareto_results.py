@@ -1,7 +1,7 @@
 """
 Pareto analysis for SimLab experiments.
 
-Produces two figures, both consistent with what the SimLab web GUI shows:
+Produces two figures, with the definitions the SimLab web GUI uses:
 
   1. Pareto fronts (dominance layers) — every front of the global
      non-dominated sort, each with its own colour and marker size.
@@ -12,9 +12,12 @@ Consistency with the GUI
 The GUI does not compute these metrics in the browser: it reads them from
 ``GET /experiments/{id}/hv-gd`` (rest-api/api/endpoints/experiment.py) and it
 colours points by ``individualRankMap`` (gui/.../pages/ExperimentDetail.vue).
-This module mirrors both definitions exactly:
+This module mirrors both definitions. It always measures each generation's
+**offspring**, though, while the endpoint defaults to survivors: compare with
+``population=offspring``.
 
-* penalized individuals (any |objective| >= 1e8) are dropped everywhere;
+* non-finite vectors and those the evaluation record marks invalid are dropped
+  everywhere (|objective| >= 1e8 only for records that predate that evidence);
 * the HV reference point is the per-axis worst value **in minimization space**
   (maximized objectives negated first), plus a ``5% + 1.0`` margin;
 * HV of a generation is the hypervolume of that generation's own Pareto front,
@@ -912,9 +915,9 @@ def main():
         # A run's own final front makes GD/IGD self-referential: they read as
         # "how close to my own final result was I at generation k" rather than
         # as convergence to the real optimum, and cannot be compared across
-        # runs. Note they do NOT reach zero at the end — the engine builds this
-        # front from the merged pool (surviving parents u last offspring) while
-        # a generation holds only its own offspring.
+        # runs. They need not reach zero at the end — the NSGA engines build
+        # this front from the final survivors, while the series here measures
+        # each generation's offspring.
         reference_label = "the run's own final front (self-reference)"
 
     # Penalized, duplicate and dominated rows would corrupt IGD, which averages

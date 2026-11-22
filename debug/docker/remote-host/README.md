@@ -47,6 +47,7 @@ creates.
 ## 3. Register the host
 
 ```bash
+export MONGO_URI='mongodb://localhost:27017/?directConnection=true'
 python util/register_host.py add remote-sim \
     --address remote-host --port 22 --user root \
     --key debug/docker/remote-host/keys/simlab_remote \
@@ -96,6 +97,12 @@ A host stuck at `offline` or `misconfigured` is diagnosed by its
 
 ## 5. Run the distribution test
 
+This test is for the `least_loaded_host` policy. Compose sets
+`earliest_completion`, which follows the measured durations instead of the
+counts and gives other splits. The value is literal in `docker-compose.yaml`
+(`.env` does not change it): set `SCHED_POLICY=least_loaded_host` there for the
+test, run `docker compose up -d masternode`, and put it back afterwards.
+
 With the local host's 8 containers and this host's 2, launch an experiment
 whose generation holds 6 simulations and watch where they land:
 
@@ -124,8 +131,8 @@ Placed 65b0… on remote-sim/rcooja1 (attempt 7f3a…) — local[2a/6f] remote-s
 ## Tearing it down
 
 ```bash
-docker compose -f debug/docker/remote-host/docker-compose.yaml down
 python util/register_host.py enable remote-sim --off   # drains it first
+docker compose -f debug/docker/remote-host/docker-compose.yaml down   # once idle
 ```
 
 Disabling stops new placements and lets anything still running finish.

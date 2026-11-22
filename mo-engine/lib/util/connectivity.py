@@ -378,7 +378,7 @@ def repair_connectivity_to_sink(
 ) -> tuple[bool, list[int]]:
     """
     Repairs a binary mask by connecting all components to the sink
-    using minimal (heuristic) node activations.
+    using heuristic node activations (not necessarily the fewest).
 
     Parameters
     ----------
@@ -387,7 +387,7 @@ def repair_connectivity_to_sink(
     mask : list[int]
         Binary mask (may be disconnected).
     sink : (float, float)
-        Sink position (must be active or will be activated).
+        Root position. It is not a candidate, so it has no bit in the mask.
     radius : float
         Reachability radius.
 

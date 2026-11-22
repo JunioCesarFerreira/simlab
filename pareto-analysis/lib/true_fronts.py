@@ -2,9 +2,9 @@
 
 For synthetic experiments the true Pareto front is known in closed form, so
 GD / IGD can be measured against the *real* optimum instead of the experiment's
-own final front. Self-reference does not drive the indicators to zero — the
-stored front comes from the merged pool (surviving parents u last offspring)
-while a generation holds only its own offspring — but it does make them measure
+own final front. For the offspring these CLIs measure, self-reference need not
+drive the indicators to zero — the stored NSGA front is that of the final
+survivors — but it does make them measure
 progress towards that one run's result, which is not comparable across runs and
 says nothing about distance to the actual optimum.
 

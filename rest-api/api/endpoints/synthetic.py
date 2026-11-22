@@ -3,7 +3,7 @@ from fastapi import APIRouter
 router = APIRouter()
 
 # Static catalogue of supported benchmark functions.
-# Extend this list when new benchmarks are added to synthetic_data.py.
+# Extend this list when new benchmarks are added to pylib/benchmarks.py.
 _BENCHMARKS = [
     {
         "id": "DTLZ2",

@@ -9,8 +9,9 @@ status reporting.
 
 Containers are **not** a fixed list of worker threads any more. The master-node
 keeps an inventory of *hosts*, each with its own Cooja *workers*, measures
-them, and places each simulation on the host carrying the fewest active
-simulations. Setup, configuration and limitations are in the main README's
+them, and places each simulation according to a [placement policy](#placement-policies)
+— by default, on the host carrying the fewest active simulations. Setup and
+deployment-wide limitations are in the main README's
 [Distributed Cooja Resources](../README.md#distributed-cooja-resources)
 section; this file is about the design and the process.
 
@@ -41,8 +42,10 @@ section; this file is about the design and the process.
 ```
 
 Three roles. The dispatcher and the health monitor are one thread each; a
-*runner* is one thread **per run**, so the live thread count is three plus the
-number of simulations in flight, plus the change-stream watchers.
+*runner* is one thread **per run**. The live thread count is the main thread,
+those two and the three watchers, plus one per simulation in flight or adopted,
+one per preparation (its lease) and the short-lived threads that check hosts in
+parallel.
 
 | Role | Responsibility |
 |---|---|
@@ -62,8 +65,8 @@ When `master-node.py` starts:
 2. **Load the keystore** and publish its public key, so the GUI can seal
    credentials that only this process can open.
 3. **Bootstrap the local host** — its containers are seeded from
-   `NUMBER_OF_CONTAINERS` on first start, insert-only, so nothing an operator
-   changed is undone. Discovery takes over afterwards.
+   `NUMBER_OF_CONTAINERS`, insert-only: every start adds what is missing and
+   nothing an operator changed is undone. Discovery maintains them afterwards.
 4. **Reconcile occupied containers** — anything still held from a previous
    process is probed: a run still going is *adopted* and followed, one that
    finished has its result collected, and only one that left nothing behind is
@@ -76,8 +79,10 @@ When `master-node.py` starts:
    from the one that ended.
 7. **Start the health and dispatcher threads.**
 8. **Drain the pending queue** — every simulation already `WAITING`.
-9. **Start the change-stream watcher** for simulations entering `WAITING`.
-10. **Block** on the main thread (keyboard interrupt exits cleanly).
+9. **Start the change-stream watcher** for simulations entering `WAITING`. The
+   watchers of hosts and resources already started with the dispatcher's assembly.
+10. **Block** on the main thread (keyboard interrupt exits cleanly; a DNS
+    self-restart exits with status 75).
 
 ---
 
@@ -91,17 +96,19 @@ The entry point. Holds the `Settings` dataclass, all core functions, and `main()
 |---|---|
 | `Settings.from_env()` | Reads all configuration from environment variables |
 | `recover_abandoned_simulations()` | Fails the `RUNNING` simulations that **no container holds**. Runs *after* the reconciliation, which is what keeps the clock from overruling a probe |
-| `prepare_simulation_files()` | Downloads `.csc`, `.dat` and source files from GridFS to a temp dir |
+| `prepare_simulation_files()` | Downloads `.csc`, `.dat` and source files from GridFS to a temp dir. The sources come from the shared repository as it is now, not from the experiment's firmware snapshot |
 | `run_cooja_simulation()` | Launches Cooja, follows it, collects its artifacts, and **reports**: it writes no simulation state — the runner decides what the outcome means |
 | `build_liveness_probe()` | Asks a container what became of a recorded run: alive, finished with an exit code, gone, or no answer |
 | `load_initial_waiting_jobs()` | Enqueues all `WAITING` simulations present at startup |
-| `_check_and_close_generation()` | After each simulation completes, checks if the whole generation is DONE or ERROR |
+| `_check_and_close_generation()` | Closes the generation of a simulation that recovery failed. Completed runs are closed by the runner |
+| `build_dispatcher()` | Assembles the dispatcher, the runner and the placement policy |
 | `main()` | Orchestrates startup, watcher, and main loop |
 
 ### `lib/scheduler/`
 
 `policy` is the placement decision as a pure function over the inventory;
-`inventory` is the snapshot it reads; `dispatcher` is the single-threaded loop
+`completion` is the plan the `earliest_completion` policy makes of when the
+waiting work would finish; `inventory` is the snapshot they read; `dispatcher` is the single-threaded loop
 that applies it; `runner` executes one placed simulation and owns every
 decision about its outcome.
 
@@ -109,8 +116,9 @@ decision about its outcome.
 
 How a container is reached: `plan` resolves where to go, `ssh` is the only
 implementation (one hop for a local container, two for one on another host),
-`hostkey` is the trust policy, `pool` keeps the first hop from being opened
-once per worker, and `factory` composes a transport from the stored records.
+`hostkey` is the trust policy, `session` opens a session on a host with no
+container behind it, `pool` keeps the first hop from being opened once per
+worker, and `factory` composes a transport from the stored records.
 
 `resolve` turns a host's name into an address before paramiko sees it, so a
 failed lookup is bounded (5 s) and classified: `NameResolutionFailed` says
@@ -126,7 +134,8 @@ The measuring cycle: Docker says whether a container exists, an SSH probe says
 whether it can actually run a simulation, and both must agree before a worker
 enters the pool. The cycle also does the housekeeping nothing else owns —
 freeing reservations that never started, reconciling runs nobody is following,
-and re-closing generations left open with nothing running in them.
+re-closing generations left open with nothing running in them, and resolving
+held workers.
 
 A probe carries the host's `config_version`, and a worker whose host's access
 settings changed is measured again before it is schedulable. Both halves
@@ -165,7 +174,8 @@ master-node restart.
 
 Deciding what to do with containers still held from a previous process, and
 with runs nobody is following. Five answers, kept apart — alive, finished with
-a collectable result, gone, unreachable, and *still being prepared*.
+a collectable result, gone (or no pid recorded), unreachable, and *still being
+prepared*.
 
 The last one is a grace rather than a probe: a container `reserved` moments ago
 has had nothing started on it, so there is no process to ask about, and the
@@ -189,16 +199,17 @@ without launching the simulator.
 >    fast-path and always enqueues simulations;
 > 2. **Legacy P1-encoded synthetic experiments** — benchmark variables encoded
 >    as relay coordinates of a `problem1` instance;
-> 3. **The global env-var override** (`ENABLE_DATA_SYNTHETIC=true`), which
->    turns any incoming simulation into a synthetic one.
+> 3. **The global env-var fallback** (`ENABLE_DATA_SYNTHETIC=true`), which
+>    turns an incoming simulation into a synthetic one, unless its experiment's
+>    `synthetic` block sets `enabled` itself.
 >
 > Keep this module in place while any of these paths is supported.
 
 Two ways to enable it, with the per-experiment config taking precedence over the
 environment variables:
 
-- **Per-experiment** — `parameters.simulation.synthetic = { enabled, bench, noise_std }`,
-  set through the GUI *Synthetic Instances* editor.
+- **Per-experiment** — `parameters.simulation.synthetic = { enabled, bench, noise_std, sch1_domain }`.
+  The GUI *Synthetic Instances* editor sets the first three.
 - **Global fallback** — `ENABLE_DATA_SYNTHETIC=true` (+ `BENCH`, `NOISE_STD`).
 
 Both chromosome encodings are supported: the P0 decision vector is read verbatim
@@ -229,11 +240,12 @@ flowchart TD
     %% placement
     QUEUE -->|sim dequeued| SYNTH{synthetic mode?\nper-experiment config,\nelse ENABLE_DATA_SYNTHETIC}
     SYNTH -->|yes| BENCH[Run benchmark function\nDTLZ2 / ZDT1 / SCH1]
-    BENCH --> DONE_SIM
+    BENCH --> DONE_SYN[mark_done simulation\nno container to release]
+    DONE_SYN --> CLOSE_GEN
 
-    SYNTH -->|no| PLACE{a host with\na free container?}
-    PLACE -->|no| HOLD[Hold the job\nand wait for capacity]
-    HOLD --> QUEUE
+    SYNTH -->|no| PLACE{policy finds a host\nto use now, within\nmachine limits?}
+    PLACE -->|no| HOLD[Hold the job\nand wait for capacity\nor a faster worker]
+    HOLD --> PLACE
     PLACE -->|yes| RESERVE[Reserve it atomically\nrecord host, worker, attempt]
 
     RESERVE --> PREP[prepare_simulation_files\nDownload .csc + .dat +\nsource files from GridFS]
@@ -245,7 +257,8 @@ flowchart TD
     OWNS -->|yes| LIVE{anything alive\nin the run directory?}
     LIVE -->|yes| QUARANTINE[Disable the worker\nno release]
     LIVE -->|no| SCP[Clean, then send files via SCP\n1 hop local, 2 hops remote]
-    SCP --> SSH[Launch Cooja detached\nsetsid + own session]
+    SCP --> MARKRUN[mark_running simulation]
+    MARKRUN --> SSH[Launch Cooja detached\nsetsid + own session]
     SSH -->|no pid, group alive| QUARANTINE
     SSH --> MONITOR[Poll until it ends\nreconnecting if the link drops]
     MONITOR -->|stop not confirmed| QUARANTINE
@@ -257,18 +270,22 @@ flowchart TD
     CONVERT --> UPLOAD_CSV[Upload CSV to GridFS]
     UPLOAD_CSV --> METRICS{CSV exists\nand non-empty?}
     METRICS -->|yes| CALC[Calculate network metrics\nstatistics.evaluate_config]
+    CALC -->|cannot be evaluated| RETRY[Preserve the testlog\nretry the collection once]
+    RETRY -->|fails again| ERR_COLLECT[Error + unfetched_result\nhold the worker if no copy was made]
+    ERR_COLLECT --> CLOSE_GEN
     CALC --> DONE_SIM[mark_done simulation\nlog_id + csv_id + metrics]
     METRICS -->|no| ERR_CSV[Error with its artifacts\nthe testlog is the only evidence]
     ERR_CSV --> CLOSE_GEN
 
+    DONE_SIM --> CLOSE_GEN[close_if_finished]
     DONE_SIM --> CLEANUP[Clear the run's remote artifacts\nand the local temp files]
     CLEANUP --> RELEASE[Release the container\nguarded by the attempt]
-    RELEASE --> CLOSE_GEN[close_if_finished]
 
-    CLOSE_GEN --> ALL_DONE{All simulations\nDONE?}
+    CLOSE_GEN --> ACTIVE{Anything still\nWaiting or Running?}
+    ACTIVE -->|yes| WAIT([Wait for remaining\nsimulations])
+    ACTIVE -->|no| ALL_DONE{A result for every\nplanned seed?}
     ALL_DONE -->|yes| GEN_DONE[mark_done generation\n→ triggers mo-engine\nChange Stream]
-    ALL_DONE -->|no active left| GEN_ERR[mark_error generation]
-    ALL_DONE -->|still active| WAIT([Wait for remaining\nsimulations])
+    ALL_DONE -->|no| GEN_ERR[mark_error generation]
 ```
 
 ---
@@ -284,18 +301,21 @@ worker" a property of the database rather than of the code around it.
 stateDiagram-v2
     [*] --> preparing : reserve() granted, attempt registered
     preparing --> running : mark_busy(), pid recorded
-    preparing --> lost : lease refused, or sweep expired it
+    preparing --> lost : lease refused or ownership unconfirmed
+    preparing --> expired : sweep revoked the attempt
+    preparing --> failed : inputs or connection failed
     preparing --> unknown : something alive in the run directory
     running --> contact_lost : the link dropped
     contact_lost --> running : reconnected; the run was unaffected
     running --> collecting : exit code recorded
     running --> unknown : had to be stopped and the stop was not confirmed
     collecting --> done : mark_done()
-    collecting --> pending_collection : both fetch attempts failed
+    collecting --> pending_collection : both collection attempts failed
     collecting --> failed : nothing usable came back
     running --> failed : the run produced nothing
-    lost --> [*] : the simulation returns to the queue
-    unknown --> [*] : the worker is disabled; a person decides
+    lost --> [*] : returns to the queue, if still owned
+    expired --> [*] : the simulation is marked Error
+    unknown --> [*] : worker held until the container is confirmed clear
     done --> [*]
     failed --> [*]
     pending_collection --> [*] : artifacts kept, location recorded
@@ -306,10 +326,11 @@ Two of these states exist because of what review reproduced:
 * **`unknown`** — a run that may still be executing. The worker is taken out of
   the pool by one write that both disables it and lets go of the attempt. It
   used to be two writes, and when the first failed the second still ran.
-* **`pending_collection`** — a finished run whose result could not be fetched
-  twice. The artifacts are copied to a name the next run's cleanup does not
-  know, and `simulation.unfetched_result` records the worker, directory and
-  pid. Nothing comes back for them automatically.
+* **`pending_collection`** — a finished run whose result could not be collected
+  twice. The simulation is marked `Error` and `simulation.unfetched_result`
+  records the worker, directory and pid. If the testlog could be copied to a
+  name the next run's cleanup does not know, the worker **returns to the pool**;
+  if not, it is held. Nothing comes back for the bytes automatically.
 
 ### How the hold outlives this process
 
@@ -337,7 +358,13 @@ and every write that could make it usable again refuses while it is set:
 `HealthMonitor.resolve_held_workers()` is that way out, and it runs every
 cycle. One rule, deliberately conservative: the hold is cleared only when the
 container **answers**, has **nothing alive** and has left **nothing behind**.
-Still running, still holding bytes, or unreachable — it stays held.
+Still running, still holding bytes, or unreachable — it stays held. A
+`collection_pending` hold also waits for the simulation's `unfetched_result`,
+if there is one, to be published or discarded.
+
+One exception to "nothing behind": a testlog whose **simulation was deleted**
+cannot be collected by anything, so it does not keep the worker held. Clearing
+a hold re-enables the worker, and the next check measures it.
 
 That pass is what lets the quarantine be strict. A worker leaves the pool
 whenever something about it is unaccounted for, and most of those causes are
@@ -355,12 +382,16 @@ is detached.
 ```mermaid
 stateDiagram-v2
     [*] --> WAITING : inserted by mo-engine
-    WAITING --> RUNNING : the dispatcher places its simulations
+    WAITING --> DONE : every planned seed has a result
+    WAITING --> ERROR : nothing active left\nand a planned seed has none
     RUNNING --> DONE : every planned seed has a result
     RUNNING --> ERROR : nothing active left\nand a planned seed has none
     DONE --> RUNNING : a failed replica is repeated (mo-engine)
     ERROR --> RUNNING : idem
 ```
+
+A generation stays `WAITING` while its simulations run; placing them does not
+change it. `RUNNING` means it was **reopened** for a repeat.
 
 The decision is **by seed, not by document**, and that distinction only
 appeared once a failed replica could be repeated. The repeat is a second
@@ -393,10 +424,10 @@ documents — and a failure of the second used to propagate back and mark the
 |---|---|---|
 | `MONGO_URI` | `mongodb://localhost:27017/?replicaSet=rs0` | MongoDB connection string (replica set required for Change Streams) |
 | `DB_NAME` | `simlab` | Database name |
-| `IS_DOCKER` | `false` | If `true`, seeded hostnames are `cooja1..coojaN` on port 22; otherwise `localhost` on ports `2231+i` |
-| `NUMBER_OF_CONTAINERS` | `8` | How many local containers to **seed** on first start. Not a thread count any more: the pool comes from the inventory, and discovery maintains it |
+| `IS_DOCKER` | `false` (`true` in the image) | If `true`, seeded hostnames are `cooja1..coojaN` on port 22; otherwise `localhost` on ports `2231+i` |
+| `NUMBER_OF_CONTAINERS` | `8` | How many local containers to **seed** (missing ones only, on every start). Not a thread count any more: the pool comes from the inventory, and discovery maintains it |
 | `SIM_TIMEOUT_SEC` | `10800` | How long one simulation may run (wall clock), and the cutoff for recovering one left `RUNNING` with no container holding it. `0` disables both. 3 h is a 180-min simulation at real time; a TSCH simulation of 27 motes and 180 min takes about an hour on a loaded machine |
-| `SCHED_POLICY` | `least_loaded_host` | Placement policy — see *Placement policies* below. `least_loaded_host`, `fastest_then_least_loaded` or `earliest_completion` (what `docker-compose.yaml` sets) |
+| `SCHED_POLICY` | `least_loaded_host` | Placement policy — see [Placement Policies](#placement-policies). `least_loaded_host`, `fastest_then_least_loaded` or `earliest_completion` (what `docker-compose.yaml` sets) |
 | `RUN_POLL_INTERVAL_SEC` | `5` | How often a running simulation is checked on. One cheap round trip each time |
 | `INFRA_CHECK_INTERVAL_SEC` | `30` | Health cycle interval |
 | `INFRA_FAILURE_THRESHOLD` | `3` | Consecutive failures before a host leaves the pool. Capacity is slow to lose and quick to regain |
@@ -408,8 +439,10 @@ documents — and a failure of the second used to propagate back and mark the
 | `DNS_RESTART_MIN_INTERVAL_SEC` | `3600` | At most one such restart per interval — the guard against a loop when the machine itself has no DNS. The last restart is stored in `master_status`, so the guard survives the restart |
 | `RESERVATION_TTL_SEC` | `600` | How long a container may stay reserved without its simulation starting. Covers only that window — a run that got as far as `busy` is governed by `SIM_TIMEOUT_SEC` |
 | `INFRA_KEY_PATH` | `/run/secrets/simlab-infra/x25519.json` | The keystore that opens sealed credentials. The private half never leaves this process |
-| `COOJA_JVM_XMS` / `COOJA_JVM_XMX` | `1g` / `2g` | JVM heap for Cooja |
-| `ENABLE_DATA_SYNTHETIC` | `false` | Replace Cooja execution with a benchmark function for experiments without a per-experiment `synthetic` block (only affects simulations that reach the master-node — P0 experiments are evaluated in-process by the mo-engine) |
+| `COOJA_JVM_XMS` / `COOJA_JVM_XMX` | `1g` / `2g` | JVM heap for Cooja. `docker-compose.yaml` sets `4g` / `4g` |
+| `COOJA_SSH_PASSWORD` | `root` | Password of the container login when no credential is stored for the worker or its host (the image's default login) |
+| `GRIDFS_COMPRESSION` / `GRIDFS_COMPRESSION_LEVEL` | `zstd` / `12` | Compression of the stored logs and CSVs — see [GRIDFS_STORAGE.md](../docs/markdown/GRIDFS_STORAGE.md) |
+| `ENABLE_DATA_SYNTHETIC` | `false` | Only the value `true` (any case) enables it. Replace Cooja execution with a benchmark function for experiments without a per-experiment `synthetic` block (only affects simulations that reach the master-node — P0 experiments are evaluated in-process by the mo-engine) |
 | `BENCH` | `DTLZ2` | Benchmark to use in synthetic mode: `DTLZ2`, `ZDT1`, or `SCH1` |
 | `NOISE_STD` | `0.0` | Standard deviation of Gaussian noise added to synthetic objectives |
 
@@ -447,9 +480,10 @@ than the code:
   stuck outside SSH cannot be forcibly interrupted by Python; its worker stays
   held until it returns or the master is restarted. A zero TTL disables both
   expiry and this budget.
-* A result that cannot be fetched is retried over a new session. If that also
-  fails, the artifacts are **preserved** and their location recorded — nothing
-  goes back for them automatically. When the copy *cannot* be made, because
+* A result that cannot be fetched is retried over a new session, which first
+  copies the testlog aside. If that also fails, the artifacts are **preserved**,
+  their location is recorded and the worker is released — nothing goes back for
+  them automatically. When the copy *cannot* be made, for instance because
   the second session never opened, the worker is **held** rather than released:
   the original is still under the name the next run deletes.
 * **Nothing remote is cleaned until the result is accounted for.** Storing the
@@ -459,25 +493,25 @@ than the code:
   the evidence.
 * A run whose termination could not be confirmed leaves its worker **out of
   the pool**, not released.
-* Losing contact is never treated as a failed run.
+* Losing contact is never treated as a failed run by itself; `SIM_TIMEOUT_SEC`
+  keeps counting while disconnected.
 * There is **no** end-to-end *exactly once*. At most one publication per
   attempt and at most one blob per artefact per attempt; a crash between the
   GridFS upload and the state write leaves blobs nothing references.
 * Docker is **not** a requirement for a worker. A hand-registered one needs
   only SSH; Docker's view of it is ignored where an operator stated its
   address.
-
-The thread counts in the overview are per role; the live total is higher,
-because each placed simulation gets a follower of its own and each adopted run
-another.
+* Only a **host's** SSH key is pinned. A container's key is accepted as
+  presented, since it changes whenever the container is recreated.
 
 ---
 
 ## Placement Policies
 
-`SCHED_POLICY` chooses one. Both balance by **host**, and the primary rule is
-the same in both: the host with the fewest **active placements** — an absolute
-count, not a utilisation ratio. The difference matters in the specification's
+`SCHED_POLICY` chooses one of three. All choose a **host**. In the first two
+the primary rule is the same: the host with the fewest **active placements** —
+an absolute count, not a utilisation ratio. The third plans by completion time.
+The difference matters in the specification's
 own example: 8, 4 and 2 free containers and six simulations give 2/2/2 by
 count and 3/2/1 by ratio, and the second lets the biggest machine quietly
 absorb most of every run.
@@ -491,6 +525,8 @@ from measured throughput of 71.5/14.4/14.1%. No ranking produced that; the
 queue did.
 
 ### `least_loaded_host` (default)
+
+The default of the code. `docker-compose.yaml` sets `earliest_completion`.
 
 Ties broken by rotation, so a pool of idle hosts does not queue behind
 whichever id sorts first.
@@ -581,7 +617,8 @@ the same genome with the same seed took 1.22–1.25x longer on the remote hosts
 (283 paired observations) against a few per cent of residual noise.
 
 Writing it is advisory and isolated: a failure is logged and the simulation is
-unaffected, because the number only chooses between equally loaded hosts.
+unaffected, because the number only influences where, and under
+`earliest_completion` when, a job is placed.
 
 ---
 
@@ -620,12 +657,13 @@ the same CPUs.
 
 ## Operational Procedures
 
-Six situations the system deliberately does **not** resolve on its own, because
-each one needs a decision rather than a default.
+Situations the system does not fully resolve on its own, either because they
+need a decision rather than a default, or because the fix is outside it.
 
 ### A worker is held and stays held
 
 ```
+docker cp util/recover_result.py master_node:/tmp/
 docker exec master_node python /tmp/recover_result.py list
 ```
 
@@ -637,16 +675,19 @@ docker exec master_node python /tmp/recover_result.py list
   alive and nothing left behind, usually within one health cycle. A hold that
   persists therefore means the container is still unreachable, still running
   something, or still holding bytes — and the resolver logs which.
-- **`collection_pending`** — a result was produced and could not be brought
-  back. This one is **never** cleared by the health cycle, even when the
-  container is healthy and idle, because its bytes may be the only copy of a
-  result. Follow the next procedure.
+- **`collection_pending`** — a result was produced and could neither be brought
+  back nor copied aside, or could not be recorded. The health cycle does not
+  clear it while the testlog is on the container or the recorded result is
+  undecided, even when the container is healthy and idle, because its bytes may
+  be the only copy of a result. Follow the next procedure.
 
 ### A result was produced and never collected
 
 `util/recover_result.py`, documented in [util/README.md](../util/README.md).
 The short version: `list` to find it, `fetch` to look at the bytes without
-touching the database, then `publish` or `discard`, and only then `release`.
+touching the database, then `publish` or `discard`, and only then `release`
+(needed only if the worker is held; with a preserved copy it is already back
+in the pool).
 The order is enforced — `release` refuses while the simulation still carries an
 unresolved `unfetched_result`, because releasing the worker first lets the next
 run delete the bytes.
@@ -806,11 +847,14 @@ master-node/
 └── lib/
     ├── scheduler/
     │   ├── policy.py       # Where a simulation goes, as a pure function
+    │   ├── completion.py   # The plan behind earliest_completion
     │   ├── inventory.py    # The snapshot the policy reads
     │   ├── dispatcher.py   # The single-threaded loop that places work
     │   └── runner.py       # Runs one placed simulation; owns the outcome
     ├── transport/
+    │   ├── base.py         # The transport's types and errors
     │   ├── plan.py         # Which address, one hop or two
+    │   ├── resolve.py      # Name lookup, bounded and classified
     │   ├── ssh.py          # The transport itself, with the tunnel
     │   ├── hostkey.py      # Trust on first use, and refusing a change
     │   ├── pool.py         # One first hop per host per cycle
@@ -818,6 +862,7 @@ master-node/
     │   └── factory.py      # Composes a transport from the stored records
     ├── dockerctl/          # Asking Docker what containers exist
     ├── health.py           # The measuring cycle and the stale sweep
+    ├── dns_watch.py        # The master-node's resolver, and the self-restart
     ├── detached.py         # Launching Cooja so it outlives the connection
     ├── recovery.py         # What to do with containers still held
     ├── discovery.py        # Reconciling the inventory with Docker
@@ -831,8 +876,10 @@ master-node/
 ## Dependencies
 
 - **paramiko** + **scp** — SSH client and file transfer
-- **pandas** — CSV parsing for log conversion
+- **pandas** + **numpy** — log conversion and metric evaluation
 - **pymongo** + **bson** — MongoDB driver
+- **pynacl** + **cryptography** — opening sealed credentials, SSH keys
+- **zstandard** — GridFS compression
 - **pylib** (internal) — shared repositories, models, metrics, and Cooja file utilities
 
 ---
@@ -841,7 +888,7 @@ master-node/
 
 | Service | How it interacts |
 |---|---|
-| **mo-engine** | Inserts `Generation` documents with status `WAITING`, which triggers the Change Stream watcher |
+| **mo-engine** | Inserts a `Generation`, then its `Simulation` documents with status `WAITING`, which trigger the Change Stream watcher. Reacts when the generation is closed |
 | **MongoDB** | Persistence for simulations, generations, the host and worker inventory, and file storage (GridFS) |
 | **Cooja containers** | Receive simulation files over SCP, run Cooja, return `COOJA.testlog`. Local ones are reached directly; those on another host through a `direct-tcpip` channel on the host's own SSH session, so no container port has to be published |
 | **rest-api** | Reads what the master-node measures and writes. It records *requests* for a check or a discovery — it has neither a route to the container network nor the key that opens a credential, so the work happens here |
@@ -860,3 +907,22 @@ the API does not depend on it.
 A host key is pinned on first contact and a change afterwards refuses the
 connection, with the message naming how to clear it if the host was
 legitimately rebuilt.
+
+A worker with no stored credential, of its own or of its host, is reached with
+the image's login (`root` and `COOJA_SSH_PASSWORD`).
+
+---
+
+## Known Issues
+
+- **A run in which no report reached the root fails at collection.** Converting
+  such a log writes a CSV of one blank line, which is not empty by size, so
+  reading it raises `EmptyDataError`. The run goes through the collection retry
+  and ends in `Error` with `unfetched_result`, and its testlog is **not** kept
+  in GridFS (a copy stays on the container). The "CSV empty" branch of the flow
+  above is not reached in that case.
+- **A metric that cannot be computed does not fail the simulation.** It is
+  published `Done` with a NaN; the mo-engine treats the value as missing.
+- **A synthetic simulation with an invalid configuration** is marked `Error`
+  without closing its generation; the health cycle closes it after the 300 s
+  grace.

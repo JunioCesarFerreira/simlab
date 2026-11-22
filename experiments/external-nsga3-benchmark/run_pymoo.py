@@ -2,8 +2,8 @@
 NSGA-III on DTLZ2 via pymoo (``pymoo.algorithms.moo.nsga3``).
 
 This implementation is provided strictly for the benchmark comparison in
-Table 3 of the SimLab paper — pymoo is NOT a runtime dependency of the
-platform.
+Table 3 of the SimLab paper — it is independent of the platform's
+``nsga3_pymoo`` strategy, which uses only pymoo's environmental selection.
 
 References:
   * Blank & Deb, "pymoo: Multi-objective Optimization in Python", IEEE
@@ -26,7 +26,7 @@ from dtlz2 import evaluate as dtlz2_evaluate, n_variables as dtlz2_n_variables
 
 class DTLZ2Problem(ElementwiseProblem):
     """Wraps the local DTLZ2 implementation so all runners share the exact
-    same evaluation (matching ``master-node/lib/synthetic_data.py``)."""
+    same evaluation (matching ``pylib/benchmarks.py``)."""
 
     def __init__(self, n_var: int, n_obj: int):
         super().__init__(n_var=n_var, n_obj=n_obj, xl=0.0, xu=1.0)

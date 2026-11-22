@@ -27,14 +27,15 @@ Strategy starts                     (simulations are queued only after this)
 The capture is **best-effort**: errors are recorded in the block and surfaced
 in the GUI, but never stop the experiment from running. It is also
 **idempotent** — the atomic claim means a restarted engine reprocessing a
-pending experiment does not duplicate copies in GridFS.
+pending experiment does not duplicate copies in GridFS. A process killed
+during the copy leaves the block in `capturing`; it is not taken over.
 
 ## Experiment document (`firmware_snapshot`)
 
-```json
+```jsonc
 {
   "firmware_snapshot": {
-    "status": "captured",          // captured | partial | skipped | failed
+    "status": "captured",          // captured | partial | skipped | failed (capturing while copying)
     "captured_at": "...",
     "schema_version": 1,
     "repositories": [
@@ -78,13 +79,19 @@ kept in `option_keys`, so the resolution stays auditable.
 - **Ownership.** The copies belong to the experiment. `ExperimentRepository.delete`
   removes them together with the experiment's other artifacts. The shared
   originals (`origin_file_id`) are never deleted by that cascade.
-- **No backfill.** Experiments that ran before this feature show *"not recorded"*
+- **No backfill.** Experiments that finished before this feature show *"not recorded"*
   and stay that way. Copying the *current* state of a shared repository into a
-  past run would fabricate provenance.
+  past run would fabricate provenance. The capture also runs on resume, so an
+  experiment still `Running` with no block gets one dated at the resume
+  (`captured_at`).
+- **Immutable by convention.** The engine writes the block once, but
+  `PUT /experiments/{id}` accepts any field and could overwrite it.
 - **Scope.** The snapshot is a record, not the execution path: the master-node
   still fetches firmware from the shared repository when it dispatches each
-  simulation. Editing a repository *while* an experiment runs is therefore not
-  reflected in its snapshot, which captures the state at start time.
+  simulation. Editing a repository *while* an experiment runs therefore changes
+  what its later simulations run **without** changing its snapshot, which
+  captures the state at start time. Do not edit a repository that a running
+  experiment uses.
 
 ## API
 
@@ -98,7 +105,7 @@ kept in `option_keys`, so the resolution stays auditable.
 
 ## GUI
 
-The experiment page shows a **Firmware** card below *Runtime Metrics*: capture
+The experiment page shows a **Firmware** card below the *Generations* list: capture
 status, file count and total size, one collapsible section per repository (with
 the option keys it served and a link to the original repository), and per file
 the size, the short `sha256` and buttons to view the source (syntax-highlighted)

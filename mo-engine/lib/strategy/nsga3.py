@@ -64,11 +64,11 @@ class NSGA3LoopStrategy(EngineStrategy):
     """
     NSGA-III loop strategy integrated with SimLab.
 
-    - Generates an initial population (fixed 2D mote positions).
+    - Generates an initial population with the problem adapter.
     - Queues simulations in MongoDB (Change Streams trigger execution on the master node).
     - Upon receiving the results (DONE status on the Generation), calculates the objectives,
         performs NSGA-III selection with reference point niching,
-        creates the next generation (offspring via SBX + Polynomial Mutation),
+        creates the next generation (offspring via the adapter's operators),
         and repeats until `number_of_generations` is reached.
     """
     def __init__(self, experiment: dict, mongo):
@@ -91,7 +91,8 @@ class NSGA3LoopStrategy(EngineStrategy):
         }
 
         # Synthetic mode: when enabled, CSC files and source-repo lookups are skipped.
-        # Objectives are evaluated by the master-node using a mathematical benchmark.
+        # Objectives come from a mathematical benchmark: in-process for P0,
+        # on the master-node for any other problem.
         syn_cfg: dict = simulation_config.get("synthetic", {}) or {}
         self._is_synthetic: bool = bool(syn_cfg.get("enabled", False))
         if self._is_synthetic:

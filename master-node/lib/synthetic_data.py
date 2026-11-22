@@ -137,7 +137,8 @@ def run_synthetic_simulation(
     noise_std: float = 0.0,
 ) -> None:
     """Emulates execution using a classical benchmark function (DTLZ2, ZDT1 or SCH1)
-    and writes the objectives according to the experiment's data_conversion_config.
+    and writes them under the names in the experiment's ``parameters.objectives``
+    (falling back to data_conversion_config when there are none).
 
     Args:
         sim:       Simulation document from MongoDB.

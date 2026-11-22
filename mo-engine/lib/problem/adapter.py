@@ -39,11 +39,10 @@ class ProblemAdapter(ABC):
         Parameters
         ----------
         problem:
-            Full problem document (or DTO) as loaded from MongoDB.
-            It should include:
-            - problem_type / problem_parameters
-            - strategy / nsga3_parameters
-            - any additional fields needed by the adapter
+            The experiment's ``parameters.problem`` as stored in MongoDB:
+            - ``name``, which selected this adapter
+            - the fields of that problem (see pylib/config/problems.py)
+            The algorithm's parameters arrive later, via ``set_ga_operator_configs``.
         """
         self.assert_problem(problem) # Validate and store the problem
 

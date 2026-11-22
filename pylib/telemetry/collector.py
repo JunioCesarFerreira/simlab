@@ -84,7 +84,7 @@ def collect_samples(
                 try:
                     value = float(raw)
                 except (TypeError, ValueError):
-                    continue  # NaN/absent samples are not preserved
+                    continue  # unparsable samples are skipped; "NaN" parses and is kept
                 samples.append({
                     "timestamp": float(ts),
                     "metric": spec.metric,

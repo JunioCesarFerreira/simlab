@@ -1,6 +1,6 @@
 # Standalone benchmark dependencies — kept separate from mo-engine/requirements.txt
-# to avoid contaminating the production image with optimization libraries that
-# the SimLab platform does not use at runtime.
+# so that the benchmark runs without the platform. (DEAP and pymoo are also
+# runtime dependencies of the mo-engine.)
 #
 # Pinned to exact versions for reproducibility of the native x DEAP x pymoo
 # comparison reported in the paper (Table 3). These match the versions used by

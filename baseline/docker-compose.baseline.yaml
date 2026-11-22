@@ -7,7 +7,7 @@
 # Inputs are pushed via scp/docker cp by run_baseline.sh; outputs are
 # pulled the same way.  No state machine, no persistence, no resume.
 #
-# Adjust the number of cooja* services and the C_MAX env in run_baseline.sh
+# Adjust the number of cooja* services and C_MAX (run_baseline.sh's third argument)
 # to match the experiment described in §5.2 of the paper.
 
 services:

@@ -1,12 +1,17 @@
 # Campaign v2 — the experiments behind the thesis and the papers
 
-Status: **plan, nothing launched** (2026-11-18).
+Status: **plan, nothing launched** (2026-11-18). Files and settings it names that
+come from this plan or from [PROVENANCE_GUIDE.md](PROVENANCE_GUIDE.md) do not exist
+yet (`experiments/campaign-v2/`, `scripts/build.sh`, `SIMLAB_REQUIRE_CLEAN_BUILD`,
+`provenance.*`, `runtime.*`), and neither does the `seed_study` strategy on `main`.
+`batch`, which C0 and CC use, cannot be created through the API
+([known issue](../../mo-engine/lib/strategy/README.md#batch)).
 
 **Decision:** every result obtained with firmware v1 (`rpl-udp-csma`, `rpl-udp-tsch`)
 is discarded. In v1, `latency` averaged the zeros of lost pings, `energy` was mA·s
 labelled mJ, and `throughput` counted the probe replies. Together these made the
 energy × throughput conflict of the paper-1 fronts partly a counting artefact (corr
-0.50–0.58 in P1, 0.77 in P2). See `FIRMWARE_METRICS.md` §7. The v1 experiments stay in
+0.50–0.58 in P1, 0.77 in P2). See [FIRMWARE_METRICS.md](FIRMWARE_METRICS.md) §7. The v1 experiments stay in
 the database for audit and are listed as superseded (§8). No v1 number is used in any
 text.
 
@@ -35,7 +40,9 @@ Changing any of these after looking at results has to be reported as such.
 \*At about 400 CSMA-v2 simulations per hour. The basis is the measured pool rate (~320
 sims/h of CSMA v1 at 180 min, local + 4 VMs, 2026-11-07) scaled by the v2/v1 cost per
 simulation measured in the harness (85 s vs 112 s). C0 measures the real rate. One TSCH-v2
-simulation costs about 10 CSMA-v2 simulations.
+simulation costs about 10 CSMA-v2 simulations. These costs predate the 64-entry
+tables of 2026-11-21, with which a TSCH-v2 run cost 5–7 CSMA-v2 runs in the
+replays; C0 redoes the table.
 
 Order: **C0 → CA → (choose `k`) → CB → CC**. CE can run at any time. CD runs in a window
 with nothing else on the pool.
@@ -57,7 +64,7 @@ with nothing else on the pool.
    `firmware_snapshot.status = captured`. One Cooja image ID per campaign
    (`PROVENANCE_GUIDE.md` §7).
 3. **Firmware v2 only.** Use `rpl-udp-csma-v2`, plus `rpl-udp-tsch-v2` in CC only. Upload
-   with `python firmware/upload-firmware.py rpl-udp-csma-v2 rpl-udp-tsch-v2`. The default v2
+   from `firmware/` with `python upload-firmware.py rpl-udp-csma-v2 rpl-udp-tsch-v2`. The default v2
    data conversion is used unchanged (16 metrics).
 4. **Common random numbers.** One list of `k` simulation seeds is drawn once (§3, D2) and
    used by every individual of every run in CB and CC. Differences between algorithms are
@@ -66,7 +73,8 @@ with nothing else on the pool.
    give it the worst objectives. CA keeps `incomplete_objective: accept`, as the seed study
    requires. Every refused, repeated or timed-out evaluation is counted and reported (§7).
 6. **Timeout.** `SIM_TIMEOUT_SEC = 10800`, the compose default. A TSCH-v2 run of 180 min
-   takes up to ~3,600 s under load. After each campaign, the number of timeouts must be 0,
+   took up to ~3,600 s under load before the 64-entry tables of 2026-11-21, and
+   816–1,167 s with them ([firmware/README.md](../../firmware/README.md#simulation-speed)). After each campaign, the number of timeouts must be 0,
    or the affected individuals are re-run before analysis.
 7. **Pool discipline.**
    - Nothing else runs on the pool during CD.
@@ -227,6 +235,9 @@ is the default if nothing is said.
   the same list for every cell.
   - These are independent runs. Sharing the seed numbers is bookkeeping, **not**
     pairing.
+- **Random search does not survive a restart of the mo-engine**
+  ([known issue](../../mo-engine/lib/strategy/README.md#random-search)): do not restart it
+  while one of these runs is active, or fix that first.
 - **Scenario:** the shared `ind1` scenario of paper 1:
   - same mobile nodes, sink, radii, region and duration;
   - P1 with 20 relays;
@@ -277,14 +288,18 @@ by the clock. Instead:
 ### CE — Implementation check (paper 1 Table 3; synthetic)
 
 - **Setup:** DTLZ2 (and the other benchmarks of the table), 30 seeds per implementation
-  (SimLab, DEAP, pymoo), `divisions` stated explicitly (the README says 12; the code
+  (SimLab, DEAP, pymoo), `divisions` stated explicitly (12 in the benchmark; the engine's
   default is 10).
 - **Tests:**
   - Unpaired Mann–Whitney with Â12. With 5 seeds and a paired Wilcoxon, the smallest
     attainable p was 0.0625.
   - Equivalence claimed only through TOST with a margin declared beforehand.
-- **README:** fix "same algorithmic code that runs in production". Only sorting, niching
-  and the operators are shared; the variation loop is reimplemented.
+- **README:** corrected on 2026-11-22: it no longer says "same algorithmic code that runs in
+  production". Only sorting, niching and the operators are shared; the variation loop is
+  reimplemented.
+- **Before running:** `regenerate_table3.py` does not import with the pinned DEAP, and the
+  three runners do not use the same parameters or return the same set
+  ([known issues](../../experiments/external-nsga3-benchmark/README.md#known-issues)).
 
 ---
 

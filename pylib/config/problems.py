@@ -144,7 +144,7 @@ class ProblemP3(HomogeneousProblem):
     candidates: list[Position]      # Q
     radius_of_cover: float          # R_cov
     k_required: int                 # k (min coverage degree)
-    g_required: int                 # g (min connectivity degree)
+    g_required: int                 # g (min connectivity degree); not read by the engine
 
     def cast(map: dict[str, Any]) -> "ProblemP3":
         obj = ProblemP3()

@@ -39,8 +39,9 @@ class Problem0SyntheticAdapter(ProblemAdapter):
 
     Evaluation
     ----------
-    The benchmark function itself is evaluated downstream (master-node) directly
-    on ``x`` — see ``encode_simulation_input``, which exposes the decision vector
+    The strategies evaluate the benchmark in-process directly on ``x``; only
+    batch leaves it to the master-node (see lib/strategy/analytical.py).
+    ``encode_simulation_input`` exposes the decision vector
     verbatim under ``simulationElements.decisionVector`` (no coordinate
     round-trip, no region scaling).
     """
@@ -143,7 +144,8 @@ class Problem0SyntheticAdapter(ProblemAdapter):
     def encode_simulation_input(self, ind: ChromosomeP0) -> SimulationElements:
         # The benchmark is evaluated analytically on the decision vector itself;
         # there are no motes. The vector is carried under 'decisionVector' so the
-        # master-node reads it directly, without any physical-coordinate scaling.
+        # master-node, when it is the evaluator (batch), reads it directly,
+        # without any physical-coordinate scaling.
         return {
             "fixedMotes": [],
             "mobileMotes": [],

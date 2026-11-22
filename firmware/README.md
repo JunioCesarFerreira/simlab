@@ -13,11 +13,11 @@ How each metric is obtained, what it measures and its limits:
 
 | Directory | Version | MAC | Status |
 |---|---|---|---|
-| `rpl-udp-csma` | v1 | CSMA | Frozen. Used by 28,898 of the 29,630 simulations in the reference database. |
-| `rpl-udp-tsch` | v1 | TSCH | Frozen. Used by 92 simulations. |
-| `rpl-udp-csma-v2` | v2 | CSMA | Current. Not yet used by an experiment. |
-| `rpl-udp-tsch-v2` | v2 | TSCH | Current. Not yet used by an experiment. |
-| `rpl-udp-tsch-6o` | legacy | TSCH | Not used and not uploaded. Its `Makefile` builds `udp-client` and `udp-server`, which are not in the directory, so it does not build as it stands. Its JSON columns differ from v1 and v2. |
+| `rpl-udp-csma` | v1 | CSMA | Frozen. Used by 28,898 of the 29,630 simulations in the reference database (2026-11-13, before v2 existed). |
+| `rpl-udp-tsch` | v1 | TSCH | Frozen. Used by 92 simulations (same count). |
+| `rpl-udp-csma-v2` | v2 | CSMA | Current. |
+| `rpl-udp-tsch-v2` | v2 | TSCH | Current. |
+| [`rpl-udp-tsch-6o`](rpl-udp-tsch-6o/README.md) | legacy | TSCH | Not used and not uploaded. A plain `make` fails, since its `Makefile` names `udp-client` and `udp-server`, which are not in the directory; `make root.cooja` and `make node.cooja`, the targets SimLab builds, do work. Its JSON columns differ from v1 and v2. |
 
 `repository_example.json` is an example of two repository records as SimLab stores
 them: the repository id, name and description, and the id of each source file.
@@ -26,7 +26,8 @@ them: the repository id, name and description, and the id of each source file.
 
 Every node sends the root a metrics report every 10 s plus a jitter. The root
 probes every node with a ping every 10 s; the node answers with a pong. The root
-prints, per report or pong, the node's energy for the last interval, its
+prints, per report (a pong prints nothing, but counts in `server_received`),
+the node's energy for the last interval, its
 counters, three latencies derived from the probes (`rtt_latency`, `r2n_latency`,
 `n2r_latency`) and the hop count.
 
@@ -224,7 +225,9 @@ SimLab copies a repository's files into Cooja's directory in the
 (`make root.cooja TARGET=cooja`, `make node.cooja TARGET=cooja`); the
 `Makefile`s expect Contiki-NG two levels up (`CONTIKI=../..`).
 
-To register repositories with SimLab, run from this directory:
+To register repositories with SimLab, run from this directory (the script
+reads the repositories from the working directory and needs Python with
+`requests`):
 
 ```sh
 python upload-firmware.py rpl-udp-csma-v2 rpl-udp-tsch-v2   # or no argument for all four

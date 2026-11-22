@@ -30,9 +30,10 @@ class DataConversionConfig(TypedDict):
 class SyntheticConfig(TypedDict, total=False):
     """Per-experiment synthetic benchmark configuration.
 
-    When ``enabled`` is True the master-node evaluates a classical benchmark
-    function (DTLZ2, ZDT1 or SCH1) instead of running a Cooja simulation.
-    All fields are optional; missing values fall back to the master-node
+    When ``enabled`` is True a classical benchmark function (DTLZ2, ZDT1 or
+    SCH1) replaces the Cooja simulation: evaluated by the mo-engine for P0, by
+    the master-node otherwise.
+    All fields are optional; on the master-node, missing values fall back to its
     environment variables (ENABLE_DATA_SYNTHETIC, BENCH, NOISE_STD).
     """
     enabled: bool
@@ -74,7 +75,7 @@ class RuntimeMetrics(TypedDict, total=False):
     small on purpose. New per-metric summaries may be added alongside ``cpu``
     and ``memory`` without breaking existing documents.
     """
-    status: str  # "collecting" | "completed" | "no_data" | "failed"
+    status: str  # "collecting" | "completed" | "no_data" | "unavailable" | "failed"
     started_at: datetime
     finished_at: datetime
     collection_finished_at: datetime
@@ -111,7 +112,7 @@ class FirmwareSnapshot(TypedDict, total=False):
     The snapshot copies every referenced file into GridFS under the sole
     ownership of the experiment, so the delete cascade removes them with it.
     """
-    status: str  # "captured" | "partial" | "skipped" | "failed"
+    status: str  # "capturing" | "captured" | "partial" | "skipped" | "failed"
     captured_at: datetime
     schema_version: int
     repositories: list[FirmwareRepositorySnapshot]

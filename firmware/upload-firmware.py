@@ -101,8 +101,8 @@ def create_repository(name: str, description: str, directory: Path):
 # MAIN
 # ============================================================
 
-# The repository name is the directory name. v1 is what every experiment run so
-# far used and must not be edited (its digests are pinned by a test); v2 changes
+# The repository name is the directory name. v1 is what the published results
+# used and must not be edited (its digests are pinned by a test); v2 changes
 # how the metrics are obtained. See docs/markdown/FIRMWARE_METRICS.md.
 # rpl-udp-tsch-6o is an older variant that no experiment used and is not uploaded.
 REPOSITORIES = {

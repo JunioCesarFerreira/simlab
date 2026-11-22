@@ -8,17 +8,17 @@ what changed between the two firmware generations, and what can be compared
 between the CSMA and TSCH MACs (section 8).
 
 Read it before quoting a metric in a paper: several of the numbers produced by
-firmware v1, which every experiment run so far used, do not mean what their
+firmware v1, which the published results used, do not mean what their
 names suggest (section 7).
 
 ## 1. Firmware versions
 
 | Directory | Version | MAC | State |
 |---|---|---|---|
-| `firmware/rpl-udp-csma` | v1 | CSMA | **Frozen.** Run by 28,898 of the 29,630 simulations in the reference database. |
-| `firmware/rpl-udp-tsch` | v1 | TSCH | **Frozen.** Run by 92 simulations. |
-| `firmware/rpl-udp-csma-v2` | v2 | CSMA | Current. Not yet used by any experiment. |
-| `firmware/rpl-udp-tsch-v2` | v2 | TSCH | Current. Not yet used by any experiment. One shared cell every 3 slots (§8.1). |
+| `firmware/rpl-udp-csma` | v1 | CSMA | **Frozen.** Run by 28,898 of the 29,630 simulations in the reference database (2026-11-13, before v2 existed). |
+| `firmware/rpl-udp-tsch` | v1 | TSCH | **Frozen.** Run by 92 simulations (same count). |
+| `firmware/rpl-udp-csma-v2` | v2 | CSMA | Current. |
+| `firmware/rpl-udp-tsch-v2` | v2 | TSCH | Current. One shared cell every 3 slots (§8.1). |
 | `firmware/rpl-udp-tsch-6o` | legacy | TSCH | No experiment used it; not uploaded by `upload-firmware.py`. Different JSON columns, so the default conversion does not read it. |
 
 [firmware/README.md](../../firmware/README.md) describes each directory and lists every
@@ -89,8 +89,14 @@ compares the two lists). It used to offer `max`, `min`, `last` and `percentile`,
 the evaluator never had; no stored experiment used them.
 
 A metric that cannot be computed (a missing column, an empty column, an unknown kind,
-a ratio without its denominator) becomes NaN with a warning in the master-node log,
-and the engine treats the individual as having no objective value.
+a ratio without its denominator) becomes NaN with a message in the master-node log,
+and the simulation is still `Done`. The exception is a column that exists with nothing
+numeric in it under `sum_all` or `sum_max`, which gives 0. If the NaN is an objective,
+the engine counts that replica as missing for it: by default the individual is then
+refused and gets the worst objectives
+([the policy](../../mo-engine/lib/strategy/README.md#the-policy)). If no report at all
+reached the root, there is no CSV to evaluate and the simulation ends in `Error`
+([master-node](../../master-node/README.md#known-issues)).
 
 ## 3. The columns of a record
 
@@ -567,8 +573,8 @@ congestion while the network formed.
   CSV still has the right column, so it can be recomputed:
   `sum_last_minus_first` over `server_sent`.
 - **Moving an experiment to v2** means launching it again with the `-v2` source
-  repositories; nothing about a finished experiment is rewritten. Upload them with
-  `python firmware/upload-firmware.py rpl-udp-csma-v2 rpl-udp-tsch-v2`. Compare a v1
+  repositories; nothing about a finished experiment is rewritten. Upload them from
+  `firmware/` with `python upload-firmware.py rpl-udp-csma-v2 rpl-udp-tsch-v2`. Compare a v1
   result with a v2 one only after replaying a sample of the v1 individuals under v2: the
   objective values change, and so may the ordering the optimiser saw.
 - **Running v1 with the wizard.** The default conversion reads v2. Under v1, in step 5:

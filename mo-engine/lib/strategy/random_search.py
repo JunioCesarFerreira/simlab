@@ -58,8 +58,9 @@ class RandomSearchStrategy(EngineStrategy):
     Random search strategy.
 
     Baseline algorithm-agnostic generator: at each generation, samples
-    ``population_size`` candidate solutions uniformly from the problem's
-    decision space ``X`` via :py:meth:`ProblemAdapter.random_individual_generator`.
+    ``population_size`` candidate solutions with the problem's own random
+    generator, :py:meth:`ProblemAdapter.random_individual_generator`. That
+    generator need not be uniform over the decision space ``X``.
     No selection, no crossover, no mutation.
 
     Genome cache and penalty objectives behave identically to NSGA-III, so
@@ -115,8 +116,8 @@ class RandomSearchStrategy(EngineStrategy):
         self._max_gen: int = int(algorithm_config.get("number_of_generations", 5))
 
         # Random search has no genetic operators, but the adapter still needs a
-        # rng (e.g. for random_individual_generator); pass an empty config so it
-        # falls back to safe defaults.
+        # rng (e.g. for random_individual_generator). It is handed over with the
+        # algorithm config, whose operator keys fall back to safe defaults.
         self._problem_adapter: ProblemAdapter = build_adapter(
             problem_config,
             algorithm_config,
@@ -723,7 +724,7 @@ class RandomSearchStrategy(EngineStrategy):
             self._finalize_experiment(pareto_front=first_pareto_front)
             return
 
-        # Otherwise, sample the next generation uniformly from X.
+        # Otherwise, draw the next generation with the problem's random generator.
         self._current_population = self._problem_adapter.random_individual_generator(self._pop_size)
         self._generation_enqueue()
         logger.info("[RandomSearch] New random generation enqueued; waiting for results.")

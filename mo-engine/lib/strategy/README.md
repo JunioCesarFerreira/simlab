@@ -1,69 +1,114 @@
 # Strategies
 
+How each strategy works. The service around them (startup, configuration,
+extension points) is in [mo-engine/README.md](../../README.md), and the problem
+operators in [lib/problem/README.md](../problem/README.md).
+
 ## NSGA-III
 
-The diagram above illustrates the execution flow of the NSGA-III strategy adopted in this work.
+The notation is the one used by the API's `population` option and by the
+[regression baseline](../../tests/regression/README.md): $P_t$ is the surviving
+population and $Q_t$ the individuals evaluated in generation $t$.
 
-![pic](../../../docs/images/nsga-flow.png)
+```mermaid
+flowchart TD
+    A["Q₀: random generation"] --> B["evaluate F(Q₀)"]
+    B --> C["P₀ = Q₀, t = 0"]
+    C --> D["t ← t + 1"]
+    D --> E["Qₜ = G(Pₜ₋₁)<br/>tournament, crossover, mutation"]
+    E --> F["evaluate F(Qₜ)"]
+    F --> G["Pₜ = E(Pₜ₋₁ ∪ Qₜ)<br/>non-dominated sort + niching"]
+    G --> H{"t ≥ T?"}
+    H -- no --> D
+    H -- yes --> I["Z = ND(P_T)"]
+```
 
 Let us define the following elements:
 
 - $N \in \mathbb{Z}_+$ denotes the population size.
 - $X$ denotes the configuration (decision) space of the problem.
-- $Y$ denotes the objective space.
+- $Y$ denotes the objective space, in minimization form (maximized objectives are sign-flipped).
 - $\Theta$ is the parameter space associated with the genetic operators.
+- $f : X \rightarrow Y$ is the evaluation map. For a simulated problem it runs one simulation per seed and collapses each objective with its seed aggregator $\Psi_a$.
+- $t \in \mathbb{Z}_+$ denotes the generation index, and $T \in \mathbb{Z}_+$ is `number_of_generations`.
 - The genetic operator is defined as
+
   $$
   \mathcal{G} : \Theta \times X^N \times Y^N \rightarrow X^N,
   $$
-  and, for a fixed parameter vector $\theta \in \Theta$, we write
-  $$
-  \mathcal{G}_\theta : X^N \times Y^N \rightarrow X^N.
-  $$
-- $f : X \rightarrow Y$ is the evaluation (or simulation) function that maps a configuration $x \in X$ to its corresponding objective vector in $Y$.
-- $t \in \mathbb{Z}_+$ denotes the generation index, and $T \in \mathbb{Z}_+$ is the maximum number of generations.
-- For each generation $t$, $P_t \subset X$ denotes the population at generation $t$, and $F_t = f(P_t) \subset Y$ denotes the corresponding set of objective vectors.
-- The intermediate population
-  $$
-  R_t = P_t \cup P_{t-1}
-  $$
-  aggregates the current and previous populations. This constitutes a slight abuse of notation. Strictly speaking, $P_t$ and $P_{t-1}$ denote populations, that is, finite collections of chromosomes, each of which corresponds to a point in the configuration space $X$. Therefore, $R_t$ should be understood as the union of the sets of decision vectors in $X$ induced by the individuals of $P_t$ and $P_{t-1}$, rather than a set-theoretic union of abstract population objects.
-- $\alpha_t$ is an association map
-  $$
-  \alpha_t : R_t \rightarrow F_t \cup F_{t-1},
-  $$
-  which assigns each chromosome in $R_t$ to its corresponding objective vector.
-- For a finite set $R \subset X$, we interpret
-    $$
-    \mathcal{E} : R \times R^Y \rightarrow X^N
-    $$
-    as a selection (or environmental filtering) operator. This operator selects a reduced subset
-    $$
-    Q = \mathcal{E}(R_t, \alpha_t),
-    $$
-    and simultaneously induces auxiliary structural information
-    $$
-    H = \alpha_t(Q),
-    $$
-    which is subsequently used by the genetic operator.
-- The next population is generated as
-  $$
-  P_{t+1} = \mathcal{G}_\theta(Q, H).
-  $$
-- After completing $T$ generations, the final result is obtained by applying the Pareto extraction operator
-  $$
-  Z = \mathcal{P}\left(\bigcup_{i=0}^{T} (P_i, F_i)\right),
-  $$
-  where $\mathcal{P}$ computes the final Pareto front.
 
-This formulation explicitly separates evaluation, selection, variation, and Pareto extraction, and matches the iterative flow depicted in the diagram.
+  and, for a fixed parameter vector $\theta \in \Theta$, the offspring of generation $t$ are
+
+  $$
+  Q_t = \mathcal{G}_\theta\big(P_{t-1}, f(P_{t-1})\big).
+  $$
+
+  Parents are drawn by binary tournament on non-domination rank, with random ties. When every parent is infeasible, all get the same rank. Repeated children are discarded, so $Q_t$ can hold fewer than $N$ individuals after $10N$ attempts.
+- The intermediate population is the union, with repetitions, of the previous survivors and the new offspring:
+
+  $$
+  R_t = P_{t-1} \cup Q_t .
+  $$
+
+- The environmental selection $\mathcal{E}$ keeps $N$ individuals of $R_t$:
+
+  $$
+  P_t = \mathcal{E}\big(R_t, f(R_t)\big).
+  $$
+
+  It takes whole fronts while they fit and completes the last one by niching over reference directions (Das & Dennis, `divisions`), normalized by extreme points and intercepts.
+- The final result is the non-dominated set of the **selected final population**, not of every evaluated solution:
+
+  $$
+  Z = \mathrm{ND}(P_T).
+  $$
+
+Generation 0 is evaluated too, so a run evaluates at most $N(T+1)$ distinct
+individuals. Each generation document stores $Q_t$ as its individuals and
+$P_t$ as `survivors`.
+
+This formulation explicitly separates evaluation, selection, variation, and
+Pareto extraction.
+
+> Mating differs from Deb & Jain (2014), who pick parents at random: SimLab
+> uses a tournament on rank. State it when reporting results.
+
+## NSGA-II
+
+The same loop, with two differences: the last front is completed by descending
+**crowding distance**, and the mating tournament breaks rank ties by crowding
+distance.
+
+## Random search
+
+Each generation is a new draw of `population_size` individuals from the
+problem's random generator. There is no selection, crossover or mutation. For
+P1–P3 that generator is constructive, and P1 and P2 repair what it draws, so
+the baseline samples that space and **not** the decision space uniformly. For
+P0 the draw is uniform over $[0,1]^n$.
+
+The genome cache, constraint penalties and replica policy work as in NSGA-III.
+Two things differ when reading its results:
+
+- The stored front is the non-dominated set of **everything evaluated**, while
+  NSGA stores $\mathrm{ND}(P_T)$. Comparing the two stored fronts favours
+  random search.
+- No survivors are recorded, so `GET /experiments/{id}/hv-gd` measures its
+  offspring and says so in `population_sources`.
+
+> **Known issue: resume is not supported correctly.** After an engine restart
+> neither the population nor the next generation index is restored. If the last
+> generation had finished, the next insert collides with its index and the
+> experiment ends in `Error`. If it was running, its results are not turned
+> into objectives. Relaunch the experiment instead of relying on the resume.
 
 ## Batch
 
 The `batch` strategy runs a fixed list of pre-defined chromosomes as a single
 generation. It performs **no** reproduction, selection or variation: the input
-chromosomes are inserted as individuals of `generation_0` and their simulations
-are queued immediately. When every simulation reaches a terminal state the
+chromosomes are inserted as individuals of generation 0 and their simulations
+are queued immediately (constraint violators are penalised instead). When every
+simulation reaches a terminal state, and the replica gate lets it proceed, the
 strategy consolidates per-individual objectives, computes the (non-dominated)
 Pareto front over the batch and finalises the experiment.
 
@@ -73,8 +118,9 @@ Input shape (subset relevant to this strategy):
 {
   "parameters": {
     "strategy": "batch",
+    "random_seed": 42,          // only draws seeds when random_seeds is absent
     "problem":   { "name": "problem2", ... },
-    "simulation":{ "duration": 180, "random_seeds": [336157, 35239] },
+    "simulation":{ "duration": 180, "random_seeds": [336157, 35239] },   // duration in minutes
     "objectives":[ { "metric_name": "latency", "goal": "min" }, ... ],
     "chromosomes": [
       { "mac_protocol": 0, "mask": [1,0,1,...] },
@@ -84,12 +130,22 @@ Input shape (subset relevant to this strategy):
 }
 ```
 
+With a single source repository, the MAC gene of each input chromosome is
+rewritten to the protocol that will run.
+
 Use cases: reproducible benchmarks, validating a specific Pareto set found by
 another strategy, or executing a user-curated candidate list without any
 evolutionary search.
 
-> Note: `batch` is the only strategy **without** the analytical fast-path
-> described below — synthetic batch experiments are evaluated by the
+> **Known issue: a batch cannot be created through the REST API.**
+> `POST /experiments/` requires `parameters.algorithm` and drops every key of
+> `parameters` that its model does not declare, `chromosomes` and `random_seed`
+> included, so the engine then fails with "requires a non-empty list of
+> chromosomes". Today the document has to be inserted in MongoDB directly. The
+> GUI does not offer the strategy.
+
+> Note: `batch` is the only optimization strategy **without** the analytical
+> fast-path described below. Synthetic batch experiments are evaluated by the
 > master-node (`master-node/lib/synthetic_data.py`), not in-process.
 
 ## Scalability benchmark (`usl_benchmark.py`)
@@ -100,15 +156,15 @@ generation per wave, for each level in `parameters.benchmark.levels`. The
 timings are fitted to the Universal Scalability Law by `pylib/scalability.py`
 and served by `GET /scalability/{id}`.
 
-```json
+```jsonc
 "parameters": {
   "strategy": "usl_benchmark",
   "benchmark": { "levels": [1, 2, 4, 8, 14], "repetitions": 3 },
-  "simulation": { "duration": 60, "random_seeds": [123456] }
+  "simulation": { "duration": 60, "random_seeds": [123456] }   // duration in minutes
 }
 ```
 
-Created by `POST /scalability`, not by the experiment wizard, and deliberately
+Created by `POST /scalability/`, not by the experiment wizard, and deliberately
 absent from `Step2Experiment.vue`.
 
 | Choice | Why |
@@ -173,7 +229,7 @@ document, because a repeated replica has two documents for one seed.
 | State | Meaning |
 |---|---|
 | `complete` | every planned seed produced a result, carrying every metric |
-| `partial` | some did not, and nothing is still running |
+| `partial` | some did not, or one came back without a metric, and nothing is still running |
 | `pending` | replicas are still in flight — not a verdict |
 | `invalid` | nothing finished; there is no mean to take |
 | `unknown` | the generation never recorded its plan (experiments created before this existed) |
@@ -189,7 +245,7 @@ The record also **names its own hole**, because a state alone cannot be read:
 |---|---|
 | `failed_seeds` | ran and ended without a result — there is a document to clone, so a repeat can repair it |
 | `absent_seeds` | planned and never created — nothing to clone |
-| `thin_metrics` | metrics a *finished* replica came back without |
+| `thin_metrics` | metrics that fewer replicas than planned carry with a finite value. A NaN or infinity counts as absent |
 | `reason` | one phrase for the state, naming which of the above it is |
 
 The distinction is the one the policy acts on. A `partial` evaluation with
@@ -244,10 +300,16 @@ so incompleteness cannot be demonstrated, and refusing individuals on a
 suspicion would silently invalidate every experiment created before this
 existed.
 
+A vector that cannot be built although the replicas are there (a metric
+missing from the aggregate, or not finite) is refused too, under either
+setting: the record gets `refused` and `objective_used: false`. At the end of
+the experiment `pareto_front_validity` counts how many items of the front are
+valid, infeasible or refused, and the system message says when none is valid.
+
 ### The repair
 
 `ReplicaGate` sits between a closed generation and the objectives drawn from
-it. In order:
+it. An unfinished `retry_plan` is completed first. Otherwise, in order:
 
 1. Anything still running? Then this is a redelivered event, or one that
    arrived for a generation since reopened — wait.
@@ -298,13 +360,19 @@ was not recorded*: `analytical` for a problem evaluated in process, and
 `infeasible` for an individual rejected by a constraint. Neither had replicas
 to count.
 
+A refused evaluation is cached like any other: if its genome reappears in the
+same experiment, the refusal is reused and the genome is not simulated again.
+
 Composed rather than inherited: the gate needs the repositories, the metric
 names and the policy, and nothing else about the strategy — so NSGA-II,
 NSGA-III, batch and random search each pass what it needs instead of sharing a
 base class that reaches into their internals.
 
-### What has not been demonstrated
+### What has been demonstrated
 
 Repeating a replica reopens a terminal generation, which touches the
 optimisation loop. The cycle is covered by tests that drive the real
-`_handle_generation_done` and the real gate; it has **not** run with Cooja.
+`_handle_generation_done` and the real gate, and it has run with Cooja: a JVM
+killed mid-run was repeated with the same seed and the generation closed
+`Done`. The interruption of the gate itself is exercised against a real MongoDB
+by [debug/validation/retry_restart.py](../../../debug/validation/README.md).

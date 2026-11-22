@@ -140,10 +140,9 @@ const populationFallback = computed(
 
 // Against the run's own final front, GD and IGD measure progress towards this
 // run's own result, not convergence to the real optimum, and so cannot be
-// compared across runs. They do NOT reach zero on the last generation: the
-// engine builds the stored front from the merged pool (surviving parents ∪ last
-// offspring), while a generation document records only that generation's
-// offspring — so each set holds points the other lacks.
+// compared across runs. In NSGA-II/III the stored front is that of the final
+// survivors, so measuring survivors reaches zero on the last generation by
+// construction; offspring and archive need not.
 const selfReferential = computed(() => data.value?.reference === "final_front");
 
 const referenceCaption = computed(() => {

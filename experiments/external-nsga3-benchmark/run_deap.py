@@ -2,8 +2,8 @@
 NSGA-III on DTLZ2 via DEAP (``deap.tools.selNSGA3``).
 
 This implementation is provided strictly for the benchmark comparison in
-Table 3 of the SimLab paper — DEAP is NOT a runtime dependency of the
-platform.
+Table 3 of the SimLab paper — it is independent of the platform's
+``nsga3_deap`` strategy, which uses only DEAP's environmental selection.
 
 References:
   * Fortin et al., "DEAP: Evolutionary Algorithms Made Easy", JMLR 2012.

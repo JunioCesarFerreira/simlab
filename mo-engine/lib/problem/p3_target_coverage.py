@@ -36,8 +36,8 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
       - Each installed sensor has degree at least g in communication graph (within R_com).
 
     Notes:
-    - You can enforce these as hard constraints (constraint_violation > 0 if violated),
-      or you can keep them as objectives/penalties depending on your algorithm settings.
+    - k-coverage is repaired in the operators; there is no penalty.
+    - g is not enforced: ``g_required`` is not read.
     """
     def assert_problem(self, problem: Mapping[str, Any]) -> None:
         # Valida núcleo homogêneo mínimo
@@ -107,7 +107,8 @@ class Problem3TargetCoverageAdapter(ProblemAdapter):
                 # Fallback: no feasible-and-unique mask found in `max_attempts`
                 # tries (feasible subspace too small, or infeasible search
                 # space). Accept the last draw rather than shrinking the
-                # population — the GA repairs/penalizes infeasibility later.
+                # population. Variation repairs k-coverage later; nothing
+                # penalizes infeasibility.
                 log.warning(
                     "[P3] Random gen fallback: could not produce a feasible, "
                     "unique individual after %d attempts.", max_attempts,

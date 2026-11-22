@@ -10,8 +10,8 @@ Usage:
 
 Examples:
     python run_pareto_analysis.py
-    python run_pareto_analysis.py --api-base http://server:8000/api/v1
-    MONGO_URI=mongodb://remote:27017/ python run_pareto_analysis.py
+    python run_pareto_analysis.py --api-base https://server/api/v1
+    MONGO_URI='mongodb://localhost:27017/?directConnection=true' python run_pareto_analysis.py
 """
 
 import argparse

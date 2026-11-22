@@ -1,5 +1,9 @@
 # Provenance and citable releases — how to do it
 
+Status: **plan, not implemented** (written 2026-11-18). `pylib/provenance.py`,
+`scripts/build.sh`, `SIMLAB_REQUIRE_CLEAN_BUILD`, the `provenance` and `runtime`
+fields and `.zenodo.json` do not exist in the repository yet.
+
 Goal: every experiment says **which code, which images and which firmware** produced
 it, and the code is citable by a **DOI** that resolves to exactly that code. Today
 only the firmware is recorded (`firmware_snapshot`, sha256 per file). The rest is
@@ -9,7 +13,7 @@ missing:
 |---|---|
 | Code version per experiment | The paper-1 run `s42` (2026-10-29) and the `s7` runs (2026-11-07) straddle commits `848cc38`/`8b3504c`. It cannot be shown that they ran the same code. |
 | Image digests | `mongo:latest`, `grafana/grafana-oss` (no tag), `python:3.12-slim` (moving tag), `simulation-cooja:v1.1` (tag, not digest). A rebuild can change any of them silently. |
-| Release | `CITATION.cff` says `v1.1.0`; there were 353 commits since that tag (2026-02-16). No DOI. |
+| Release | `CITATION.cff` says `v1.1.0`; on 2026-11-18 there were 353 commits since that tag (2026-02-16). No DOI. |
 
 Do the steps in order. Steps 1–4 are code; 5–7 are operations. Nothing here changes a
 result; it makes a result traceable.
@@ -174,4 +178,6 @@ In the paper, one sentence carries all of it:
 
 Deposit the campaign data (exported experiment documents, the campaign manifest and the
 analysis scripts) as a **separate** Zenodo dataset record, linked to the software DOI
-with `isSupplementTo`. `util/mongo_backup.py` produces the export.
+with `isSupplementTo`. `util/mongo_backup.py` produces a JSON export of every
+collection, GridFS included. It is meant for reading and archiving: it writes
+ids and dates as strings, so it is not a restorable dump.

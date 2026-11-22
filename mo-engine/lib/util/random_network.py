@@ -143,7 +143,7 @@ def continuous_network_gen(
     preserving geometric connectivity.
 
     Growth model:
-    - Seed at region center.
+    - Seed at the sink (region center if there is none).
     - Iteratively sample anchored candidates.
     - Select the point maximizing minimum distance.
     - Apply fallback insertion when sampling fails.
@@ -167,7 +167,7 @@ def continuous_network_gen(
     Returns
     -------
     list[(float, float)]
-        Generated point set.
+        Generated point set, without the sink.
     """
     if amount <= 0:
         return []
@@ -247,7 +247,7 @@ def stochastic_reachability_mask(
     candidates : list[(float, float)]
         list of candidate positions Q.
     sink : (float, float)
-        Root position (must be in candidates).
+        Root position (need not be one of the candidates).
     radius : float
         Reachability radius.
     rng : random.Random

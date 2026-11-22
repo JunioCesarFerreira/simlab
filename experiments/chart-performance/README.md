@@ -1,5 +1,7 @@
 # Chart loading review — 2026-09-13
 
+A dated report: the code, test counts and times are those of that date.
+
 The review found unnecessary work in the metrics endpoint, repeated queries
 to MongoDB, and processing that blocked the UI.
 
@@ -67,7 +69,7 @@ From the repository root:
 
 ```bash
 # Preserves the previous endpoint in a temporary file; does not touch Git.
-git show HEAD:rest-api/api/endpoints/experiment.py > /tmp/simlab-hvgd-baseline.py
+git show 74c5e2a^:rest-api/api/endpoints/experiment.py > /tmp/simlab-hvgd-baseline.py
 rest-api/.venv/bin/python experiments/chart-performance/benchmark.py \
   --include-cumulative --baseline-file /tmp/simlab-hvgd-baseline.py
 
@@ -75,7 +77,8 @@ rest-api/.venv/bin/python experiments/chart-performance/benchmark.py \
 rest-api/.venv/bin/python experiments/chart-performance/benchmark.py --dimensions 6
 ```
 
-The file used as baseline must contain the code prior to this review. The
+The file used as baseline must contain the code prior to this review
+(`74c5e2a^`). The
 benchmark prints times, query counts, and numerically compares the series
 when given `--baseline-file`.
 
