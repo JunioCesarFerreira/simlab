@@ -10,6 +10,10 @@ from pymongo.errors import PyMongoError
 logger = logging.getLogger(__name__)
 
 
+#: How long an idle change stream that can be stopped waits on the server
+#: before it asks again whether it was. An event still returns at once.
+STOP_CHECK_MS = 1000
+
 #: Every client this class creates reads dates as **aware UTC**.
 #:
 #: BSON stores an instant, not a wall clock, and without this PyMongo hands it
@@ -23,6 +27,19 @@ logger = logging.getLogger(__name__)
 #: of the database, which is why the writers in this repository use
 #: ``pylib.timeutil.utc_now`` rather than ``datetime.now()``.
 TZ_AWARE = True
+
+
+def _changes(stream, should_stop: Callable[[], bool] | None) -> Generator:
+    """The stream's changes, until it ends or is told to stop."""
+    if should_stop is None:
+        yield from stream
+        return
+    while stream.alive and not should_stop():
+        # Iterating blocks for as long as nothing happens; this returns None
+        # after STOP_CHECK_MS instead.
+        change = stream.try_next()
+        if change is not None:
+            yield change
 
 
 class MongoDBConnection:
@@ -98,6 +115,7 @@ class MongoDBConnection:
         on_change: Callable[[dict], None],
         full_document: str = "default",
         on_open: Callable[[], None] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> None:
         """
         Observes changes in a specific collection using a given pipeline.
@@ -114,21 +132,27 @@ class MongoDBConnection:
                 what happens after the scan is delivered by the stream, so
                 nothing falls between the two. It has to be idempotent, since
                 the same document can be seen by both.
+            should_stop (Callable): Asked about once a second. When true the
+                stream is closed, with its client, and this returns. Without
+                it this never returns, which suits a watcher that lives as
+                long as the process and leaks one that does not.
         """
         resume_token = None
         backoff = 1
-        while True:
+        while not (should_stop and should_stop()):
             try:
                 with self.connect() as db:
                     collection: Collection = db[collection_name]
                     kwargs = {"full_document": full_document}
+                    if should_stop:
+                        kwargs["max_await_time_ms"] = STOP_CHECK_MS
                     if resume_token:
                         kwargs["resume_after"] = resume_token
                     with collection.watch(pipeline, **kwargs) as stream:
                         backoff = 1
                         if on_open:
                             on_open()
-                        for change in stream:
+                        for change in _changes(stream, should_stop):
                             resume_token = change.get("_id")
                             on_change(change)
             except PyMongoError as e:

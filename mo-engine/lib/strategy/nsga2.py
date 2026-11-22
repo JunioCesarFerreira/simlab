@@ -17,6 +17,7 @@ from pylib.db.models import Generation, Individual, Simulation
 from pylib.config.simulator import SimulationConfig
 from pylib import plot_network
 
+from lib.util import background
 from lib.util.build_input_sim_cooja import create_files
 
 # NSGA utils
@@ -588,14 +589,10 @@ class NSGA2LoopStrategy(EngineStrategy):
 # Watcher (Change Stream) + Polling fallback
 # ------------------------------
     def _start_watcher(self):
-        self._stop_flag = False
-
-        # Stop any existing threads
-        for t in (self._watch_thread, self._sim_watch_thread):
-            if t and t.is_alive():
-                self._stop_flag = True
-                t.join(timeout=1.0)
-                self._stop_flag = False
+        # The flag is not cleared here: a run with nothing to simulate can
+        # finish, and stop, before start() reaches this.
+        if self._stop_flag:
+            return
 
         # --- Generation watcher: controls flow ---
         def _run_generation_watcher():
@@ -608,7 +605,8 @@ class NSGA2LoopStrategy(EngineStrategy):
                     logger.exception("[NSGA-II] Generation watcher callback error.")
 
             logger.info("[NSGA-II] Starting Generation watcher (DONE or ERROR).")
-            self.mongo.generation_repo.watch_status_terminal(_callback)
+            self.mongo.generation_repo.watch_status_terminal(
+                _callback, should_stop=lambda: self._stop_flag)
 
         # --- Simulation watcher: accounting only ---
         def _run_simulation_watcher():
@@ -621,7 +619,8 @@ class NSGA2LoopStrategy(EngineStrategy):
                     logger.exception("[NSGA-II] Simulation watcher callback error.")
 
             logger.info("[NSGA-II] Starting Simulation watcher (DONE or ERROR).")
-            self.mongo.simulation_repo.watch_status_terminal(_callback)
+            self.mongo.simulation_repo.watch_status_terminal(
+                _callback, should_stop=lambda: self._stop_flag)
 
         self._watch_thread = Thread(target=_run_generation_watcher, daemon=True, name="nsga2-gen-watcher")
         self._sim_watch_thread = Thread(target=_run_simulation_watcher, daemon=True, name="nsga2-sim-watcher")
@@ -691,7 +690,7 @@ class NSGA2LoopStrategy(EngineStrategy):
         config_snapshot: dict,
     ) -> None:
         """
-        Generates and uploads the topology image for one individual in a background thread,
+        Generates and uploads the topology image for one individual on the background queue,
         then updates topology_picture_id on the Individual document.
         """
         if self._has_picture(individual_id):
@@ -706,7 +705,7 @@ class NSGA2LoopStrategy(EngineStrategy):
                     "[NSGA-II] Topology upload failed for gen=%s ind=%s", gen_index, ind_idx
                 )
 
-        Thread(target=_do, daemon=True, name=f"topo-g{gen_index}-{ind_idx}").start()
+        background.submit(_do)
 
 
 # ------------------------------

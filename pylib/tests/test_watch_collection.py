@@ -112,3 +112,81 @@ def test_the_experiment_watch_hands_on_open_to_the_stream():
     repository.watch_status_waiting(MagicMock(), on_open=on_open)
 
     assert repository.connection.watch_collection.call_args.kwargs["on_open"] is on_open
+
+
+class _IdleStream:
+    """An open stream: ``try_next`` gives ``None`` while nothing happens."""
+
+    alive = True
+
+    def __init__(self, events=()):
+        self.events = list(events)
+        self.closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.closed = True
+
+    def try_next(self):
+        return self.events.pop(0) if self.events else None
+
+
+def _idle(monkeypatch, stream, failure=None):
+    options = []
+
+    class _Collection:
+        def watch(self, _pipeline, **kwargs):
+            options.append(kwargs)
+            if failure:
+                raise failure
+            return stream
+
+    @contextmanager
+    def connect():
+        yield {"things": _Collection()}
+
+    conn = MongoDBConnection("mongodb://unused", "test")
+    monkeypatch.setattr(conn, "connect", connect)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    return conn, options
+
+
+def test_an_idle_stream_ends_when_told_to(monkeypatch):
+    stream = _IdleStream()
+    conn, options = _idle(monkeypatch, stream)
+    asked = []
+
+    conn.watch_collection(
+        "things", [], MagicMock(), should_stop=lambda: asked.append(1) or len(asked) > 3)
+
+    assert stream.closed
+    # The server answers an idle getMore within this, so the question is asked.
+    assert 0 < options[0]["max_await_time_ms"] <= 5000
+
+
+def test_events_are_delivered_until_then(monkeypatch):
+    stream = _IdleStream([{"_id": "a"}, {"_id": "b"}])
+    conn, _ = _idle(monkeypatch, stream)
+    seen = []
+
+    conn.watch_collection("things", [], seen.append, should_stop=lambda: len(seen) == 2)
+
+    assert [change["_id"] for change in seen] == ["a", "b"]
+
+
+def test_a_stream_already_stopped_is_not_opened(monkeypatch):
+    conn, options = _idle(monkeypatch, _IdleStream())
+
+    conn.watch_collection("things", [], MagicMock(), should_stop=lambda: True)
+
+    assert options == []
+
+
+def test_stopping_ends_the_retries_too(monkeypatch):
+    conn, options = _idle(monkeypatch, None, failure=PyMongoError("no primary"))
+
+    conn.watch_collection("things", [], MagicMock(), should_stop=lambda: len(options) >= 3)
+
+    assert len(options) == 3

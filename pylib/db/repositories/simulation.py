@@ -583,7 +583,11 @@ class SimulationRepository:
             full_document="updateLookup"
         )
 
-    def watch_status_terminal(self, on_change: Callable[[dict], None]) -> None:
+    def watch_status_terminal(
+        self,
+        on_change: Callable[[dict], None],
+        should_stop: Optional[Callable[[], bool]] = None,
+    ) -> None:
         """Watches the simulations collection for documents entering DONE or ERROR status."""
         log.info("[SimulationRepository] Watching for terminal simulations (DONE or ERROR)...")
         pipeline = [
@@ -598,5 +602,6 @@ class SimulationRepository:
             "simulations",
             pipeline,
             on_change,
-            full_document="updateLookup"
+            full_document="updateLookup",
+            should_stop=should_stop,
         )

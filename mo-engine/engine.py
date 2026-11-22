@@ -71,12 +71,19 @@ def process_experiment(exp_doc: dict) -> bool:
     # stay editable, so this copy is the only evidence of what actually ran.
     # Best-effort by design — it records its own failures and never raises.
     capture_firmware_snapshot(mongo, exp_doc)
+    strategy = None
     try:
         strategy = select_strategy(exp_doc)
         strategy.start()
         return True
     except Exception:
         log.exception("Failed to start strategy for experiment %s", exp_id)
+        if strategy is not None:
+            # It may have started its watchers, which would outlive it.
+            try:
+                strategy.stop()
+            except Exception:
+                log.exception("Failed to stop strategy for experiment %s", exp_id)
         return False
 
 

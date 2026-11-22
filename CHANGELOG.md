@@ -5,6 +5,22 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — The mo-engine releases what finished experiments held
+
+### Fixed
+
+- **A finished experiment gives back its threads and connections.** Its change
+  streams never returned. They now end within about a second of the strategy
+  stopping (`watch_collection(should_stop=...)`), also when a start fails. A
+  strategy that finished before it began watching is no longer restarted by it.
+- **Topology pictures are drawn by two threads**, not by one per individual,
+  which kept every pending canvas in memory at once.
+- Measured with 50 experiments in a row: 8 threads and 6 MongoDB connections
+  at the end (before: 406 and 306), 308 MB (before: 1.8 GB). A burst of 80
+  that reached 4 GB stays at 352 MB.
+
+---
+
 ## [Unreleased] — An engine killed at any write resumes the same run
 
 ### Fixed

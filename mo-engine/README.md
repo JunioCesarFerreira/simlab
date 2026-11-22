@@ -178,11 +178,6 @@ wave finished this way did not run at its N, so it measures as invalid.
 
 ### Known issues
 
-- **A finished experiment does not release its threads.** Its change-stream
-  watchers never return: in a test, each experiment left about 15 threads, 7
-  MongoDB connections and 50–100 MB behind, and the engine ran out of 4 GB
-  after some 70 of them. Restart the engine between batches, with nothing
-  running.
 - **Cancelling a scalability benchmark does not stop it.** `usl_benchmark` does
   not read the cancellation: it runs every wave and then overwrites `Cancelled`
   with `Done`.
@@ -317,7 +312,7 @@ mo-engine/
 │   │   ├── mutation/
 │   │   └── selection/
 │   │
-│   └── util/                    # Network generation, connectivity and coverage, Cooja inputs
+│   └── util/                    # Network generation, connectivity and coverage, Cooja inputs, background queue
 │
 ├── simulation_template.xml      # Cooja template every simulation is generated from
 ├── tests/                       # pytest suite; run `pytest -q` from this directory

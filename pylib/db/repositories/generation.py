@@ -700,7 +700,11 @@ class GenerationRepository:
             full_document="updateLookup"
         )
 
-    def watch_status_terminal(self, on_change: Callable[[dict], None]):
+    def watch_status_terminal(
+        self,
+        on_change: Callable[[dict], None],
+        should_stop: Optional[Callable[[], bool]] = None,
+    ):
         """Watches for generations reaching any terminal state (DONE or ERROR)."""
         log.info("[GenerationRepository] Watching for terminal generations (DONE or ERROR)...")
         pipeline = [
@@ -715,5 +719,6 @@ class GenerationRepository:
             "generations",
             pipeline,
             on_change,
-            full_document="updateLookup"
+            full_document="updateLookup",
+            should_stop=should_stop,
         )

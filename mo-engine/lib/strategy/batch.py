@@ -17,6 +17,7 @@ from pylib.db.models import Generation, Individual, Simulation
 from pylib.config.simulator import SimulationConfig
 from pylib import plot_network
 
+from lib.util import background
 from lib.util.build_input_sim_cooja import create_files
 
 from lib.nsga import fast_nondominated_sort
@@ -267,7 +268,10 @@ class BatchStrategy(EngineStrategy):
     # Watchers
     # ------------------------------
     def _start_watcher(self):
-        self._stop_flag = False
+        # The flag is not cleared here: a run with nothing to simulate can
+        # finish, and stop, before start() reaches this.
+        if self._stop_flag:
+            return
 
         def _run_generation_watcher():
             def _callback(gen_doc: dict):
@@ -279,7 +283,8 @@ class BatchStrategy(EngineStrategy):
                     logger.exception("[Batch] Generation watcher callback error.")
 
             logger.info("[Batch] Starting Generation watcher (DONE or ERROR).")
-            self.mongo.generation_repo.watch_status_terminal(_callback)
+            self.mongo.generation_repo.watch_status_terminal(
+                _callback, should_stop=lambda: self._stop_flag)
 
         def _run_simulation_watcher():
             def _callback(sim_doc: dict):
@@ -291,7 +296,8 @@ class BatchStrategy(EngineStrategy):
                     logger.exception("[Batch] Simulation watcher callback error.")
 
             logger.info("[Batch] Starting Simulation watcher (DONE or ERROR).")
-            self.mongo.simulation_repo.watch_status_terminal(_callback)
+            self.mongo.simulation_repo.watch_status_terminal(
+                _callback, should_stop=lambda: self._stop_flag)
 
         self._watch_thread = Thread(
             target=_run_generation_watcher, daemon=True, name="batch-gen-watcher"
@@ -733,7 +739,7 @@ class BatchStrategy(EngineStrategy):
                     gen_index, ind_idx,
                 )
 
-        Thread(target=_do, daemon=True, name=f"topo-batch-{ind_idx}").start()
+        background.submit(_do)
 
     def _plot_topology(
         self,

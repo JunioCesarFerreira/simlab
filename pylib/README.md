@@ -31,7 +31,7 @@ from pylib.db import create_mongo_repository_factory
 | `crypto/envelope.py` | The sealed-envelope *format* and its validation. **stdlib only**, deliberately: the API must be able to validate an envelope without being able to open one |
 | `crypto/sealed.py` | The keystore that opens them (X25519, libsodium sealed boxes), used only by the master-node |
 | `timeutil.py` | Aware-UTC timestamps, and arithmetic that tolerates the naive values written before that convention |
-| `db/connection.py` | The Mongo client, built `tz_aware` — which is what makes a stored instant readable as one instead of a wall clock nobody can place |
+| `db/connection.py` | The Mongo client, built `tz_aware` — which is what makes a stored instant readable as one instead of a wall clock nobody can place. Its `watch_collection` takes `on_open` (scan once listening) and `should_stop`, which a watcher that does not live as long as its process must pass |
 | `statistics.py`, `moo_metrics.py` | Metric evaluation ([the kinds](../docs/markdown/FIRMWARE_METRICS.md#21-what-a-data-conversion-does)) and multi-objective quality indicators |
 | `evaluation_validity.py` | The one rule for "is this objective vector a measurement?", read from the stored evidence |
 | `benchmarks.py` | DTLZ2, ZDT1 and SCH1: evaluation, true fronts and exact distances |

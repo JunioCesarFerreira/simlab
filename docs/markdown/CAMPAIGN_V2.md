@@ -236,9 +236,7 @@ is the default if nothing is said.
   - These are independent runs. Sharing the seed numbers is bookkeeping, **not**
     pairing.
 - **Engine restarts:** every strategy resumes exactly since 2026-11-22. Do not change the code
-  of the engine in the middle of a run: a resume reproduces what the same code would do. Watch
-  its memory until the [known issue](../../mo-engine/README.md#known-issues) is fixed: finished
-  runs do not release theirs.
+  of the engine in the middle of a run: a resume reproduces what the same code would do.
 - **Scenario:** the shared `ind1` scenario of paper 1:
   - same mobile nodes, sink, radii, region and duration;
   - P1 with 20 relays;

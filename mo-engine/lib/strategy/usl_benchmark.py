@@ -391,7 +391,8 @@ class UslBenchmarkStrategy(EngineStrategy):
     # ── watchers ───────────────────────────────────────────────────────────
 
     def _start_watchers(self) -> None:
-        self._stop_flag = False
+        if self._stop_flag:
+            return
 
         def watch() -> None:
             def callback(gen_doc: dict) -> None:
@@ -401,7 +402,8 @@ class UslBenchmarkStrategy(EngineStrategy):
                     self.event_generation_done(gen_doc)
                 except Exception:
                     logger.exception("[USL] Generation watcher callback error")
-            self.mongo.generation_repo.watch_status_terminal(callback)
+            self.mongo.generation_repo.watch_status_terminal(
+                callback, should_stop=lambda: self._stop_flag)
 
         def poll() -> None:
             # The change stream is the fast path; this is the backstop that
