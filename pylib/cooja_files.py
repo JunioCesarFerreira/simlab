@@ -13,23 +13,24 @@ def convert_simulation_files(
     ):
     """Processa a simulação completa a partir dos arquivos de configuração."""
     
-    # Gera arquivo de posições e obtém posições iniciais
-    fixed_positions, mobile_start_positions = generate_positions_from_json(
+    # Gera arquivo de posições e obtém a posição inicial de cada mote, na ordem
+    # dos IDs: o sorvedouro (sink.c) primeiro, fixo ou móvel.
+    positions, n_mobile = generate_positions_from_json(
         config["simulationElements"], 
         output_filename=outpos
     )
     
     # Se não motes moveis remove o arquivo positions.dat pois este não é necessário
-    if mobile_start_positions is None or len(mobile_start_positions) == 0:
+    if n_mobile == 0:
         os.remove(outpos)
     
-    # Identifica motes servidores (assume que o primeiro fixo é o servidor)
+    # O mote 1 roda o firmware da raiz, e o leitor do log a procura como Mote:1.
     root_motes = [1]
     
     # Gera arquivo XML de simulação
     update_simulation_xml(
-        fixed_positions=fixed_positions,
-        mobile_positions=mobile_start_positions,
+        positions=positions,
+        has_mobile=n_mobile > 0,
         root_motes=root_motes,
         simulation_time=config["duration"],
         tx_range=config["radiusOfReach"],

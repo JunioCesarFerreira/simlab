@@ -5,29 +5,53 @@ from pylib.config.simulator import SimulationElements
 def evaluate_function(expression: str, t_values: np.ndarray) -> np.ndarray:
     return np.array([eval(expression, {"t": t, "np": np}) for t in t_values])
 
+ROOT_SOURCE = "sink.c"
+
+
+def mote_order(simElements: SimulationElements) -> list[tuple[str, int]]:
+    """The motes as Cooja numbers them, ``("fixed" | "mobile", index)``, the root first.
+
+    Cooja's mote 1 runs the root firmware, and the log reader takes the root's
+    lines as ``Mote:1``. The root is the mote whose source is ``sink.c``: P1–P3
+    already list it first among the fixed motes, P4's sink is mobile. Without
+    one, the first mote is the root, as before.
+    """
+    order = [("fixed", i) for i in range(len(simElements["fixedMotes"]))]
+    order += [("mobile", j) for j in range(len(simElements["mobileMotes"]))]
+    motes = {"fixed": simElements["fixedMotes"], "mobile": simElements["mobileMotes"]}
+    root = next((k for k in order if motes[k[0]][k[1]].get("sourceCode") == ROOT_SOURCE), None)
+    if root is not None and root != order[0]:
+        order.remove(root)
+        order.insert(0, root)
+    return order
+
+
 def generate_positions_from_json(
     simElements: SimulationElements, 
     output_filename: str = "positions.dat",
     debug = False
-    ) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
+    ) -> tuple[list[tuple[float, float]], int]:
+    """Write the positions file and return every mote's start position in
+    ``mote_order``, with the number of mobile motes."""
 
+    order = mote_order(simElements)
+    index_of = {key: i for i, key in enumerate(order)}
     fixed_positions = [(mote["position"][0], mote["position"][1]) for mote in simElements["fixedMotes"]]
     mobile_motes = simElements["mobileMotes"]
-    
-    mobile_start_positions = []
+    start: dict[tuple[str, int], tuple[float, float]] = {
+        ("fixed", i): p for i, p in enumerate(fixed_positions)}
 
     with open(output_filename, "w") as file:
         file.write("# Fixed positions\n")
         for i, (x, y) in enumerate(fixed_positions):
-            file.write(f"{i} 0.00000000 {x:.2f} {y:.2f}\n")
+            file.write(f"{index_of[('fixed', i)]} 0.00000000 {x:.2f} {y:.2f}\n")
         file.write("\n")
 
         file.write("# Mobile nodes\n")
-        mote_index = len(fixed_positions)
         max_steps = 0
         mobile_trajectories = []
 
-        for mote in mobile_motes:
+        for j, mote in enumerate(mobile_motes):
             path_segments = mote["functionPath"]
             speed = mote["speed"]
             time_step = mote["timeStep"]
@@ -70,9 +94,8 @@ def generate_positions_from_json(
                 x_full = np.concatenate((x_full, x_full[::-1]))
                 y_full = np.concatenate((y_full, y_full[::-1]))
 
-            mobile_start_positions.append((x_full[0], y_full[0]))
-            mobile_trajectories.append((mote_index, x_full, y_full, time_step))
-            mote_index += 1
+            start[("mobile", j)] = (x_full[0], y_full[0])
+            mobile_trajectories.append((index_of[("mobile", j)], x_full, y_full, time_step))
 
         for step in range(2 * max_steps):
             for mote_id, x_full, y_full, time_step in mobile_trajectories:
@@ -80,4 +103,4 @@ def generate_positions_from_json(
                     file.write(f"{mote_id} {step * time_step:.8f} {x_full[step]:.2f} {y_full[step]:.2f}\n")
             file.write("\n")
 
-    return fixed_positions, mobile_start_positions
+    return [start[key] for key in order], len(mobile_motes)

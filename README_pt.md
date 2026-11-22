@@ -516,7 +516,7 @@ resultado deve ser lido. Cada um está descrito no documento indicado.
 | Área | Problema | Detalhes |
 | --- | --- | --- |
 | Unidades | A GUI rotula a duração simulada em segundos; ela é em minutos | [GUI](gui/simlab/README.md#known-issues) |
-| Problema 4 | Não executa pela GUI nem pela API, e seu CSC tornaria um sensor a raiz RPL | [Problemas](mo-engine/lib/problem/README.md#known-limitations) |
+| Problema 4 | Não pode ser lançado pela GUI | [Problemas](mo-engine/lib/problem/README.md#known-limitations) |
 | Log vazio | Uma execução em que nenhum relatório chegou à raiz falha na coleta | [master-node](master-node/README.md#known-issues) |
 | Telemetria | A varredura periódica não repete coletas `unavailable`/`failed` | [Métricas de execução](docs/markdown/RUNTIME_METRICS.md#known-issues) |
 | API | `GET /files/simulations/{id}/topology` responde 500 | [API REST](rest-api/README.md#known-issues) |

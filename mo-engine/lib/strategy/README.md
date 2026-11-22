@@ -152,8 +152,7 @@ chromosomes that do not fit the problem or its sources (`pylib/batch_input.py`):
 `random_seed`, when sent, is a whole number from 0 to 2³¹−1. These are the forms
 stored in `individuals.chromosome` and `pareto_front[].chromosome`, so either
 can be sent back as it is. Feasibility is not checked there: the engine
-penalises. P4 passes this check and still fails at start
-([known limitation](../problem/README.md#known-limitations)).
+penalises.
 
 With a single source repository, the MAC gene of each input chromosome is
 rewritten to the protocol that will run. With several, a non-synthetic batch

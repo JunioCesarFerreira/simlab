@@ -5,6 +5,32 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — P4 runs
+
+### Fixed
+
+- **P4 accepts JSON.** `assert_problem` required tuples, and JSON and BSON give
+  lists, so every P4 experiment created through the API failed at start.
+- **The mobile sink is the RPL root.** The Cooja builder made the first fixed
+  mote, a sensor, mote 1, which runs the root firmware and whose lines the log
+  reader takes as the root's. The mote whose source is `sink.c` is mote 1 now,
+  fixed or mobile. For P0–P3 the files are byte-identical: 622 stored
+  simulations regenerated with the old and the new code. In Cooja, a P4 run's
+  mobile root received reports from all 12 sensors of the example.
+- **Routes stay on the mobility graph.** The repair appended the base after the
+  first invalid move, even where that last move did not exist. It returns to
+  the base by the shortest walk over the adjacency, within `max_route_length`.
+- **Sojourn ids must equal their indices**, as the route assumed; a mismatch is
+  refused instead of mapping genes to the wrong stops. `max_route_length` and
+  `tau_bounds` are validated.
+- **Buffer and data rate are enforced.** A route that never collects a mote, or
+  lets a buffer overflow between two collections, is penalised instead of
+  simulated. Energy stays a measured objective, not a constraint.
+- The request example `debug/requests/post-nsga3-experiment-p4.json` is a valid
+  P4 instance, with `random_seeds`.
+
+---
+
 ## [Unreleased] — Table 3 measures what separates the methods
 
 ### Changed

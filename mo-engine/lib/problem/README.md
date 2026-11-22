@@ -18,7 +18,7 @@ does not yet enforce part of it, [Known Limitations](#known-limitations) says so
 | P1 | `p1_continuous_mobility.py` | Runs |
 | P2 | `p2_discrete_mobility.py` | Runs |
 | P3 | `p3_target_coverage.py` | Runs |
-| P4 | `p4_mobile_sink_collection.py` | **Does not run end to end** |
+| P4 | `p4_mobile_sink_collection.py` | Runs |
 
 ---
 
@@ -202,8 +202,24 @@ Determine:
 
 such that all motes can successfully deliver their data to the sink through multi-hop communication paths, without exceeding their energy constraints.
 
-In the implementation the energy, buffer and data-rate parameters are validated
-but enforce no constraint.
+**In the implementation.** The sink's route repeats (its path is closed). A
+stop collects from every mote in a connected part of the network (multi-hop,
+within $R_{\text{com}}$) that holds a mote in its `visibleNodes`, and only
+while the sink dwells there. An individual is infeasible, and penalised as in
+P1–P3, when a mote is never collected or when a buffer overflows: with
+$\delta$ the data rate, $W$ the buffer and $g_i$ the longest time between two
+collections of mote $i$, over the round and into the next,
+$\delta \, g_i > W$. With $u$ the share of motes never collected and $o$ the
+mean over the collected motes of $\min(1, (\delta g_i - W)/W)$, every
+objective is $10^9 (1 + (u + o)/2)$.
+
+Energy is not a constraint of the implementation: it is measured by the
+simulation (the firmware's energy metrics), and `initial_energy` is validated
+and stored with the problem. The sink is Cooja's mote 1, the RPL root, although
+it is mobile.
+
+Positions are `[x, y]`; sojourn `i` must have id `i` (the route holds indices,
+the adjacency ids), and sojourn 0 is the base.
 
 ---
 
@@ -527,8 +543,10 @@ Sojourn ids have to equal their indices.
 | Crossover | Single-cut route splice → route repair; blend crossover of the dwell times; uniform MAC inheritance |
 | Mutation | With probability `per_gene_prob`, one internal stop is replaced → route repair; with probability `pm_tau`, Gaussian noise (`sigma_tau`) on the whole dwell vector; bit-flip MAC |
 
-The route repair truncates at the first invalid edge and appends the base, even
-where that last edge does not exist.
+The route repair keeps the longest valid prefix from the base and returns to
+the base by the shortest walk over the adjacency, dropping the last stops when
+the route would exceed `max_route_length` stops. A route that cannot leave the
+base is `[0, 0]`.
 
 ---
 
@@ -593,15 +611,8 @@ Where the code departs from the formulations above.
 
 **Problem 4**
 
-- `assert_problem` requires positions as tuples. JSON and BSON deliver lists,
-  so every experiment created through the API is rejected.
 - The GUI's problem export does not write the fields P4 needs (`nodes`,
-  `sink_base`, `sojourns`, …), and the bundled request example has no `nodes`
-  and an empty `sojourns`.
-- The encoder puts the sink among the mobile motes, while the Cooja builder
-  makes mote 1, the first **fixed** mote, the RPL root. A sensor would run the
-  root firmware and the mobile sink a node's.
-- Energy, buffer and data-rate parameters enforce nothing.
+  `sink_base`, `sojourns`, …).
 
 **Trajectories (P1, P2, P4)**
 

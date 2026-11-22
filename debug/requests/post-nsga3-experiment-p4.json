@@ -5,7 +5,7 @@
     "system_message": null,
     "created_time": "2026-01-03T22:00:00Z",
     "start_time": null,
-    "end_time": null,    
+    "end_time": null,
     "generations": [],
     "source_repository_options": {
         "csma": "695fb041125e5141b896bcf0",
@@ -13,7 +13,7 @@
     },
     "parameters": {
         "strategy": "nsga3",
-        "objectives":[
+        "objectives": [
             {
                 "metric_name": "latency",
                 "goal": "min"
@@ -42,9 +42,11 @@
         },
         "simulation": {
             "duration": 180,
-            "random_seed": 123456
+            "random_seeds": [
+                123456
+            ]
         },
-        "problem":{
+        "problem": {
             "name": "problem4",
             "radius_of_reach": 100,
             "radius_of_inter": 200,
@@ -54,15 +56,200 @@
                 500,
                 500
             ],
-            "sink_base": [0, 0],
+            "nodes": [
+                [
+                    -300.0,
+                    -250.0
+                ],
+                [
+                    -260.0,
+                    -240.0
+                ],
+                [
+                    -290.0,
+                    -205.0
+                ],
+                [
+                    250.0,
+                    -300.0
+                ],
+                [
+                    290.0,
+                    -290.0
+                ],
+                [
+                    260.0,
+                    -255.0
+                ],
+                [
+                    320.0,
+                    280.0
+                ],
+                [
+                    360.0,
+                    290.0
+                ],
+                [
+                    330.0,
+                    325.0
+                ],
+                [
+                    -280.0,
+                    300.0
+                ],
+                [
+                    -240.0,
+                    310.0
+                ],
+                [
+                    -270.0,
+                    345.0
+                ]
+            ],
+            "sink_base": [
+                0,
+                0
+            ],
             "initial_energy": 1000,
-            "buffer_capacity": 256,
+            "buffer_capacity": 4096,
             "data_rate": 1.61,
-            "sojourns": [],
+            "sojourns": [
+                {
+                    "id": 0,
+                    "position": [
+                        0.0,
+                        0.0
+                    ],
+                    "adjacency": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5,
+                        6
+                    ],
+                    "visibleNodes": []
+                },
+                {
+                    "id": 1,
+                    "position": [
+                        -285.0,
+                        -235.0
+                    ],
+                    "adjacency": [
+                        0,
+                        2,
+                        3,
+                        4,
+                        5,
+                        6
+                    ],
+                    "visibleNodes": [
+                        0,
+                        1,
+                        2
+                    ]
+                },
+                {
+                    "id": 2,
+                    "position": [
+                        265.0,
+                        -285.0
+                    ],
+                    "adjacency": [
+                        0,
+                        1,
+                        3,
+                        4,
+                        5,
+                        6
+                    ],
+                    "visibleNodes": [
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "id": 3,
+                    "position": [
+                        335.0,
+                        295.0
+                    ],
+                    "adjacency": [
+                        0,
+                        1,
+                        2,
+                        4,
+                        5,
+                        6
+                    ],
+                    "visibleNodes": [
+                        6,
+                        7,
+                        8
+                    ]
+                },
+                {
+                    "id": 4,
+                    "position": [
+                        -265.0,
+                        315.0
+                    ],
+                    "adjacency": [
+                        0,
+                        1,
+                        2,
+                        3,
+                        5,
+                        6
+                    ],
+                    "visibleNodes": [
+                        9,
+                        10,
+                        11
+                    ]
+                },
+                {
+                    "id": 5,
+                    "position": [
+                        0.0,
+                        -300.0
+                    ],
+                    "adjacency": [
+                        0,
+                        1,
+                        2,
+                        3,
+                        4,
+                        6
+                    ],
+                    "visibleNodes": []
+                },
+                {
+                    "id": 6,
+                    "position": [
+                        0.0,
+                        300.0
+                    ],
+                    "adjacency": [
+                        0,
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ],
+                    "visibleNodes": []
+                }
+            ],
             "speed": 10,
             "time_step": 1,
             "max_route_length": 20,
-            "tau_bounds": [0, 200]
+            "tau_bounds": [
+                0,
+                200
+            ]
         }
     },
     "data_conversion_config": {

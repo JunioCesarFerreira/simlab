@@ -1,3 +1,4 @@
+from collections import deque
 from typing import Any, Mapping, Sequence
 import math
 
@@ -12,6 +13,18 @@ Position = tuple[float, float]
 PathSeg = tuple[str, str]  # (x(t), y(t)) com t em [0,1]
 
 BASE_INDEX = 0 # fixed base index for base sojourn
+
+# Same base as P1–P3: above any measured objective, so a penalised individual
+# never reaches front 0.
+_PENALTY_BASE = 1e9
+
+
+def _is_position(value: Any) -> bool:
+    """[x, y] or (x, y): JSON and BSON give lists, Python callers tuples."""
+    return (
+        isinstance(value, (list, tuple)) and len(value) == 2
+        and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value)
+    )
 
 def _clamp(x: float, lo: float, hi: float) -> float:
     """Clamp x to [lo, hi]."""
@@ -55,11 +68,13 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
         - route: [v0, v1, ..., vT] indices over L, with v0 = vT = base_index
         - tau:   [tau0, tau1, ..., tauT] nonnegative real times
 
-    Notes:
-    - Route feasibility requires adjacency in mobility graph A.
-    - You can either enforce feasibility via repair (recommended) or penalize violations.
-    - This adapter is designed to match your earlier mixed-encoding concept:
-      a symbolic path (route) + real vector (sojourn times).
+    Feasibility:
+    - Route: every move is an edge of the mobility graph A; the repair keeps
+      the valid prefix and returns to the base by the shortest walk over A.
+    - Data: every mote is collected at some stop (it is in the connected part
+      of the network that a stop sees, and the sink dwells there), and no
+      buffer overflows between two collections over the repeated route
+      (data_rate × longest gap ≤ buffer_capacity). Violations are penalised.
     """
     def assert_problem(self, problem: Mapping[str, Any]) -> None:
         # -----------------------------
@@ -77,15 +92,13 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
         # -----------------------------
         # nodes: list[Position]
         nodes = problem["nodes"]
-        if not isinstance(nodes, list) or any(
-            (not isinstance(p, tuple) or len(p) != 2) for p in nodes
-        ):
-            raise TypeError("problem['nodes'] must be list[Position] where Position is tuple[float,float].")
+        if not isinstance(nodes, list) or not all(_is_position(p) for p in nodes):
+            raise TypeError("problem['nodes'] must be a list of positions [x, y].")
 
         # sink_base: Position
         sink_base = problem["sink_base"]
-        if not isinstance(sink_base, tuple) or len(sink_base) != 2:
-            raise TypeError("problem['sink_base'] must be a Position (tuple[float,float]).")
+        if not _is_position(sink_base):
+            raise TypeError("problem['sink_base'] must be a position [x, y].")
 
         # Scalars
         initial_energy = problem["initial_energy"]
@@ -104,6 +117,12 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
             raise ValueError("problem['speed'] must be > 0.")
         if float(time_step) <= 0:
             raise ValueError("problem['time_step'] must be > 0.")
+        max_route_length = problem["max_route_length"]
+        if isinstance(max_route_length, bool) or not isinstance(max_route_length, int) or max_route_length < 2:
+            raise ValueError("problem['max_route_length'] must be a whole number >= 2.")
+        tau_bounds = problem["tau_bounds"]
+        if not _is_position(tau_bounds) or not 0 <= tau_bounds[0] <= tau_bounds[1]:
+            raise ValueError("problem['tau_bounds'] must be [min, max] with 0 <= min <= max.")
 
         # sojourns: list[SojournLocation]
         sojourns = problem["sojourns"]
@@ -112,22 +131,26 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
 
         # Validate minimal SojournLocation structure + adjacency integrity
         sojourn_ids: set[int] = set()
-        for s in sojourns:
+        for index, s in enumerate(sojourns):
             if not isinstance(s, dict):
                 raise TypeError("Each sojourn must be a mapping/dict.")
             if "id" not in s or "position" not in s or "adjacency" not in s or "visibleNodes" not in s:
                 raise KeyError("Each sojourn must have keys: id, position, adjacency, visibleNodes.")
 
             sid = s["id"]
-            if not isinstance(sid, int):
+            if isinstance(sid, bool) or not isinstance(sid, int):
                 raise TypeError("sojourn['id'] must be int.")
-            if sid in sojourn_ids:
-                raise ValueError(f"Duplicate sojourn id: {sid}")
+            # The route holds indices into this list and the adjacency holds
+            # ids: they have to be the same numbers. Sojourn 0 is the base.
+            if sid != index:
+                raise ValueError(
+                    f"Sojourn ids must equal their position in the list: "
+                    f"the sojourn at {index} has id {sid}.")
             sojourn_ids.add(sid)
 
             pos = s["position"]
-            if not isinstance(pos, tuple) or len(pos) != 2:
-                raise TypeError("sojourn['position'] must be Position (tuple[float,float]).")
+            if not _is_position(pos):
+                raise TypeError("sojourn['position'] must be a position [x, y].")
 
             adj = s["adjacency"]
             if not isinstance(adj, list) or any(not isinstance(a, int) for a in adj):
@@ -155,6 +178,17 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
                     )
 
         self.problem: ProblemP4 = ProblemP4.cast(problem)
+        self._successors_of: dict[int, list[int]] = {}
+        for s in self.problem.sojourns:
+            self._successors_of[int(s.id)] = sorted({int(v) for v in s.adjacency})
+        # Which motes each stop collects from: those in a connected part of
+        # the network (multi-hop, within R_com) that holds a mote it sees.
+        component = self._components(self.problem.nodes, self.problem.radius_of_reach)
+        self._collects: list[frozenset[int]] = [
+            frozenset(i for i in range(len(self.problem.nodes))
+                      if component[i] in {component[v] for v in s.visibleNodes})
+            for s in self.problem.sojourns
+        ]
 
 
     # Operators are fixed by design: route splice crossover with repair + tau
@@ -187,76 +221,152 @@ class Problem4MobileSinkCollectionAdapter(ProblemAdapter):
         return A
 
 
+    @staticmethod
+    def _components(points: Sequence[Position], radius: float) -> list[int]:
+        """Connected-component label of each point, edges within ``radius``."""
+        label = [-1] * len(points)
+        for start in range(len(points)):
+            if label[start] >= 0:
+                continue
+            label[start] = start
+            stack = [start]
+            while stack:
+                u = stack.pop()
+                for v in range(len(points)):
+                    if label[v] < 0 and math.dist(points[u], points[v]) <= radius:
+                        label[v] = start
+                        stack.append(v)
+        return label
+
+
+    def _path_to_base(self, start: int) -> list[int] | None:
+        """The shortest walk over A from ``start`` to the base, both included,
+        or ``None`` when the base cannot be reached from it."""
+        base = BASE_INDEX
+        if start == base:
+            return [base]
+        previous: dict[int, int | None] = {start: None}
+        queue = deque([start])
+        while queue:
+            u = queue.popleft()
+            for v in self._successors_of.get(u, []):
+                if v in previous:
+                    continue
+                previous[v] = u
+                if v == base:
+                    path = [v]
+                    while previous[path[-1]] is not None:
+                        path.append(previous[path[-1]])
+                    return path[::-1]
+                queue.append(v)
+        return None
+
+
+    def _close(self, walk: list[int]) -> list[int]:
+        """``walk`` (starting at the base, every move an edge) closed at the base
+        by the shortest walk, within ``max_route_length`` stops when possible.
+        Stops from which the base cannot be reached are dropped."""
+        base = BASE_INDEX
+        walk = list(walk) or [base]
+        limit = max(2, self.problem.max_route_length)
+        while True:
+            back = self._path_to_base(walk[-1])
+            if back is not None and (len(walk) + len(back) - 1 <= limit or len(walk) == 1):
+                break
+            walk.pop()
+        route = walk + back[1:]
+        return route if len(route) >= 2 else [base, base]
+
+
     def _random_route(self) -> list[int]:
         """
-        Sample a random feasible route in the mobility graph, starting/ending at base.
-        Simple random walk with a return to base.
+        A random walk over the mobility graph from the base, closed at the base
+        by the shortest walk over existing edges.
         """
         base = BASE_INDEX
-        A = self._A()
-        max_len = self.problem.max_route_length
-
-        route = [base]
-        cur = base
-        # Random walk
-        for _ in range(max_len - 1):
-            neighbors = [v for (u, v) in A if u == cur]
+        walk = [base]
+        for _ in range(self.problem.max_route_length - 2):
+            neighbors = self._successors_of.get(walk[-1], [])
             if not neighbors:
                 break
-            nxt = self._rng.choice(neighbors)
-            route.append(nxt)
-            cur = nxt
+            walk.append(self._rng.choice(neighbors))
             # Occasionally decide to stop early
             if self._rng.random() < 0.2:
                 break
-
-        # Ensure return to base with one more hop if possible; otherwise force base (may be infeasible and repaired later)
-        if cur != base:
-            neighbors = [v for (u, v) in A if u == cur]
-            if base in neighbors:
-                route.append(base)
-            else:
-                route.append(base)  # will be repaired/penalized
-        else:
-            route.append(base)  # trivial loop
-
-        return route
+        return self._close(walk)
 
     def _repair_route(self, route: list[int]) -> list[int]:
         """
-        Repair route to ensure:
-        - starts/ends at base
-        - each consecutive edge is in A
+        A route that starts and ends at the base with every move an edge of A.
 
-        Strategy:
-        - enforce endpoints = base
-        - if an invalid edge occurs, truncate and return to base if possible
+        Keeps the longest valid prefix from the base and returns to the base by
+        the shortest walk over A. The previous repair appended the base after
+        the first invalid move, even where that last move did not exist.
         """
         base = BASE_INDEX
-        A = self._A()
-
-        if not route:
-            return [base, base]
-
-        route = route[:]
-        route[0] = base
-        route[-1] = base
-
-        repaired = [route[0]]
-        cur = repaired[0]
-        for nxt in route[1:]:
-            if (cur, nxt) in A:
-                repaired.append(nxt)
-                cur = nxt
+        walk = [base]
+        for nxt in list(route)[1:]:
+            if nxt in self._successors_of.get(walk[-1], []):
+                walk.append(nxt)
             else:
-                # Try to return to base directly; otherwise truncate hard and append base
-                if (cur, base) in A:
-                    repaired.append(base)
-                else:
-                    repaired.append(base)
-                return repaired
+                break
+        return self._close(walk)
 
-        return repaired
+
+    def collection_deficits(self, chromosome: ChromosomeP4) -> tuple[float, float]:
+        """How far the route is from collecting every mote's data, each in [0, 1].
+
+        - uncollected: share of the motes that no stop with a positive dwell
+          collects from;
+        - overflow: mean over the collected motes of the data lost in the
+          longest gap between two collections, over the buffer, capped at 1.
+
+        The route repeats (the sink's path is closed), so the gap from the last
+        collection to the first one of the next round counts too.
+        """
+        n = len(self.problem.nodes)
+        if n == 0:
+            return 0.0, 0.0
+        L = self.problem.sojourns
+        speed = float(self.problem.speed)
+        windows: list[list[tuple[float, float]]] = [[] for _ in range(n)]
+        t, here = 0.0, tuple(self.problem.sink_base)
+        for stop, dwell in zip(chromosome.route, chromosome.sojourn_times):
+            position = tuple(L[stop].position)
+            t += math.dist(here, position) / speed
+            here = position
+            if dwell > 0:
+                for i in self._collects[stop]:
+                    windows[i].append((t, t + dwell))
+            t += dwell
+        period = t + math.dist(here, tuple(self.problem.sink_base)) / speed
+
+        collected = [w for w in windows if w]
+        uncollected = 1.0 - len(collected) / n
+        rate, capacity = float(self.problem.data_rate), float(self.problem.buffer_capacity)
+        if not collected or rate <= 0:
+            return uncollected, 0.0
+        losses = []
+        for w in collected:
+            w = sorted(w)
+            gaps = [b[0] - a[1] for a, b in zip(w, w[1:])]
+            gaps.append(w[0][0] + period - w[-1][1])
+            losses.append(min(1.0, max(0.0, rate * max(gaps) - capacity) / capacity))
+        return uncollected, sum(losses) / len(losses)
+
+
+    def penalty_objectives(self, chromosome: ChromosomeP4, n_objectives: int) -> list[float] | None:
+        """
+        A minimization-space penalty when the route leaves a mote uncollected
+        or lets a buffer overflow, ``None`` when it is feasible.
+
+          deficit = mean of the two deficits  ∈ (0, 1]
+          penalty = 1e9 × (1 + deficit)
+        """
+        deficits = self.collection_deficits(chromosome)
+        if not any(deficits):
+            return None
+        return [_PENALTY_BASE * (1.0 + sum(deficits) / len(deficits))] * n_objectives
 
 
     def _random_tau(self, length: int) -> list[float]:

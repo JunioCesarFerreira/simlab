@@ -510,7 +510,7 @@ read. Each is described in the linked document.
 | Area | Issue | Details |
 | --- | --- | --- |
 | Units | The GUI labels the simulated duration in seconds; it is in minutes | [GUI](gui/simlab/README.md#known-issues) |
-| Problem 4 | Cannot run from the GUI or the API, and its CSC would make a sensor the RPL root | [Problems](mo-engine/lib/problem/README.md#known-limitations) |
+| Problem 4 | Cannot be launched from the GUI | [Problems](mo-engine/lib/problem/README.md#known-limitations) |
 | Empty log | A run in which no report reached the root fails at collection | [master-node](master-node/README.md#known-issues) |
 | Telemetry | The periodic sweep does not retry `unavailable`/`failed` collections | [Runtime metrics](docs/markdown/RUNTIME_METRICS.md#known-issues) |
 | API | `GET /files/simulations/{id}/topology` answers 500 | [REST API](rest-api/README.md#known-issues) |
