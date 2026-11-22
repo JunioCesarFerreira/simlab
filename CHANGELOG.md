@@ -5,6 +5,28 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — P3 enforces its constraints
+
+### Fixed
+
+- **An infeasible P3 individual is penalised instead of simulated.** The
+  adapter had no penalty, so a mask cut off from the sink or leaving a target
+  under-covered ran and competed on its objectives. It now gets
+  `1e9 × (1 + deficit)`, as in P1 and P2.
+- **`g_required` is read** (optional, default 1, the sink counts as a
+  neighbour); a mote with fewer neighbours makes the individual infeasible.
+- **The repairs no longer undo each other.** The k-coverage repair ran after the
+  connectivity repair and could switch on a sensor out of reach. It runs first
+  now; both only switch candidates on.
+- **The random generation judges connectivity with the sink.** Two sensors
+  joined only through the sink were rejected, and a group out of its reach was
+  accepted.
+
+The stored P3 runs are unaffected: all 639 distinct individuals of the two P3
+experiments, and every item of their fronts, are feasible under the new rule.
+
+---
+
 ## [Unreleased] — Table 3 compares the three NSGA-III alike
 
 ### Fixed

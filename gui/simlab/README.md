@@ -387,6 +387,6 @@ Both are fixed at build time.
   11 / 10 and *expected* simulations is one population short.
 - **P4 cannot be launched**: the export writes neither `nodes`, `sink_base` nor
   `sojourns`. See [the problems](../../mo-engine/lib/problem/README.md#known-limitations).
-- **The editor has no field for P3's `g`**, which the engine does not read either.
+- **The editor has no field for P3's `g`**: an experiment runs with the default, 1.
 - **The *pm_tau* hint is inexact:** it is the probability of mutating the whole
   dwell-time vector, not each time.

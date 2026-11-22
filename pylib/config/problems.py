@@ -36,6 +36,20 @@ def parse_min_coverage_percentage(map: dict[str, Any]) -> float:
     return value
 
 
+def parse_g_required(map: dict[str, Any]) -> int:
+    """
+    Lê e valida g (`g_required`), o número mínimo de vizinhos de cada mote
+    instalado do P3, o sorvedouro incluído. Opcional: ausente, vale 1, o que a
+    conectividade ao sorvedouro já garante.
+    """
+    raw = map.get("g_required", 1)
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+        raise ValueError(
+            f"problem['g_required'] must be a whole number >= 1, got {raw!r}."
+        )
+    return raw
+
+
 class MobileNode:
     # Trajetória parametrizada de forma simbólica
     path_segments: list[tuple[str, str]]
@@ -144,7 +158,7 @@ class ProblemP3(HomogeneousProblem):
     candidates: list[Position]      # Q
     radius_of_cover: float          # R_cov
     k_required: int                 # k (min coverage degree)
-    g_required: int                 # g (min connectivity degree); not read by the engine
+    g_required: int                 # g (min neighbours of each mote, sink included); default 1
 
     def cast(map: dict[str, Any]) -> "ProblemP3":
         obj = ProblemP3()
@@ -155,6 +169,7 @@ class ProblemP3(HomogeneousProblem):
         obj.sink = Position(map["sink"])
         obj.radius_of_cover = map["radius_of_cover"]
         obj.k_required = map["k_required"]
+        obj.g_required = parse_g_required(map)
         obj.candidates = [Position(cand) for cand in map["candidates"]]
         obj.targets = [Position(tgt) for tgt in map["targets"]]
         return obj

@@ -17,7 +17,7 @@ does not yet enforce part of it, [Known Limitations](#known-limitations) says so
 | P0 | `p0_synthetic.py` | Runs in-process |
 | P1 | `p1_continuous_mobility.py` | Runs |
 | P2 | `p2_discrete_mobility.py` | Runs |
-| P3 | `p3_target_coverage.py` | Runs; the constraints are only partly enforced |
+| P3 | `p3_target_coverage.py` | Runs |
 | P4 | `p4_mobile_sink_collection.py` | **Does not run end to end** |
 
 ---
@@ -143,13 +143,22 @@ A static sensing coverage problem with explicit sensing targets and connectivity
 * Integer parameters:
 
   * $k$: required coverage degree for each target (JSON key `k_required`);
-  * $g$: required minimum communication degree for each deployed mote (**not implemented**: the value is not read).
+  * $g$: required minimum communication degree for each deployed mote (JSON
+    key `g_required`, optional, default 1; the sink counts as a neighbour).
 
 **Goal.**
 Determine the **smallest subset** $P \subset Q$ such that:
 
 1. Each target $\xi_h$ is covered by at least $k$ fixed motes;
-2. Each deployed mote has at least $g$ neighbors within communication range.
+2. Each deployed mote has at least $g$ neighbors within communication range;
+3. Every deployed mote reaches the sink over the communication graph.
+
+With $g = 1$ the second condition follows from the third.
+
+**Penalty.** An individual that violates a condition is not simulated. With
+the three deficits in $[0, 1]$ (share of motes cut off from the sink, missing
+covers over $k \cdot |\Xi|$, missing neighbours over $g \cdot |P|$) and $d$
+their mean, every objective is $10^9 (1 + d)$, as in P1 and P2.
 
 ---
 
@@ -495,13 +504,14 @@ The chromosome is the same as in P2: a binary mask over $Q$ and a MAC gene.
 
 | Operator | Pipeline |
 |---|---|
-| Random generation | The rooted growth of P2.1, redrawn up to 20 times until the mask is connected, $k$-covers every target and is new in the population. After that the last draw is accepted even if infeasible |
-| Crossover | Uniform mask crossover → connectivity repair → $k$-coverage repair; uniform MAC inheritance |
-| Mutation | Bit-flip mask mutation → connectivity repair → $k$-coverage repair; bit-flip MAC |
+| Random generation | The rooted growth of P2.1, redrawn up to 20 times until the mask is feasible (the three conditions, the sink included) and new in the population. After that the last draw is accepted, and penalised if infeasible |
+| Crossover | Uniform mask crossover → $k$-coverage repair → connectivity repair; uniform MAC inheritance |
+| Mutation | Bit-flip mask mutation → $k$-coverage repair → connectivity repair; bit-flip MAC |
 
 The $k$-coverage repair activates the candidates nearest to each deficient
-target. It runs **after** the connectivity repair and can disconnect the
-network again.
+target; the connectivity repair then activates paths to the sink. Both only
+activate, so the second keeps what the first achieved. No operator repairs a
+degree below $g$: the penalty does.
 
 ---
 
@@ -578,12 +588,8 @@ Where the code departs from the formulations above.
 
 **Problem 3**
 
-- `g_required` is never read, so the minimum degree is not enforced.
-- The adapter defines no penalty: an individual that violates connectivity or
-  $k$-coverage is simulated and competes on its objectives.
-- The $k$-coverage repair can break the connectivity restored just before it.
-- The feasibility test of the random generation checks connectivity among the
-  sensors, without the sink.
+- A degree below $g$ is penalised, not repaired, and the GUI has no field for
+  `g_required`.
 
 **Problem 4**
 
