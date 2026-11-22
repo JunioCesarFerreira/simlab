@@ -96,6 +96,15 @@ which is useful when full coverage is infeasible for the given $N$ and
 $R_{\text{com}}$. Individuals below $\alpha$ are rejected by
 `penalty_objectives` and never reach simulation.
 
+**Trajectories** (P1, P2, and the sink of P4). `is_closed` means the mote goes
+back from the end of its path to the start: when the segments do not already
+end where they begin, that return is a straight segment, sampled for the
+coverage and travelled in the simulation (`pylib/trajectory.py`). A round trip
+goes back along the path. An open path that is not a round trip starts over at
+its beginning. Each mote repeats its own path at its own period for the whole
+simulation: the positions file spans the least common multiple of the periods
+when that is shorter than the simulation, and the whole simulation otherwise.
+
 ---
 
 ## Problem 2 — Discrete Coverage with Mobility
@@ -608,11 +617,5 @@ Where the code departs from the formulations above.
 
 - A degree below $g$ is penalised, not repaired.
 
-**Trajectories (P1, P2, P4)**
-
-- `is_closed` is not used when the positions file is generated.
-- Cooja's Mobility plugin repeats every trajectory with the period of the
-  longest one, so a mote with a shorter trajectory waits at its end (decision
-  D7 of [CAMPAIGN_V2.md](../../../docs/markdown/CAMPAIGN_V2.md#3-decisions-before-launch)).
 
 ---

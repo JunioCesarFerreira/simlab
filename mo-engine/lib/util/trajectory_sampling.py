@@ -12,6 +12,7 @@ _ARC_REF_SAMPLES points before the actual sampling is performed.
 import math
 import numpy as np
 from pylib.config.problems import MobileNode
+from pylib.trajectory import path_segments
 
 # Each row is a bitset encoded as a plain Python int (arbitrary precision).
 # Bit j of row i is set iff candidate j is within radius R of sample point i.
@@ -80,7 +81,10 @@ def sample_trajectories(mobile_nodes: list[MobileNode], step: float) -> list[Poi
     points: list[Point2D] = []
 
     for mn in mobile_nodes:
-        for x_expr, y_expr in mn.path_segments:
+        # A closed path includes the return to its start, as the mote travels it.
+        segments = path_segments(mn.path_segments, getattr(mn, "is_closed", False),
+                                 getattr(mn, "is_round_trip", False))
+        for x_expr, y_expr in segments:
             length = _arc_length(x_expr, y_expr)
 
             # At least 2 points (the two endpoints); ceil ensures the step

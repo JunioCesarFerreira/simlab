@@ -1,6 +1,8 @@
 import logging
+import math
 import numpy as np
 from pylib.config.simulator import SimulationElements
+from pylib.trajectory import path_segments as travelled_segments
 
 def evaluate_function(expression: str, t_values: np.ndarray) -> np.ndarray:
     return np.array([eval(expression, {"t": t, "np": np}) for t in t_values])
@@ -29,10 +31,20 @@ def mote_order(simElements: SimulationElements) -> list[tuple[str, int]]:
 def generate_positions_from_json(
     simElements: SimulationElements, 
     output_filename: str = "positions.dat",
-    debug = False
+    debug = False,
+    duration_sec: float | None = None,
     ) -> tuple[list[tuple[float, float]], int]:
     """Write the positions file and return every mote's start position in
-    ``mote_order``, with the number of mobile motes."""
+    ``mote_order``, with the number of mobile motes.
+
+    With ``duration_sec``, each mobile mote repeats its own path. Cooja's
+    Mobility plugin replays the whole file with the period of its longest
+    trajectory, so a mote with a shorter path stood at its end until the
+    longest one finished. The file now spans a whole number of every mote's
+    periods (their least common multiple, plus the first point again, so the
+    replay joins) when that is shorter than the simulation, and the whole
+    simulation otherwise.
+    """
 
     order = mote_order(simElements)
     index_of = {key: i for i, key in enumerate(order)}
@@ -52,10 +64,11 @@ def generate_positions_from_json(
         mobile_trajectories = []
 
         for j, mote in enumerate(mobile_motes):
-            path_segments = mote["functionPath"]
             speed = mote["speed"]
             time_step = mote["timeStep"]
             is_round_trip = mote.get("isRoundTrip", False)
+            path_segments = travelled_segments(
+                mote["functionPath"], mote.get("isClosed", False), is_round_trip)
             
             if debug:
                 log = logging.getLogger(__name__)
@@ -97,7 +110,20 @@ def generate_positions_from_json(
             start[("mobile", j)] = (x_full[0], y_full[0])
             mobile_trajectories.append((index_of[("mobile", j)], x_full, y_full, time_step))
 
-        for step in range(2 * max_steps):
+        if duration_sec is not None and mobile_trajectories:
+            steps_of = {ts for *_, ts in mobile_trajectories}
+            horizon = max(math.ceil(duration_sec / ts) + 1 for ts in steps_of)
+            if len(steps_of) == 1:
+                cycle = math.lcm(*(len(xs) for _, xs, _, _ in mobile_trajectories)) + 1
+                horizon = min(horizon, cycle)
+            tiled = []
+            for mote_id, xs, ys, ts in mobile_trajectories:
+                repeat = np.arange(horizon) % len(xs)
+                tiled.append((mote_id, xs[repeat], ys[repeat], ts))
+            mobile_trajectories = tiled
+            max_steps = horizon
+
+        for step in range(max_steps if duration_sec is not None else 2 * max_steps):
             for mote_id, x_full, y_full, time_step in mobile_trajectories:
                 if step < len(x_full):
                     file.write(f"{mote_id} {step * time_step:.8f} {x_full[step]:.2f} {y_full[step]:.2f}\n")

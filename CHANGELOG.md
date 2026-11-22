@@ -5,6 +5,27 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Mobile motes move as their paths say
+
+### Fixed
+
+- **Each mobile mote repeats its own path for the whole simulation.** Cooja's
+  Mobility plugin replays the positions file with the period of its longest
+  trajectory, so a mote with a shorter path stood at its end until the longest
+  one finished (in the shared scenario, a 43-s path waited ~70 s per cycle).
+  The file spans the least common multiple of the periods when that is shorter
+  than the simulation, and the whole simulation otherwise: about 285 KB stored
+  per simulation instead of 2 KB for the stored scenarios.
+- **`is_closed` is honoured.** A closed path whose segments do not end where
+  they begin returns to its start in a straight line, in the coverage sampling
+  and in the simulation (`pylib/trajectory.py`). Five stored P2 mobile nodes are
+  closed and open; the others are ellipses, which close by themselves.
+
+The CSC files of 622 stored simulations regenerate byte-identical, and the
+first pass of every mobile mote in their positions files is unchanged.
+
+---
+
 ## [Unreleased] — The GUI launches P4 and labels what it shows
 
 ### Fixed

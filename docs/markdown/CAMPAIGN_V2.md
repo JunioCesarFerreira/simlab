@@ -172,14 +172,15 @@ is the default if nothing is said.
 - The truncation check of 2026-11-15 (12 simulations) is too small to justify a shorter
   window.
 
-**D7 — Mobility model [needs your choice].**
+**D7 — Mobility model [decided 2026-11-22: fixed].**
 
-- Cooja's Mobility plugin repeats every trajectory with the period of the **longest** one
-  (`WRAP_MOVES`). In the shared scenario that is ~111 s, so the 43-s mobile node stands
-  still ~70 s per cycle and moves slower than its nominal 5 m/s on average.
-  `is_closed` is ignored.
-- Recommended: declare it as a limitation (it applies equally to every cell).
-- Alternative: write one trajectory per node padded to the common period before C0.
+- Cooja's Mobility plugin repeats the positions file with the period of the **longest**
+  trajectory (`WRAP_MOVES`). In the shared scenario that was ~111 s, so the 43-s mobile node
+  stood still ~70 s per cycle and moved slower than its nominal 5 m/s on average, and
+  `is_closed` was ignored.
+- Fixed: each mote repeats its own path for the whole simulation, and a closed path returns
+  to its start ([problems](../../mo-engine/lib/problem/README.md#problem-1--continuous-coverage-with-mobility)).
+  Runs before the fix are not comparable on mobility.
 
 ---
 
@@ -364,7 +365,6 @@ at these sample sizes. "No difference" is claimed only with TOST on ΔHV, with m
 - **Selection:** NSGA-III mating uses a rank tournament (Deb & Jain use random
   selection).
 - **Coverage:** checked on trajectory samples every R/2.
-- **Mobility:** shared period of the mobility plugin (D7), unless fixed.
 - **Delivery-conditional metrics:** latency, power and hops describe only delivered
   reports; `node_coverage` is shown next to them.
 - **P1 crossover:** if D3 is not fixed, the defect is stated.

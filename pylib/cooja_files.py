@@ -17,7 +17,9 @@ def convert_simulation_files(
     # dos IDs: o sorvedouro (sink.c) primeiro, fixo ou móvel.
     positions, n_mobile = generate_positions_from_json(
         config["simulationElements"], 
-        output_filename=outpos
+        output_filename=outpos,
+        # Cada mote móvel repete a própria trajetória até o fim da simulação.
+        duration_sec=float(config["duration"]) * 60.0,
     )
     
     # Se não motes moveis remove o arquivo positions.dat pois este não é necessário

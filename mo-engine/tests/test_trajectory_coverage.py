@@ -339,3 +339,30 @@ def test_p2_adapter_agrees_with_p1_sink_included(seed):
     assert build_test_adapter(problem).coverage_score(mask) == pytest.approx(
         p1.check_coverage(active)
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# A closed path is covered all the way round
+# ──────────────────────────────────────────────────────────────────────────────
+
+class _Mote:
+    def __init__(self, segments, closed, round_trip=False):
+        self.path_segments = segments
+        self.is_closed = closed
+        self.is_round_trip = round_trip
+
+
+def test_the_return_of_a_closed_path_is_sampled():
+    l_shape = [("10 * t", "0"), ("10", "10 * t")]
+
+    open_points = sample_trajectories([_Mote(l_shape, closed=False)], step=1.0)
+    closed_points = sample_trajectories([_Mote(l_shape, closed=True)], step=1.0)
+
+    on_the_diagonal = [p for p in closed_points if 0.5 < p[0] < 9.5 and abs(p[0] - p[1]) < 1e-9]
+    assert on_the_diagonal and not [p for p in open_points if 0.5 < p[0] < 9.5 and abs(p[0] - p[1]) < 1e-9]
+
+
+def test_a_geometrically_closed_path_is_unchanged():
+    ellipse = [("5 * np.cos(2 * np.pi * t)", "3 * np.sin(2 * np.pi * t)")]
+    assert (sample_trajectories([_Mote(ellipse, closed=True)], step=0.5)
+            == sample_trajectories([_Mote(ellipse, closed=False)], step=0.5))
