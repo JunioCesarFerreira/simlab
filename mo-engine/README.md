@@ -161,8 +161,8 @@ What a resume restores depends on the strategy:
 
 | Strategy | On resume |
 |---|---|
-| NSGA-II / NSGA-III and their variants | Population order, survivors and RNG state, so the search continues as it would have. See the known issues below for the evidence |
-| `batch` | Its single generation. Constraint-penalised chromosomes are re-labelled as `refused`, with the worst vector instead of their penalty |
+| NSGA-II / NSGA-III and their variants | Population order, survivors, RNG state and the evidence behind each vector, so the run continues as it would have |
+| `batch` | Its single generation, with the penalties written at enqueue and their evidence |
 | `usl_benchmark` | The last wave and the recorded workload |
 | `random_search` | The population, the archive and the RNG state, so the run continues as it would have ([details](lib/strategy/README.md#random-search)) |
 
@@ -176,9 +176,6 @@ What a resume restores depends on the strategy:
 - **Cancelling a scalability benchmark does not stop it.** `usl_benchmark` does
   not read the cancellation: it runs every wave and then overwrites `Cancelled`
   with `Done`.
-- **An NSGA resume loses the evidence of what it did not simulate.** An
-  infeasible, analytical or reused individual of the generation in flight is
-  rewritten as `unknown` and used, so a penalty vector reads as a measurement.
 - **An NSGA restart during an enqueue is not detected.** The generation is
   resumed as a fragment: it can wait for ever or be evaluated with individuals
   missing.

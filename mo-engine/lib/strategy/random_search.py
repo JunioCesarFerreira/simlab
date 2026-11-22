@@ -35,6 +35,7 @@ from lib.strategy.completeness import (
     ReplicaGate,
     ReplicaPolicy,
     annotate,
+    decided_at_enqueue,
     evaluation_of,
     front_validity,
     front_warning,
@@ -314,7 +315,7 @@ class RandomSearchStrategy(EngineStrategy):
                 record = document.get("completeness")
                 if in_flight:
                     self._current_population.append(genome)
-                    if not (stored and self._decided_at_enqueue(record)):
+                    if not (stored and decided_at_enqueue(record)):
                         self._genome_objectives_cache.pop(h, None)
                         self._genome_completeness_cache.pop(h, None)
                         pending += 1
@@ -360,14 +361,6 @@ class RandomSearchStrategy(EngineStrategy):
             # Nothing to simulate, and killed before the enqueue could close it:
             # the master closes only generations that have simulations.
             self.mongo.generation_repo.mark_done(self._generation_id)
-
-    @staticmethod
-    def _decided_at_enqueue(record: Optional[dict]) -> bool:
-        """Whether a stored vector was written without simulations of its generation."""
-        if not record:
-            return True     # written before the evidence was recorded
-        return bool(record.get("reused")) or record.get("state") in (
-            STATE_ANALYTICAL, STATE_INFEASIBLE)
 
     # ------------------------------
     # Watchers

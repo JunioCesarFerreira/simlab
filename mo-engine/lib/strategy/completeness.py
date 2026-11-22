@@ -265,6 +265,21 @@ def without_simulations(state: str, reason: str) -> dict:
     return {"state": state, "reason": reason, "expected": 0, "observed": 0}
 
 
+def decided_at_enqueue(record: Optional[dict]) -> bool:
+    """Whether a stored vector was written without simulations of its generation.
+
+    What a resume has to know. Such a vector (reused, analytical, infeasible)
+    has nothing to be derived from, so it is read back with its evidence.
+    Anything else rests on simulations and is derived from them again: the
+    stored write may be half done, and a refusal is only known to the code
+    that derives it.
+    """
+    if not record:
+        return True     # written before the evidence was recorded
+    return bool(record.get("reused")) or record.get("state") in (
+        STATE_ANALYTICAL, STATE_INFEASIBLE)
+
+
 def finite_or_none(value: Any) -> Optional[float]:
     """``value`` as a float when it is a finite number, else ``None``."""
     if value is None or isinstance(value, str):

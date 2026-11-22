@@ -13,7 +13,7 @@
 > | 4. Parâmetros padrão | Mutação corrigida no wizard sintético (`1.0` e `1/n`); o domínio de SCH1 continua [-5,5] e difere do notebook |
 > | 5. GD e frente esparsa | Corrigido: GD analítico e amplitude teórica; a definição continua diferente da do notebook |
 > | 6. Caminhos de HV | Corrigido para benchmarks; no WSN a referência ainda é de cada execução, e os CLIs medem descendentes |
-> | 7. Sementes e retomada | Corrigido na trajetória do NSGA-II/III e na [busca aleatória](../../mo-engine/lib/strategy/README.md#random-search); a retomada do NSGA ainda [perde a evidência do que não simulou](../../mo-engine/README.md#known-issues) |
+> | 7. Sementes e retomada | Corrigido na trajetória do NSGA-II/III e na [busca aleatória](../../mo-engine/lib/strategy/README.md#random-search), com a [evidência de cada vetor preservada na retomada](../../mo-engine/README.md#startup) |
 > | 8. Seleção final | Corrigido |
 > | 9. Defeitos do endpoint | Corrigido na API; os CLIs ainda [mapeiam objetivos por posição](../../pareto-analysis/README.md#known-issues) |
 >

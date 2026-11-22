@@ -5,6 +5,23 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — A resume keeps the evidence behind every vector
+
+### Fixed
+
+- **NSGA-II/III no longer turn a penalty into a measurement on resume.** The
+  infeasible, analytical and reused individuals of the generation in flight
+  were rewritten as `unknown` and used. They are read back with their own
+  evidence, and what rests on simulations is derived from them again, so a
+  refusal (a 1e12 placeholder) stays refused.
+- **A resumed batch keeps its penalties.** They were not read back, and were
+  replaced by the refusal placeholder.
+- A resumed run now stores the same documents and the same front as one never
+  interrupted. No experiment of these strategies in the reference database was
+  ever resumed, so no stored result is affected.
+
+---
+
 ## [Unreleased] — Placement compares like with like, and a benchmark runs at N
 
 ### Fixed

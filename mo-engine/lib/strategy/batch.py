@@ -32,6 +32,7 @@ from lib.strategy.completeness import (
     ReplicaGate,
     ReplicaPolicy,
     annotate,
+    decided_at_enqueue,
     evaluation_of,
     front_validity,
     front_warning,
@@ -188,6 +189,7 @@ class BatchStrategy(EngineStrategy):
                 "[Batch] Experiment %s already has generation %s (status=%s); resuming.",
                 self._exp_id, self._generation_id, status,
             )
+            self._restore_decided_at_enqueue()
             self._start_watcher()
             self._start_generation_poll()
             if status in (EnumStatus.DONE, EnumStatus.ERROR):
@@ -228,6 +230,33 @@ class BatchStrategy(EngineStrategy):
                 t.join(timeout=1.0)
         self._watch_thread = None
         self._sim_watch_thread = None
+
+    # ------------------------------
+    # Resume
+    # ------------------------------
+    def _restore_decided_at_enqueue(self) -> None:
+        """Read back the penalties written at enqueue, with their evidence.
+
+        They have no simulations, so the handler would find nothing for them
+        and put the refusal placeholder in their place. What does rest on
+        simulations is left to the handler, which derives it from them.
+        """
+        stored = {
+            document["individual_id"]: document
+            for document in self.mongo.individual_repo.find_by_generation(self._generation_id)
+        }
+        simulated: set[str] = set()
+        for genome in self._chromosomes:
+            genome_hash = genome.get_hash()
+            document = stored.get(genome_hash) or {}
+            vector, record = document.get("objectives"), document.get("completeness")
+            if vector and decided_at_enqueue(record):
+                # The goals are ±1: the same product converts both ways.
+                self._map_genome_objectives[genome] = self._objectives_list_to_original(vector)
+                self._evidence[genome_hash] = record
+            else:
+                simulated.add(genome_hash)
+        self._count_sims_inserted = len(simulated) * len(self._sim_rand_seeds)
 
     # ------------------------------
     # Watchers

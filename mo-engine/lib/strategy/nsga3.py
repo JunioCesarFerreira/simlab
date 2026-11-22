@@ -39,6 +39,7 @@ from lib.strategy.completeness import (
     ReplicaGate,
     ReplicaPolicy,
     annotate,
+    decided_at_enqueue,
     evaluation_of,
     front_validity,
     front_warning,
@@ -426,7 +427,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         current_index = int(current_generation["index"])
         self._restore_selection_state(current_generation)
         self._current_population, current_map, pending_individuals = self._load_generation_population(
-            current_generation["_id"]
+            current_generation["_id"], in_flight=True
         )
         self._map_genome_objectives.update(current_map)
         self._count_sims_inserted = pending_individuals * len(self._sim_rand_seeds)
@@ -505,9 +506,14 @@ class NSGA3LoopStrategy(EngineStrategy):
 
             stored = document.get("objectives")
             if stored:
-                objectives_map[chromosome] = self._objectives_list_to_minimization(
+                vector = self._objectives_list_to_minimization(
                     [float(value) for value in stored]
                 )
+                objectives_map[chromosome] = vector
+                # The cache write follows the individual's, so it can be missing.
+                self._genome_objectives_cache.setdefault(individual_id, vector)
+                self._genome_completeness_cache.setdefault(
+                    individual_id, document.get("completeness"))
                 continue
             cached = self._genome_objectives_cache.get(individual_id)
             if cached:
@@ -518,7 +524,15 @@ class NSGA3LoopStrategy(EngineStrategy):
     def _load_generation_population(
         self,
         generation_id: ObjectId,
+        *,
+        in_flight: bool = False,
     ) -> tuple[list[Chromosome], dict[Chromosome, list[float]], int]:
+        """A generation's population, with the vectors that stand.
+
+        ``in_flight`` is the generation being resumed: there only what was
+        decided at enqueue stands, with the evidence the handler will write
+        back (see ``decided_at_enqueue``).
+        """
         individuals = self.mongo.individual_repo.find_by_generation(generation_id)
         if not individuals:
             raise RuntimeError(f"Cannot resume generation {generation_id}: no individuals were found.")
@@ -540,10 +554,21 @@ class NSGA3LoopStrategy(EngineStrategy):
             population.append(chromosome)
 
             individual_objectives = ind.get("objectives")
+            genome_hash, record = ind["individual_id"], ind.get("completeness")
+            if in_flight:
+                if not (individual_objectives and decided_at_enqueue(record)):
+                    self._genome_objectives_cache.pop(genome_hash, None)
+                    self._genome_completeness_cache.pop(genome_hash, None)
+                    pending_individuals += 1
+                    continue
+                self._generation_completeness[genome_hash] = record
             if individual_objectives:
-                objectives_map[chromosome] = self._objectives_list_to_minimization(
+                vector = self._objectives_list_to_minimization(
                     [float(value) for value in individual_objectives]
                 )
+                objectives_map[chromosome] = vector
+                self._genome_objectives_cache.setdefault(genome_hash, vector)
+                self._genome_completeness_cache.setdefault(genome_hash, record)
                 continue
 
             cache_objectives = self._genome_objectives_cache.get(ind["individual_id"])
