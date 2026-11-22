@@ -1,5 +1,5 @@
 import type { ProblemDraft } from '../types/problem'
-import { hasCoverageConstraint } from '../types/problem'
+import { DEFAULT_P4, hasCoverageConstraint } from '../types/problem'
 
 export type ValidationError = { field: string; message: string }
 
@@ -26,6 +26,28 @@ export function validateProblem(draft: ProblemDraft): ValidationError[] {
   for (const c of draft.candidates) {
     if (c.x < xmin || c.x > xmax || c.y < ymin || c.y > ymax)
       errors.push({ field: 'candidates', message: `Candidate (${c.x},${c.y}) is outside region` })
+  }
+  if (draft.name === 'problem3') {
+    const g = draft.gRequired ?? 1
+    if (!Number.isInteger(g) || g < 1)
+      errors.push({ field: 'g_required', message: 'g must be a whole number ≥ 1' })
+  }
+  if (draft.name === 'problem4') {
+    const s = { ...DEFAULT_P4, ...draft.p4 }
+    if (draft.targets.length === 0) errors.push({ field: 'targets', message: 'P4 needs at least one sensor mote' })
+    if (draft.candidates.length === 0) errors.push({ field: 'candidates', message: 'P4 needs at least one stop besides the base' })
+    for (const key of ['initialEnergy', 'bufferCapacity', 'speed', 'timeStep'] as const) {
+      if (!(s[key] > 0)) errors.push({ field: 'p4', message: `${key} must be > 0` })
+    }
+    if (!(s.dataRate >= 0)) errors.push({ field: 'p4', message: 'dataRate must be ≥ 0' })
+    if (!Number.isInteger(s.maxRouteLength) || s.maxRouteLength < 2)
+      errors.push({ field: 'p4', message: 'maxRouteLength must be a whole number ≥ 2' })
+    if (!(s.tauMin >= 0 && s.tauMin <= s.tauMax))
+      errors.push({ field: 'p4', message: 'dwell bounds must satisfy 0 ≤ min ≤ max' })
+  }
+  for (const t of draft.targets) {
+    if (t.x < xmin || t.x > xmax || t.y < ymin || t.y > ymax)
+      errors.push({ field: 'targets', message: `Point (${t.x},${t.y}) is outside region` })
   }
   for (const m of draft.mobileNodes) {
     if (!m.name.trim()) errors.push({ field: 'mobile_nodes', message: 'Mobile node name required' })

@@ -463,6 +463,7 @@ import { isPenalized } from "../types/simlab";
 import { effectiveSeedAggregator, formatSeedAggregator } from "../lib/seedAggregator";
 import { computeRanks } from "../utils/nonDominatedSort";
 import { useParetoRanks } from "../composables/useParetoRanks";
+import { plannedGenerations, plannedSimulations } from "../services/generationTotals";
 
 const props = defineProps<{ id: string }>();
 const store = useExperimentDetailStore();
@@ -668,11 +669,11 @@ const finishedCount = computed(
   () => sortedGenerations.value.filter((g) => g.status === "Done").length,
 );
 
-const totalGenerations = computed(
-  () =>
-    store.experiment?.parameters?.algorithm?.number_of_generations ??
-    store.experiment?.generations.length ??
-    0,
+const totalGenerations = computed(() =>
+  plannedGenerations(
+    store.experiment?.parameters?.algorithm,
+    store.experiment?.generations.length ?? 0,
+  ),
 );
 
 const progressPct = computed(() => {
@@ -718,12 +719,9 @@ const totalSimulations = computed(() => {
 const expectedSimulations = computed<number | null>(() => {
   const exp = store.experiment;
   if (!exp) return null;
-  const popSize = exp.parameters.algorithm?.population_size ?? 0;
-  const numGens = exp.parameters.algorithm?.number_of_generations ?? 0;
   const seedsCount =
     simulationSeeds.value.length || exp.parameters.simulation?.random_seeds_count || 0;
-  if (!popSize || !numGens || !seedsCount) return null;
-  return popSize * numGens * seedsCount;
+  return plannedSimulations(exp.parameters.algorithm, seedsCount);
 });
 
 // Inline name editing

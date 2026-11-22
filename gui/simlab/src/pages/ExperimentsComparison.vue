@@ -106,7 +106,7 @@
                 <td>{{ fmtSeedAggregators(result.expB) }}</td>
               </tr>
               <tr>
-                <td>Sim. duration (s)</td>
+                <td>Sim. duration (min)</td>
                 <td>{{ fmtParam(result.expA.parameters.simulation?.duration) }}</td>
                 <td>{{ fmtParam(result.expB.parameters.simulation?.duration) }}</td>
               </tr>

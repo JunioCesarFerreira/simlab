@@ -51,7 +51,7 @@ const allTools: { id: EditorTool; icon: string; label: string; visibleWhen?: () 
   { id: 'select',           icon: '↖',  label: 'Select / Move  [S]' },
   { id: 'place-sink',       icon: '⊕',  label: 'Place Sink  [K]' },
   { id: 'place-candidate',  icon: '●',  label: 'Place Candidate  [C]' },
-  { id: 'place-target',     icon: '◇',  label: 'Place Target  [T]', visibleWhen: () => targetsEnabled.value },
+  { id: 'place-target',     icon: '◇',  label: 'Place Target (P3) / Sensor mote (P4)  [T]', visibleWhen: () => targetsEnabled.value },
   { id: 'place-relay',      icon: '⧫',  label: 'Place Relay  [N] — problem1 chromosome', visibleWhen: () => relaysEnabled.value },
   { id: 'chromosome-pick',  icon: '▣',  label: 'Chromosome Pick  [X] — click candidates to toggle mask (p2/p3) or append route stop (p4)', visibleWhen: () => chromosomePickEnabled.value },
   { id: 'draw-line',        icon: '╱',  label: 'Draw Polyline  [L] — right-click/Esc to finish' },

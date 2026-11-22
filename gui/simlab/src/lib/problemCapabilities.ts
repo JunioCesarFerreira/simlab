@@ -93,8 +93,8 @@ export const PROBLEM_CAPABILITIES: Record<string, ProblemCapabilities> = {
 
   problem3: {
     crossoverMethods: [],
-    fixedCrossoverLabel: 'uniform mask + connectivity repair (fixed by construction)',
-    fixedMutationLabel: 'bit-flip mask + bit-flip MAC, with connectivity repair',
+    fixedCrossoverLabel: 'uniform mask + k-coverage and connectivity repair (fixed by construction)',
+    fixedMutationLabel: 'bit-flip mask + bit-flip MAC, with k-coverage and connectivity repair',
     supportsCoverageRepair: false,
     extraParams: [],
   },
@@ -109,7 +109,7 @@ export const PROBLEM_CAPABILITIES: Record<string, ProblemCapabilities> = {
         key: 'pm_tau',
         label: 'Tau mutation probability (pm_tau)',
         default: 0.5, min: 0, max: 1, step: 0.05,
-        hint: 'Probability of mutating each dwell time (tau).',
+        hint: 'Probability that a child gets Gaussian noise on its whole dwell-time vector (tau).',
       },
       {
         key: 'sigma_tau',

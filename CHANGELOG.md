@@ -5,6 +5,27 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — The GUI launches P4 and labels what it shows
+
+### Fixed
+
+- **P4 can be designed and launched in the GUI.** The export wrote none of the
+  fields P4 needs. The sink is the base, the candidates are the stops and the
+  targets the sensor motes; a form takes the scalars. The export writes the
+  sojourns (base first, any stop reachable from any other, the motes each stop
+  sees), and a P4 chromosome is exported with the base at both ends. Import does
+  the reverse. `gui/simlab/src/services/__tests__/fixtures/p4-export.json` is
+  checked by the GUI's tests and run by the engine's.
+- **P3's `g`** has a field, exported as `g_required`.
+- **Simulated duration is labelled in minutes**, which it is: launch wizard,
+  comparison table and benchmark form said seconds.
+- **The totals count generation 0.** *Completed generations* read 11 / 10 at the
+  end of a 10-step run, and *expected* simulations was one population short.
+- The *pm_tau* hint says what it is: the probability that a child's whole
+  dwell-time vector gets noise.
+
+---
+
 ## [Unreleased] — P4 runs
 
 ### Fixed

@@ -62,7 +62,7 @@
       </label>
 
       <label class="field">
-        <span>Simulated duration (s)</span>
+        <span>Simulated duration (min)</span>
         <input
           v-model.number="duration"
           type="number"

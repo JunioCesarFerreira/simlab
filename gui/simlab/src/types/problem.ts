@@ -40,8 +40,46 @@ export function hasCandidates(name: string): boolean {
   return name !== 'problem1'
 }
 
+/** P3's sensing targets, or P4's sensor motes: points the user places. */
 export function hasTargets(name: string): boolean {
-  return name === 'problem3'
+  return name === 'problem3' || name === 'problem4'
+}
+
+/** What the placed points are called: P4's are the motes the sink collects from. */
+export function targetsLabel(name: string): string {
+  return name === 'problem4' ? 'Sensor motes' : 'Targets'
+}
+
+/**
+ * P4's scalars. The sink is the base, the candidates are the stops and the
+ * targets are the sensor motes; see exportProblem for how they map onto
+ * pylib's ProblemP4.
+ */
+export type P4Settings = {
+  initialEnergy: number
+  bufferCapacity: number
+  /** Data units per second, in the unit of bufferCapacity. */
+  dataRate: number
+  /** m/s */
+  speed: number
+  /** s */
+  timeStep: number
+  /** Stops in a route, the base at both ends included. */
+  maxRouteLength: number
+  /** Dwell time bounds, s. */
+  tauMin: number
+  tauMax: number
+}
+
+export const DEFAULT_P4: P4Settings = {
+  initialEnergy: 1000,
+  bufferCapacity: 4096,
+  dataRate: 1.61,
+  speed: 10,
+  timeStep: 1,
+  maxRouteLength: 20,
+  tauMin: 0,
+  tauMax: 200,
 }
 
 /**
@@ -62,6 +100,10 @@ export type ProblemDraft = {
   radiusOfInter: number
   radiusOfCover: number
   kRequired: number
+  /** P3: minimum neighbours of each deployed mote, the sink included. Absent → 1. */
+  gRequired?: number
+  /** P4 only. Absent → DEFAULT_P4. */
+  p4?: P4Settings
   /** alpha: minimum trajectory coverage level, in percent [0, 100]. P1/P2 only. */
   minCoveragePercentage: number
   region: Region
@@ -105,7 +147,8 @@ export type ChromosomeP3Draft = {
 export type ChromosomeP4Draft = {
   kind: 'problem4'
   macProtocol: MacProtocol
-  /** Indices into draft.candidates. */
+  /** Indices into draft.candidates. The base is implicit at both ends: the
+   *  exported route is [0, ...route + 1, 0], sojourn 0 being the base. */
   route: number[]
   /** Same length as route. */
   sojournTimes: number[]
@@ -163,6 +206,26 @@ export type ExportedProblem = {
   candidates?: Array<[number, number]>
   number_of_relays?: number
   mobile_nodes: ExportedMobileNode[]
+  /** P3 */
+  g_required?: number
+  /** P4: see exportProblem */
+  nodes?: Array<[number, number]>
+  sink_base?: [number, number]
+  sojourns?: ExportedSojourn[]
+  initial_energy?: number
+  buffer_capacity?: number
+  data_rate?: number
+  speed?: number
+  time_step?: number
+  max_route_length?: number
+  tau_bounds?: [number, number]
+}
+
+export type ExportedSojourn = {
+  id: number
+  position: [number, number]
+  adjacency: number[]
+  visibleNodes: number[]
 }
 
 export type ExportedProblemFile = {

@@ -606,13 +606,7 @@ Where the code departs from the formulations above.
 
 **Problem 3**
 
-- A degree below $g$ is penalised, not repaired, and the GUI has no field for
-  `g_required`.
-
-**Problem 4**
-
-- The GUI's problem export does not write the fields P4 needs (`nodes`,
-  `sink_base`, `sojourns`, …).
+- A degree below $g$ is penalised, not repaired.
 
 **Trajectories (P1, P2, P4)**
 

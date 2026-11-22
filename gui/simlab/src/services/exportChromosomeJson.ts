@@ -32,12 +32,14 @@ export function exportChromosome(chrom: ChromosomeDraft): ExportedChromosomeFile
     }
   }
 
+  // The engine's route starts and ends at the base, sojourn 0; candidate j is
+  // sojourn j + 1. The base is left without a dwell.
   return {
     problem_name,
     chromosome: {
       mac_protocol: macGene(chrom.macProtocol),
-      route: [...chrom.route],
-      sojourn_times: [...chrom.sojournTimes],
+      route: [0, ...chrom.route.map(i => i + 1), 0],
+      sojourn_times: [0, ...chrom.sojournTimes, 0],
     },
   }
 }

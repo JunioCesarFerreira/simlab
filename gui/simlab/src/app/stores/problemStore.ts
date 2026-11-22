@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import { nanoid } from 'nanoid'
-import type { ProblemDraft, SinkPoint, MobileRouteDraft, DraftSegment, Region, TargetPoint, ChromosomeDraft, MacProtocol, RelayPoint } from '../../types/problem'
+import type { ProblemDraft, SinkPoint, MobileRouteDraft, DraftSegment, Region, TargetPoint, ChromosomeDraft, MacProtocol, RelayPoint, P4Settings } from '../../types/problem'
+import { DEFAULT_P4 } from '../../types/problem'
 export type { ProblemDraft }
 import { saveDraft, loadDraft as loadSavedDraft } from '../../services/persistence'
 
@@ -12,6 +13,8 @@ function createDefaultDraft(): ProblemDraft {
     radiusOfInter: 200,
     radiusOfCover: 90,
     kRequired: 1,
+    gRequired: 1,
+    p4: { ...DEFAULT_P4 },
     minCoveragePercentage: 100,
     region: [-150, -150, 150, 150],
     sink: null,
@@ -52,7 +55,11 @@ export const useProblemStore = defineStore('problem', () => {
     draft.value = { ...createDefaultDraft(), ...incoming }
   }
 
-  function updateMeta(fields: Partial<Pick<ProblemDraft, 'name' | 'radiusOfReach' | 'radiusOfInter' | 'radiusOfCover' | 'kRequired' | 'minCoveragePercentage' | 'region' | 'numSensors'>>) {
+  function updateP4(fields: Partial<P4Settings>) {
+    draft.value.p4 = { ...DEFAULT_P4, ...draft.value.p4, ...fields }
+  }
+
+  function updateMeta(fields: Partial<Pick<ProblemDraft, 'name' | 'radiusOfReach' | 'radiusOfInter' | 'radiusOfCover' | 'kRequired' | 'gRequired' | 'minCoveragePercentage' | 'region' | 'numSensors'>>) {
     const nameChanging = fields.name && fields.name !== draft.value.name
     Object.assign(draft.value, fields)
     if (nameChanging) {
@@ -266,6 +273,7 @@ export const useProblemStore = defineStore('problem', () => {
     reset,
     loadDraft,
     updateMeta,
+    updateP4,
     setSink,
     addCandidate,
     removeCandidate,

@@ -146,9 +146,15 @@ Go to **Problems** (`/problems`). The canvas editor lets you:
   (interference), `radiusOfCover` (sensing).
 - Add **mobile nodes** with parametric routes (line, ellipse, or custom expression).
 - Choose the **problem variant** (`problem1`–`problem4`) which governs which
-  elements are required. Only P1–P3 can run: the export does not write what P4
-  needs (see [Known issues](#known-issues)).
-- Set the **coverage level α** (P1, P2) and the coverage degree **k** (P3).
+  elements are required.
+- Set the **coverage level α** (P1, P2), and the coverage degree **k** and the
+  minimum neighbours **g** (P3).
+- For **P4**, the sink is the base, the candidates are the stops and the
+  targets (◇) the sensor motes; the form takes speed, time step, maximum route
+  length, dwell bounds, data rate, buffer and initial energy. The export writes
+  the sojourns: the base first, any stop reachable from any other, and the motes
+  each stop sees within the radius of reach. A P4 chromosome lists stops only;
+  it is exported with the base at both ends.
 
 **Saving problems:** use the *Problems* panel (toolbar button) to persist the
 current design to the server. Saved problems can be loaded or deleted.
@@ -379,14 +385,4 @@ Both are fixed at build time.
 
 ## Known issues
 
-- **Simulated duration is in minutes, labelled as seconds**: in the wizard
-  (step 3), in the comparison table (*Sim. duration (s)*) and in the benchmark
-  form (*Simulated duration (s)*). The value is stored and used as minutes.
-- **The totals do not count generation 0.** A run has
-  `number_of_generations + 1` generations, so *Completed generations* can read
-  11 / 10 and *expected* simulations is one population short.
-- **P4 cannot be launched**: the export writes neither `nodes`, `sink_base` nor
-  `sojourns`. See [the problems](../../mo-engine/lib/problem/README.md#known-limitations).
-- **The editor has no field for P3's `g`**: an experiment runs with the default, 1.
-- **The *pm_tau* hint is inexact:** it is the probability of mutating the whole
-  dwell-time vector, not each time.
+None known.
