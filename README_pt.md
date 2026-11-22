@@ -522,7 +522,6 @@ resultado deve ser lido. Cada um está descrito no documento indicado.
 | Telemetria | A varredura periódica não repete coletas `unavailable`/`failed` | [Métricas de execução](docs/markdown/RUNTIME_METRICS.md#known-issues) |
 | API | `GET /files/simulations/{id}/topology` responde 500 | [API REST](rest-api/README.md#known-issues) |
 | Indicadores | As CLIs medem descendentes; a GUI mede sobreviventes por padrão | [pareto-analysis](pareto-analysis/README.md#known-issues) |
-| Baseline | Duas simulações podem ser enviadas ao mesmo container ao mesmo tempo | [Baseline](baseline/README.md#known-issues) |
 | Tabela 3 | `regenerate_table3.py` falha ao importar com a versão fixada do DEAP | [Benchmark](experiments/external-nsga3-benchmark/README.md#known-issues) |
 
 ---

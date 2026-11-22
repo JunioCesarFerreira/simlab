@@ -1,7 +1,8 @@
 # Script-based baseline orchestrator (§5.6 of the SimLab paper).
 #
 # Launches a fixed number of Cooja worker containers in parallel, exposing
-# SSH on incremental host ports.  There is intentionally NO mo-engine,
+# SSH on incremental host ports of 127.0.0.1 only: the image's login is
+# root/root, and run_baseline.sh connects to localhost.  There is intentionally NO mo-engine,
 # NO master-node, NO REST API, NO MongoDB, and NO Change Streams.
 #
 # Inputs are pushed via scp/docker cp by run_baseline.sh; outputs are
@@ -17,7 +18,7 @@ services:
     container_name: baseline_cooja1
     restart: "no"
     ports:
-      - "12231:22"
+      - "127.0.0.1:12231:22"
     networks: [ baseline-net ]
     labels:
       - "baseline.role=worker"
@@ -28,7 +29,7 @@ services:
     container_name: baseline_cooja2
     restart: "no"
     ports:
-      - "12232:22"
+      - "127.0.0.1:12232:22"
     networks: [ baseline-net ]
     labels:
       - "baseline.role=worker"
@@ -39,7 +40,7 @@ services:
     container_name: baseline_cooja3
     restart: "no"
     ports:
-      - "12233:22"
+      - "127.0.0.1:12233:22"
     networks: [ baseline-net ]
     labels:
       - "baseline.role=worker"
@@ -50,7 +51,7 @@ services:
     container_name: baseline_cooja4
     restart: "no"
     ports:
-      - "12234:22"
+      - "127.0.0.1:12234:22"
     networks: [ baseline-net ]
     labels:
       - "baseline.role=worker"
@@ -61,7 +62,7 @@ services:
     container_name: baseline_cooja5
     restart: "no"
     ports:
-      - "12235:22"
+      - "127.0.0.1:12235:22"
     networks: [ baseline-net ]
     labels:
       - "baseline.role=worker"
@@ -72,7 +73,7 @@ services:
     container_name: baseline_cooja6
     restart: "no"
     ports:
-      - "12236:22"
+      - "127.0.0.1:12236:22"
     networks: [ baseline-net ]
     labels:
       - "baseline.role=worker"
@@ -83,7 +84,7 @@ services:
     container_name: baseline_cooja7
     restart: "no"
     ports:
-      - "12237:22"
+      - "127.0.0.1:12237:22"
     networks: [ baseline-net ]
     labels:
       - "baseline.role=worker"
@@ -94,7 +95,7 @@ services:
     container_name: baseline_cooja8
     restart: "no"
     ports:
-      - "12238:22"
+      - "127.0.0.1:12238:22"
     networks: [ baseline-net ]
     labels:
       - "baseline.role=worker"
@@ -105,7 +106,7 @@ services:
     container_name: baseline_cooja9
     restart: "no"
     ports:
-      - "12239:22"
+      - "127.0.0.1:12239:22"
     networks: [ baseline-net ]
     labels:
       - "baseline.role=worker"
@@ -116,7 +117,7 @@ services:
     container_name: baseline_cooja10
     restart: "no"
     ports:
-      - "12240:22"
+      - "127.0.0.1:12240:22"
     networks: [ baseline-net ]
     labels:
       - "baseline.role=worker"

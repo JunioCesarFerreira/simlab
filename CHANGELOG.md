@@ -5,6 +5,28 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — The baseline runs one simulation per container
+
+### Fixed
+
+- **The baseline no longer sends a simulation to a busy container.** When any
+  run ended, the next simulation went to the next container in the round-robin,
+  busy or not. Two JVMs then shared a directory: reproduced with real Cooja runs,
+  3 of 5 logs differed from the same bundle run alone. Each container now takes
+  the next simulation only once its own has ended.
+- **A run that hits `SIM_TIMEOUT_SEC` is stopped.** The limit ended the local
+  `ssh` only, and the JVM ran on into the next simulation and past the end of
+  the script. It is applied in the container now, and a failed run is followed
+  by killing what is left there.
+- **A failed run no longer gets the previous run's log.** The container is
+  cleaned before each run, as the master-node does, and each run writes its exit
+  code to `.exit`; the console counts the simulations that exited 0 with a log.
+- **`docker-compose.baseline.yaml` publishes SSH on 127.0.0.1 only.** The login
+  is root/root, and it was reachable on every interface.
+- `prepare_workload.py --duration` is described in minutes, which it is.
+
+---
+
 ## [Unreleased] — A batch can be created through the API
 
 ### Fixed

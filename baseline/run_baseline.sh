@@ -41,6 +41,11 @@ SSH_PASS="root"  # default credentials of the Cooja image
 JVM_XMS="${COOJA_JVM_XMS:-4g}"
 JVM_XMX="${COOJA_JVM_XMX:-4g}"
 SIM_TIMEOUT="${SIM_TIMEOUT_SEC:-10800}"  # same default as the master-node
+# What a run leaves in the container, removed before the next one so that it
+# can be neither collected as that run's result nor reused by it. The same
+# list as the master-node's (master-node/lib/transport/ssh.py).
+GENERATED="build/cooja COOJA.testlog COOJA.log"
+SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
 
 mkdir -p "$RESULTS_DIR"
 
@@ -76,36 +81,62 @@ sleep 5
 # ---------------------------------------------------------------------------
 # Worker function — runs ONE simulation on ONE container.
 # ---------------------------------------------------------------------------
+remote() {  # remote PORT COMMAND
+  sshpass -p "$SSH_PASS" ssh "${SSH_OPTS[@]}" -p "$1" "$SSH_USER@localhost" "$2"
+}
+
 run_one() {
   local worker_id=$1
   local sim_dir=$2
+  local previous_dir=$3  # what this container ran last, if anything
   local sim_name
   sim_name=$(basename "$sim_dir")
   local port=$((12230 + worker_id))
   local result_log="$RESULTS_DIR/${sim_name}.log"
   local elapsed_file="$RESULTS_DIR/${sim_name}.elapsed"
+  local exit_file="$RESULTS_DIR/${sim_name}.exit"
+  # A log or exit code from an earlier invocation is not this run's.
+  rm -f -- "$result_log" "$exit_file"
 
   echo "[baseline][worker $worker_id] -> $sim_name (port $port)"
   local t0
   t0=$(date +%s)
 
+  # Start from the files this run uploads: the previous run's output and
+  # inputs go first. Recompiling the firmware is part of the run, as on SimLab.
+  local stale="$GENERATED simulation.csc positions.dat"
+  if [[ -n "$previous_dir" ]]; then
+    for f in "$previous_dir"/*; do stale+=" $(basename "$f")"; done
+  fi
+  remote "$port" "cd $REMOTE_DIR && rm -rf -- $stale" 2>/dev/null \
+    || { echo "[baseline][worker $worker_id] FAILED to clean the container"; echo 255 > "$exit_file"; return 1; }
+
   # Upload inputs — plain scp, one file at a time
   for f in "$sim_dir"/*; do
-    sshpass -p "$SSH_PASS" scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    sshpass -p "$SSH_PASS" scp "${SSH_OPTS[@]}" \
       -P "$port" "$f" "$SSH_USER@localhost:$REMOTE_DIR/" 2>/dev/null \
-      || { echo "[baseline][worker $worker_id] FAILED to upload $f"; return 1; }
+      || { echo "[baseline][worker $worker_id] FAILED to upload $f"; echo 255 > "$exit_file"; return 1; }
   done
 
   # Execute Cooja headless. No status persistence, no progress tracking.
-  local cmd="cd $REMOTE_DIR && /opt/java/openjdk/bin/java --enable-preview -Xms$JVM_XMS -Xmx$JVM_XMX -jar build/libs/cooja.jar --no-gui simulation.csc"
-  timeout "$SIM_TIMEOUT" sshpass -p "$SSH_PASS" ssh \
-    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  # The time limit is applied in the container: a local one only ended the
+  # ssh client, and the JVM went on running into the next simulation.
+  local cmd="cd $REMOTE_DIR && timeout -k 30 $SIM_TIMEOUT /opt/java/openjdk/bin/java --enable-preview -Xms$JVM_XMS -Xmx$JVM_XMX -jar build/libs/cooja.jar --no-gui simulation.csc"
+  local rc=0
+  timeout $((SIM_TIMEOUT + 120)) sshpass -p "$SSH_PASS" ssh "${SSH_OPTS[@]}" \
     -p "$port" "$SSH_USER@localhost" "$cmd" \
     > "$RESULTS_DIR/${sim_name}.stdout" 2> "$RESULTS_DIR/${sim_name}.stderr" \
-    || echo "[baseline][worker $worker_id] WARNING: simulation $sim_name exited non-zero"
+    || rc=$?
+  echo "$rc" > "$exit_file"
+  if [[ $rc -ne 0 ]]; then
+    echo "[baseline][worker $worker_id] WARNING: simulation $sim_name exited with $rc"
+    # Lost connection or a JVM past its limit: the container is not free
+    # while one is still there.
+    remote "$port" "pkill -KILL -f '[c]ooja.jar'" 2>/dev/null || true
+  fi
 
   # Fetch raw log
-  sshpass -p "$SSH_PASS" scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  sshpass -p "$SSH_PASS" scp "${SSH_OPTS[@]}" \
     -P "$port" "$SSH_USER@localhost:$REMOTE_DIR/COOJA.testlog" "$result_log" \
     2>/dev/null \
     || { echo "[baseline][worker $worker_id] WARNING: COOJA.testlog missing for $sim_name"; }
@@ -117,39 +148,50 @@ run_one() {
 }
 
 # ---------------------------------------------------------------------------
-# Crude job queue: when any slot frees, dispatch to the next worker round-robin
-# (which is not necessarily the one that freed).
+# Crude job queue: one simulation per container, on the first container whose
+# simulation has ended.
 # This is intentionally naive — no retry, no monitoring, no progress UI.
 # ---------------------------------------------------------------------------
-T_START=$(date +%s)
-WORKER_PIDS=()
-NEXT_WORKER=1
-for sim_dir in "${SIM_DIRS[@]}"; do
-  # Wait for a free slot
-  while [[ ${#WORKER_PIDS[@]} -ge $C_MAX ]]; do
-    NEW_PIDS=()
-    for pid in "${WORKER_PIDS[@]}"; do
-      if kill -0 "$pid" 2>/dev/null; then
-        NEW_PIDS+=("$pid")
+declare -A RUN_OF=()   # worker -> pid of the simulation it holds
+declare -A LAST_OF=()  # worker -> bundle it ran last
+FREE_WORKER=
+wait_for_free_worker() {
+  local w pid
+  while :; do
+    for w in $(seq 1 "$C_MAX"); do
+      pid=${RUN_OF[$w]:-}
+      if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+        FREE_WORKER=$w
+        return
       fi
     done
-    WORKER_PIDS=("${NEW_PIDS[@]}")
-    [[ ${#WORKER_PIDS[@]} -ge $C_MAX ]] && sleep 1
+    sleep 1
   done
+}
 
-  run_one "$NEXT_WORKER" "$sim_dir" &
-  WORKER_PIDS+=("$!")
-
-  NEXT_WORKER=$((NEXT_WORKER + 1))
-  [[ $NEXT_WORKER -gt $C_MAX ]] && NEXT_WORKER=1
+T_START=$(date +%s)
+for sim_dir in "${SIM_DIRS[@]}"; do
+  wait_for_free_worker
+  run_one "$FREE_WORKER" "$sim_dir" "${LAST_OF[$FREE_WORKER]:-}" &
+  RUN_OF[$FREE_WORKER]=$!
+  LAST_OF[$FREE_WORKER]=$sim_dir
 done
 
 # Wait for all remaining workers
 wait
 T_END=$(date +%s)
 
+COMPLETED=0
+for sim_dir in "${SIM_DIRS[@]}"; do
+  sim_name=$(basename "$sim_dir")
+  if [[ "$(cat "$RESULTS_DIR/${sim_name}.exit" 2>/dev/null)" == 0 && -s "$RESULTS_DIR/${sim_name}.log" ]]; then
+    COMPLETED=$((COMPLETED + 1))
+  fi
+done
+
 echo "[baseline] ============================================================"
 echo "[baseline] simulations completed in $((T_END - T_START))s wall-clock."
+echo "[baseline] $COMPLETED of ${#SIM_DIRS[@]} simulations exited 0 with a log."
 echo "[baseline] results in $RESULTS_DIR/"
 echo "[baseline] container fleet still running; stop with:"
 echo "[baseline]   docker compose -f $COMPOSE_FILE down"

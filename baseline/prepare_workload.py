@@ -89,7 +89,7 @@ def main() -> None:
     parser.add_argument("--region", type=float, nargs=4, default=(-150.0, -150.0, 150.0, 150.0),
                         metavar=("XMIN", "YMIN", "XMAX", "YMAX"))
     parser.add_argument("--duration", type=int, default=180,
-                        help="Simulated duration in seconds (default: 180)")
+                        help="Simulated duration in minutes (default: 180)")
     parser.add_argument("--radius-of-reach", type=float, default=50.0)
     parser.add_argument("--radius-of-inter", type=float, default=90.0)
     parser.add_argument("--seed", type=int, default=42,
