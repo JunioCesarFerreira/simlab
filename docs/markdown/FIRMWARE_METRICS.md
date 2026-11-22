@@ -373,6 +373,7 @@ constant. They are not default metrics.
 | CSMA neighbour queues | Contiki-NG default, 2 (`CSMA_CONF_MAX_NEIGHBOR_QUEUES`) | A packet for a third neighbour while two queues are in use is dropped, silently (MAC log level is `NONE`). v1's burst of pings reached it constantly; v2 sends only the reports, so it is rarely reached (§7). |
 | TSCH schedule | v2: one shared cell every 3 slots of 10 ms (`TSCH_SCHEDULE_CONF_DEFAULT_LENGTH 3` in `project-conf.h`). v1: Contiki-NG's default, every 7 | With 7, at this report rate and 26 nodes, the cell congests and RPL drops routes (§8.1). With 3, TSCH delivers what CSMA delivers (§8). |
 | Queue buffers | 64 on the Cooja platform (`QUEUEBUF_CONF_NUM`) | A TSCH node can queue up to 64 packets for one neighbour, so under congestion a report can wait tens of seconds before it is sent. |
+| Neighbour and route tables | v2: 64 entries (`NBR_TABLE_CONF_MAX_NEIGHBORS`, `NETSTACK_MAX_ROUTE_ENTRIES` in `project-conf.h`). v1: the Cooja platform's 300 | None up to 63 motes, root included: the output is bit for bit that of the 300-entry build (five instances, both MACs). The tables are smaller only to make Cooja faster. Past 63 motes a full table evicts neighbours (`firmware/README.md`, "Simulation speed"). |
 | Radio | UDGM, ranges from the problem, success 1.0 | No random channel loss. |
 | Contiki-NG | The one in the `simulation-cooja:v1.1` image (`a044c3203`, November 2024) | The semantics of the seed and of the stack depend on it. Record the image with the results. |
 

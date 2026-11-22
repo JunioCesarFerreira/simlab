@@ -121,6 +121,16 @@ def test_v2_tsch_has_a_shared_cell_every_3_slots():
     assert re.search(r"^#define TSCH_SCHEDULE_CONF_DEFAULT_LENGTH 3\s*$", conf, re.M)
 
 
+@pytest.mark.parametrize("macro", ["NBR_TABLE_CONF_MAX_NEIGHBORS", "NETSTACK_MAX_ROUTE_ENTRIES"])
+def test_v2_tables_hold_64_entries(macro):
+    """Cooja copies a mote's whole RAM on every tick. The platform's 300-entry tables made that
+    copy most of a TSCH run's time, and 64 entries print the same output up to 63 motes
+    (firmware/README.md, "Simulation speed"). Shrinking the tables further lowers that limit,
+    and growing them back slows every run, so a change here needs both checked again."""
+    conf = (TSCH_V2 / "project-conf.h").read_text()
+    assert re.search(rf"^#define {macro} 64\s*$", conf, re.M)
+
+
 def test_v2_root_prints_every_column_the_default_conversion_reads():
     keys = set(re.findall(r'\\"(\w+)\\":', (CSMA_V2 / "root.c").read_text()))
     needed = {"node", "root_time_now"}

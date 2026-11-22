@@ -5,6 +5,40 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Firmware v2 runs several times faster in Cooja, same output
+
+### Changed
+
+- **The v2 firmware's neighbour and route tables hold 64 entries instead of the
+  Cooja platform's 300** (`NBR_TABLE_CONF_MAX_NEIGHBORS`,
+  `NETSTACK_MAX_ROUTE_ENTRIES` in the shared `project-conf.h` of
+  `rpl-udp-csma-v2` and `rpl-udp-tsch-v2`).
+  - **Why it was slow:** on every tick, Cooja copies a mote's whole RAM into the
+    native library and back. A 180-minute TSCH run spent 87% of its time on that
+    copy. The tables made up most of that RAM: a TSCH node's `.bss` falls from
+    272 KB to 118 KB.
+  - **The output does not change.** Five instances replayed with both builds
+    printed the same mote lines at the same simulation times: three TSCH and two
+    CSMA, 26 nodes each, 180 simulated minutes. The repository's build also
+    produces the same binaries as the build that was validated.
+  - **Speed:** under the load of eight production simulations, a TSCH run took
+    816 to 1,167 s, against about 100 minutes for the 300-entry build. Most of the
+    old build's slowness came from memory-bandwidth contention, so the gain is
+    smaller on an idle machine.
+  - **The output stays identical up to 63 motes, root included.** Past that, a
+    full table evicts neighbours. The largest problem in the reference database
+    has 53 nodes.
+  - Details: `firmware/README.md`, "Simulation speed". Test:
+    `test_v2_tables_hold_64_entries`.
+  - The change only reaches experiments after the `-v2` repositories are
+    uploaded again (`python firmware/upload-firmware.py rpl-udp-csma-v2
+    rpl-udp-tsch-v2`). The upload creates new records next to the old ones, under
+    the same name; the new descriptions end in "64-entry tables". v2 experiments
+    that already ran keep the old `project-conf.h` in their snapshot. Their
+    results are what the new build prints too.
+
+---
+
 ## [Unreleased] — Validity guards: NaN, infeasible fronts, the MAC gene, penalty filtering
 
 Found in the repository review of 2026-11-18. None of them affected the stored

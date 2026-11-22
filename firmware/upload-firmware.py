@@ -108,8 +108,8 @@ def create_repository(name: str, description: str, directory: Path):
 REPOSITORIES = {
     "rpl-udp-csma": "RPL UDP firmware using CSMA MAC layer (v1)",
     "rpl-udp-tsch": "RPL UDP firmware using TSCH MAC layer (v1)",
-    "rpl-udp-csma-v2": "RPL UDP firmware using CSMA MAC layer (v2: no probes, one-way latency, cumulative counters)",
-    "rpl-udp-tsch-v2": "RPL UDP firmware using TSCH MAC layer (v2: no probes, one-way latency, cumulative counters, shared cell every 3 slots)",
+    "rpl-udp-csma-v2": "RPL UDP firmware using CSMA MAC layer (v2: no probes, one-way latency, cumulative counters, 64-entry tables)",
+    "rpl-udp-tsch-v2": "RPL UDP firmware using TSCH MAC layer (v2: no probes, one-way latency, cumulative counters, shared cell every 3 slots, 64-entry tables)",
 }
 
 
