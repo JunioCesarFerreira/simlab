@@ -6,6 +6,8 @@ analysis files) while leaving shared artifacts — source-code repositories —
 untouched.  A live MongoDB / GridFS is out of scope here, so we exercise the
 pure helpers and invariants that guarantee that contract.
 """
+from unittest.mock import MagicMock
+
 from bson import ObjectId
 
 from pylib.db.repositories.experiment import ExperimentRepository
@@ -103,3 +105,32 @@ class TestFirmwareSnapshotCleanup:
         assert ExperimentRepository._collect_firmware_file_ids(
             {"status": "skipped", "repositories": []}
         ) == []
+
+
+class TestCancellation:
+    def repo(self, document=None):
+        connection = MagicMock()
+        db = connection.connect.return_value.__enter__.return_value
+        collection = db.__getitem__.return_value
+        collection.find_one.return_value = document
+        collection.update_one.return_value.matched_count = 1
+        return ExperimentRepository(connection), collection
+
+    def test_a_deleted_experiment_must_stop_too(self):
+        repo, _ = self.repo(None)
+
+        assert repo.is_cancelled(str(ObjectId())) is True
+
+    def test_a_running_one_must_not(self):
+        repo, _ = self.repo({"status": "Running"})
+
+        assert repo.is_cancelled(str(ObjectId())) is False
+
+    def test_the_write_is_conditioned_on_not_cancelled(self):
+        repo, collection = self.repo()
+        exp_id = ObjectId()
+
+        assert repo.update_unless_cancelled(str(exp_id), {"status": "Done"}) is True
+
+        assert collection.update_one.call_args.args[0] == {
+            "_id": exp_id, "status": {"$ne": "Cancelled"}}

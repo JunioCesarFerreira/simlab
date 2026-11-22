@@ -82,7 +82,7 @@ def stored(document: dict) -> dict:
 
 #: The calls that write, which is where a process can die between two states.
 WRITES = {
-    "experiment_repo": ("update",),
+    "experiment_repo": ("update", "update_unless_cancelled"),
     "generation_repo": ("insert", "record_plan", "update", "set_survivors", "mark_done",
                         "close_if_finished"),
     "individual_repo": ("insert", "update_evaluation"),
@@ -148,6 +148,14 @@ class _ExperimentRepo(_Repo):
         return self.db.experiment["status"] == EnumStatus.CANCELLED
 
     def update(self, _exp_id, fields):
+        return self._write(fields)
+
+    def update_unless_cancelled(self, _exp_id, fields):
+        if self.db.experiment["status"] == EnumStatus.CANCELLED:
+            return False
+        return self._write(fields)
+
+    def _write(self, fields):
         if fields.get("status") == EnumStatus.DONE and self.db.die_before_finish:
             raise Killed
         self.db.experiment.update(stored(fields))

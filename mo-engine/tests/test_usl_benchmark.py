@@ -119,6 +119,13 @@ class Store:
                 outer.experiments.setdefault(str(exp_id), {}).update(fields)
                 return True
 
+            def is_cancelled(self, exp_id):
+                return outer.experiments.get(str(exp_id), {}).get(
+                    "status") == EnumStatus.CANCELLED
+
+            def update_unless_cancelled(self, exp_id, fields):
+                return not self.is_cancelled(exp_id) and self.update(exp_id, fields)
+
         self.generation_repo = Generations()
         self.individual_repo = Individuals()
         self.simulation_repo = Simulations()
@@ -482,3 +489,34 @@ class TestAWaveCutWhileEnqueueing:
         assert len(store.wave_simulations(generation["_id"])) == levels[wave]
         assert len(store.individuals) == wave + 1
         assert generation["enqueue_complete"] is True
+
+
+class TestCancelling:
+    def cancel(self, store):
+        store.experiment_repo.update(EXP_ID, {"status": EnumStatus.CANCELLED})
+
+    def test_no_wave_follows_a_cancellation(self, store):
+        strategy = started(store, levels=(1, 2, 4), repetitions=1)
+        self.cancel(store)
+
+        strategy.event_generation_done(store.close(store.generations[0]["_id"]))
+
+        assert len(store.generations) == 1
+        assert strategy._stop_flag
+
+    def test_the_last_wave_does_not_turn_cancelled_into_done(self, store):
+        strategy = started(store, levels=(1,), repetitions=1)
+        self.cancel(store)
+
+        strategy.event_generation_done(store.close(store.generations[0]["_id"]))
+
+        assert store.experiments[str(EXP_ID)]["status"] == EnumStatus.CANCELLED
+
+    def test_a_wave_without_results_does_not_turn_it_into_error(self, store):
+        strategy = started(store, levels=(2,), repetitions=1)
+        self.cancel(store)
+
+        strategy.event_generation_done(
+            store.close(store.generations[0]["_id"], EnumStatus.ERROR))
+
+        assert store.experiments[str(EXP_ID)]["status"] == EnumStatus.CANCELLED

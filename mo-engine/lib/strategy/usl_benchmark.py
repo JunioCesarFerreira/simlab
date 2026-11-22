@@ -171,7 +171,7 @@ class UslBenchmarkStrategy(EngineStrategy):
         with self._lock:
             if not existing:
                 if self._cut is None:
-                    self.mongo.experiment_repo.update(str(self._exp_id), {
+                    self.mongo.experiment_repo.update_unless_cancelled(str(self._exp_id), {
                         "status": EnumStatus.RUNNING, "start_time": utc_now()})
                 self._enqueue(0)
                 return
@@ -357,6 +357,9 @@ class UslBenchmarkStrategy(EngineStrategy):
         """
         if gen_oid != self._current_generation or gen_oid in self._handled:
             return
+        if self._stop_if_cancelled():
+            logger.info("[USL] %s cancelled; no further wave.", self._exp_id)
+            return
         self._handled.add(gen_oid)
 
         if self._count_done(gen_oid) == 0:
@@ -382,7 +385,7 @@ class UslBenchmarkStrategy(EngineStrategy):
 
     def _finish(self, status: str, message: str) -> None:
         if self._exp_id is not None:
-            self.mongo.experiment_repo.update(str(self._exp_id), {
+            self.mongo.experiment_repo.update_unless_cancelled(str(self._exp_id), {
                 "status": status, "end_time": utc_now(), "system_message": message})
         log = logger.info if status == EnumStatus.DONE else logger.error
         log("[USL] %s: %s", self._exp_id, message)
@@ -414,6 +417,8 @@ class UslBenchmarkStrategy(EngineStrategy):
                 if self._stop_flag or self._current_generation is None:
                     continue
                 try:
+                    if self._stop_if_cancelled():
+                        break
                     gen = self.mongo.generation_repo.get(str(self._current_generation))
                     if gen and gen.get("status") in (EnumStatus.DONE, EnumStatus.ERROR):
                         with self._lock:

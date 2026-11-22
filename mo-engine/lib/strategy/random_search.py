@@ -352,7 +352,7 @@ class RandomSearchStrategy(EngineStrategy):
             self._exp_id, self._generation_id, last_index, last.get("status"),
             len(self._map_genome_objectives), pending,
         )
-        self.mongo.experiment_repo.update(str(self._exp_id), {
+        self.mongo.experiment_repo.update_unless_cancelled(str(self._exp_id), {
             "status": EnumStatus.RUNNING,
         })
         if not pending and last.get("status") == EnumStatus.WAITING:
@@ -436,6 +436,8 @@ class RandomSearchStrategy(EngineStrategy):
                 if self._stop_flag or self._generation_id is None:
                     continue
                 try:
+                    if self._stop_if_cancelled():
+                        break
                     gen = self.mongo.generation_repo.get(str(self._generation_id))
                     if gen and gen.get("status") in (EnumStatus.DONE, EnumStatus.ERROR):
                         logger.warning(
@@ -519,7 +521,7 @@ class RandomSearchStrategy(EngineStrategy):
             self._generation_id, self._sim_rand_seeds)
 
         if gen_index == 0 and self._adopted is None:
-            self.mongo.experiment_repo.update(str(exp_oid), {
+            self.mongo.experiment_repo.update_unless_cancelled(str(exp_oid), {
                 "status": EnumStatus.RUNNING,
                 "start_time": utc_now(),
             })
@@ -999,7 +1001,7 @@ class RandomSearchStrategy(EngineStrategy):
                 logger.warning("[RandomSearch] Experiment %s: %s", self._exp_id, warning)
                 system_msg = f"{system_msg} {warning}" if system_msg else warning
             logger.info("[RandomSearch] Experiment %s completed.", self._exp_id)
-            self.mongo.experiment_repo.update(str(self._exp_id), {
+            self.mongo.experiment_repo.update_unless_cancelled(str(self._exp_id), {
                 "status": EnumStatus.DONE,
                 "end_time": utc_now(),
                 "system_message": system_msg
@@ -1010,7 +1012,7 @@ class RandomSearchStrategy(EngineStrategy):
             })
         else:
             logger.error("[RandomSearch] Experiment %s finished with error.", self._exp_id)
-            self.mongo.experiment_repo.update(str(self._exp_id), {
+            self.mongo.experiment_repo.update_unless_cancelled(str(self._exp_id), {
                 "status": EnumStatus.ERROR,
                 "system_message": system_msg
                     if system_msg is not None

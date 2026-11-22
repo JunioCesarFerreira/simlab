@@ -73,6 +73,12 @@ class _Experiments:
         self.resumed.append(exp_id)
         return True
 
+    def update_unless_cancelled(self, exp_id, fields):
+        if self.status(exp_id) == EnumStatus.CANCELLED:
+            return False
+        self.documents[ObjectId(exp_id)].update(fields)
+        return True
+
     def update_status(self, exp_id, status):
         self.documents[ObjectId(exp_id)]["status"] = status
         return True

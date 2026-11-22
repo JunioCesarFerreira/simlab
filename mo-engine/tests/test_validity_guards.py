@@ -250,7 +250,7 @@ def test_finalize_writes_the_validity_and_the_warning(cls, factory):
 
     strat._finalize_experiment(pareto_front=[item])
 
-    fields = strat.mongo.experiment_repo.update.call_args.args[1]
+    fields = strat.mongo.experiment_repo.update_unless_cancelled.call_args.args[1]
     assert fields["status"] == "Done"
     assert fields["pareto_front_validity"] == {
         "items": 1, "valid": 0, "infeasible": 1, "refused": 0}

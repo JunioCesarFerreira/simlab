@@ -99,7 +99,7 @@ def on_experiment_event(change: dict):
         
     if mongo.experiment_repo.update_starting(exp_id):
         if process_experiment(exp_doc) == False:
-            mongo.experiment_repo.update_status(exp_id, EnumStatus.ERROR)
+            mongo.experiment_repo.update_unless_cancelled(exp_id, {"status": EnumStatus.ERROR})
 
 
 def resume_experiment(exp_doc: dict) -> None:
@@ -114,7 +114,7 @@ def resume_experiment(exp_doc: dict) -> None:
         log.info("Experiment %s is no longer running; not resuming it", exp_id)
         return
     if process_experiment(exp_doc) is False:
-        mongo.experiment_repo.update_status(exp_id, EnumStatus.ERROR)
+        mongo.experiment_repo.update_unless_cancelled(exp_id, {"status": EnumStatus.ERROR})
 
 
 def run_pending_experiment(change: dict):
@@ -125,7 +125,7 @@ def run_pending_experiment(change: dict):
     
     if mongo.experiment_repo.update_starting(exp_id):
         if process_experiment(change) == False:
-            mongo.experiment_repo.update_status(exp_id, EnumStatus.ERROR)
+            mongo.experiment_repo.update_unless_cancelled(exp_id, {"status": EnumStatus.ERROR})
        
        
 def start_waiting_experiments() -> None:

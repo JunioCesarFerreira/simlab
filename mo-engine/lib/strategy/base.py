@@ -10,6 +10,17 @@ class EngineStrategy(ResumableEnqueue, ABC):
         self.experiment = experiment
         self.mongo = mongo
 
+    def _stop_if_cancelled(self) -> bool:
+        """Let go of an experiment that was cancelled or deleted.
+
+        Asked by the polling fallback, so that it does not depend on a
+        generation closing: a deleted one never does.
+        """
+        if not self.mongo.experiment_repo.is_cancelled(str(self._exp_id)):
+            return False
+        self.stop()
+        return True
+
     @abstractmethod
     def start(self):
         """

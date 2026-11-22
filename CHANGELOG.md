@@ -5,6 +5,21 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Cancelled stays cancelled
+
+### Fixed
+
+- **Cancelling a scalability benchmark stops it.** It never read the status,
+  ran every wave and wrote `Done` over `Cancelled`.
+- **No strategy writes a status over `Cancelled`.** A cancellation that came
+  while a generation was being processed, or while a run was resuming, was
+  overwritten. The engine's status writes are now conditional
+  (`update_unless_cancelled`).
+- **A deleted experiment stops too**, instead of waiting for a generation that
+  will never close, or creating more.
+
+---
+
 ## [Unreleased] — The mo-engine releases what finished experiments held
 
 ### Fixed

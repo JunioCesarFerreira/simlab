@@ -76,11 +76,24 @@ class ExperimentRepository:
             result = db["experiments"].update_one({"_id": ObjectId(experiment_id)}, {"$set": updates})
             return result.modified_count > 0
 
+    def update_unless_cancelled(self, experiment_id: str, updates: dict) -> bool:
+        """``update``, unless somebody cancelled the experiment meanwhile.
+
+        For the engine's status writes. One conditional write: reading and
+        then writing would let a cancellation in between be overwritten.
+        """
+        updates["id"] = experiment_id
+        with self.connection.connect() as db:
+            result = db["experiments"].update_one(
+                {"_id": ObjectId(experiment_id), "status": {"$ne": EnumStatus.CANCELLED}},
+                {"$set": updates})
+            return result.matched_count > 0
+
     def update_status(self, experiment_id: str, status: str) -> bool:
         return self.update(experiment_id, {"status": status})
 
     def is_cancelled(self, experiment_id: str) -> bool:
-        """True when the experiment has been marked CANCELLED (e.g. from the GUI).
+        """True when the experiment was marked CANCELLED (e.g. from the GUI) or deleted.
 
         Used by the engine strategies to cooperatively stop a running experiment
         at the next generation boundary instead of driving it to completion.
@@ -92,7 +105,7 @@ class ExperimentRepository:
             return False
         with self.connection.connect() as db:
             doc = db["experiments"].find_one({"_id": oid}, {"status": 1})
-            return bool(doc) and doc.get("status") == EnumStatus.CANCELLED
+            return doc is None or doc.get("status") == EnumStatus.CANCELLED
 
     def update_starting(self, experiment_id: str) -> bool:
         with self.connection.connect() as db:

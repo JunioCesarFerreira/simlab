@@ -178,9 +178,6 @@ wave finished this way did not run at its N, so it measures as invalid.
 
 ### Known issues
 
-- **Cancelling a scalability benchmark does not stop it.** `usl_benchmark` does
-  not read the cancellation: it runs every wave and then overwrites `Cancelled`
-  with `Done`.
 - **An empty `parameters.algorithm` fails at start** with
   `AttributeError: ... '_rng'`: the adapter receives the generator only with a
   non-empty configuration.
@@ -262,7 +259,7 @@ flowchart TD
 | **Worst-objective fallback** | A failed replica is first repeated once (see [Replica completeness](lib/strategy/README.md#replica-completeness-completenesspy)). An evaluation that stays incomplete, or has a non-finite value, gets the finite sentinel `1e12` in every objective (minimisation space) and is recorded as not used. This keeps the loop running, though it biases the search against that chromosome. |
 | **Constraint penalty** | An infeasible chromosome is not simulated: it gets `1e9 × (1 + deficit)` and the state `infeasible` (P1 and P2 only). |
 | **MAC gene pinned under a single firmware** | With one source repository the gene cannot express anything; `lib/problem/mac_gene.py` pins it where chromosomes are made, so the stored gene is the one that ran. |
-| **Cooperative cancellation** | A cancelled experiment stops at the next generation boundary; simulations already queued still run. |
+| **Cooperative cancellation** | A cancelled or deleted experiment gets no further generation or benchmark wave: the strategy stops at the next boundary, or at the next poll (30 s) if that is sooner. Simulations already queued still run. The engine never writes a status over `Cancelled`. |
 | **`_select_next_parents()` hook** | Environmental selection is isolated in a single overridable method. DEAP and pymoo variants inherit all infrastructure and override only this one method, minimising code duplication and regression surface. |
 
 ---

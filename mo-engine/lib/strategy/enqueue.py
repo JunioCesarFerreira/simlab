@@ -145,7 +145,7 @@ class ResumableEnqueue:
         )
         # Here and not only in the engine: the refusal can also be reached from
         # a watcher thread, where nothing would turn the exception into a status.
-        self.mongo.experiment_repo.update(str(self._exp_id), {
+        self.mongo.experiment_repo.update_unless_cancelled(str(self._exp_id), {
             "status": EnumStatus.ERROR, "system_message": reason, "end_time": utc_now()})
         self.stop()
         raise CannotFinishEnqueue(reason)

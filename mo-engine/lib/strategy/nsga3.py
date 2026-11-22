@@ -409,7 +409,7 @@ class NSGA3LoopStrategy(EngineStrategy):
                 last_generation["index"],
                 status,
             )
-            self.mongo.experiment_repo.update(str(self._exp_id), {
+            self.mongo.experiment_repo.update_unless_cancelled(str(self._exp_id), {
                 "status": EnumStatus.RUNNING,
             })
             return False
@@ -420,7 +420,7 @@ class NSGA3LoopStrategy(EngineStrategy):
                 self._generation_id,
                 last_generation["index"],
             )
-            self.mongo.experiment_repo.update(str(self._exp_id), {
+            self.mongo.experiment_repo.update_unless_cancelled(str(self._exp_id), {
                 "status": EnumStatus.RUNNING,
             })
             return True
@@ -670,6 +670,8 @@ class NSGA3LoopStrategy(EngineStrategy):
                 if self._stop_flag or self._generation_id is None:
                     continue
                 try:
+                    if self._stop_if_cancelled():
+                        break
                     gen = self.mongo.generation_repo.get(str(self._generation_id))
                     if gen and gen.get("status") in (EnumStatus.DONE, EnumStatus.ERROR):
                         logger.warning(
@@ -767,7 +769,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             self._generation_id, self._sim_rand_seeds)
 
         if gen_index == 0 and self._adopted is None:
-            self.mongo.experiment_repo.update(str(exp_oid), {
+            self.mongo.experiment_repo.update_unless_cancelled(str(exp_oid), {
                 "status": EnumStatus.RUNNING,
                 "start_time": utc_now()
             })
@@ -1436,7 +1438,7 @@ class NSGA3LoopStrategy(EngineStrategy):
                 logger.warning("[NSGA-III] Experiment %s: %s", self._exp_id, warning)
                 system_msg = f"{system_msg} {warning}" if system_msg else warning
             logger.info(f"[NSGA-III] Experiment {self._exp_id} completed.")
-            self.mongo.experiment_repo.update(str(self._exp_id), {
+            self.mongo.experiment_repo.update_unless_cancelled(str(self._exp_id), {
                 "status": EnumStatus.DONE,
                 "end_time": utc_now(),
                 "system_message": system_msg if system_msg is not None else f"Experiment {self._exp_id} completed.",
@@ -1445,7 +1447,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             })
         else:
             logger.error(f"[NSGA-III] Experiment {self._exp_id} finished with error.")
-            self.mongo.experiment_repo.update(str(self._exp_id), {
+            self.mongo.experiment_repo.update_unless_cancelled(str(self._exp_id), {
                 "status": EnumStatus.ERROR,
                 "system_message": system_msg if system_msg is not None else f"Experiment {self._exp_id} finished.",
                 "end_time": utc_now()
