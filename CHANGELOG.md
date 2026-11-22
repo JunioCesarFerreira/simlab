@@ -5,6 +5,16 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — An empty algorithm block runs on the defaults
+
+### Fixed
+
+- **`parameters.algorithm: {}` no longer fails at start** with
+  `AttributeError: ... '_rng'`. `build_adapter` handed the random generator
+  over only with a non-empty configuration; it always does now.
+
+---
+
 ## [Unreleased] — Cancelled stays cancelled
 
 ### Fixed

@@ -95,7 +95,9 @@ def build_adapter(
     adptr = adapter_cls(problem)
 
     if len(ga_parameter) > 0:
-      _warn_ignored_ga_keys(key, adapter_cls, ga_parameter)
-      adptr.set_ga_operator_configs(rng, ga_parameter)
+        _warn_ignored_ga_keys(key, adapter_cls, ga_parameter)
+    # With no settings too: every adapter has defaults for them, and this is
+    # also how it receives the generator it draws from.
+    adptr.set_ga_operator_configs(rng, ga_parameter)
 
     return adptr

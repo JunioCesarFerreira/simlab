@@ -184,9 +184,8 @@ absent from `Step2Experiment.vue`.
 | A wave counts only if its N ran at the same time | A wave that queued measured a lower concurrency. It is reported invalid, with the concurrency it reached |
 | A wave with no result stops the benchmark | The workload does not run; more waves would only measure failures. A wave with *some* failures is reported invalid and the benchmark continues |
 
-The adapter gets its RNG through `set_ga_operator_configs(rng, {})`:
-`build_adapter` hands the RNG over only together with GA settings, and a
-benchmark has none.
+A benchmark has no GA settings: `build_adapter` still hands its RNG to the
+adapter, which takes the defaults for the rest.
 
 ---
 

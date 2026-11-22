@@ -176,12 +176,6 @@ When that cannot be reproduced (the code or the experiment changed since), the
 experiment ends in `Error`, with the difference in `system_message`. A benchmark
 wave finished this way did not run at its N, so it measures as invalid.
 
-### Known issues
-
-- **An empty `parameters.algorithm` fails at start** with
-  `AttributeError: ... '_rng'`: the adapter receives the generator only with a
-  non-empty configuration.
-
 ### Strategy Execution Flowchart
 
 For NSGA-II and NSGA-III. The other strategies are described in

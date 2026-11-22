@@ -129,13 +129,8 @@ class UslBenchmarkStrategy(EngineStrategy):
             for k, v in src_repo_opts.items()
         }
 
+        # A benchmark has no operator settings: the adapter's defaults apply.
         self._adapter: ProblemAdapter = build_adapter(problem_config, {}, self._rng)
-        # `build_adapter` hands the RNG over only together with GA operator
-        # settings, and a benchmark has none — so the generator would draw
-        # from an attribute that was never set. Every adapter reads those
-        # settings with defaults, so an empty mapping gives it the RNG and
-        # nothing else.
-        self._adapter.set_ga_operator_configs(self._rng, {})
 
         self._exp_id: Optional[ObjectId] = None
         self._workload: Optional[Chromosome] = None
