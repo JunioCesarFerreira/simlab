@@ -137,19 +137,35 @@ Input shape (subset relevant to this strategy):
 }
 ```
 
+`algorithm` is not needed and not read.
+
+`POST /experiments/` takes this shape and refuses, with a 422 naming the field,
+chromosomes that do not fit the problem or its sources (`pylib/batch_input.py`):
+
+| Problem | A chromosome |
+|---|---|
+| `problem0` | `x`: `n` numbers in [0, 1] |
+| `problem1` | `mac_protocol`, `relays`: `number_of_relays` positions `{"x": .., "y": ..}` |
+| `problem2`, `problem3` | `mac_protocol`, `mask`: one integer 0 or 1 per candidate |
+| `problem4` | `mac_protocol`, `route`: sojourn indices, `sojourn_times`: one non-negative number per stop |
+
+`random_seed`, when sent, is a whole number from 0 to 2³¹−1. These are the forms
+stored in `individuals.chromosome` and `pareto_front[].chromosome`, so either
+can be sent back as it is. Feasibility is not checked there: the engine
+penalises. P4 passes this check and still fails at start
+([known limitation](../problem/README.md#known-limitations)).
+
 With a single source repository, the MAC gene of each input chromosome is
-rewritten to the protocol that will run.
+rewritten to the protocol that will run. With several, a non-synthetic batch
+needs a source under `csma` for gene 0 and under `tsch` for gene 1. A batch that
+is not synthetic needs at least one source.
 
 Use cases: reproducible benchmarks, validating a specific Pareto set found by
 another strategy, or executing a user-curated candidate list without any
 evolutionary search.
 
-> **Known issue: a batch cannot be created through the REST API.**
-> `POST /experiments/` requires `parameters.algorithm` and drops every key of
-> `parameters` that its model does not declare, `chromosomes` and `random_seed`
-> included, so the engine then fails with "requires a non-empty list of
-> chromosomes". Today the document has to be inserted in MongoDB directly. The
-> GUI does not offer the strategy.
+> The GUI does not offer the strategy: create it through the API
+> ([example](../../../debug/requests/post-batch-experiment-p2.json)).
 
 > Note: `batch` is the only optimization strategy **without** the analytical
 > fast-path described below. Synthetic batch experiments are evaluated by the

@@ -29,9 +29,9 @@ never sees the experiment.
 
 1. **`batch` strategy** — `BatchStrategy` has no analytical fast-path; it
    always enqueues `Simulation` documents (skipping only the CSC/firmware
-   artifacts), and the master-node evaluates them synthetically. A batch
-   [cannot currently be created through the API](../../mo-engine/lib/strategy/README.md#batch),
-   only by inserting its document in MongoDB.
+   artifacts), and the master-node evaluates them synthetically. A batch is
+   [created through the API](../../mo-engine/lib/strategy/README.md#batch), not
+   from the GUI.
 2. **Legacy P1-encoded synthetic experiments** — older experiments where the
    benchmark variables were encoded as relay coordinates of a `problem1`
    instance. The master-node reconstructs the genome from

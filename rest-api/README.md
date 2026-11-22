@@ -63,12 +63,26 @@ The complete list, with schemas, is the Swagger UI.
 
 ### What `POST /experiments/` keeps
 
-`parameters` is a typed model with `strategy`, `algorithm`, `simulation`,
-`problem` and `objectives`, all required. **Any other key in it is dropped
-without an error.** The contents of `algorithm`, `simulation` and `problem` are
-stored as sent. `simulation.duration` is in simulated minutes. Seed aggregators
-are validated (422); the rest is validated by the engine when the experiment
-starts.
+`parameters` is a typed model:
+
+| Key | `batch` | The other strategies |
+|---|---|---|
+| `strategy`, `simulation`, `problem`, `objectives` | required | required |
+| `algorithm` | optional, stored as `{}` when absent (batch does not read it) | required |
+| `chromosomes` | required | dropped |
+| `random_seed` | optional; batch draws seeds from it when `simulation.random_seeds` is absent | dropped (theirs is `algorithm.random_seed`) |
+
+**Any other key in it is dropped without an error**, on the way in and on the
+way out. The contents of `algorithm`, `simulation` and `problem` are stored as
+sent. `simulation.duration` is in simulated minutes.
+
+Two inputs are validated here, with a 422 that names the field: the seed
+aggregators, and what a [batch](../mo-engine/lib/strategy/README.md#batch)
+brings (`pylib/batch_input.py`). The rest is validated by the engine when the
+experiment starts.
+
+On reading, `algorithm` is always present: `{}` for an experiment stored without
+one.
 
 ---
 
@@ -204,9 +218,6 @@ credentials passed review once.
   `simulation_repo.get_topology_pic_file_id`, which does not exist; the test
   mocks it. The picture is on the individual (`topology_picture_id`): use
   `GET /files/{file_id}/as/png`.
-- **A `batch` experiment cannot be created.** `parameters.chromosomes` is one of
-  the keys that are dropped (above). See
-  [the strategy](../mo-engine/lib/strategy/README.md#batch).
 - **Writes are not validated on every route.** `PUT /experiments/{id}` and
   `PUT /simulations/{id}` store any field, the firmware snapshot included, and
   `PATCH` of a generation's or simulation's status accepts any string. Only the

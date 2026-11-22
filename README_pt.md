@@ -516,7 +516,6 @@ resultado deve ser lido. Cada um está descrito no documento indicado.
 | Área | Problema | Detalhes |
 | --- | --- | --- |
 | Unidades | A GUI rotula a duração simulada em segundos; ela é em minutos | [GUI](gui/simlab/README.md#known-issues) |
-| `batch` | Não pode ser criado por `POST /experiments/`: a API descarta `parameters.chromosomes` | [Estratégias](mo-engine/lib/strategy/README.md#batch) |
 | Problema 3 | `g` é ignorado, e indivíduos inviáveis são simulados sem penalidade | [Problemas](mo-engine/lib/problem/README.md#known-limitations) |
 | Problema 4 | Não executa pela GUI nem pela API, e seu CSC tornaria um sensor a raiz RPL | [Problemas](mo-engine/lib/problem/README.md#known-limitations) |
 | Log vazio | Uma execução em que nenhum relatório chegou à raiz falha na coleta | [master-node](master-node/README.md#known-issues) |

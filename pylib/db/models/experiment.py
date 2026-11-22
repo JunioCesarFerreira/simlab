@@ -43,10 +43,17 @@ class SyntheticConfig(TypedDict, total=False):
 
 class Parameters(TypedDict):
     strategy: str
-    algorithm: dict[str, Any]  # Algorithm parameters defined in config/algorithm.py
+    # Algorithm parameters defined in config/algorithm.py. Optional for batch
+    # only, which does not read it; the API requires it of the others.
+    algorithm: NotRequired[dict[str, Any]]
     simulation: dict[str, Any]
     problem: dict[str, Any]    # Problem parameters defined in config/problems.py
     objectives: list[ObjetiveItem]
+    # Batch input, checked by pylib/batch_input.py when the API creates one.
+    # Declared, or validation would drop them, and loose, so that reading an
+    # experiment never depends on them. usl_benchmark stores random_seed too.
+    chromosomes: NotRequired[Any]  # list of chromosome to_dict() forms
+    random_seed: NotRequired[Any]  # int
 
 
 class ParetoFrontItem(TypedDict):

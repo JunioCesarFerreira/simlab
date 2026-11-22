@@ -90,7 +90,7 @@ The engine never directly communicates with the Cooja simulator. Instead, it wri
 | `nsga2` | `NSGA2LoopStrategy` | Native NDS + crowding distance | ✅ | — |
 | `nsga2_deap` | `NSGA2DeapStrategy` | DEAP `tools.selNSGA2` | ✅ (inherited) | `deap >= 1.3` |
 | `nsga2_pymoo` | `NSGA2PymooStrategy` | pymoo `RankAndCrowdingSurvival` | ✅ (inherited) | `pymoo >= 0.6` |
-| `batch` | `BatchStrategy` | No evolution — evaluates one generation ([not creatable through the API](lib/strategy/README.md#batch)) | ❌ (relies on master-node) | — |
+| `batch` | `BatchStrategy` | No evolution — evaluates the [chromosomes it is given](lib/strategy/README.md#batch) as one generation | ❌ (relies on master-node) | — |
 | `random_search` | `RandomSearchStrategy` | None: each generation is drawn by the problem's random generator | ✅ | — |
 | `usl_benchmark` | `UslBenchmarkStrategy` | None: measures the infrastructure; created by `POST /scalability/` | ❌ (P0 does not apply) | — |
 
@@ -514,6 +514,7 @@ Key `parameters` fields in the experiment document:
 | `parameters.algorithm.divisions` | Reference-point granularity (NSGA-III). Default 10 |
 | `parameters.simulation.duration` | Simulated **minutes**, as an integer. Default 120 |
 | `parameters.simulation.random_seeds` | Seeds for simulation runs per individual. Default `[123456]` for NSGA-II/III |
+| `parameters.chromosomes`, `parameters.random_seed` | `batch` only: its [input](lib/strategy/README.md#batch). `random_seed` draws the simulation seeds. Default 42 |
 | `parameters.simulation.random_seeds_count` | `random_search` and `batch` only: how many seeds to draw when `random_seeds` is absent |
 | `parameters.simulation.replica_policy`, `max_replica_retries`, `incomplete_objective` | [Replica policy](lib/strategy/README.md#the-policy) |
 | `parameters.simulation.synthetic` | [Synthetic mode](../docs/markdown/SYNTHETIC_MODE.md) |

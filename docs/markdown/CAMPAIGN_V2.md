@@ -4,8 +4,8 @@ Status: **plan, nothing launched** (2026-11-18). Files and settings it names tha
 come from this plan or from [PROVENANCE_GUIDE.md](PROVENANCE_GUIDE.md) do not exist
 yet (`experiments/campaign-v2/`, `scripts/build.sh`, `SIMLAB_REQUIRE_CLEAN_BUILD`,
 `provenance.*`, `runtime.*`), and neither does the `seed_study` strategy on `main`.
-`batch`, which C0 and CC use, cannot be created through the API
-([known issue](../../mo-engine/lib/strategy/README.md#batch)).
+C0 and CC create their [`batch`](../../mo-engine/lib/strategy/README.md#batch)
+experiments through the API; the GUI does not offer that strategy.
 
 **Decision:** every result obtained with firmware v1 (`rpl-udp-csma`, `rpl-udp-tsch`)
 is discarded. In v1, `latency` averaged the zeros of lost pings, `energy` was mA·s

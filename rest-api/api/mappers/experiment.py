@@ -111,6 +111,14 @@ def firmware_snapshot_from_mongo(fw: Optional[dict]) -> Optional[FirmwareSnapsho
     return dto
 
 
+def _parameters_from_mongo(parameters: dict) -> dict:
+    """``algorithm`` is always present on the way out: a batch written straight
+    to MongoDB has none, and readers iterate over it."""
+    if not parameters:
+        return parameters
+    return {**parameters, "algorithm": parameters.get("algorithm") or {}}
+
+
 def experiment_from_mongo(doc: dict) -> ExperimentDto:
     id_str, d = pop_id(doc)
     return {
@@ -121,7 +129,7 @@ def experiment_from_mongo(doc: dict) -> ExperimentDto:
         "created_time": d.get("created_time"),
         "start_time": d.get("start_time"),
         "end_time": d.get("end_time"),
-        "parameters": d.get("parameters", {}),
+        "parameters": _parameters_from_mongo(d.get("parameters", {})),
         "source_repository_options": dict_oid_to_str(d.get("source_repository_options", {})),
         "data_conversion_config": d.get("data_conversion_config", {}),
         "pareto_front": _pareto_from_mongo(d.get("pareto_front")),

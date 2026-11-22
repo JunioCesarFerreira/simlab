@@ -82,7 +82,7 @@ replace the conversion
 | `post-nsga3-experiment-p1.json`, `post-nsga3-experiment-p2.json` | NSGA-III examples for P1 and P2 |
 | `post-random-search-experiment-p2.json` | random-search example for P2 |
 | `import-problem-p2.json` | for the GUI's problem import, not for the API |
-| `post-batch-experiment-p2.json` | **Rejected by the API** (422): batch [cannot be created through it](../mo-engine/lib/strategy/README.md#batch) |
+| `post-batch-experiment-p2.json` | [batch](../mo-engine/lib/strategy/README.md#batch) example for P2: 3 chromosomes × 3 seeds |
 | `post-nsga3-experiment-p3.json` | **Needs fixing:** its conversion does not produce the three objectives it declares, and `simulation.random_seed` is not read (the key is `random_seeds`; seed 123456 is used) |
 | `post-nsga3-experiment-p4.json` | **Invalid for the engine:** no `nodes` and empty `sojourns` ([P4](../mo-engine/lib/problem/README.md#known-limitations)); same seed key problem |
 

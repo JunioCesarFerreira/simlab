@@ -9,6 +9,7 @@ import numpy as np
 import moocore
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import PlainTextResponse
 from bson import errors as bson_errors
 from tempfile import NamedTemporaryFile
@@ -17,6 +18,7 @@ from pydantic import BaseModel
 from bson import ObjectId
 
 from pylib import benchmarks, moo_metrics
+from pylib.batch_input import validate_batch_input
 from pylib.db import MongoRepository
 from pylib.firmware_snapshot import iter_snapshot_files
 from pylib.seed_aggregation import objective_aggregators
@@ -44,6 +46,26 @@ from pylib.timeutil import utc_now
 router = APIRouter()
 
 
+def _settle_strategy_input(parameters: dict, source_options: dict) -> None:
+    """Batch brings chromosomes instead of an algorithm; the others, the opposite."""
+    if parameters["strategy"] == "batch":
+        try:
+            validate_batch_input(parameters, source_options)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        parameters.setdefault("algorithm", {})
+        return
+    if "algorithm" not in parameters:
+        # The answer the model gave while it declared the field required.
+        raise RequestValidationError([{
+            "type": "missing", "loc": ("body", "parameters", "algorithm"),
+            "msg": "Field required", "input": parameters,
+        }])
+    # Read by batch alone: storing them would suggest they had an effect.
+    parameters.pop("chromosomes", None)
+    parameters.pop("random_seed", None)
+
+
 def _validate_seed_aggregators(parameters: dict) -> None:
     # The engine applies them only once the first generation's simulations
     # are done, so a bad value would otherwise cost a whole generation of runs.
@@ -60,6 +82,7 @@ def create_experiment(
     factory: MongoRepository = Depends(get_factory)
 ) -> str:
     """Create a new experiment. Returns the generated experiment_id."""
+    _settle_strategy_input(experiment["parameters"], experiment["source_repository_options"])
     _validate_seed_aggregators(experiment["parameters"])
     try:
         doc = experiment_to_mongo(experiment)

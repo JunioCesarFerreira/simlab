@@ -39,6 +39,7 @@ from pylib.db import create_mongo_repository_factory
 | `plot_network.py` | The topology picture of an individual |
 | `service_settings.py` | Settings read from the environment |
 | `seed_aggregation.py` | The seed aggregator (Ψa) that turns an individual's replicas into one objective value. No pandas, so the API can validate an experiment's aggregator |
+| `batch_input.py` | What a batch experiment must bring. Standard library only, so the API can check chromosomes without importing the mo-engine |
 | `cooja_files.py`, `cooja_builder/` | Reading Cooja's output and writing its inputs |
 | `rpl_dodag.py` | DODAG formation and tree, from a testlog |
 | `telemetry/` | Runtime metric collection |

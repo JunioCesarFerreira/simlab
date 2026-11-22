@@ -5,6 +5,29 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — A batch can be created through the API
+
+### Fixed
+
+- **`POST /experiments/` creates a batch.** The model dropped
+  `parameters.chromosomes` and `parameters.random_seed` and required an
+  `algorithm` that batch does not read, so the strategy could only be used by
+  writing to MongoDB. For the other strategies `algorithm` is still required and
+  the two keys are still dropped.
+- **A batch can be read back.** `GET /experiments/{id}` and `/full` left both
+  keys out, and answered 500 for a batch stored without `algorithm`, as did the
+  campaign holding it. The answer now always has `algorithm`. Scalability
+  benchmarks also show their `random_seed`.
+
+### Added
+
+- **Batch input is checked when created** (`pylib/batch_input.py`): a list, gene
+  shapes per problem, the seed and a source for each MAC gene. The engine read a
+  missing mask as no relays and a bit of 2 as not installed, and found a mask of
+  the wrong length only with the generation open.
+
+---
+
 ## [Unreleased] — An empty algorithm block runs on the defaults
 
 ### Fixed
