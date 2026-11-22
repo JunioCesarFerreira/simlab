@@ -121,6 +121,18 @@ def run_pending_experiment(change: dict):
             mongo.experiment_repo.update_status(exp_id, EnumStatus.ERROR)
        
        
+def start_waiting_experiments() -> None:
+    """Start whatever is ``Waiting`` now.
+
+    Runs each time the change stream opens, so what was created while nothing
+    was listening is found here and what comes later by the stream. The claim
+    is atomic, so one seen by both is started once.
+    """
+    pending = mongo.experiment_repo.find_startable_by_status(EnumStatus.WAITING)
+    while pending:
+        run_pending_experiment(pending.pop())
+
+
 def main() -> None:
     log.info("service started.")
     log.info(f"env:\n\tMONGO_URI: {MONGO_URI}\n\tDB_NAME: {DB_NAME}")
@@ -131,17 +143,15 @@ def main() -> None:
     # persists the raw series (GridFS) + summary on the experiment document.
     start_runtime_metrics_watcher(mongo)
 
-    pending = exp_repo.find_startable_by_status(EnumStatus.WAITING)
-
-    while (len(pending) > 0):
-        run_pending_experiment(pending.pop())
-
-    # And the ones a previous process left in flight. Only `Waiting` was
-    # picked up here, so an experiment interrupted mid-generation stayed
-    # `Running` for ever: its strategy state died with the process and the
-    # change stream only fires on new ones. Observed in practice — an engine
-    # restart left a finished generation with no evolution after it, and the
-    # experiment never completed.
+    # First the ones a previous process left in flight, and only then the new
+    # ones: starting one makes it `Running`, and read afterwards it would be
+    # resumed as well, with two strategies driving one experiment.
+    #
+    # Only `Waiting` used to be picked up, so an experiment interrupted
+    # mid-generation stayed `Running` for ever: its strategy state died with
+    # the process and the change stream only fires on new ones. Observed in
+    # practice — an engine restart left a finished generation with no evolution
+    # after it, and the experiment never completed.
     #
     # The strategies already know how to come back: `start()` resumes the
     # latest persisted generation, and processing a generation that is already
@@ -155,9 +165,11 @@ def main() -> None:
     for exp_doc in resumable:
         resume_experiment(exp_doc)
 
+    # `Waiting` is read only once the stream is listening: read before, an
+    # experiment created in between was seen by neither.
     Thread(
-        target=exp_repo.watch_status_waiting, 
-        args=(on_experiment_event,),
+        target=exp_repo.watch_status_waiting,
+        args=(on_experiment_event, start_waiting_experiments),
         daemon=True).start()
 
     while True:

@@ -236,8 +236,8 @@ is the default if nothing is said.
   - These are independent runs. Sharing the seed numbers is bookkeeping, **not**
     pairing.
 - **Engine restarts:** random search resumes exactly since 2026-11-22. Until the
-  [engine's known issues](../../mo-engine/README.md#known-issues) are fixed, create these runs
-  only while the engine is up, and do not restart it during an NSGA-III run.
+  [engine's known issues](../../mo-engine/README.md#known-issues) are fixed, do not restart
+  the engine during an NSGA-III run, and watch its memory: finished runs do not release theirs.
 - **Scenario:** the shared `ind1` scenario of paper 1:
   - same mobile nodes, sink, radii, region and duration;
   - P1 with 20 relays;

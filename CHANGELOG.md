@@ -5,6 +5,23 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — One strategy per experiment when the engine starts
+
+### Fixed
+
+- **An experiment `Waiting` when the mo-engine starts is no longer started
+  twice.** The engine claimed it, which makes it `Running`, and then resumed
+  everything `Running`, itself included: two strategies drove one experiment,
+  with duplicate generations, lost objectives or a run that never ended. What a
+  previous process left `Running` is now read before anything is started.
+- **An experiment created while the engine starts is no longer missed.**
+  `Waiting` was scanned before the change stream was listening, so what was
+  created in between waited until the next restart (12 of 16 experiments in
+  the reproduction). The scan now runs once the stream is open, and again when
+  it reopens: `watch_collection` takes an optional `on_open` for that.
+
+---
+
 ## [Unreleased] — Random search resumes the run it was running
 
 ### Fixed

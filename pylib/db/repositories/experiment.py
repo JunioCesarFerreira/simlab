@@ -439,7 +439,11 @@ class ExperimentRepository:
 
             return file_id
 
-    def watch_status_waiting(self, on_change: Callable[[dict], None]):
+    def watch_status_waiting(
+        self,
+        on_change: Callable[[dict], None],
+        on_open: Optional[Callable[[], None]] = None,
+    ):
         log.info("[ExperimentRepository] Waiting new experiments...")
         pipeline = [
             {
@@ -453,5 +457,6 @@ class ExperimentRepository:
             "experiments",
             pipeline,
             on_change,
-            full_document="updateLookup"
+            full_document="updateLookup",
+            on_open=on_open,
         )

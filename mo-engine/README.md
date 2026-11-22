@@ -37,8 +37,8 @@ The engine never directly communicates with the Cooja simulator. Instead, it wri
 │                             mo-engine                                │
 │                                                                      │
 │  engine.py                                                           │
-│  ├── watch experiments (Change Stream: status=Waiting)               │
 │  ├── resume experiments left Running (at startup)                    │
+│  ├── watch experiments (Change Stream: status=Waiting)               │
 │  ├── capture_firmware_snapshot()     (pylib)                         │
 │  ├── runtime-metrics watcher         (pylib/telemetry)               │
 │  └── select_strategy() → EngineStrategy.start()                      │
@@ -153,9 +153,9 @@ launch wizard sets it per objective in step 4 (*Objectives*).
 When the container starts, `engine.py`:
 
 1. Starts the runtime-metrics watcher ([RUNTIME_METRICS.md](../docs/markdown/RUNTIME_METRICS.md)).
-2. Claims each experiment in `Waiting` (it becomes `Running`), copies its firmware ([FIRMWARE_TRACEABILITY.md](../docs/markdown/FIRMWARE_TRACEABILITY.md)) and starts its strategy.
-3. Resumes each experiment left `Running` by a previous process (`resumed_at` records it).
-4. Opens a Change Stream on the `experiments` collection to handle future experiments.
+2. Resumes each experiment left `Running` by a previous process (`resumed_at` records it). This comes before anything new is started, so nothing this process starts is taken for a run to resume.
+3. Opens a Change Stream on the `experiments` collection to handle future experiments.
+4. With the stream listening, claims each experiment in `Waiting` (it becomes `Running`), copies its firmware ([FIRMWARE_TRACEABILITY.md](../docs/markdown/FIRMWARE_TRACEABILITY.md)) and starts its strategy. The scan repeats whenever the stream reopens. The claim is atomic, so an experiment seen by both the scan and the stream is started once.
 
 What a resume restores depends on the strategy:
 
@@ -168,11 +168,14 @@ What a resume restores depends on the strategy:
 
 ### Known issues
 
-- **An experiment that is `Waiting` when the engine starts is started twice.**
-  Step 2 makes it `Running`, and step 3 then resumes it, so two instances of the
-  strategy drive one experiment: duplicate generation indices, generations
-  without objectives, or a run that never ends. Create experiments only while
-  the engine is up.
+- **A finished experiment does not release its threads.** Its change-stream
+  watchers never return: in a test, each experiment left about 15 threads, 7
+  MongoDB connections and 50–100 MB behind, and the engine ran out of 4 GB
+  after some 70 of them. Restart the engine between batches, with nothing
+  running.
+- **Cancelling a scalability benchmark does not stop it.** `usl_benchmark` does
+  not read the cancellation: it runs every wave and then overwrites `Cancelled`
+  with `Done`.
 - **An NSGA resume loses the evidence of what it did not simulate.** An
   infeasible, analytical or reused individual of the generation in flight is
   rewritten as `unknown` and used, so a penalty vector reads as a measurement.
@@ -190,10 +193,11 @@ For NSGA-II and NSGA-III. The other strategies are described in
 
 ```mermaid
 flowchart TD
-    A([engine starts]) --> B{pending\nexperiments?}
+    A([engine starts]) --> R[resume what was\nleft Running]
+    R --> D[open Change Stream\non experiments]
+    D --> B{Waiting\nexperiments?}
     B -- yes --> C[pop next experiment]
-    B -- no --> D[open Change Stream\non experiments]
-    D --> E{new Waiting\nexperiment?}
+    B -- no --> E{new Waiting\nexperiment?}
     E -- yes --> C
     C --> F[select_strategy\nby parameters.strategy]
     F --> G[strategy.start]

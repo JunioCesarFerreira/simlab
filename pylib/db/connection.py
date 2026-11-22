@@ -96,7 +96,8 @@ class MongoDBConnection:
         collection_name: str,
         pipeline: list[dict],
         on_change: Callable[[dict], None],
-        full_document: str = "default"
+        full_document: str = "default",
+        on_open: Callable[[], None] | None = None,
     ) -> None:
         """
         Observes changes in a specific collection using a given pipeline.
@@ -108,6 +109,11 @@ class MongoDBConnection:
             pipeline (list): Aggregation pipeline (e.g., [$match]).
             on_change (Callable): Callback function called on each event.
             full_document (str): Full document retrieval mode.
+            on_open (Callable): Runs each time the stream opens, before its
+                events are handled. The place to scan for what already exists:
+                what happens after the scan is delivered by the stream, so
+                nothing falls between the two. It has to be idempotent, since
+                the same document can be seen by both.
         """
         resume_token = None
         backoff = 1
@@ -120,6 +126,8 @@ class MongoDBConnection:
                         kwargs["resume_after"] = resume_token
                     with collection.watch(pipeline, **kwargs) as stream:
                         backoff = 1
+                        if on_open:
+                            on_open()
                         for change in stream:
                             resume_token = change.get("_id")
                             on_change(change)
