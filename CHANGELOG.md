@@ -5,6 +5,27 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Random search resumes the run it was running
+
+### Fixed
+
+- **A restart of the mo-engine no longer breaks a random search.** The resume
+  restored neither the population nor the next index, the archive or the random
+  stream: the next generation collided with the last index, and the results in
+  flight never became objectives. It now continues the interrupted run exactly:
+  same individuals, simulations, evidence and final front.
+  - Generations record `rng_state` and `enqueue_complete`, and individuals
+    record `index`. Older checkpoints remain resumable: their draws are
+    repeated to position the stream.
+  - A generation that closed while the engine was down, or whose enqueue had
+    nothing to simulate, is processed at startup.
+  - A generation cut in the middle of its enqueue is refused, with the reason in
+    `system_message`, instead of finishing on fewer evaluations.
+  - A run that is never interrupted is unchanged. The four random-search runs
+    in the reference database were never resumed and are not affected.
+
+---
+
 ## [Unreleased] — Problem 2 counts the sink as coverage
 
 ### Fixed

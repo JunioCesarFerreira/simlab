@@ -235,9 +235,9 @@ is the default if nothing is said.
   the same list for every cell.
   - These are independent runs. Sharing the seed numbers is bookkeeping, **not**
     pairing.
-- **Random search does not survive a restart of the mo-engine**
-  ([known issue](../../mo-engine/lib/strategy/README.md#random-search)): do not restart it
-  while one of these runs is active, or fix that first.
+- **Engine restarts:** random search resumes exactly since 2026-11-22. Until the
+  [engine's known issues](../../mo-engine/README.md#known-issues) are fixed, create these runs
+  only while the engine is up, and do not restart it during an NSGA-III run.
 - **Scenario:** the shared `ind1` scenario of paper 1:
   - same mobile nodes, sink, radii, region and duration;
   - P1 with 20 relays;

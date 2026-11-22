@@ -511,7 +511,8 @@ read. Each is described in the linked document.
 | --- | --- | --- |
 | Units | The GUI labels the simulated duration in seconds; it is in minutes | [GUI](gui/simlab/README.md#known-issues) |
 | `batch` | Cannot be created through `POST /experiments/`: the API drops `parameters.chromosomes` | [Strategies](mo-engine/lib/strategy/README.md#batch) |
-| `random_search` | Does not resume correctly after an engine restart | [Strategies](mo-engine/lib/strategy/README.md#random-search) |
+| Engine startup | An experiment `Waiting` when the engine starts is started twice, which corrupts it | [mo-engine](mo-engine/README.md#known-issues) |
+| NSGA resume | Penalties can be rewritten as measurements, and an interrupted enqueue is not detected | [mo-engine](mo-engine/README.md#known-issues) |
 | Problem 3 | `g` is ignored, and infeasible individuals are simulated without penalty | [Problems](mo-engine/lib/problem/README.md#known-limitations) |
 | Problem 4 | Cannot run from the GUI or the API, and its CSC would make a sensor the RPL root | [Problems](mo-engine/lib/problem/README.md#known-limitations) |
 | Empty log | A run in which no report reached the root fails at collection | [master-node](master-node/README.md#known-issues) |

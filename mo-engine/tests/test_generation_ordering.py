@@ -31,7 +31,8 @@ def _make_strategy(cls, enqueue_name):
     strat._gen_index = 0
     strat._sim_rand_seeds = [42]
     # The enqueue snapshots this onto the generation document, for resume.
-    strat._ga_rng = random.Random(42)
+    strat._ga_rng = random.Random(42)   # NSGA
+    strat._rng = random.Random(42)      # random search
     strat._genome_objectives_cache = {}
     strat._genome_completeness_cache = {}
     strat._generation_completeness = {}
@@ -109,7 +110,8 @@ def test_analytical_enqueue_skips_simulations(cls):
     strat._sim_rand_seeds = [42]
     strat._aggregators = ["mean", "mean"]
     # The enqueue snapshots this onto the generation document, for resume.
-    strat._ga_rng = random.Random(42)
+    strat._ga_rng = random.Random(42)   # NSGA
+    strat._rng = random.Random(42)      # random search
     strat._genome_objectives_cache = {}
     strat._genome_completeness_cache = {}
     strat._generation_completeness = {}

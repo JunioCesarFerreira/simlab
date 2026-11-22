@@ -96,11 +96,20 @@ Two things differ when reading its results:
 - No survivors are recorded, so `GET /experiments/{id}/hv-gd` measures its
   offspring and says so in `population_sources`.
 
-> **Known issue: resume is not supported correctly.** After an engine restart
-> neither the population nor the next generation index is restored. If the last
-> generation had finished, the next insert collides with its index and the
-> experiment ends in `Error`. If it was running, its results are not turned
-> into objectives. Relaunch the experiment instead of relying on the resume.
+**Resume.** After an engine restart the run continues as it would have:
+
+- each generation records `rng_state` (the stream after its draw), and each
+  individual its `index` in the population;
+- the archive behind the final front is rebuilt from all the generations;
+- in the last generation, what was decided at enqueue (reused, analytical,
+  infeasible) is read back with its evidence, and what rests on simulations is
+  derived from them again;
+- a generation is inserted with `enqueue_complete: false`, which turns true
+  once all of it was written. Found false on resume, the generation is a
+  fragment: the experiment ends in `Error`, saying so in `system_message`,
+  rather than finishing on fewer evaluations than configured;
+- a checkpoint without `rng_state` (written before 2026-11-22) has its earlier
+  draws repeated to position the stream, with a warning in the log.
 
 ## Batch
 

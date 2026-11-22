@@ -161,10 +161,27 @@ What a resume restores depends on the strategy:
 
 | Strategy | On resume |
 |---|---|
-| NSGA-II / NSGA-III and their variants | Population order, survivors and RNG state, so the run continues as it would have |
+| NSGA-II / NSGA-III and their variants | Population order, survivors and RNG state, so the search continues as it would have. See the known issues below for the evidence |
 | `batch` | Its single generation. Constraint-penalised chromosomes are re-labelled as `refused`, with the worst vector instead of their penalty |
 | `usl_benchmark` | The last wave and the recorded workload |
-| `random_search` | **Not correctly**: see [Random search](lib/strategy/README.md#random-search) |
+| `random_search` | The population, the archive and the RNG state, so the run continues as it would have ([details](lib/strategy/README.md#random-search)) |
+
+### Known issues
+
+- **An experiment that is `Waiting` when the engine starts is started twice.**
+  Step 2 makes it `Running`, and step 3 then resumes it, so two instances of the
+  strategy drive one experiment: duplicate generation indices, generations
+  without objectives, or a run that never ends. Create experiments only while
+  the engine is up.
+- **An NSGA resume loses the evidence of what it did not simulate.** An
+  infeasible, analytical or reused individual of the generation in flight is
+  rewritten as `unknown` and used, so a penalty vector reads as a measurement.
+- **An NSGA restart during an enqueue is not detected.** The generation is
+  resumed as a fragment: it can wait for ever or be evaluated with individuals
+  missing.
+- **An empty `parameters.algorithm` fails at start** with
+  `AttributeError: ... '_rng'`: the adapter receives the generator only with a
+  non-empty configuration.
 
 ### Strategy Execution Flowchart
 

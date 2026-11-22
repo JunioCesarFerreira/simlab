@@ -11,6 +11,11 @@ class Generation(TypedDict):
     start_time: datetime
     end_time: datetime
     expected_seeds: NotRequired[list[int]]
+    # False from the insert of the generation until every individual and
+    # simulation planned for it was written. Found False on resume, the
+    # generation is a fragment and must not be evaluated as if it were whole.
+    # Written by random search only; absent otherwise, and on older documents.
+    enqueue_complete: NotRequired[bool]
     replica_retries: NotRequired[int]
     # Source simulation ids/reasons for a claimed round whose enqueue has not
     # finished. Removed atomically with reopening after every clone exists.
@@ -30,6 +35,8 @@ class Generation(TypedDict):
     # enqueued — i.e. before any draw belonging to it. Every library seed
     # (DEAP, pymoo) is derived from that one generator. Stateful backends also
     # require selection_state to reproduce the uninterrupted trajectory.
+    # In random search it is the state after this generation's draw, from
+    # which the next generation is drawn.
     rng_state: NotRequired[dict]
     # Versioned BSON-safe backend state at enqueue, before this generation's
     # environmental selection. Absent in legacy checkpoints/stateless backends.
