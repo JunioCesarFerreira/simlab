@@ -509,7 +509,6 @@ read. Each is described in the linked document.
 
 | Area | Issue | Details |
 | --- | --- | --- |
-| Telemetry | The periodic sweep does not retry `unavailable`/`failed` collections | [Runtime metrics](docs/markdown/RUNTIME_METRICS.md#known-issues) |
 | API | `GET /files/simulations/{id}/topology` answers 500 | [REST API](rest-api/README.md#known-issues) |
 | Indicators | The offline CLIs measure offspring; the GUI measures survivors by default | [pareto-analysis](pareto-analysis/README.md#known-issues) |
 

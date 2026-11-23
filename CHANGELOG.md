@@ -5,6 +5,20 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Telemetry retries, and averages only numbers
+
+### Fixed
+
+- **The sweep retries `unavailable` and `failed` collections.** Its query did
+  not project `runtime_metrics`, so it never forced past the claim, which
+  refuses an existing block: those runs were picked up every pass and never
+  collected.
+- **A NaN sample no longer makes an average NaN.** It stays in the raw
+  artifact and is left out of the summary, which counts it in
+  `non_finite_samples`.
+
+---
+
 ## [Unreleased] — A run that delivered nothing is a result
 
 ### Fixed

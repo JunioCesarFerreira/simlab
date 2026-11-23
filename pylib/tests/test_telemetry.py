@@ -296,3 +296,45 @@ class TestDefaultMetricSpecs:
             ("cpu_percent", "container"),
             ("memory_bytes", "container"),
         }
+
+
+# ── what the retries and the averages rest on ─────────────────────────────────
+class TestNonFinite:
+    def test_a_nan_sample_stays_in_the_samples_and_out_of_the_average(self):
+        samples = [
+            {"timestamp": t, "metric": "cpu_percent", "value": v, "unit": "percent",
+             "scope": "aggregate", "labels": {}}
+            for t, v in ((1.0, 10.0), (2.0, float("nan")), (3.0, 30.0))
+        ]
+        summary = summarize_samples(samples, START, END)
+        assert summary["cpu"] == {"average_percent": 20.0, "maximum_percent": 30.0}
+        assert summary["non_finite_samples"] == 1
+
+
+class TestSweepRetries:
+    def test_the_query_tells_which_runs_already_have_a_block(self):
+        from unittest.mock import MagicMock
+        from pylib.db.repositories.experiment import ExperimentRepository
+        connection = MagicMock()
+        collection = connection.connect.return_value.__enter__.return_value.__getitem__.return_value
+        collection.find.return_value = []
+
+        ExperimentRepository(connection).find_finished_runtime_metrics_to_collect(START)
+
+        projection = collection.find.call_args.args[1]
+        assert projection.get("runtime_metrics.status") == 1
+
+    def test_a_failed_block_is_forced_and_a_fresh_run_is_claimed(self, monkeypatch):
+        from pylib.telemetry import watcher
+        calls = []
+        monkeypatch.setattr(watcher, "_collect_later",
+                            lambda mongo, doc, delay, force=False: calls.append((doc["_id"], force)))
+        mongo = SimpleNamespace(experiment_repo=SimpleNamespace(
+            release_stale_runtime_metrics_claims=lambda before: 0,
+            find_finished_runtime_metrics_to_collect=lambda cutoff: [
+                {"_id": "failed", "start_time": START, "end_time": END,
+                 "runtime_metrics": {"status": "failed"}},
+                {"_id": "fresh", "start_time": START, "end_time": END},
+            ]))
+        watcher._run_sweep(mongo, backfill_hours=6, stale_claim_seconds=900)
+        assert calls == [("failed", True), ("fresh", False)]

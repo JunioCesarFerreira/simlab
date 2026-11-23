@@ -6,6 +6,7 @@ block (status "collecting"); concurrent or repeated invocations are no-ops.
 """
 import hashlib
 import logging
+import math
 import os
 from dataclasses import dataclass, asdict
 from datetime import datetime
@@ -101,6 +102,13 @@ def _stats(values: list[float]) -> tuple[float, float]:
     return sum(values) / len(values), max(values)
 
 
+def _finite(values: list[float]) -> tuple[list[float], int]:
+    """The finite values, and how many were not. Prometheus answers "NaN" for
+    a window with no data; it stays in the raw artifact, not in an average."""
+    kept = [v for v in values if math.isfinite(v)]
+    return kept, len(values) - len(kept)
+
+
 def summarize_samples(
     samples: list[dict],
     started_at: datetime,
@@ -114,10 +122,12 @@ def summarize_samples(
     summary: dict = {
         "duration_seconds": max((finished_at - started_at).total_seconds(), 0.0),
     }
-    cpu = [s["value"] for s in samples
-           if s["metric"] == "cpu_percent" and s["scope"] == "aggregate"]
-    mem = [s["value"] for s in samples
-           if s["metric"] == "memory_bytes" and s["scope"] == "aggregate"]
+    cpu, cpu_dropped = _finite([s["value"] for s in samples
+                                if s["metric"] == "cpu_percent" and s["scope"] == "aggregate"])
+    mem, mem_dropped = _finite([s["value"] for s in samples
+                                if s["metric"] == "memory_bytes" and s["scope"] == "aggregate"])
+    if cpu_dropped or mem_dropped:
+        summary["non_finite_samples"] = cpu_dropped + mem_dropped
     if cpu:
         avg, peak = _stats(cpu)
         summary["cpu"] = {"average_percent": avg, "maximum_percent": peak}

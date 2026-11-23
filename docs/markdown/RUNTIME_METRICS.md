@@ -73,7 +73,7 @@ a manual retry. An operator can also trigger a collection on demand via
 }
 ```
 
-The summary is computed over **all** aggregate-scope samples of the window.
+The summary is computed over **all** finite aggregate-scope samples of the window.
 CPU is in percent of one core and summed over the containers, so it can exceed
 100.
 New metric summaries can be added alongside `cpu` / `memory` without breaking
@@ -151,11 +151,17 @@ main stack and `debug/docker/mongo-cooja`). Before collecting, the client
 checks Prometheus's health endpoint; if unreachable, the query is skipped with
 a single warning and the state is persisted as `unavailable`.
 
+## Retries and missing samples
+
+- **`unavailable` and `failed` are retried by the sweep**, every
+  `TELEMETRY_SWEEP_INTERVAL_SECONDS`, for the runs that ended in the last
+  `TELEMETRY_BACKFILL_HOURS`: it overwrites the block it finds (`force`). Older
+  runs are retried with *Collect from Prometheus* on the experiment page, or the
+  collect endpoint.
+- **A NaN sample** (Prometheus answers `NaN` for a window without data) is kept
+  in the raw artifact and left out of the summary's averages and maxima; the
+  summary's `non_finite_samples` says how many were left out.
+
 ## Known issues
 
-- **`unavailable` and `failed` are not retried automatically.** The sweep's
-  query does not project `runtime_metrics`, so it never passes `force`, and the
-  claim then refuses because a block exists. Use *Collect from Prometheus* on
-  the experiment page, or the collect endpoint.
-- **A NaN sample is stored**, and makes the corresponding average of the
-  summary NaN.
+None known.

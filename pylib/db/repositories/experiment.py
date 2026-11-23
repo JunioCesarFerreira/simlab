@@ -269,7 +269,10 @@ class ExperimentRepository:
                             {"$in": list(self._RETRYABLE_RUNTIME_METRICS_STATUS)}},
                     ],
                 },
-                {"_id": 1, "start_time": 1, "end_time": 1}
+                # The status tells the sweep a block exists: a retry has to
+                # force past the claim, which refuses an existing block. Left
+                # out, unavailable and failed were picked up and never retried.
+                {"_id": 1, "start_time": 1, "end_time": 1, "runtime_metrics.status": 1}
             ))
 
     def watch_status_finished(self, on_change: Callable[[dict], None]):
