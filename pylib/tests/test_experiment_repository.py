@@ -134,3 +134,18 @@ class TestCancellation:
 
         assert collection.update_one.call_args.args[0] == {
             "_id": exp_id, "status": {"$ne": "Cancelled"}}
+
+
+class TestStatusFrom:
+    def test_the_write_is_conditioned_on_the_current_status(self):
+        connection = MagicMock()
+        collection = connection.connect.return_value.__enter__.return_value.__getitem__.return_value
+        collection.update_one.return_value.matched_count = 0
+        exp_id = ObjectId()
+
+        assert ExperimentRepository(connection).update_status_from(
+            str(exp_id), "Waiting", ("Done", "Error")) is False
+
+        query, change = collection.update_one.call_args.args
+        assert query == {"_id": exp_id, "status": {"$in": ["Done", "Error"]}}
+        assert change == {"$set": {"status": "Waiting"}}

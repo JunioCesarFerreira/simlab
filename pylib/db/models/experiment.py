@@ -54,6 +54,9 @@ class Parameters(TypedDict):
     # experiment never depends on them. usl_benchmark stores random_seed too.
     chromosomes: NotRequired[Any]  # list of chromosome to_dict() forms
     random_seed: NotRequired[Any]  # int
+    # usl_benchmark's plan (levels, repetitions). Declared so that reading an
+    # experiment returns it; created only through POST /scalability/.
+    benchmark: NotRequired[Any]
 
 
 class ParetoFrontItem(TypedDict):

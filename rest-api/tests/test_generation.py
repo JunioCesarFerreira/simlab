@@ -106,6 +106,12 @@ class TestUpdateGenerationStatus:
 
 # ── R19: the evidence travels with the objectives ──────────────────────────
 
+    def test_an_unknown_status_is_refused(self, client, mock_factory):
+        resp = client.patch(f"{BASE}/{GEN_ID}/status", params={"new_status": "Finished"})
+        assert resp.status_code == 422
+        mock_factory.generation_repo.update.assert_not_called()
+
+
 class TestCompletenessIsPublished:
     """An objective vector alone cannot be read.
 

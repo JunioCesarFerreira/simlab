@@ -1,3 +1,4 @@
+from unittest.mock import MagicMock
 import io
 import json
 import zipfile
@@ -77,6 +78,17 @@ class TestDownloadTopologyBySimulation:
         mock_factory.fs_handler.download_file.side_effect = RuntimeError("error")
         resp = client.get(f"{BASE}/simulations/{SIM_ID}/topology")
         assert resp.status_code == 500
+
+
+class TestTopologyAgainstTheRealRepository:
+    """The route called a method the repository did not have; the mocks above
+    accepted it. A mock with the repository's spec does not."""
+
+    def test_the_repository_has_the_method_the_route_calls(self, client, mock_factory):
+        from pylib.db.repositories.simulation import SimulationRepository
+        mock_factory.simulation_repo = MagicMock(spec=SimulationRepository)
+        mock_factory.simulation_repo.get_topology_pic_file_id.return_value = None
+        assert client.get(f"{BASE}/simulations/{SIM_ID}/topology").status_code == 404
 
 
 # ── GET /experiments/{experiment_id}/analysis/zip ─────────────────────────────

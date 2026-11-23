@@ -92,6 +92,20 @@ class ExperimentRepository:
     def update_status(self, experiment_id: str, status: str) -> bool:
         return self.update(experiment_id, {"status": status})
 
+    def update_status_from(self, experiment_id: str, status: str, allowed_from) -> bool:
+        """Set ``status`` only while the current one is in ``allowed_from``.
+
+        One conditional write, so a status that changes in between is not
+        overwritten: the API moving a running experiment back to Waiting let
+        the engine start it a second time.
+        """
+        with self.connection.connect() as db:
+            result = db["experiments"].update_one(
+                {"_id": ObjectId(experiment_id), "status": {"$in": list(allowed_from)}},
+                {"$set": {"status": status}},
+            )
+            return result.matched_count > 0
+
     def is_cancelled(self, experiment_id: str) -> bool:
         """True when the experiment was marked CANCELLED (e.g. from the GUI) or deleted.
 

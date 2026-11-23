@@ -190,3 +190,21 @@ class TestReadBatch:
         response = client.get(f"{BASE}/{EXP_ID}")
 
         assert response.json()["parameters"] == sample_experiment()["parameters"]
+
+
+class TestBenchmarkPlan:
+    def test_it_is_returned_on_reading(self, client, mock_factory):
+        doc = sample_experiment()
+        doc["parameters"] = {**doc["parameters"], "strategy": "usl_benchmark",
+                             "benchmark": {"levels": [1, 2], "repetitions": 3}}
+        mock_factory.experiment_repo.get.return_value = doc
+        response = client.get(f"{BASE}/{EXP_ID}")
+        assert response.json()["parameters"]["benchmark"] == {"levels": [1, 2], "repetitions": 3}
+
+    @pytest.mark.parametrize("strategy", ["usl_benchmark", "nsga3", "batch"])
+    def test_it_is_not_taken_from_post_experiments(self, created, batch, strategy):
+        payload = batch if strategy == "batch" else other_strategy(strategy)
+        payload["parameters"]["benchmark"] = {"levels": [1]}
+        response, stored = created(payload)
+        assert response.status_code == 200, response.text
+        assert "benchmark" not in stored["parameters"]

@@ -71,6 +71,7 @@ The complete list, with schemas, is the Swagger UI.
 | `algorithm` | optional, stored as `{}` when absent (batch does not read it) | required |
 | `chromosomes` | required | dropped |
 | `random_seed` | optional; batch draws seeds from it when `simulation.random_seeds` is absent | dropped (theirs is `algorithm.random_seed`) |
+| `benchmark` | dropped | dropped: a benchmark is created by `POST /scalability/`, and its plan is returned on reading |
 
 **Any other key in it is dropped without an error**, on the way in and on the
 way out. The contents of `algorithm`, `simulation` and `problem` are stored as
@@ -212,13 +213,21 @@ credentials passed review once.
 
 ---
 
+## What a client may change
+
+| Route | Accepts |
+|---|---|
+| `PUT /experiments/{id}` | `name` only (a non-empty string). Everything else is the engine's |
+| `PATCH /experiments/{id}/status` | `Cancelled` from `Waiting` or `Running`; `Waiting` from `Done`, `Error` or `Cancelled`. `Running`, `Done` and `Error` are the engine's (422); any other move is 409, and asking for the current status is a no-op |
+| `PUT /simulations/{id}` | `system_message` only. Status, metrics and files are the master-node's |
+| `PATCH /simulations/{id}/status`, `PATCH /generations/{id}/status` | one of the five statuses (422 otherwise) |
+
+A running experiment cannot be put back to `Waiting`: the engine would start it
+a second time.
+
+`GET /files/simulations/{id}/topology` serves the topology picture, which is
+stored on the simulation's individual.
+
 ## Known issues
 
-- **`GET /files/simulations/{id}/topology` answers 500.** It calls
-  `simulation_repo.get_topology_pic_file_id`, which does not exist; the test
-  mocks it. The picture is on the individual (`topology_picture_id`): use
-  `GET /files/{file_id}/as/png`.
-- **Writes are not validated on every route.** `PUT /experiments/{id}` and
-  `PUT /simulations/{id}` store any field, the firmware snapshot included, and
-  `PATCH` of a generation's or simulation's status accepts any string. Only the
-  experiment's status is checked.
+None known.

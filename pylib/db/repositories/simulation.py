@@ -114,6 +114,24 @@ class SimulationRepository:
             result = db["simulations"].update_one({"_id": sim_id}, {"$set": updates})
             return result.modified_count > 0
 
+    def get_topology_pic_file_id(self, simulation_id: str) -> Optional[ObjectId]:
+        """The topology picture of a simulation, which is stored on its individual.
+
+        ``None`` when the simulation, the individual or the picture is missing.
+        """
+        with self.connection.connect() as db:
+            sim = db["simulations"].find_one(
+                {"_id": ObjectId(simulation_id)}, {"generation_id": 1, "individual_id": 1})
+            if not sim:
+                return None
+            individual = db["individuals"].find_one(
+                {"generation_id": sim.get("generation_id"), "individual_id": sim.get("individual_id")},
+                {"topology_picture_id": 1})
+        picture = (individual or {}).get("topology_picture_id")
+        if not picture:
+            return None
+        return picture if isinstance(picture, ObjectId) else ObjectId(str(picture))
+
     def update_status(self, sim_id: str, status: str):
         with self.connection.connect() as db:
             db["simulations"].update_one(

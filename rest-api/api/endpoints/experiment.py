@@ -45,9 +45,21 @@ from pylib.timeutil import utc_now
 
 router = APIRouter()
 
+#: What PUT /experiments/{id} may change.
+EDITABLE_EXPERIMENT_FIELDS = {"name"}
+
+#: The statuses a client may set, and the ones each is reached from.
+STATUS_FROM: dict[str, tuple[str, ...]] = {
+    EnumStatus.CANCELLED.value: (EnumStatus.WAITING.value, EnumStatus.RUNNING.value),
+    EnumStatus.WAITING.value: (EnumStatus.DONE.value, EnumStatus.ERROR.value,
+                               EnumStatus.CANCELLED.value),
+}
+
 
 def _settle_strategy_input(parameters: dict, source_options: dict) -> None:
     """Batch brings chromosomes instead of an algorithm; the others, the opposite."""
+    # A benchmark's plan is validated by POST /scalability/, its only door.
+    parameters.pop("benchmark", None)
     if parameters["strategy"] == "batch":
         try:
             validate_batch_input(parameters, source_options)
@@ -169,9 +181,19 @@ def update_experiment(
     updates: dict,
     factory: MongoRepository = Depends(get_factory)
 ) -> bool:
-    """Partially update an experiment using $set semantics."""
+    """Rename an experiment. The other fields are written by the engine, and the
+    status has its own PATCH route: storing any field here let a client
+    overwrite, for one, the firmware snapshot."""
+    other = sorted(set(updates) - EDITABLE_EXPERIMENT_FIELDS)
+    if other:
+        raise HTTPException(
+            status_code=422,
+            detail=f"only {sorted(EDITABLE_EXPERIMENT_FIELDS)} can be changed here, not {other}")
+    name = updates.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise HTTPException(status_code=422, detail="name must be a non-empty string")
     try:
-        return factory.experiment_repo.update(experiment_id, updates)
+        return factory.experiment_repo.update(experiment_id, {"name": name.strip()})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -199,20 +221,38 @@ def update_experiment_status(
     new_status: str,
     factory: MongoRepository = Depends(get_factory)
 ) -> bool:
-    """Update only the status field of an experiment."""
+    """Cancel an experiment that waits or runs, or put a finished one back to Waiting.
+
+    Running, Done and Error are the engine's to set. Moving a running
+    experiment back to Waiting let the engine start it a second time.
+    """
     valid = {s.value for s in EnumStatus}
     if new_status not in valid:
         raise HTTPException(
             status_code=422,
             detail=f"Invalid status {new_status!r}; expected one of {sorted(valid)}",
         )
+    allowed_from = STATUS_FROM.get(new_status)
+    if allowed_from is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{new_status} is set by the engine; a client sets {sorted(STATUS_FROM)}")
     try:
-        factory.experiment_repo.update_status(experiment_id, new_status)
-        return True
-    except HTTPException:
-        raise
+        if factory.experiment_repo.update_status_from(experiment_id, new_status, allowed_from):
+            return True
+        doc = factory.experiment_repo.get(experiment_id)
+    except bson_errors.InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid experiment_id")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    if doc.get("status") == new_status:
+        return True
+    raise HTTPException(
+        status_code=409,
+        detail=f"cannot go from {doc.get('status')} to {new_status}; "
+               f"{new_status} is reached from {sorted(allowed_from)}")
 
 
 @router.patch("/{experiment_id}/analysis-file", response_model=str)

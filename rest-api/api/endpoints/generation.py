@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from bson import ObjectId
 
 from pylib.db import MongoRepository
+from pylib.db.models.enums import EnumStatus
 from api.dependencies import get_factory
 from api.domain.generation import GenerationDto
 from api.mappers.generation import generation_from_mongo
@@ -65,6 +66,11 @@ def update_generation_status(
     factory: MongoRepository = Depends(get_factory)
 ) -> bool:
     """Update only the status field of a generation."""
+    valid = {s.value for s in EnumStatus}
+    if new_status not in valid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid status {new_status!r}; expected one of {sorted(valid)}")
     try:
         return factory.generation_repo.update(ObjectId(generation_id), {"status": new_status})
     except Exception as e:

@@ -4,6 +4,7 @@ from bson import ObjectId
 import tempfile
 
 from pylib.db import MongoRepository
+from pylib.db.models.enums import EnumStatus
 from api.dependencies import get_factory
 from api.domain.simulation import SimulationDto
 from api.mappers.simulation import simulation_from_mongo, simulation_to_mongo
@@ -78,15 +79,29 @@ def get_simulation(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _require_status(new_status: str) -> None:
+    valid = {s.value for s in EnumStatus}
+    if new_status not in valid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid status {new_status!r}; expected one of {sorted(valid)}")
+
+
 @router.put("/{sim_id}", response_model=bool)
 def update_simulation(
     sim_id: str,
     updates: dict,
     factory: MongoRepository = Depends(get_factory)
 ) -> bool:
-    """Partially update a simulation using $set semantics."""
+    """Annotate a simulation. Its status, results and files are the
+    master-node's; storing any field here let a client rewrite a result."""
+    other = sorted(set(updates) - {"system_message"})
+    if other or not isinstance(updates.get("system_message"), str):
+        raise HTTPException(
+            status_code=422,
+            detail=f"only system_message (a string) can be changed here, not {other}")
     try:
-        return factory.simulation_repo.update(ObjectId(sim_id), updates)
+        return factory.simulation_repo.update(ObjectId(sim_id), {"system_message": updates["system_message"]})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -134,6 +149,7 @@ def update_simulation_status(
     factory: MongoRepository = Depends(get_factory)
 ) -> bool:
     """Update only the status field of a simulation."""
+    _require_status(new_status)
     try:
         factory.simulation_repo.update_status(sim_id, new_status)
         return True

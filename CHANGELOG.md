@@ -5,6 +5,27 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — The API serves topologies and guards its writes
+
+### Fixed
+
+- **`GET /files/simulations/{id}/topology` serves the picture.** It called
+  `simulation_repo.get_topology_pic_file_id`, which did not exist, and answered
+  500; the tests mocked it. The repository finds the picture on the
+  simulation's individual.
+- **A running experiment cannot be put back to `Waiting`.** The engine started
+  it a second time. A client may cancel what waits or runs and put what ended
+  back to `Waiting`; `Running`, `Done` and `Error` are the engine's. The write
+  is conditional on the current status.
+- **Writes are limited to what a client owns.** `PUT /experiments/{id}` took any
+  field, the firmware snapshot included; it renames. `PUT /simulations/{id}`
+  could rewrite a result; it annotates (`system_message`). The status of a
+  generation or simulation must be one of the five.
+- **A benchmark's plan is returned** on reading an experiment
+  (`parameters.benchmark`), and still taken only from `POST /scalability/`.
+
+---
+
 ## [Unreleased] — Telemetry retries, and averages only numbers
 
 ### Fixed

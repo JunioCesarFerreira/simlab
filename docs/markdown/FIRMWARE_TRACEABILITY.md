@@ -84,8 +84,8 @@ kept in `option_keys`, so the resolution stays auditable.
   past run would fabricate provenance. The capture also runs on resume, so an
   experiment still `Running` with no block gets one dated at the resume
   (`captured_at`).
-- **Immutable by convention.** The engine writes the block once, but
-  `PUT /experiments/{id}` accepts any field and could overwrite it.
+- **Immutable for clients.** The engine writes the block once, and the API's
+  `PUT /experiments/{id}` changes only the name.
 - **Scope.** The snapshot is a record, not the execution path: the master-node
   still fetches firmware from the shared repository when it dispatches each
   simulation. Editing a repository *while* an experiment runs therefore changes

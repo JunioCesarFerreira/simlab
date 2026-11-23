@@ -239,12 +239,22 @@ class TestUpdateExperiment:
         resp = client.put(f"{BASE}/{EXP_ID}", json={"name": "Updated"})
         assert resp.status_code == 200
         assert resp.json() is True
+        mock_factory.experiment_repo.update.assert_called_once_with(EXP_ID, {"name": "Updated"})
 
     def test_not_modified(self, client, mock_factory):
         mock_factory.experiment_repo.update.return_value = False
         resp = client.put(f"{BASE}/{EXP_ID}", json={"name": "Updated"})
         assert resp.status_code == 200
         assert resp.json() is False
+
+    @pytest.mark.parametrize("updates", [
+        {"firmware_snapshot": {}}, {"status": "Done"}, {"name": "x", "pareto_front": []},
+        {"name": ""}, {"name": "   "}, {"name": 3}, {},
+    ])
+    def test_only_a_name_is_written(self, client, mock_factory, updates):
+        resp = client.put(f"{BASE}/{EXP_ID}", json=updates)
+        assert resp.status_code == 422
+        mock_factory.experiment_repo.update.assert_not_called()
 
 
 # ── DELETE /{experiment_id} ────────────────────────────────────────────────────
@@ -274,27 +284,53 @@ class TestDeleteExperiment:
 
 # ── PATCH /{experiment_id}/status ─────────────────────────────────────────────
 class TestUpdateExperimentStatus:
-    def test_success(self, client, mock_factory):
-        mock_factory.experiment_repo.update_status.return_value = None
-        resp = client.patch(f"{BASE}/{EXP_ID}/status", params={"new_status": "Running"})
-        assert resp.status_code == 200
-        assert resp.json() is True
+    def patch(self, client, status):
+        return client.patch(f"{BASE}/{EXP_ID}/status", params={"new_status": status})
 
-    def test_cancelled_is_accepted(self, client, mock_factory):
-        mock_factory.experiment_repo.update_status.return_value = None
-        resp = client.patch(f"{BASE}/{EXP_ID}/status", params={"new_status": "Cancelled"})
-        assert resp.status_code == 200
-        assert resp.json() is True
+    def test_a_running_experiment_can_be_cancelled(self, client, mock_factory):
+        mock_factory.experiment_repo.update_status_from.return_value = True
+        resp = self.patch(client, "Cancelled")
+        assert resp.status_code == 200 and resp.json() is True
+        args = mock_factory.experiment_repo.update_status_from.call_args.args
+        assert args[1] == "Cancelled" and set(args[2]) == {"Waiting", "Running"}
+
+    def test_a_finished_one_can_wait_again(self, client, mock_factory):
+        mock_factory.experiment_repo.update_status_from.return_value = True
+        assert self.patch(client, "Waiting").status_code == 200
+        args = mock_factory.experiment_repo.update_status_from.call_args.args
+        assert set(args[2]) == {"Done", "Error", "Cancelled"}
+
+    def test_a_running_one_cannot_go_back_to_waiting(self, client, mock_factory):
+        # The engine would start it a second time.
+        mock_factory.experiment_repo.update_status_from.return_value = False
+        mock_factory.experiment_repo.get.return_value = {"status": "Running"}
+        resp = self.patch(client, "Waiting")
+        assert resp.status_code == 409
+        assert "Running" in resp.json()["detail"]
+
+    def test_asking_for_the_status_it_has_is_not_an_error(self, client, mock_factory):
+        mock_factory.experiment_repo.update_status_from.return_value = False
+        mock_factory.experiment_repo.get.return_value = {"status": "Cancelled"}
+        assert self.patch(client, "Cancelled").status_code == 200
+
+    def test_a_missing_experiment_is_404(self, client, mock_factory):
+        mock_factory.experiment_repo.update_status_from.return_value = False
+        mock_factory.experiment_repo.get.return_value = None
+        assert self.patch(client, "Cancelled").status_code == 404
+
+    @pytest.mark.parametrize("status", ["Running", "Done", "Error"])
+    def test_the_engine_statuses_are_refused(self, client, mock_factory, status):
+        resp = self.patch(client, status)
+        assert resp.status_code == 422
+        mock_factory.experiment_repo.update_status_from.assert_not_called()
 
     def test_invalid_status_returns_422(self, client, mock_factory):
-        resp = client.patch(f"{BASE}/{EXP_ID}/status", params={"new_status": "Bogus"})
-        assert resp.status_code == 422
-        mock_factory.experiment_repo.update_status.assert_not_called()
+        assert self.patch(client, "Bogus").status_code == 422
+        mock_factory.experiment_repo.update_status_from.assert_not_called()
 
     def test_repo_error_returns_500(self, client, mock_factory):
-        mock_factory.experiment_repo.update_status.side_effect = RuntimeError("db error")
-        resp = client.patch(f"{BASE}/{EXP_ID}/status", params={"new_status": "Running"})
-        assert resp.status_code == 500
+        mock_factory.experiment_repo.update_status_from.side_effect = RuntimeError("db error")
+        assert self.patch(client, "Cancelled").status_code == 500
 
 
 # ── PATCH /{experiment_id}/analysis-file ──────────────────────────────────────
