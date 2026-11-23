@@ -5,6 +5,29 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — The offline indicators equal the GUI's
+
+### Fixed
+
+- **The CLIs measure the set `/hv-gd` measures.** They measured each
+  generation's offspring while the API and the GUI default to survivors.
+  `--population` (`survivors` by default, `offspring`, `archive`) follows the
+  endpoint, and the generations now publish their `survivors`.
+- **Objectives are read by name.** Stored vectors were paired with
+  `--objectives` by position: another order, or a subset, gave wrong numbers
+  without an error. An unknown name stops the tool.
+- **A synthetic experiment is measured against its analytical front by
+  default**, under the endpoint's conditions, and a permuted request is measured
+  in the declared order, aligned with that front.
+- **`lib/stats.py` computes the 95% interval with Student's t**; the normal
+  quantile understated it by 31% with five runs.
+
+Checked on three NSGA-III runs (engine, API and disposable MongoDB): every
+series of `compute_hv_gd.py` equals `/hv-gd`'s, for the full set and for a
+reordered subset.
+
+---
+
 ## [Unreleased] — Host tools work from where they are run
 
 ### Fixed

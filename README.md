@@ -507,7 +507,6 @@ read. Each is described in the linked document.
 
 | Area | Issue | Details |
 | --- | --- | --- |
-| Indicators | The offline CLIs measure offspring; the GUI measures survivors by default | [pareto-analysis](pareto-analysis/README.md#known-issues) |
 
 ---
 

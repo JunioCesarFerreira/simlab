@@ -66,7 +66,7 @@ def generation_from_mongo(
     simulations_by_individual: Optional[dict[str, list[str]]] = None,
 ) -> GenerationDto:
     id_str, d = pop_id(doc)
-    return {
+    out: GenerationDto = {
         "id": id_str,
         "experiment_id": oid_to_str(d.get("experiment_id")),
         "index": d.get("index", 0),
@@ -78,3 +78,7 @@ def generation_from_mongo(
             for ind in (individuals or [])
         ],
     }
+    # Published so that offline tools can measure the same set as /hv-gd.
+    if d.get("survivors") is not None:
+        out["survivors"] = [str(h) for h in d["survivors"]]
+    return out

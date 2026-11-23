@@ -49,8 +49,12 @@ from lib import metrics
 from lib.api import (
     DEFAULT_API_BASE,
     build_session,
-    get_generations_from_experiment,
+    canonical_order,
+    get_experiment,
     get_experiment_pareto_front,
+    load_generations,
+    objective_columns,
+    synthetic_bench,
     upload_analysis_file_api,
 )
 
@@ -337,6 +341,21 @@ class ConvergenceMetrics(NamedTuple):
     igd_plus: list[float]
 
 
+POPULATIONS = ("survivors", "offspring", "archive")
+
+
+def population_sources(
+    generations: list[int], population: str, survivors_per_gen: dict[int, list[str]] | None,
+) -> list[str]:
+    """The set each generation is measured on: survivors fall back to the
+    offspring where a generation recorded none, as /hv-gd does."""
+    survivors_per_gen = survivors_per_gen or {}
+    return [
+        "offspring" if population == "survivors" and g not in survivors_per_gen else population
+        for g in generations
+    ]
+
+
 def compute_convergence_metrics(
     individuals_per_gen: dict[int, list[dict]],
     objectives: list[str],
@@ -345,6 +364,8 @@ def compute_convergence_metrics(
     reference_front_min: np.ndarray,
     normalized: bool = True,
     bench: str | None = None,
+    population: str = "offspring",
+    survivors_per_gen: dict[int, list[str]] | None = None,
 ) -> ConvergenceMetrics:
     """
     Compute per-generation HV, cumulative HV, GD, IGD and IGD+.
@@ -374,8 +395,24 @@ def compute_convergence_metrics(
     non-dominated set rather than re-sorting the whole population: a point that
     is off its own generation's front is dominated within that generation too,
     so it can never join the accumulated front.  Cost is O(G * front^2).
+
+    ``population`` picks the set each generation is measured on, as the
+    ``population`` parameter of ``/hv-gd``: ``survivors`` (P_t, from
+    ``survivors_per_gen``; the offspring where a generation recorded none),
+    ``offspring`` (what the generation evaluated) or ``archive`` (everything
+    evaluated so far). The cumulative curve is the archive's in every case.
     """
+    if population not in POPULATIONS:
+        raise ValueError(f"population must be one of {POPULATIONS}, got {population!r}")
     generations = sorted(individuals_per_gen.keys())
+    sources = population_sources(generations, population, survivors_per_gen)
+    # Survivors are chromosome hashes, and one may have been evaluated in an
+    # older generation, so they are resolved against the whole experiment.
+    by_hash: dict[str, dict] = {
+        ind["individual_id"]: ind
+        for gen in generations for ind in individuals_per_gen[gen]
+        if ind.get("individual_id")
+    }
 
     hv_values: list[float] = []
     hv_cumulative: list[float] = []
@@ -405,41 +442,51 @@ def compute_convergence_metrics(
     acc_rows: list[list[float]] = []    # running non-dominated set (min-space)
     last_cum_hv = 0.0
 
-    for gen in generations:
+    for gen, source in zip(generations, sources):
         front_rows = generation_front_min(
             individuals_per_gen[gen], objectives=objectives, minimize=minimize
         )
 
-        if not front_rows:
+        # Cumulative ("best so far") front, always folded from the offspring:
+        # it is everything evaluated. Duplicates never dominate each other, so
+        # without the dedup key the accumulator would keep one copy per
+        # generation a point reappears in — same hypervolume, unbounded growth.
+        if front_rows:
+            for row in front_rows:
+                key = tuple(row)
+                if key not in acc_seen:
+                    acc_seen.add(key)
+                    acc_rows.append(row)
+            acc_rows = nondominated_rows_min(acc_rows)
+            acc_seen = {tuple(r) for r in acc_rows}
+            acc_arr = np.asarray(acc_rows, dtype=float)
+            acc_dom = acc_arr[np.all(acc_arr < hv_ref_arr, axis=1)]
+            last_cum_hv = float(moocore.hypervolume(acc_dom, ref=hv_ref)) if len(acc_dom) else 0.0
+        cum_hv = last_cum_hv
+
+        if source == "survivors":
+            kept = [by_hash[h] for h in survivors_per_gen.get(gen, []) if h in by_hash]
+            selected = generation_front_min(kept, objectives=objectives, minimize=minimize)
+        elif source == "archive":
+            selected = [list(r) for r in acc_rows]
+        else:
+            selected = front_rows
+
+        if not selected:
             hv_values.append(0.0)
-            hv_cumulative.append(last_cum_hv)   # an empty generation adds nothing
+            hv_cumulative.append(cum_hv)   # an empty generation adds nothing
             gd_values.append(float("nan"))
             igd_values.append(float("nan"))
             igd_plus_values.append(float("nan"))
             continue
 
-        pts_min = np.asarray(front_rows, dtype=float)
+        pts_min = np.asarray(selected, dtype=float)
 
         # Only points that strictly dominate the reference contribute to HV;
         # moocore requires every point passed to it to dominate ``ref``.
         dominating = pts_min[np.all(pts_min < hv_ref_arr, axis=1)]
-        hv_val = float(moocore.hypervolume(dominating, ref=hv_ref)) if len(dominating) else 0.0
-
-        # Cumulative ("best so far") front.  Duplicates never dominate each
-        # other, so without the dedup key the accumulator would keep one copy
-        # per generation a point reappears in — same hypervolume, unbounded
-        # growth.  Deduplicating keeps the running set minimal.
-        for row in front_rows:
-            key = tuple(row)
-            if key not in acc_seen:
-                acc_seen.add(key)
-                acc_rows.append(row)
-        acc_rows = nondominated_rows_min(acc_rows)
-        acc_seen = {tuple(r) for r in acc_rows}
-        acc_arr = np.asarray(acc_rows, dtype=float)
-        acc_dom = acc_arr[np.all(acc_arr < hv_ref_arr, axis=1)]
-        cum_hv = float(moocore.hypervolume(acc_dom, ref=hv_ref)) if len(acc_dom) else 0.0
-        last_cum_hv = cum_hv
+        hv_val = cum_hv if source == "archive" else (
+            float(moocore.hypervolume(dominating, ref=hv_ref)) if len(dominating) else 0.0)
 
         hv_values.append(hv_val)
         hv_cumulative.append(cum_hv)
@@ -653,6 +700,7 @@ def plot_hv_gd(
     objective_names: tuple[str, ...],
     output_path: Path,
     reference_label: str = "the stored Pareto front",
+    population: str = "offspring",
     normalized: bool = True,
 ):
     """
@@ -680,7 +728,7 @@ def plot_hv_gd(
     ax_hv.plot(
         generations, hv_values,
         marker="o", markersize=4, linewidth=1.5,
-        color="tab:blue", label="Per generation",
+        color="tab:blue", label=f"Per generation ({population})",
     )
     ax_hv.plot(
         generations, hv_cumulative,
@@ -747,9 +795,14 @@ def main():
 
     parser.add_argument("--api-base", default=DEFAULT_API_BASE,
                         help="SimLab REST API base URL  [env: SIMLAB_API_BASE]")
-    parser.add_argument("--api-key", default=os.getenv("SIMLAB_API_KEY", "api-password"))
+    parser.add_argument("--api-key", default=os.getenv("SIMLAB_API_KEY", "simlab-api-key42"))
     parser.add_argument("--expid", required=True)
     parser.add_argument("--keep-the-files", action="store_true", default=False)
+    parser.add_argument(
+        "--population", choices=POPULATIONS, default="survivors",
+        help=("The set each generation's HV/GD/IGD curve measures, as /hv-gd: "
+              "survivors (P_t; the offspring where none was recorded), offspring, or archive."),
+    )
 
     parser.add_argument(
         "--objectives",
@@ -770,9 +823,9 @@ def main():
         choices=["DTLZ2", "ZDT1", "SCH1"],
         default=None,
         help=(
-            "For synthetic experiments: measure HV and GD against the "
-            "benchmark's analytical Pareto front (convergence to the true "
-            "optimum) instead of the experiment's own empirical references."
+            "Measure HV and GD against the benchmark's analytical Pareto front. "
+            "By default it is used, as by /hv-gd, for a synthetic experiment "
+            "whose objectives are all minimised and all requested."
         ),
     )
     parser.add_argument(
@@ -803,11 +856,15 @@ def main():
     session = build_session(args.api_key)
 
     # Non-penalized individuals per generation (penalized filtered in lib/api.py)
-    individuals_per_gen = get_generations_from_experiment(
+    experiment = get_experiment(session, args.api_base, args.expid)
+    # Objectives are looked up by name in the order the experiment declares.
+    columns = objective_columns(args.objectives, experiment)
+    individuals_per_gen, survivors_per_gen = load_generations(
         session=session,
         api_base=args.api_base,
         experiment_id=args.expid,
         label_objectives=args.objectives,
+        columns=columns,
     )
 
     if not any(individuals_per_gen.values()):
@@ -876,16 +933,20 @@ def main():
     # optimum, not to the run's own final front) and its fixed nadir as the HV
     # reference (so HV is comparable across runs). WSN experiments keep the
     # empirical references (population-derived worst point + stored final front).
-    if args.true_front_bench:
+    bench = args.true_front_bench or synthetic_bench(experiment, args.objectives, args.minimize)
+    metric_objectives, metric_minimize = list(args.objectives), list(args.minimize)
+    if bench:
         from lib.true_fronts import sample_true_front, true_nadir
-        m = args.true_front_m or len(args.objectives)
-        true_front = sample_true_front(args.true_front_bench, m)
+        metric_objectives, metric_minimize = canonical_order(
+            metric_objectives, metric_minimize, experiment)
+        m = args.true_front_m or len(metric_objectives)
+        true_front = sample_true_front(bench, m)
         reference_front_min = to_minimization_array(
-            true_front, objectives=args.objectives, minimize=args.minimize
+            true_front, objectives=metric_objectives, minimize=metric_minimize
         )
-        worst_point = [v * 1.1 for v in true_nadir(args.true_front_bench, m)]
-        reference_label = f"the true {args.true_front_bench} front"
-        bench_for_metrics = args.true_front_bench
+        worst_point = [v * 1.1 for v in true_nadir(bench, m)]
+        reference_label = f"the true {bench} front"
+        bench_for_metrics = bench
     else:
         bench_for_metrics = None
         # Reference point: worst feasible values + margin (no penalty contamination).
@@ -936,12 +997,14 @@ def main():
 
     conv = compute_convergence_metrics(
         individuals_per_gen=individuals_per_gen,
-        objectives=args.objectives,
-        minimize=args.minimize,
+        objectives=metric_objectives,
+        minimize=metric_minimize,
         hv_ref=worst_point,
         reference_front_min=reference_front_min,
         normalized=not args.raw_distances,
         bench=bench_for_metrics,
+        population=args.population,
+        survivors_per_gen=survivors_per_gen,
     )
 
     hv_gd_plot = Path(f"hv_gd_{args.expid}.png")
@@ -953,10 +1016,11 @@ def main():
         igd_values=conv.igd,
         igd_plus_values=conv.igd_plus,
         worst_point=worst_point,
-        objective_names=tuple(args.objectives),
+        objective_names=tuple(metric_objectives),
         output_path=hv_gd_plot,
         reference_label=reference_label,
         normalized=not args.raw_distances,
+        population=args.population,
     )
     upload_analysis_file_api(
         session, args.api_base, args.expid, hv_gd_plot,

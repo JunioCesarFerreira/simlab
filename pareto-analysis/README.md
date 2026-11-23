@@ -42,7 +42,7 @@ The scripts go through the reverse proxy and verify TLS against
 | Variable | Default | Description |
 |---|---|---|
 | `SIMLAB_API_BASE` | `https://localhost/api/v1` | API base URL |
-| `SIMLAB_API_KEY` | `api-password` | API key. Compose's default is `simlab-api-key42`, so set it |
+| `SIMLAB_API_KEY` | `simlab-api-key42` | API key, Compose's default |
 | `SIMLAB_CA_BUNDLE` | the proxy's certificate, if present | CA bundle |
 | `SIMLAB_TLS_VERIFY` | `true` | `false` skips verification |
 
@@ -53,9 +53,10 @@ The scripts go through the reverse proxy and verify TLS against
 | `--expid` | required | required | Experiment ObjectId |
 | `--api-key` | `SIMLAB_API_KEY` | `SIMLAB_API_KEY` | REST API key |
 | `--api-base` | `SIMLAB_API_BASE` | `SIMLAB_API_BASE` | Base URL of the SimLab API |
-| `--objectives` | `latency energy throughput` | required | Objective names, **all of them, in the order the experiment declares** |
+| `--objectives` | `latency energy throughput` | required | Objective names, looked up by name among those the experiment declares; any order, or a subset. An unknown name stops the tool |
 | `--minimize` | `True True False` | required | One boolean per objective: `True` minimises, `False` maximises |
-| `--true-front-bench` | — | — | `DTLZ2`, `ZDT1` or `SCH1`: measure against the analytical front |
+| `--true-front-bench` | as `/hv-gd` | as `/hv-gd` | `DTLZ2`, `ZDT1` or `SCH1`: measure against the analytical front. By default, the experiment's benchmark when it is synthetic, every objective is minimised and all are requested |
+| `--population` | `survivors` | `survivors` | The set each generation is measured on, as `/hv-gd`: `survivors` (P_t; the offspring where a generation recorded none), `offspring`, or `archive` |
 | `--true-front-m` | number of objectives | number of objectives | Objectives of the analytical front |
 | `--raw-distances` | off | off | Do not normalise GD, IGD and IGD+ |
 | `--keep-the-files` | off | n/a | Keep the local PNG files after upload |
@@ -131,13 +132,4 @@ minimises over the reference instead.
 
 ## Known issues
 
-- **Only offspring are measured.** Each point of a series is the front of the
-  individuals evaluated in that generation (plus the cumulative HV). The API
-  and the GUI default to survivors: compare with
-  `/hv-gd?population=offspring`.
-- **Objectives map by position.** Generation values are paired with
-  `--objectives` in the order given, while the reference is read by name. A
-  different order, or a subset, gives wrong numbers without an error.
-- `lib/stats.py`, a helper for comparing several runs that the CLIs do not use,
-  computes its 95% interval with the normal approximation, which is narrow for
-  few runs.
+None known.

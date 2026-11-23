@@ -5,8 +5,8 @@ Distance (IGD / IGD+) per generation.  Outputs a single JSON object to stdout.
 The metric loop itself lives in ``plot_pareto_results.compute_convergence_metrics``
 — the same function the plotting CLI uses — so the numbers printed here, the
 numbers in the uploaded PNG and the numbers the web GUI reads from
-``GET /experiments/{id}/hv-gd`` share one definition. The series here measure
-each generation's offspring, which is ``population=offspring`` there.
+``GET /experiments/{id}/hv-gd`` share one definition. ``--population`` is that
+endpoint's ``population``, survivors by default as there.
 """
 import json
 import os
@@ -18,13 +18,19 @@ from lib import metrics
 from lib.api import (
     DEFAULT_API_BASE,
     build_session,
-    get_generations_from_experiment,
+    canonical_order,
+    get_experiment,
     get_experiment_pareto_front,
+    load_generations,
+    objective_columns,
+    synthetic_bench,
 )
 from plot_pareto_results import (
+    POPULATIONS,
     compute_worst_point,
     to_minimization_array,
     compute_convergence_metrics,
+    population_sources,
 )
 
 
@@ -34,6 +40,7 @@ def _empty() -> str:
         "gd": [], "igd": [], "igd_plus": [],
         "reference": None, "reference_size": 0, "normalized": False,
         "worst_point": {}, "gd_method": None, "gd_formula": None, "normalization": None,
+        "population": None, "population_sources": [], "population_source": None,
     })
 
 
@@ -41,7 +48,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Compute HV, GD and IGD per generation")
     parser.add_argument("--api-base", default=DEFAULT_API_BASE,
                         help="SimLab REST API base URL  [env: SIMLAB_API_BASE]")
-    parser.add_argument("--api-key", default=os.getenv("SIMLAB_API_KEY", "api-password"))
+    parser.add_argument("--api-key", default=os.getenv("SIMLAB_API_KEY", "simlab-api-key42"))
     parser.add_argument("--expid", required=True)
     parser.add_argument("--objectives", nargs="+", required=True)
     parser.add_argument("--minimize", nargs="+", required=True)
@@ -50,9 +57,9 @@ def main() -> None:
         choices=["DTLZ2", "ZDT1", "SCH1"],
         default=None,
         help=(
-            "For synthetic experiments: use the benchmark's analytical Pareto "
-            "front as the GD/IGD reference (convergence to the true optimum) "
-            "instead of the experiment's own stored final front (self-reference)."
+            "Measure against the benchmark's analytical Pareto front. By default it "
+            "is used, as by /hv-gd, for a synthetic experiment whose objectives are "
+            "all minimised and all requested; otherwise the stored final front."
         ),
     )
     parser.add_argument(
@@ -70,6 +77,11 @@ def main() -> None:
             "by the reference front's ideal-nadir range."
         ),
     )
+    parser.add_argument(
+        "--population", choices=POPULATIONS, default="survivors",
+        help=("The set each generation is measured on, as /hv-gd: survivors (P_t; "
+              "the offspring where a generation recorded none), offspring, or archive."),
+    )
     args = parser.parse_args()
     minimize: list[bool] = [s.lower() == "true" for s in args.minimize]
     objectives: list[str] = args.objectives
@@ -77,11 +89,18 @@ def main() -> None:
 
     session = build_session(args.api_key)
 
-    individuals_per_gen = get_generations_from_experiment(
+    experiment = get_experiment(session, args.api_base, args.expid)
+    bench = args.true_front_bench or synthetic_bench(experiment, objectives, minimize)
+    if bench:
+        objectives, minimize = canonical_order(objectives, minimize, experiment)
+    # Objectives are looked up by name in the order the experiment declares.
+    columns = objective_columns(objectives, experiment)
+    individuals_per_gen, survivors_per_gen = load_generations(
         session=session,
         api_base=args.api_base,
         experiment_id=args.expid,
         label_objectives=objectives,
+        columns=columns,
     )
 
     if not individuals_per_gen:
@@ -91,7 +110,6 @@ def main() -> None:
 
     # Reference front — either the benchmark's analytical (true) front or the
     # experiment's own stored final front.
-    bench = args.true_front_bench
     m = args.true_front_m or len(objectives)
     if bench:
         from lib.true_fronts import sample_true_front
@@ -149,7 +167,10 @@ def main() -> None:
         reference_front_min=reference_front,
         normalized=normalized,
         bench=bench,
+        population=args.population,
+        survivors_per_gen=survivors_per_gen,
     )
+    sources = population_sources(conv.generations, args.population, survivors_per_gen)
 
     # NaN marks a generation with no feasible individual; JSON has no NaN, so it
     # is emitted as null and the consumer draws a gap instead of a fake zero.
@@ -171,6 +192,9 @@ def main() -> None:
         "gd_formula": "mean of each front point's distance to the true front (p=1)",
         "normalization": "analytical ideal-nadir range" if bench
                          else "reference front ideal-nadir range",
+        "population": args.population,
+        "population_sources": sources,
+        "population_source": sources[0] if len(set(sources)) == 1 else "mixed",
     }))
 
 

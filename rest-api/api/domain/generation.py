@@ -70,3 +70,6 @@ class GenerationDto(TypedDict):
     start_time: Optional[datetime]
     end_time: Optional[datetime]
     population: list[IndividualDto]
+    #: Chromosome hashes of the population environmental selection kept (P_t).
+    #: Absent when the generation predates the record or never closed.
+    survivors: NotRequired[list[str]]

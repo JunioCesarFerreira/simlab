@@ -90,15 +90,18 @@ def igd_plus(front: np.ndarray, ref_front: np.ndarray) -> float:
 # single run (or only the mean of several) cannot support "method A beats B".
 
 def summary(values) -> dict:
-    """Return ``{n, mean, std, ci95}`` (sample std, ddof=1; 95% CI half-width)."""
+    """Return ``{n, mean, std, ci95}`` (sample std, ddof=1; 95% CI half-width, Student's t)."""
     a = np.asarray(list(values), dtype=float)
     a = a[np.isfinite(a)]
     n = int(a.size)
     if n == 0:
         return {"n": 0, "mean": float("nan"), "std": float("nan"), "ci95": float("nan")}
     std = float(a.std(ddof=1)) if n > 1 else 0.0
+    if n < 2:
+        return {"n": n, "mean": float(a.mean()), "std": std, "ci95": 0.0}
+    from scipy.stats import t as student_t   # Student's t, as pareto-analysis/lib/stats.py
     return {"n": n, "mean": float(a.mean()), "std": std,
-            "ci95": 1.96 * std / math.sqrt(n) if n > 1 else 0.0}
+            "ci95": float(student_t.ppf(0.975, n - 1)) * std / math.sqrt(n)}
 
 
 def mann_whitney_pvalue(a, b) -> float:

@@ -331,14 +331,13 @@ python compute_hv_gd.py --expid <id> \
   --true-front-bench DTLZ2 --true-front-m 3
 ```
 
-Without `--true-front-bench` the behavior is unchanged (self-reference front).
-With it, the HV reference point is the benchmark's fixed `1.1 × nadir` — the
-same one `/hv-gd` and `plot_pareto_results.py` use. `compute_hv_gd.py` used to
-derive it from the observed worst point regardless, so the same experiment
-reported one hypervolume on the CLI and another in the GUI.
+The analytical front is used without `--true-front-bench` too, as `/hv-gd`
+does: for a synthetic experiment whose objectives are all minimised and all
+requested (in any order). The HV reference point is then the benchmark's fixed
+`1.1 × nadir`, the same in the CLI, the plots and the GUI.
 
-The CLI always measures each generation's **offspring**. Compare it with
-`/hv-gd?population=offspring`, not with the endpoint's default (survivors).
+`--population` is the endpoint's `population`, survivors by default, so the
+CLI's series equal `/hv-gd`'s; checked series by series on NSGA-III runs.
 
 > **Self-reference measures agreement with this run, not the true optimum.**
 > In NSGA-II/III the stored final front is built from the selected final survivors.
@@ -360,7 +359,7 @@ unit hypersphere segment; ZDT1 = `1 − √f₁`; SCH1 = `x²`/`(x−2)²`, `x�
 > benchmark and the worst feasible objective + margin otherwise.
 >
 > The same definitions back `GET /experiments/{id}/hv-gd`, which is what the web
-> GUI plots (the measured population may differ, as noted above): they live in `pylib/moo_metrics.py`, mirrored for the offline CLIs
+> GUI plots: they live in `pylib/moo_metrics.py`, mirrored for the offline CLIs
 > in `pareto-analysis/lib/metrics.py` under a parity test.
 
 ### Missing survivor sets and resume compatibility

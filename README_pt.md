@@ -513,7 +513,6 @@ resultado deve ser lido. Cada um está descrito no documento indicado.
 
 | Área | Problema | Detalhes |
 | --- | --- | --- |
-| Indicadores | As CLIs medem descendentes; a GUI mede sobreviventes por padrão | [pareto-analysis](pareto-analysis/README.md#known-issues) |
 
 ---
 
