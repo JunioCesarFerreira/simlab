@@ -83,7 +83,9 @@ replace the conversion
 | `post-random-search-experiment-p2.json` | random-search example for P2 |
 | `import-problem-p2.json` | for the GUI's problem import, not for the API |
 | `post-batch-experiment-p2.json` | [batch](../mo-engine/lib/strategy/README.md#batch) example for P2: 3 chromosomes × 3 seeds |
-| `post-nsga3-experiment-p3.json` | **Needs fixing:** its conversion does not produce the three objectives it declares, and `simulation.random_seed` is not read (the key is `random_seeds`; seed 123456 is used) |
+| `post-nsga3-experiment-p3.json` | NSGA-III example for P3 |
 | `post-nsga3-experiment-p4.json` | NSGA-III example for P4: 12 motes in four groups, the base and six stops |
 
-`simulation.duration` is in simulated minutes.
+`simulation.duration` is in simulated minutes. `mo-engine/tests/test_request_examples.py` checks that every
+`post-*` example builds, encodes, has its objectives in the conversion and its seeds under
+`random_seeds`.

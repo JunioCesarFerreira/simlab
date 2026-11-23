@@ -5,6 +5,16 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — The request examples run
+
+### Fixed
+
+- **`post-nsga3-experiment-p3.json` produces the objectives it declares** and
+  gives its seed under `random_seeds`; the engine read neither. A test now runs
+  every `post-*` example through the engine's checks.
+
+---
+
 ## [Unreleased] — The offline indicators equal the GUI's
 
 ### Fixed

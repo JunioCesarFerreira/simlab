@@ -40,7 +40,7 @@
         },
         "simulation": {
             "duration": 180,
-            "random_seed": 123456
+            "random_seeds": [123456]
         },
         "problem":{
             "name": "problem3",
@@ -329,7 +329,10 @@
                 "name": "rtt_latency",
                 "kind": "mean",
                 "column": "rtt_latency"
-            }
+            },
+            { "name": "latency",    "kind": "mean",                 "column": "rtt_latency" },
+            { "name": "energy",     "kind": "sum_all",              "column": "total_energy_mj" },
+            { "name": "throughput", "kind": "sum_last_minus_first", "column": "server_received" }
         ]
     },
     "pareto_front": null
