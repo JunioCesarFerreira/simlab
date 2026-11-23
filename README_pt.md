@@ -509,10 +509,9 @@ Alteram resultados em relação a versões anteriores e estão listadas no
 ## Problemas Conhecidos
 
 Defeitos do código atual que afetam o que pode ser executado ou como um
-resultado deve ser lido. Cada um está descrito no documento indicado.
-
-| Área | Problema | Detalhes |
-| --- | --- | --- |
+resultado deve ser lido, cada um descrito no README do seu módulo. Nenhum é
+conhecido no momento; os limites de arquitetura estão em
+[Limitações](#limitações).
 
 ---
 

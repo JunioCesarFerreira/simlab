@@ -503,10 +503,8 @@ These alter results compared with earlier versions, and are listed in
 ## Known Issues
 
 Defects in the current code that affect what can be run or how a result is
-read. Each is described in the linked document.
-
-| Area | Issue | Details |
-| --- | --- | --- |
+read, each described in its module's README. None are known at present; the
+architectural limits are under [Limitations](#limitations).
 
 ---
 
