@@ -234,6 +234,13 @@ class TestRunSyntheticNoiseAndValidation:
         mongo.simulation_repo.mark_error.assert_called_once()
         mongo.simulation_repo.mark_done.assert_not_called()
 
+    def test_an_invalid_configuration_closes_the_generation_at_once(self):
+        # It waited for the health cycle's 300 s grace before anyone closed it.
+        mongo = _mongo_stub(objective_names=("f1", "f2", "f3"))
+        simulation = _sim([0.5], seed=1)
+        run_synthetic_simulation(simulation, mongo, bench="DTLZ2", noise_std=0.0)
+        mongo.generation_repo.close_if_finished.assert_called_once_with(simulation["generation_id"])
+
     def test_zero_noise_matches_pure_evaluation(self):
         mongo = _mongo_stub()
         run_synthetic_simulation(_sim([0.25, 0.0, 0.0, 0.0, 0.0, 0.0], seed=3),

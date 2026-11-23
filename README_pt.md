@@ -515,7 +515,6 @@ resultado deve ser lido. Cada um está descrito no documento indicado.
 
 | Área | Problema | Detalhes |
 | --- | --- | --- |
-| Log vazio | Uma execução em que nenhum relatório chegou à raiz falha na coleta | [master-node](master-node/README.md#known-issues) |
 | Telemetria | A varredura periódica não repete coletas `unavailable`/`failed` | [Métricas de execução](docs/markdown/RUNTIME_METRICS.md#known-issues) |
 | API | `GET /files/simulations/{id}/topology` responde 500 | [API REST](rest-api/README.md#known-issues) |
 | Indicadores | As CLIs medem descendentes; a GUI mede sobreviventes por padrão | [pareto-analysis](pareto-analysis/README.md#known-issues) |

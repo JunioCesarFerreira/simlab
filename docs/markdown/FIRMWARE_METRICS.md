@@ -80,7 +80,7 @@ column), `scale` (a factor).
 | `sum_last_minus_first` | Per node, last value minus first value (rows in time order), negatives clipped to 0, then summed over nodes | Also for cumulative counters, but the first report of each node is the baseline and is not counted. Kept for v1 conversions. |
 | `ratio_sum` | `scale` × sum of `column` ÷ sum of `denominator`, over all rows | A ratio of totals, not a mean of per-row ratios: a long interval weighs as much as it lasted. NaN if the denominator sums to 0. |
 | `ratio_sum_max` | `scale` × `sum_max(column)` ÷ `sum_max(denominator)` | The ratio of two counters' totals. |
-| `node_coverage` | Distinct values of `column` ÷ sensor nodes in the simulation | The master-node counts the motes that wrote to the testlog, root excluded (`rpl_dodag.count_deployed_nodes`), because the CSV has no row for a node that never reached the root. |
+| `node_coverage` | Distinct values of `column` ÷ sensor nodes in the simulation | The master-node counts the motes that wrote to the testlog, root excluded (`rpl_dodag.count_deployed_nodes`), because the CSV has no row for a node that never reached the root. A run in which no report reached the root gives 0 here and in the counting kinds, NaN in the others ([master-node](../../master-node/README.md#results-that-lack-a-value)). |
 | `sum_rate` | Sum of the column ÷ the time the rows span, per second | Not used by the default conversion. |
 | `inverse_median` | `scale` ÷ median of the column | Not used by the default conversion. |
 
@@ -95,8 +95,9 @@ numeric in it under `sum_all` or `sum_max`, which gives 0. If the NaN is an obje
 the engine counts that replica as missing for it: by default the individual is then
 refused and gets the worst objectives
 ([the policy](../../mo-engine/lib/strategy/README.md#the-policy)). If no report at all
-reached the root, there is no CSV to evaluate and the simulation ends in `Error`
-([master-node](../../master-node/README.md#known-issues)).
+reached the root, the simulation is still `Done`: counts and `node_coverage` are 0, the
+other metrics NaN
+([master-node](../../master-node/README.md#results-that-lack-a-value)).
 
 ## 3. The columns of a record
 

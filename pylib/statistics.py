@@ -198,6 +198,29 @@ def _require_column(df: pd.DataFrame, col: str, name: str, log: Logger) -> bool:
 #: Kinds that divide by a second column, named in the item's "denominator".
 RATIO_KINDS = {"ratio_sum", "ratio_sum_max"}
 
+#: Kinds that count or add up what was reported: with no report, 0.
+COUNTING_KINDS = {"sum_all", "sum_max", "sum_last_minus_first", "sum_rate"}
+
+
+def _nothing_reported(item: dict[str, Any], ctx: dict[str, Any]) -> float:
+    """The value of a metric over a run in which no report reached the root.
+
+    Counts are 0, and so is the share of nodes heard from. A mean, median,
+    quantile or ratio of nothing has no value.
+    """
+    kind = item.get("kind")
+    if kind in COUNTING_KINDS:
+        return 0.0
+    if kind == "node_coverage" and ctx.get("deployed_nodes"):
+        return 0.0
+    return float("nan")
+
+
+def unavailable(metrics: dict[str, float]) -> list[str]:
+    """Names of the metrics that could not be computed (stored as NaN)."""
+    return sorted(k for k, v in metrics.items()
+                  if not isinstance(v, (int, float)) or not np.isfinite(float(v)))
+
 
 STAT_DISPATCH: dict[str, StatFn] = {
     "quantile": lambda df, item, ctx: quantile(
@@ -247,6 +270,10 @@ def _evaluate_items(
         col = item.get("column")
         kind = item.get("kind")
 
+        if ctx.get("nothing_reported"):
+            results[name] = _nothing_reported(item, ctx)
+            continue
+
         if not col or not _require_column(df, col, name, log):
             results[name] = float("nan")
             continue
@@ -294,6 +321,7 @@ def evaluate_config(
     cfg: dict[str, list[dict]],
     log: Logger,
     deployed_nodes: int | None = None,
+    nothing_reported: bool = False,
     ) -> dict[str, float]:
     """
     Evaluates a DataFrame against a configuration of objectives or metrics.
@@ -310,6 +338,8 @@ def evaluate_config(
         deployed_nodes: Sensor nodes in the simulation, for the node_coverage
             kind; the CSV alone cannot tell, it has no row for a node whose
             reports never reached the root.
+        nothing_reported: No report reached the root (the CSV is empty):
+            counting kinds and node_coverage are 0, the others NaN.
 
     Returns:
         Dictionary with numerical results for each objective or metric defined in the config.
@@ -318,6 +348,7 @@ def evaluate_config(
         "node_col": cfg.get("node_col", "node"),
         "time_col": cfg.get("time_col", "root_time_now"),
         "deployed_nodes": deployed_nodes,
+        "nothing_reported": nothing_reported,
     }
 
     metrics = _evaluate_items(

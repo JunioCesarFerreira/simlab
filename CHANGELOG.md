@@ -5,6 +5,23 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — A run that delivered nothing is a result
+
+### Fixed
+
+- **A run in which no report reached the root no longer fails at collection.**
+  Its log converted to a CSV of one blank line, which reading back rejected
+  (`EmptyDataError`): the run went through the collection retry, ended in
+  `Error` with `unfetched_result`, and its testlog was not kept. The converter
+  writes an empty file, and the run is published `Done` with its counts and
+  `node_coverage` at 0, the other metrics NaN, and its testlog kept.
+- **A metric that could not be computed is named.** It is still stored as NaN,
+  and the simulation's `system_message` lists it.
+- **A synthetic simulation with an invalid configuration closes its
+  generation** at once, instead of after the health cycle's 300 s grace.
+
+---
+
 ## [Unreleased] — P3 repairs the degree
 
 ### Fixed

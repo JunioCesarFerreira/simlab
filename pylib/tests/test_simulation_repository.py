@@ -143,6 +143,17 @@ class TestAttemptGuards:
 
         assert coll.update_one.call_args.args[0]["attempt_id"] == ATTEMPT
 
+    def test_done_carries_what_the_result_lacks(self, simulations):
+        repo, coll = simulations
+        coll.update_one.return_value = MagicMock(matched_count=1)
+
+        repo.mark_done(SIM_OID, None, None, {"latency": float("nan")},
+                       attempt_id=ATTEMPT, system_message="not computable: latency")
+        assert coll.update_one.call_args.args[1]["$set"]["system_message"] == "not computable: latency"
+
+        repo.mark_done(SIM_OID, None, None, {}, attempt_id=ATTEMPT)
+        assert "system_message" not in coll.update_one.call_args.args[1]["$set"]
+
     def test_error_is_guarded(self, simulations):
         repo, coll = simulations
         coll.update_one.return_value = MagicMock(matched_count=1)

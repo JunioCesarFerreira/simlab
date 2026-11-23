@@ -268,8 +268,8 @@ flowchart TD
     GETLOG --> UPLOAD_LOG[Upload log to GridFS]
     UPLOAD_LOG --> CONVERT[Convert log → CSV\ncooja_files.convert_cooja_log_to_csv]
     CONVERT --> UPLOAD_CSV[Upload CSV to GridFS]
-    UPLOAD_CSV --> METRICS{CSV exists\nand non-empty?}
-    METRICS -->|yes| CALC[Calculate network metrics\nstatistics.evaluate_config]
+    UPLOAD_CSV --> METRICS{CSV exists?}
+    METRICS -->|yes| CALC[Calculate network metrics\nstatistics.evaluate_config\nempty CSV: counts 0, the rest NaN]
     CALC -->|cannot be evaluated| RETRY[Preserve the testlog\nretry the collection once]
     RETRY -->|fails again| ERR_COLLECT[Error + unfetched_result\nhold the worker if no copy was made]
     ERR_COLLECT --> CLOSE_GEN
@@ -926,16 +926,18 @@ the image's login (`root` and `COOJA_SSH_PASSWORD`).
 
 ---
 
+## Results that lack a value
+
+- **A run in which no report reached the root is a result.** Its testlog
+  converts to an empty CSV; it is published `Done` with every counting metric
+  (`sum_all`, `sum_max`, `sum_last_minus_first`, `sum_rate`) and `node_coverage`
+  at 0, and means, medians, quantiles and ratios as NaN. It is not repeated: Cooja
+  is deterministic, and the same seed would deliver nothing again.
+- **A metric that cannot be computed is stored as NaN**, and the simulation's
+  `system_message` names it. The mo-engine counts a replica for an objective
+  only where its value is finite, so the replica policy decides what an
+  individual missing it gets.
+
 ## Known Issues
 
-- **A run in which no report reached the root fails at collection.** Converting
-  such a log writes a CSV of one blank line, which is not empty by size, so
-  reading it raises `EmptyDataError`. The run goes through the collection retry
-  and ends in `Error` with `unfetched_result`, and its testlog is **not** kept
-  in GridFS (a copy stays on the container). The "CSV empty" branch of the flow
-  above is not reached in that case.
-- **A metric that cannot be computed does not fail the simulation.** It is
-  published `Done` with a NaN; the mo-engine treats the value as missing.
-- **A synthetic simulation with an invalid configuration** is marked `Error`
-  without closing its generation; the health cycle closes it after the 300 s
-  grace.
+None known.

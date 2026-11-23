@@ -206,6 +206,9 @@ def run_synthetic_simulation(
     except ValueError as exc:
         log.error("Invalid synthetic configuration for simulation %s: %s", sim_oid, exc)
         mongo.simulation_repo.mark_error(sim_oid, str(exc), attempt_id=None)
+        # Closed now: left open, the generation waited for the health cycle's
+        # grace period (300 s) before anyone closed it.
+        _close_generation(sim, mongo)
         return
 
     bench_upper = bench.upper()
@@ -235,9 +238,14 @@ def run_synthetic_simulation(
             log.exception("Failed to mark simulation %s as error", sim_oid)
         return
 
+    _close_generation(sim, mongo)
+
+
+def _close_generation(sim: Simulation, mongo: MongoRepository) -> None:
+    """Close the simulation's generation if nothing in it is still running."""
     generation_id = sim.get("generation_id")
     if not generation_id:
-        log.warning("Simulation %s has no generation_id; skipping generation close check", sim_oid)
+        log.warning("Simulation %s has no generation_id; skipping generation close check", sim.get("_id"))
         return
     try:
         mongo.generation_repo.close_if_finished(generation_id)

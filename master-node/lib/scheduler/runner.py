@@ -91,6 +91,9 @@ class RunReport:
     confirmed: bool = True
     #: Why it is unconfirmed, for the simulation's ``system_message``.
     reason: str = ""
+    #: What a confirmed result lacks (metrics stored as NaN), for the
+    #: ``system_message`` of the simulation published Done.
+    note: str = ""
 
 
 class _PrepareFailed(Exception):
@@ -801,6 +804,7 @@ class SimulationRunner:
                     getattr(report, "csv_id", None),
                     getattr(report, "metrics", None) or {},
                     getattr(report, "dodag", None),
+                    system_message=getattr(report, "note", "") or None,
                     attempt_id=attempt_id,
                 ))
             except Exception:

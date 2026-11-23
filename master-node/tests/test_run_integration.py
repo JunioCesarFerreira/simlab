@@ -31,7 +31,11 @@ from bson import ObjectId
 from lib.detached import PGID_FILE, PID_FILE, STATUS_PREFIX
 from lib.scheduler.runner import SimulationRunner
 from lib.transport.base import ExecResult, TransportError
+from pylib import statistics as _statistics
 from pylib.timeutil import utc_now
+
+#: Captured before the fixture replaces it.
+REAL_EVALUATE = _statistics.evaluate_config
 
 SIM_OID = ObjectId("507f1f77bcf86cd799430003")
 RES_ID = ObjectId("507f1f77bcf86cd799430021")
@@ -398,6 +402,40 @@ class TestTestlogWithoutAnExitCode:
         mongo.simulation_repo.mark_error.assert_called_once()
         assert mongo.simulation_repo.mark_error.call_args.kwargs["log_id"] is None
         assert container.fetches == 0
+
+
+class TestNoReportReachedTheRoot:
+    """A confirmed run whose log has no root report is a result.
+
+    The converter wrote one blank line, reading it back raised EmptyDataError,
+    and the run went through the collection retry to Error with its testlog
+    discarded. Here the real converter and the real metric evaluation run.
+    """
+
+    def test_it_is_published_with_its_counts_at_zero(self, wire, monkeypatch, entry):
+        from pylib.cooja_builder.csv_converter import cooja_log_to_csv
+        monkeypatch.setattr(entry.cooja_files, "convert_cooja_log_to_csv",
+                            lambda log_path, csv_path: cooja_log_to_csv(Path(log_path), Path(csv_path)))
+        monkeypatch.setattr(entry.statistics, "evaluate_config", REAL_EVALUATE)
+        monkeypatch.setattr(entry.rpl_dodag, "count_deployed_nodes", lambda path: 12)
+        container = ScriptedContainer(alive=False, exit_code=0, testlog="Starting Cooja\nTest ended\n")
+        runner, mongo = wire(container)
+        mongo.experiment_repo.get_metrics_data_conversion.return_value = {
+            "node_col": "node", "time_col": "root_time_now", "metrics": [
+                {"name": "delivered", "kind": "sum_last_minus_first", "column": "server_received"},
+                {"name": "coverage", "kind": "node_coverage", "column": "node"},
+                {"name": "latency", "kind": "median", "column": "latency"}]}
+
+        runner.resume(sim(), HOST, RESOURCE, ATTEMPT, 4242)
+
+        mongo.simulation_repo.mark_error.assert_not_called()
+        args, kwargs = mongo.simulation_repo.mark_done.call_args
+        metrics = args[3]
+        assert args[1] == "blob-sim_result.log"
+        assert metrics["delivered"] == 0.0 and metrics["coverage"] == 0.0
+        assert metrics["latency"] != metrics["latency"]  # NaN
+        assert "no report reached the root" in kwargs["system_message"]
+        assert "latency" in kwargs["system_message"]
 
 
 # ── Garantia 1, on the real path ────────────────────────────────────────────

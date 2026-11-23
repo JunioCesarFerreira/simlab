@@ -164,8 +164,12 @@ class SimulationRepository:
         dodag: Optional[dict] = None,
         *,
         attempt_id: Optional[str],
+        system_message: Optional[str] = None,
     ) -> bool:
         """Publish a result, for the attempt that is still the owner.
+
+        ``system_message`` says what the result lacks, e.g. the metrics that
+        could not be computed and are stored as NaN.
 
         Returns false when the write matched nothing, which means this attempt
         no longer owns the simulation. The caller must not treat that as
@@ -180,6 +184,8 @@ class SimulationRepository:
         }
         if dodag is not None:
             fields["dodag"] = dodag
+        if system_message:
+            fields["system_message"] = system_message
         with self.connection.connect() as db:
             res = db["simulations"].update_one(
                 self._attempt_filter(sim_id, attempt_id),
