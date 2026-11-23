@@ -109,6 +109,12 @@ def test_a_start_that_failed_is_stopped(monkeypatch):
     monkeypatch.setattr(engine, "capture_firmware_snapshot", lambda *_: None)
     monkeypatch.setattr(engine, "select_strategy", lambda _doc: strategy)
 
-    assert engine.process_experiment({"_id": ObjectId()}) is False
+    exp_id = ObjectId()
+    assert engine.process_experiment({"_id": exp_id}) is False
 
     strategy.stop.assert_called_once()
+    # Error, and why: the status alone sent the operator to the engine's log.
+    written = engine.mongo.experiment_repo.update_unless_cancelled.call_args.args
+    assert written[0] == str(exp_id)
+    assert written[1]["status"] == "Error" and written[1]["end_time"] is not None
+    assert "RuntimeError: after its watchers had started" in written[1]["system_message"]

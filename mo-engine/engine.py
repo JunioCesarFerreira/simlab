@@ -8,6 +8,7 @@ if project_path not in sys.path:
 from pylib.db import create_mongo_repository_factory, EnumStatus
 from pylib.firmware_snapshot import capture_firmware_snapshot
 from pylib.telemetry import start_runtime_metrics_watcher
+from pylib.timeutil import utc_now
 from lib.strategy.base import EngineStrategy
 from lib.strategy.nsga3 import NSGA3LoopStrategy
 from lib.strategy.nsga2 import NSGA2LoopStrategy
@@ -64,6 +65,16 @@ def select_strategy(exp_doc: dict) -> EngineStrategy:
     raise ValueError(f"[mo-engine] Experiment type unknown: {exp_type}")
 
 
+def _record_start_failure(exp_id: str, error: BaseException) -> None:
+    """Error, with what went wrong: the status alone left the operator to the
+    engine's log to find out why an experiment never ran."""
+    mongo.experiment_repo.update_unless_cancelled(exp_id, {
+        "status": EnumStatus.ERROR,
+        "system_message": f"The strategy could not start: {type(error).__name__}: {error}",
+        "end_time": utc_now(),
+    })
+
+
 def process_experiment(exp_doc: dict) -> bool:
     exp_id = str(exp_doc["_id"])
     log.info(f"Processing experiment id: {exp_id}")
@@ -76,7 +87,7 @@ def process_experiment(exp_doc: dict) -> bool:
         strategy = select_strategy(exp_doc)
         strategy.start()
         return True
-    except Exception:
+    except Exception as error:
         log.exception("Failed to start strategy for experiment %s", exp_id)
         if strategy is not None:
             # It may have started its watchers, which would outlive it.
@@ -84,6 +95,7 @@ def process_experiment(exp_doc: dict) -> bool:
                 strategy.stop()
             except Exception:
                 log.exception("Failed to stop strategy for experiment %s", exp_id)
+        _record_start_failure(exp_id, error)
         return False
 
 
@@ -98,8 +110,7 @@ def on_experiment_event(change: dict):
     exp_id = str(exp_doc["_id"])
         
     if mongo.experiment_repo.update_starting(exp_id):
-        if process_experiment(exp_doc) == False:
-            mongo.experiment_repo.update_unless_cancelled(exp_id, {"status": EnumStatus.ERROR})
+        process_experiment(exp_doc)
 
 
 def resume_experiment(exp_doc: dict) -> None:
@@ -113,8 +124,7 @@ def resume_experiment(exp_doc: dict) -> None:
     if not mongo.experiment_repo.claim_resume(exp_id):
         log.info("Experiment %s is no longer running; not resuming it", exp_id)
         return
-    if process_experiment(exp_doc) is False:
-        mongo.experiment_repo.update_unless_cancelled(exp_id, {"status": EnumStatus.ERROR})
+    process_experiment(exp_doc)
 
 
 def run_pending_experiment(change: dict):
@@ -124,8 +134,7 @@ def run_pending_experiment(change: dict):
     exp_id = str(change["_id"])
     
     if mongo.experiment_repo.update_starting(exp_id):
-        if process_experiment(change) == False:
-            mongo.experiment_repo.update_unless_cancelled(exp_id, {"status": EnumStatus.ERROR})
+        process_experiment(change)
        
        
 def start_waiting_experiments() -> None:

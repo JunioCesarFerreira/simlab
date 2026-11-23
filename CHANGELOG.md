@@ -5,6 +5,17 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — A strategy that cannot start says why
+
+### Fixed
+
+- **An experiment whose strategy fails to start says why.** It ended in `Error`
+  with no message and no end time, so the reason was only in the engine's log
+  and the telemetry skipped it. The experiment now carries the exception in
+  `system_message` and an `end_time`.
+
+---
+
 ## [Unreleased] — The API serves topologies and guards its writes
 
 ### Fixed
