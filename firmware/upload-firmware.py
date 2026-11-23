@@ -27,7 +27,8 @@ VERIFY_TLS = (
 
 API_URL = f"{API_BASE}/sources/"
 API_KEY = os.getenv("SIMLAB_API_KEY", "simlab-api-key42")  # keep in sync with SIMLAB_API_KEY in .env
-FIRMWARE_DIR = Path(".")  # run in the firmware/ directory, which holds the rpl-udp-* directories
+# The rpl-udp-* directories sit next to this script: it runs from any directory.
+FIRMWARE_DIR = Path(__file__).resolve().parent
 
 # ============================================================
 # Helpers

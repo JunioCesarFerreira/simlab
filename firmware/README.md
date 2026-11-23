@@ -225,12 +225,11 @@ SimLab copies a repository's files into Cooja's directory in the
 (`make root.cooja TARGET=cooja`, `make node.cooja TARGET=cooja`); the
 `Makefile`s expect Contiki-NG two levels up (`CONTIKI=../..`).
 
-To register repositories with SimLab, run from this directory (the script
-reads the repositories from the working directory and needs Python with
-`requests`):
+To register repositories with SimLab (the script finds the repositories next to
+itself, from any directory, and needs Python with `requests`):
 
 ```sh
-python upload-firmware.py rpl-udp-csma-v2 rpl-udp-tsch-v2   # or no argument for all four
+python firmware/upload-firmware.py rpl-udp-csma-v2 rpl-udp-tsch-v2   # or no argument for all four
 ```
 
 `SIMLAB_API_BASE`, `SIMLAB_API_KEY` and `SIMLAB_CA_BUNDLE` / `SIMLAB_TLS_VERIFY`

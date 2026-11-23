@@ -16,16 +16,12 @@ Utility tools for development and experiment management.
 
 ## Before running
 
-- **MongoDB from the host.** Only `gridfs_compact.py` has a default URI that
-  works outside Docker. For the others:
-
-  ```bash
-  export MONGO_URI='mongodb://localhost:27017/?directConnection=true'
-  ```
-
-- **API key.** `create_exp.py` defaults to `simlab-api-key42` (as Compose does)
-  and `run_pareto_analysis.py` to `api-password`. Set `SIMLAB_API_KEY` to the
-  key of your deployment.
+- **MongoDB from the host.** Every script defaults to
+  `mongodb://localhost:27017/?directConnection=true`, which reaches the stack's
+  replica set from the host. `MONGO_URI` or `--uri` override it.
+- **API key.** The scripts that call the API default to `simlab-api-key42`, the
+  default of `docker-compose.yaml`. Set `SIMLAB_API_KEY` to the key of your
+  deployment.
 - **Dependencies.** There is no `requirements.txt` here. `pymongo` and
   `requests` cover the simple scripts; those that import `pylib` run in the
   master-node's environment (`master-node/requirements.txt`).
@@ -86,7 +82,7 @@ python mongo_backup.py [--uri URI] [--db DB] [--output DIR]
 
 | Argument | Env var | Default | Description |
 |---|---|---|---|
-| `--uri` | `MONGO_URI` | `mongodb://localhost:27017/?replicaSet=rs0` | MongoDB connection URI |
+| `--uri` | `MONGO_URI` | `mongodb://localhost:27017/?directConnection=true` | MongoDB connection URI |
 | `--db` | `DB_NAME` | `simlab` | Database name |
 | `--output` | — | `mongo_backup` | Root output directory |
 
@@ -161,10 +157,10 @@ python run_pareto_analysis.py [--uri URI] [--db DB] [--api-base URL] [--api-key 
 
 | Argument | Env var | Default | Description |
 |---|---|---|---|
-| `--uri` | `MONGO_URI` | `mongodb://localhost:27017/?replicaSet=rs0` | MongoDB connection URI |
+| `--uri` | `MONGO_URI` | `mongodb://localhost:27017/?directConnection=true` | MongoDB connection URI |
 | `--db` | `DB_NAME` | `simlab` | Database name |
 | `--api-base` | `SIMLAB_API_BASE` | `https://localhost/api/v1` | SimLab REST API base URL (through the nginx proxy) |
-| `--api-key` | `SIMLAB_API_KEY` | `api-password` | SimLab API key |
+| `--api-key` | `SIMLAB_API_KEY` | `simlab-api-key42` | SimLab API key |
 | `--python` | `SIMLAB_PYTHON` | `python3` | Interpreter for `plot_pareto_results.py`; it needs [pareto-analysis](../pareto-analysis/README.md)'s dependencies |
 
 **Example (remote server):**
@@ -283,7 +279,7 @@ python util/recover_result.py release <worker_name>
 
 | Env var | Default | Description |
 |---|---|---|
-| `MONGO_URI` | `mongodb://localhost:27017/?replicaSet=rs0` | MongoDB connection URI |
+| `MONGO_URI` | `mongodb://localhost:27017/?directConnection=true` | MongoDB connection URI |
 | `DB_NAME` | `simlab` | Database name |
 | `INFRA_KEY_PATH` | the master-node's keystore path | the key that opens the host credential |
 

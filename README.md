@@ -317,12 +317,10 @@ container and built there: `root.c`, `node.c`, their headers and the
 are not uploaded.
 
 Use the **Sources** page, `POST /api/v1/sources/`, or the script that registers
-the repositories shipped here (it has to run from `firmware/` and needs
-`requests`):
+the repositories shipped here (it needs `requests`):
 
 ```bash
-cd firmware
-python upload-firmware.py rpl-udp-csma-v2 rpl-udp-tsch-v2
+python firmware/upload-firmware.py rpl-udp-csma-v2 rpl-udp-tsch-v2
 ```
 
 ### 3. Create and Launch an Experiment

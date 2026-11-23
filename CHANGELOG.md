@@ -5,6 +5,22 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — Host tools work from where they are run
+
+### Fixed
+
+- **`firmware/upload-firmware.py` runs from any directory.** It looked for the
+  repositories in the working directory and failed with `Directory ... not
+  found` anywhere but `firmware/`.
+- **The host-side utilities reach MongoDB by default.** Their default URI named
+  the replica set (`?replicaSet=rs0`), whose member address only resolves
+  inside Docker; they default to `?directConnection=true`, as `gridfs_compact.py`
+  already did. The services keep theirs.
+- `run_pareto_analysis.py` defaults to the API key of `docker-compose.yaml`, as
+  the other scripts do.
+
+---
+
 ## [Unreleased] — A strategy that cannot start says why
 
 ### Fixed

@@ -53,7 +53,7 @@ Usage
 
 Environment
 -----------
-    MONGO_URI    default mongodb://localhost:27017/?replicaSet=rs0
+    MONGO_URI    default mongodb://localhost:27017/?directConnection=true
     DB_NAME      default simlab
     INFRA_KEY_PATH  the keystore that opens the host credential; the same one
                     the master-node uses, and it has to be readable here
@@ -104,7 +104,7 @@ from pylib.db import create_mongo_repository_factory            # noqa: E402
 from pylib.db.models.enums import EnumStatus                    # noqa: E402
 from pylib.timeutil import utc_now                              # noqa: E402
 
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/?replicaSet=rs0")
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/?directConnection=true")
 DB_NAME = os.getenv("DB_NAME", "simlab")
 KEY_PATH = os.getenv("INFRA_KEY_PATH", DEFAULT_KEY_PATH)
 

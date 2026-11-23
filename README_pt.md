@@ -319,12 +319,10 @@ container Cooja e compilados lá: `root.c`, `node.c`, seus cabeçalhos e o
 são enviados.
 
 Use a página **Sources**, `POST /api/v1/sources/`, ou o script que registra os
-repositórios deste projeto (precisa ser executado de dentro de `firmware/` e
-requer `requests`):
+repositórios deste projeto (requer `requests`):
 
 ```bash
-cd firmware
-python upload-firmware.py rpl-udp-csma-v2 rpl-udp-tsch-v2
+python firmware/upload-firmware.py rpl-udp-csma-v2 rpl-udp-tsch-v2
 ```
 
 ### 3. Criar e Iniciar um Experimento

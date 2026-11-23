@@ -25,7 +25,7 @@ Usage
 
 Environment
 -----------
-    MONGO_URI   default mongodb://localhost:27017/?replicaSet=rs0
+    MONGO_URI   default mongodb://localhost:27017/?directConnection=true
     DB_NAME     default simlab
 
 Notes
@@ -61,7 +61,7 @@ DEFAULT_LABEL_FILTER = "simlab.type=cooja"
 
 def factory():
     return create_mongo_repository_factory(
-        os.getenv("MONGO_URI", "mongodb://localhost:27017/?replicaSet=rs0"),
+        os.getenv("MONGO_URI", "mongodb://localhost:27017/?directConnection=true"),
         os.getenv("DB_NAME", "simlab"),
     )
 

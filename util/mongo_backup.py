@@ -5,7 +5,7 @@ MongoDB backup utility — dumps each collection as individual JSON files.
 Usage:
     python mongo_backup.py [--uri URI] [--db DB] [--output DIR]
 
-Defaults match the simlab stack (mongodb://localhost:27017/?replicaSet=rs0, db=simlab).
+Defaults reach the stack's MongoDB from the host (mongodb://localhost:27017/?directConnection=true, db=simlab).
 Output structure:
     <output_dir>/<timestamp>/<collection>/<_id>.json
 """
@@ -71,7 +71,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Backup MongoDB collections to JSON files.")
     parser.add_argument(
         "--uri",
-        default=os.getenv("MONGO_URI", "mongodb://localhost:27017/?replicaSet=rs0"),
+        default=os.getenv("MONGO_URI", "mongodb://localhost:27017/?directConnection=true"),
         help="MongoDB connection URI",
     )
     parser.add_argument(
