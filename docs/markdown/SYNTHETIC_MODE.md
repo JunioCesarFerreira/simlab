@@ -313,9 +313,11 @@ can render the synthetic badge without fetching the full document.
   1. Marks the simulation **running**.
   2. Obtains the decision vector — verbatim (`decisionVector`, P0) or by
      extracting relay coordinates and normalizing via the region (P1 legacy).
-  3. Evaluates the benchmark (+ optional reproducible Gaussian noise).
+  3. Evaluates the benchmark (+ optional reproducible Gaussian noise). A
+     configuration it cannot evaluate (DTLZ2 with `n < M−1`, for instance)
+     marks the simulation **Error** with the reason and goes straight to step 5.
   4. Writes objectives keyed by `metric_name` and marks the simulation **done**.
-  5. Closes the generation when all its simulations are done.
+  5. Closes the generation when nothing in it is still waiting or running.
 
 ---
 

@@ -136,7 +136,7 @@ sequenceDiagram
 - **Event-driven coordination:** MongoDB Change Streams, with periodic fallbacks for missed events.
 - **Automation:** end-to-end execution, from evolution to result collection.
 - **Evidence kept with results:** replica completeness, a firmware snapshot per experiment and the host/container of each simulation.
-- **Benchmarks without Cooja:** DTLZ2, ZDT1 and SCH1, evaluated in-process.
+- **Benchmarks without Cooja:** DTLZ2, ZDT1 and SCH1, evaluated by the mo-engine (by the master-node for a batch).
 - **Infrastructure measurement:** a Universal Scalability Law benchmark and per-experiment CPU/memory telemetry.
 
 ---
@@ -333,14 +333,12 @@ From the GUI:
 
 Or use `POST /api/v1/experiments/`. An experiment specifies:
 
-* The strategy: `nsga3`, `nsga3_deap`, `nsga3_pymoo`, `nsga2`, `nsga2_deap`, `nsga2_pymoo` or `random_search`
+* The strategy: `nsga3`, `nsga3_deap`, `nsga3_pymoo`, `nsga2`, `nsga2_deap`, `nsga2_pymoo`, `random_search`, or `batch` with its chromosomes ([strategies](mo-engine/lib/strategy/README.md#batch)). A scalability benchmark is created from the Scalability page or `POST /api/v1/scalability/`
 * The problem, and the objectives with their direction and seed aggregator
 * The simulation seeds and the simulated duration
 * The source repository of each MAC protocol and the data conversion
 
-> **`simulation.duration` is in simulated minutes.** The wizard, the comparison
-> page and the benchmark form label it as seconds, but the value is used as
-> minutes: `180` simulates three hours.
+> **`simulation.duration` is in simulated minutes:** `180` simulates three hours.
 
 Once created, the **mo-engine** and **master-node** detect the experiment through MongoDB Change Streams and begin execution.
 
@@ -458,6 +456,14 @@ These alter results compared with earlier versions, and are listed in
   read as UTC; no data was migrated.
 - **The default data conversion reads firmware v2.** Running v1 needs the
   changes in [Firmware metrics §9](docs/markdown/FIRMWARE_METRICS.md#9-using-results-across-versions).
+- **Each mobile mote repeats its own path for the whole simulation**, and a
+  closed path returns to its start, in the simulation and in the coverage of P1
+  and P2. Runs from before are not comparable on mobility.
+- **P3 penalises an infeasible individual** instead of simulating it, and
+  repairs the degree `g`; **P4 runs**, with its data constraints enforced
+  ([problems](mo-engine/lib/problem/README.md)).
+- **A run in which no report reached the root is a result** (`Done`, counts
+  at 0), no longer a collection failure.
 
 ### Limitations
 

@@ -27,10 +27,9 @@ Update experiment document   → runtime_metrics block (summary + artifact ref)
 ```
 
 A **periodic** sweep (also runs once at startup) backfills experiments that
-finished while the watcher was down. It also selects runs left in a transient
+finished while the watcher was down. It also retries runs left in a transient
 `unavailable`/`failed` state — e.g. Prometheus was down at finish time and has
-since come back — but today it [does not manage to collect them](#known-issues).
-It is bounded by `TELEMETRY_BACKFILL_HOURS` (default 6 h) so
+since come back ([Retries](#retries-and-missing-samples)). It is bounded by `TELEMETRY_BACKFILL_HOURS` (default 6 h) so
 runs whose data Prometheus no longer retains are not churned, and its cadence
 is `TELEMETRY_SWEEP_INTERVAL_SECONDS` (default 600 s; `0` = startup only).
 Collection is idempotent: an atomic claim on the `runtime_metrics` field

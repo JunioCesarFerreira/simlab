@@ -67,7 +67,7 @@ docker compose build "$@"
 ## 2. Record it on the experiment
 
 New `pylib/provenance.py`, called from `mo-engine/engine.py` right next to
-`capture_firmware_snapshot(mongo, exp_doc)` (line 73), same best-effort contract
+`capture_firmware_snapshot(mongo, exp_doc)` (in `process_experiment`), same best-effort contract
 (a failure is recorded, never fatal):
 
 ```python

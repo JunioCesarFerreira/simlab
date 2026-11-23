@@ -138,7 +138,7 @@ sequenceDiagram
 - **Coordenação orientada a eventos:** Change Streams do MongoDB, com verificações periódicas para eventos perdidos.
 - **Automação:** execução de ponta a ponta, da evolução à coleta dos resultados.
 - **Evidência junto do resultado:** completude das réplicas, cópia do firmware por experimento e host/container de cada simulação.
-- **Benchmarks sem Cooja:** DTLZ2, ZDT1 e SCH1, avaliados no próprio processo.
+- **Benchmarks sem Cooja:** DTLZ2, ZDT1 e SCH1, avaliados pelo mo-engine (pelo master-node num batch).
 - **Medição da infraestrutura:** benchmark pela Lei Universal de Escalabilidade e telemetria de CPU/memória por experimento.
 
 ---
@@ -335,14 +335,12 @@ Pela GUI:
 
 Ou use `POST /api/v1/experiments/`. Um experimento especifica:
 
-* A estratégia: `nsga3`, `nsga3_deap`, `nsga3_pymoo`, `nsga2`, `nsga2_deap`, `nsga2_pymoo` ou `random_search`
+* A estratégia: `nsga3`, `nsga3_deap`, `nsga3_pymoo`, `nsga2`, `nsga2_deap`, `nsga2_pymoo`, `random_search`, ou `batch` com seus cromossomos ([estratégias](mo-engine/lib/strategy/README.md#batch)). Um benchmark de escalabilidade é criado pela página Scalability ou por `POST /api/v1/scalability/`
 * O problema, e os objetivos com sentido e agregador entre sementes
 * As sementes e a duração simulada
 * O repositório de fontes de cada protocolo MAC e a conversão de dados
 
-> **`simulation.duration` está em minutos simulados.** O assistente, a página
-> de comparação e o formulário de benchmark rotulam o campo como segundos, mas
-> o valor é usado como minutos: `180` simula três horas.
+> **`simulation.duration` está em minutos simulados:** `180` simula três horas.
 
 Após criado, o **mo-engine** e o **master-node** detectam o experimento via Change Streams do MongoDB e iniciam a execução.
 
@@ -462,6 +460,14 @@ Alteram resultados em relação a versões anteriores e estão listadas no
   como UTC; nenhum dado foi migrado.
 - **A conversão de dados padrão lê o firmware v2.** Rodar o v1 exige os ajustes
   de [Métricas do firmware §9](docs/markdown/FIRMWARE_METRICS.md#9-using-results-across-versions).
+- **Cada mote móvel repete a própria trajetória a simulação inteira**, e uma
+  trajetória fechada volta ao início, na simulação e na cobertura de P1 e P2.
+  Execuções anteriores não são comparáveis quanto à mobilidade.
+- **O P3 penaliza um indivíduo inviável** em vez de simulá-lo, e repara o grau
+  `g`; **o P4 executa**, com as restrições de dados aplicadas
+  ([problemas](mo-engine/lib/problem/README.md)).
+- **Uma execução em que nenhum relatório chegou à raiz é um resultado** (`Done`,
+  contagens em 0), e não mais uma falha de coleta.
 
 ### Limitações
 

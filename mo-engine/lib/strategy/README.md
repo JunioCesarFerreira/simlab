@@ -83,9 +83,10 @@ distance.
 
 Each generation is a new draw of `population_size` individuals from the
 problem's random generator. There is no selection, crossover or mutation. For
-P1–P3 that generator is constructive, and P1 and P2 repair what it draws, so
-the baseline samples that space and **not** the decision space uniformly. For
-P0 the draw is uniform over $[0,1]^n$.
+P1–P4 that generator is constructive: P1 and P2 repair what they draw, P3
+redraws until feasible and P4 walks the mobility graph. The baseline therefore
+samples that space and **not** the decision space uniformly. For P0 the draw is
+uniform over $[0,1]^n$.
 
 The genome cache, constraint penalties and replica policy work as in NSGA-III.
 Two things differ when reading its results:

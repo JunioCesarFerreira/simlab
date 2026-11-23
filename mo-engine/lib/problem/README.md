@@ -426,7 +426,7 @@ For each individual:
 4. Coverage repair is applied (P2.4) and the MAC protocol gene is initialized uniformly at random.
 5. A genome already in the population is drawn again, up to 20 times.
 
-This strategy biases the initial population toward **small, connected solutions**, which is consistent with the objective of minimizing $|P|$.
+This strategy biases the initial population toward **small, connected solutions**, in the direction of the smallest-subset goal (which is not an objective of its own).
 
 
 
@@ -550,9 +550,9 @@ Sojourn ids have to equal their indices.
 
 | Operator | Pipeline |
 |---|---|
-| Random generation | Random walk over the adjacency, up to `max_route_length`, closed at the base → route repair; uniform dwell times |
+| Random generation | Random walk from the base over the adjacency, stopping early with probability 0.2 at each step, closed by the shortest walk back to the base within `max_route_length` stops; uniform dwell times within `tau_bounds` |
 | Crossover | Single-cut route splice → route repair; blend crossover of the dwell times; uniform MAC inheritance |
-| Mutation | With probability `per_gene_prob`, one internal stop is replaced → route repair; with probability `pm_tau`, Gaussian noise (`sigma_tau`) on the whole dwell vector; bit-flip MAC |
+| Mutation | On a route of more than three stops, with probability `per_gene_prob`, one internal stop is replaced by a random sojourn → route repair; with probability `pm_tau`, Gaussian noise (`sigma_tau`) on the whole dwell vector, clamped to `tau_bounds`; bit-flip MAC |
 
 The route repair keeps the longest valid prefix from the base and returns to
 the base by the shortest walk over the adjacency, dropping the last stops when
@@ -581,7 +581,7 @@ NSGA-II and NSGA-III always use tournament selection.
 | `pm_tau`, `sigma_tau` | — | — | — | — | ✓ |
 | `repair_coverage_candidates`, `repair_coverage_relay_candidates`, `connectivity_repair_step_ratio`, `connectivity_repair_retries` | — | ✓ | — | — | — |
 
-Defaults when a key is absent from a non-empty `algorithm` block:
+Defaults when a key is absent (an empty `algorithm` block takes them all):
 
 | Key | P0 | P1 | P2 | P3 | P4 |
 |---|---|---|---|---|---|

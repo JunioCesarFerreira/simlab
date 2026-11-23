@@ -102,7 +102,8 @@ src/
 │   ├── sources/         # Source file viewer
 │   └── synthetic-editor/ # Benchmark editor + 4-step launch wizard
 ├── composables/         # useEChart, useResizable, useExperimentViewState, useTheme, …
-├── lib/                 # GA capabilities, NSGA-III helpers, seed aggregators
+├── lib/                 # GA capabilities, NSGA-III helpers, seed aggregators,
+│                        # the measured set of the indicators, ECharts setup
 ├── pages/               # One file per top-level route
 ├── services/            # Import/export helpers, validators, the default data
 │                        # conversion, and the pure modules that mirror a
@@ -179,7 +180,7 @@ launches the problem that is open in the editor:
 |---|---|---|
 | 1 | **Problem** | Review the problem defined in the editor |
 | 2 | **Experiment** | Algorithm (NSGA-II / NSGA-III, native or DEAP/pymoo, or random search), one source repository (firmware) per MAC protocol, population size, number of generations, crossover/mutation rates, the operator knobs the problem reads, NSGA-III divisions |
-| 3 | **Simulation** | Simulated duration (**minutes**, although the field says seconds), random seeds |
+| 3 | **Simulation** | Simulated duration in **minutes**, random seeds |
 | 4 | **Objectives** | One row per metric to optimise — name of a metric of step 5 (defaults: `latency`, `power_mw`, `throughput`), direction (`Minimize` / `Maximize`), and how its value is combined across seeds (mean / median / trimmed mean / min / max). The row says when min/max judges an individual by its worst or best seed |
 | 5 | **Data conversion** | Column names in the Cooja CSV log, plus one [kind](../../docs/markdown/FIRMWARE_METRICS.md#21-what-a-data-conversion-does) per metric, from the list the evaluator knows. The default reads firmware v2 |
 

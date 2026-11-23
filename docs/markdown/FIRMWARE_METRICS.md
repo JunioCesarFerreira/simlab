@@ -89,8 +89,8 @@ compares the two lists). It used to offer `max`, `min`, `last` and `percentile`,
 the evaluator never had; no stored experiment used them.
 
 A metric that cannot be computed (a missing column, an empty column, an unknown kind,
-a ratio without its denominator) becomes NaN with a message in the master-node log,
-and the simulation is still `Done`. The exception is a column that exists with nothing
+a ratio without its denominator) becomes NaN, named in the simulation's `system_message`
+and in the master-node log, and the simulation is still `Done`. The exception is a column that exists with nothing
 numeric in it under `sum_all` or `sum_max`, which gives 0. If the NaN is an objective,
 the engine counts that replica as missing for it: by default the individual is then
 refused and gets the worst objectives

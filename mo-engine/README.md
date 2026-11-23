@@ -94,7 +94,7 @@ The engine never directly communicates with the Cooja simulator. Instead, it wri
 | `random_search` | `RandomSearchStrategy` | None: each generation is drawn by the problem's random generator | ✅ | — |
 | `usl_benchmark` | `UslBenchmarkStrategy` | None: measures the infrastructure; created by `POST /scalability/` | ❌ (P0 does not apply) | — |
 
-`parameters.strategy` is required in practice: an absent or unknown value ends the experiment in `Error`.
+`parameters.strategy` is required in practice: an absent or unknown value ends the experiment in `Error`, with the reason in `system_message`, as does any strategy that fails to start.
 DEAP and pymoo are pinned in `requirements.txt` and installed in the image; the imports are deferred only so that the native strategies also load without them.
 
 The DEAP and pymoo variants share **all** SimLab infrastructure with their native base classes (Change Streams, Genome Cache, ProblemAdapter operators, resume capability) and differ only in the environmental-selection step (pymoo's NSGA-III also checkpoints its normalization). They exist to compare selection implementations inside the platform. The standalone scripts behind **Table 3** of the companion article are a separate benchmark, in [experiments/external-nsga3-benchmark](../experiments/external-nsga3-benchmark/README.md).
@@ -251,7 +251,7 @@ flowchart TD
 | **`_gen_index` incremented before generation insert** | The Change Stream callback runs on a separate thread. Incrementing the index before inserting avoids a race where the callback fires and reads a stale index. |
 | **Generation inserted before its simulations** | A fast worker can finish before the last simulation is inserted; the close has to land on a document that exists. |
 | **Worst-objective fallback** | A failed replica is first repeated once (see [Replica completeness](lib/strategy/README.md#replica-completeness-completenesspy)). An evaluation that stays incomplete, or has a non-finite value, gets the finite sentinel `1e12` in every objective (minimisation space) and is recorded as not used. This keeps the loop running, though it biases the search against that chromosome. |
-| **Constraint penalty** | An infeasible chromosome is not simulated: it gets `1e9 × (1 + deficit)` and the state `infeasible` (P1 and P2 only). |
+| **Constraint penalty** | An infeasible chromosome is not simulated: it gets `1e9 × (1 + deficit)` and the state `infeasible`. P1 and P2: trajectory coverage; P3: connectivity, k-coverage and degree; P4: data collection and buffers ([problems](lib/problem/README.md)). |
 | **MAC gene pinned under a single firmware** | With one source repository the gene cannot express anything; `lib/problem/mac_gene.py` pins it where chromosomes are made, so the stored gene is the one that ran. |
 | **Cooperative cancellation** | A cancelled or deleted experiment gets no further generation or benchmark wave: the strategy stops at the next boundary, or at the next poll (30 s) if that is sooner. Simulations already queued still run. The engine never writes a status over `Cancelled`. |
 | **`_select_next_parents()` hook** | Environmental selection is isolated in a single overridable method. DEAP and pymoo variants inherit all infrastructure and override only this one method, minimising code duplication and regression surface. |
@@ -496,7 +496,7 @@ Key environment variables consumed by the mo-engine container (the telemetry one
 | `DB_NAME` | `simlab` | Database name. |
 | `BATCH_POLL_INTERVAL` | `30` | Seconds between polling-fallback checks of the current generation. Used by every strategy, despite the name. |
 | `TEMPLATE_XML` | `./simulation_template.xml` | Cooja template. The image sets `/app/mo-engine/simulation_template.xml`. |
-| `IS_DOCKER` | unset | Selects container defaults (telemetry URL). |
+| `IS_DOCKER` | unset | Selects container defaults (telemetry URL), and deletes the generated Cooja files once uploaded. |
 | `GRIDFS_COMPRESSION` / `GRIDFS_COMPRESSION_LEVEL` | `zstd` / `12` | Compression of the files it writes ([GRIDFS_STORAGE.md](../docs/markdown/GRIDFS_STORAGE.md)). |
 
 Key `parameters` fields in the experiment document:

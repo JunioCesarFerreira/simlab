@@ -5,6 +5,28 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — The documentation says what the code does
+
+### Fixed
+
+- **Docs that still described the behaviour before these fixes.** The READMEs
+  no longer say the GUI labels the duration in seconds; they list `batch` and
+  the scalability benchmark among the strategies, and say a batch's benchmark
+  is evaluated by the master-node. RUNTIME_METRICS no longer says the sweep
+  fails to collect `unavailable`/`failed` runs. FIRMWARE_METRICS says an
+  uncomputable metric is named in `system_message`. SYNTHETIC_MODE says an
+  invalid synthetic configuration closes its generation at once. The status
+  table of the NSGA metrics audit says the CLIs read objectives by name and
+  measure the set `/hv-gd` measures. The nginx README no longer says the
+  scripts' API-key defaults differ.
+- **Smaller gaps.** The master-node layout lists `scheduler/workload.py`;
+  `pylib/README.md` lists `trajectory.py` and says which mote is the root
+  when none runs `sink.c`. The problem READMEs describe P4's random
+  generation and mutation as the code does. PROVENANCE_GUIDE names
+  `process_experiment` instead of a line number.
+
+---
+
 ## [Unreleased] — The request examples run
 
 ### Fixed

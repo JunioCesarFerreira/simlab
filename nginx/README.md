@@ -93,9 +93,10 @@ URLs) point off the proxy.
 `util/`, `firmware/` and `pareto-analysis/` default to
 `https://localhost/api/v1` and verify TLS against `nginx/certs/simlab.crt`,
 which is why the self-signed certificate does not force `verify=False`
-anywhere. The key is sent from `SIMLAB_API_KEY`; the scripts' own defaults
-differ, so set it ([util/README.md](../util/README.md#before-running)). Override
-the endpoint and the verification with:
+anywhere. The key is sent from `SIMLAB_API_KEY`, which defaults to
+`simlab-api-key42`, Compose's default; set it when the deployment uses another
+([util/README.md](../util/README.md#before-running)). Override the endpoint and
+the verification with:
 
 | Variable | Effect |
 | --- | --- |

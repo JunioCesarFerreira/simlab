@@ -108,7 +108,8 @@ The entry point. Holds the `Settings` dataclass, all core functions, and `main()
 
 `policy` is the placement decision as a pure function over the inventory;
 `completion` is the plan the `earliest_completion` policy makes of when the
-waiting work would finish; `inventory` is the snapshot they read; `dispatcher` is the single-threaded loop
+waiting work would finish; `inventory` is the snapshot they read; `workload`
+is the key under which a worker's held time is estimated; `dispatcher` is the single-threaded loop
 that applies it; `runner` executes one placed simulation and owns every
 decision about its outcome.
 
@@ -862,6 +863,7 @@ master-node/
     │   ├── policy.py       # Where a simulation goes, as a pure function
     │   ├── completion.py   # The plan behind earliest_completion
     │   ├── inventory.py    # The snapshot the policy reads
+    │   ├── workload.py     # Which runs share one held-time estimate
     │   ├── dispatcher.py   # The single-threaded loop that places work
     │   └── runner.py       # Runs one placed simulation; owns the outcome
     ├── transport/
