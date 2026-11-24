@@ -288,3 +288,40 @@ def test_p2_mutation_output_is_feasible_with_repair_on():
 
     assert adapter.penalty_objectives(child, n_objectives=2) is None
     assert is_connected([_SINK, *_active_positions(child.mask, candidates)], _R)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# What the sink covers needs no relay
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_p2_repair_activates_nothing_when_the_sink_is_enough():
+    candidates = _line_candidates()
+    # The sink alone covers the trajectory from 0 to 10, over 10% of it.
+    adapter = _adapter(min_pct=10.0, candidates=candidates)
+
+    mask = [0] * len(candidates)
+    assert adapter._repair_mask(mask) == mask
+
+
+def test_p2_repair_gain_ignores_points_the_sink_already_covers():
+    # Both candidates reach four points. All four of the first one are already
+    # covered by the sink; the second adds the point at x=15.
+    candidates = [(-1.0, 0.0), (6.0, 0.0)]
+    problem = _p2_problem(100.0, candidates)
+    problem["mobile_nodes"][0]["path_segments"] = [("40 * t - 20", "0")]
+    adapter = build_test_adapter(problem)
+    adapter.set_ga_operator_configs(random.Random(7), {"repair_coverage_budget": 1})
+
+    assert adapter._repair_mask([0, 0]) == [0, 1]
+
+
+def test_p2_repair_keeps_one_bit_per_candidate():
+    candidates = _line_candidates()
+    adapter = _adapter(min_pct=100.0, candidates=candidates, budget=len(candidates))
+
+    repaired = adapter._repair_mask([1] + [0] * (len(candidates) - 1))
+
+    assert len(repaired) == len(candidates)
+    elements = adapter.encode_simulation_input(ChromosomeP2(mac_protocol=0, mask=repaired))
+    assert [m["name"] for m in elements["fixedMotes"]].count("sink") == 1
+    assert len(elements["fixedMotes"]) == 1 + sum(repaired)

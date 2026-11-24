@@ -28,6 +28,7 @@ equal terms with a fully evaluated one — and it is configurable for anyone who
 wants the previous numbers back.
 """
 import logging
+import math
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -35,6 +36,12 @@ from pylib.db.repositories.generation import (
     STATE_COMPLETE,
     STATE_PENDING,
     STATE_UNKNOWN,
+)
+# One rule for "is this vector a measurement?", shared with the REST API and
+# the analysis scripts so that the engine and its readers cannot disagree.
+from pylib.evaluation_validity import (  # noqa: F401  (re-exported)
+    STATE_INFEASIBLE as _VALIDITY_STATE_INFEASIBLE,
+    is_valid_evaluation,
 )
 
 logger = logging.getLogger(__name__)
@@ -118,6 +125,11 @@ def is_usable(record: Optional[dict], policy: ReplicaPolicy) -> bool:
     """
     if record is None:
         return True
+    if record.get("refused"):
+        # The strategy could not turn the measurements into a vector (a
+        # metric missing from the aggregate, or not a finite number). The
+        # worst vector it assigned is a placeholder, never a measurement.
+        return False
     if record.get("reused"):
         # Carried over, not re-measured: the decision is read rather than
         # re-derived.
@@ -214,7 +226,7 @@ SOURCE_CACHE = "genome_cache"
 #: Evaluated in-process, with no simulations at all (an analytical problem).
 STATE_ANALYTICAL = "analytical"
 #: Rejected before simulating: the individual violates a constraint.
-STATE_INFEASIBLE = "infeasible"
+STATE_INFEASIBLE = _VALIDITY_STATE_INFEASIBLE
 
 
 def reused(record: Optional[dict]) -> dict:
@@ -251,6 +263,122 @@ def without_simulations(state: str, reason: str) -> dict:
     there was no plan to record.
     """
     return {"state": state, "reason": reason, "expected": 0, "observed": 0}
+
+
+def decided_at_enqueue(record: Optional[dict]) -> bool:
+    """Whether a stored vector was written without simulations of its generation.
+
+    What a resume has to know. Such a vector (reused, analytical, infeasible)
+    has nothing to be derived from, so it is read back with its evidence.
+    Anything else rests on simulations and is derived from them again: the
+    stored write may be half done, and a refusal is only known to the code
+    that derives it.
+    """
+    if not record:
+        return True     # written before the evidence was recorded
+    return bool(record.get("reused")) or record.get("state") in (
+        STATE_ANALYTICAL, STATE_INFEASIBLE)
+
+
+def finite_or_none(value: Any) -> Optional[float]:
+    """``value`` as a float when it is a finite number, else ``None``."""
+    if value is None or isinstance(value, str):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def objective_vector(
+    metrics: dict, keys: list[str], goals: list[int]
+) -> tuple[Optional[list[float]], Optional[str]]:
+    """The minimisation-space vector, or ``None`` and the reason it cannot be.
+
+    NaN is the case this exists for. ``statistics`` returns NaN for a column
+    that is absent or empty, the master publishes the simulation as ``Done``
+    anyway, and a NaN that reaches the sort is never dominated (every
+    comparison with it is false): it enters front 0 and, through the ideal
+    point, turns NSGA-III niching into noise. Infinity is refused for the
+    same reason — neither is a measurement.
+    """
+    vector: list[float] = []
+    for key, goal in zip(keys, goals):
+        raw = metrics.get(key)
+        if raw is None:
+            return None, f"metric {key!r} is missing"
+        value = finite_or_none(raw)
+        if value is None:
+            return None, f"metric {key!r} is not a finite number ({raw!r})"
+        vector.append(value * goal)
+    return vector, None
+
+
+def refuse(record: Optional[dict], reason: str) -> dict:
+    """The record of an evaluation the strategy could not turn into a vector.
+
+    Distinct from the policy refusing an incomplete evaluation: here the
+    replicas may all be there, and what is wrong is the value — a metric that
+    the aggregate does not carry, or one that is not a finite number. Before
+    this existed the strategy assigned the worst vector and the stored record
+    still said ``objective_used: true``, so a placeholder of 1e12 read as a
+    measurement to anything that trusted the record.
+    """
+    out: dict[str, Any] = dict(record or {"state": STATE_UNKNOWN})
+    out["refused"] = str(reason)
+    return out
+
+
+def evaluation_of(record: Optional[dict]) -> dict:
+    """The part of a completeness record a Pareto-front item carries."""
+    rec = record or {}
+    return {
+        "state": str(rec.get("state") or STATE_UNKNOWN),
+        "objective_used": bool(rec.get("objective_used", True))
+        and not rec.get("refused"),
+        "valid": is_valid_evaluation(record),
+    }
+
+
+def front_validity(items: list[dict]) -> dict:
+    """Count what the reported front rests on.
+
+    A front made only of penalty vectors or placeholders is still a
+    non-dominated set — the sort does not know what the numbers mean — and an
+    experiment used to finish ``Done`` with such a front and the message
+    "completed". This is what lets the record say otherwise.
+    """
+    counts = {"items": len(items), "valid": 0, "infeasible": 0, "refused": 0}
+    for item in items:
+        evaluation = item.get("evaluation") or {}
+        if evaluation.get("valid", True):
+            counts["valid"] += 1
+        elif evaluation.get("state") == STATE_INFEASIBLE:
+            counts["infeasible"] += 1
+        else:
+            counts["refused"] += 1
+    return counts
+
+
+def front_warning(validity: dict) -> Optional[str]:
+    """A message for the experiment when its front is not a result."""
+    if not validity.get("items"):
+        return None
+    if validity.get("valid"):
+        if validity["valid"] < validity["items"]:
+            return (
+                f"Pareto front mixes {validity['valid']} valid item(s) with "
+                f"{validity['infeasible']} infeasible and {validity['refused']} "
+                "refused item(s)."
+            )
+        return None
+    return (
+        "Completed WITHOUT a valid solution: every item of the reported Pareto "
+        f"front is a penalty or a placeholder ({validity['infeasible']} "
+        f"infeasible, {validity['refused']} refused). Do not use this front "
+        "as a result."
+    )
 
 
 def annotate(record: Optional[dict], *, usable: bool, policy: ReplicaPolicy) -> dict:

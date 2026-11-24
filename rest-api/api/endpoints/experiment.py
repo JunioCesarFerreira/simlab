@@ -9,6 +9,7 @@ import numpy as np
 import moocore
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import PlainTextResponse
 from bson import errors as bson_errors
 from tempfile import NamedTemporaryFile
@@ -17,6 +18,7 @@ from pydantic import BaseModel
 from bson import ObjectId
 
 from pylib import benchmarks, moo_metrics
+from pylib.batch_input import validate_batch_input
 from pylib.db import MongoRepository
 from pylib.firmware_snapshot import iter_snapshot_files
 from pylib.seed_aggregation import objective_aggregators
@@ -43,6 +45,38 @@ from pylib.timeutil import utc_now
 
 router = APIRouter()
 
+#: What PUT /experiments/{id} may change.
+EDITABLE_EXPERIMENT_FIELDS = {"name"}
+
+#: The statuses a client may set, and the ones each is reached from.
+STATUS_FROM: dict[str, tuple[str, ...]] = {
+    EnumStatus.CANCELLED.value: (EnumStatus.WAITING.value, EnumStatus.RUNNING.value),
+    EnumStatus.WAITING.value: (EnumStatus.DONE.value, EnumStatus.ERROR.value,
+                               EnumStatus.CANCELLED.value),
+}
+
+
+def _settle_strategy_input(parameters: dict, source_options: dict) -> None:
+    """Batch brings chromosomes instead of an algorithm; the others, the opposite."""
+    # A benchmark's plan is validated by POST /scalability/, its only door.
+    parameters.pop("benchmark", None)
+    if parameters["strategy"] == "batch":
+        try:
+            validate_batch_input(parameters, source_options)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        parameters.setdefault("algorithm", {})
+        return
+    if "algorithm" not in parameters:
+        # The answer the model gave while it declared the field required.
+        raise RequestValidationError([{
+            "type": "missing", "loc": ("body", "parameters", "algorithm"),
+            "msg": "Field required", "input": parameters,
+        }])
+    # Read by batch alone: storing them would suggest they had an effect.
+    parameters.pop("chromosomes", None)
+    parameters.pop("random_seed", None)
+
 
 def _validate_seed_aggregators(parameters: dict) -> None:
     # The engine applies them only once the first generation's simulations
@@ -60,6 +94,7 @@ def create_experiment(
     factory: MongoRepository = Depends(get_factory)
 ) -> str:
     """Create a new experiment. Returns the generated experiment_id."""
+    _settle_strategy_input(experiment["parameters"], experiment["source_repository_options"])
     _validate_seed_aggregators(experiment["parameters"])
     try:
         doc = experiment_to_mongo(experiment)
@@ -146,9 +181,19 @@ def update_experiment(
     updates: dict,
     factory: MongoRepository = Depends(get_factory)
 ) -> bool:
-    """Partially update an experiment using $set semantics."""
+    """Rename an experiment. The other fields are written by the engine, and the
+    status has its own PATCH route: storing any field here let a client
+    overwrite, for one, the firmware snapshot."""
+    other = sorted(set(updates) - EDITABLE_EXPERIMENT_FIELDS)
+    if other:
+        raise HTTPException(
+            status_code=422,
+            detail=f"only {sorted(EDITABLE_EXPERIMENT_FIELDS)} can be changed here, not {other}")
+    name = updates.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise HTTPException(status_code=422, detail="name must be a non-empty string")
     try:
-        return factory.experiment_repo.update(experiment_id, updates)
+        return factory.experiment_repo.update(experiment_id, {"name": name.strip()})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -176,20 +221,38 @@ def update_experiment_status(
     new_status: str,
     factory: MongoRepository = Depends(get_factory)
 ) -> bool:
-    """Update only the status field of an experiment."""
+    """Cancel an experiment that waits or runs, or put a finished one back to Waiting.
+
+    Running, Done and Error are the engine's to set. Moving a running
+    experiment back to Waiting let the engine start it a second time.
+    """
     valid = {s.value for s in EnumStatus}
     if new_status not in valid:
         raise HTTPException(
             status_code=422,
             detail=f"Invalid status {new_status!r}; expected one of {sorted(valid)}",
         )
+    allowed_from = STATUS_FROM.get(new_status)
+    if allowed_from is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{new_status} is set by the engine; a client sets {sorted(STATUS_FROM)}")
     try:
-        factory.experiment_repo.update_status(experiment_id, new_status)
-        return True
-    except HTTPException:
-        raise
+        if factory.experiment_repo.update_status_from(experiment_id, new_status, allowed_from):
+            return True
+        doc = factory.experiment_repo.get(experiment_id)
+    except bson_errors.InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid experiment_id")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    if not doc:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    if doc.get("status") == new_status:
+        return True
+    raise HTTPException(
+        status_code=409,
+        detail=f"cannot go from {doc.get('status')} to {new_status}; "
+               f"{new_status} is reached from {sorted(allowed_from)}")
 
 
 @router.patch("/{experiment_id}/analysis-file", response_model=str)
@@ -590,11 +653,10 @@ def plot_pareto_results(
 
 # ── HV/GD inline helpers ──────────────────────────────────────────────────────
 
-_PENALTY_THRESHOLD = moo_metrics.PENALTY_THRESHOLD
-
-
-def _is_penalized(objs: list[float]) -> bool:
-    return any(abs(v) >= _PENALTY_THRESHOLD for v in objs)
+def _is_excluded(objs: list[float], record: Optional[dict] = None) -> bool:
+    """Penalty, placeholder or non-finite: decided by the stored evidence,
+    by magnitude only for documents written before the evidence existed."""
+    return moo_metrics.is_excluded(objs, record)
 
 
 def _front_rows(objs_list: list[list[float]], minimize: list[bool]) -> list[list[float]]:
@@ -691,9 +753,9 @@ def get_hv_gd(
         objectives, minimize, population, normalize, include_cumulative,
         (doc.get("parameters") or {}).get("objectives"),
         ((doc.get("parameters") or {}).get("simulation") or {}).get("synthetic"),
-        [p.get("objectives") for p in doc.get("pareto_front") or []],
+        [[p.get("objectives"), p.get("evaluation")] for p in doc.get("pareto_front") or []],
         [[g["index"], g.get("survivors"),
-          [[i.get("individual_id"), i.get("objectives")]
+          [[i.get("individual_id"), i.get("objectives"), i.get("completeness")]
            for i in individuals.get(g["_id"], [])]] for g in gens],
     ]
     return hv_gd_cache.get_or_compute(
@@ -749,7 +811,7 @@ def _compute_hv_gd(
             if len(raw) <= max(objective_columns):
                 continue
             objs = [float(raw[i]) for i in objective_columns]
-            if _is_penalized(objs) or not np.isfinite(objs).all():
+            if _is_excluded(objs, ind.get("completeness")):
                 continue
             valid.append(objs)
             ind_hash = ind.get("individual_id")
@@ -798,6 +860,9 @@ def _compute_hv_gd(
 
     reference_kind = "final_front"
     reference_front = None
+    # Evidence parallel to the empirical reference rows; None for an
+    # analytical front, which has no stored items to vouch for.
+    ref_records: Optional[list[Optional[dict]]] = None
     hv_ref: list[float] = []
     # Theoretical ideal-nadir range, when the benchmark provides one. Used both
     # to normalise the indicators (instead of the sampled reference's extremes,
@@ -844,6 +909,7 @@ def _compute_hv_gd(
         if not stored_pf:
             return _empty_hv_gd()
         ref_min_rows: list[list[float]] = []
+        ref_records = []
         for p in stored_pf:
             objs_dict: dict = p.get("objectives") or {}
             # A row missing an objective is dropped rather than defaulted: a
@@ -855,13 +921,15 @@ def _compute_hv_gd(
                 float(objs_dict[o]) if minimize_bools[i] else -float(objs_dict[o])
                 for i, o in enumerate(objectives)
             ])
+            ref_records.append(p.get("evaluation"))
         reference_front = ref_min_rows
 
     # Penalised, duplicate and dominated rows are stripped before the front is
     # used as a reference. IGD averages over the reference, so a single
     # penalised row (≥ 1e8) would dominate the mean outright — GD never exposed
     # this because it minimises over the reference instead.
-    reference_front = moo_metrics.sanitize_reference_front(reference_front)
+    reference_front = moo_metrics.sanitize_reference_front(
+        reference_front, records=ref_records)
     if reference_front.size == 0:
         return _empty_hv_gd()
 

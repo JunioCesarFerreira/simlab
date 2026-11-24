@@ -1,13 +1,13 @@
 """Timestamps that mean the same thing in every process.
 
-Most of this repository writes ``datetime.now()`` — naive, and therefore in
-whatever zone the process happens to run in. That worked while everything ran
+This repository used to write ``datetime.now()`` — naive, and therefore in
+whatever zone the process happened to run in. That worked while everything ran
 in one container with its clock on UTC, and stopped being a safe assumption
 once simulations started running on other machines: a reservation made by the
 master-node and read back by an operator's tooling are the same instant only
 if both agree on the zone, and a naive value does not say which it is.
 
-So the collections this feature introduced store **aware UTC**, and the two
+So what is written through this module is **aware UTC**, and the two
 helpers below exist because the migration is partial on purpose. Documents
 written before it — and the collections not yet converted — hold naive values,
 and arithmetic that mixes the two raises ``TypeError`` rather than being

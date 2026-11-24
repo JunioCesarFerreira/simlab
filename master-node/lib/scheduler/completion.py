@@ -8,26 +8,30 @@ before this one could only answer the first question.
 The plan is list scheduling with earliest finish time, on paper: every
 waiting job, in turn, goes to the worker that would finish it first — a free
 one now, or a busy one once its current run ends — using each worker's
-measured held time. For identical jobs on workers of different speeds this
-greedy is optimal for the makespan, and the jobs in one queue are as close to
-identical as the scheduler can know: it has no estimate per job, only per
-worker. The plan is then used for one thing only: if it gives a job to a
+measured held time **for the workload of the job at the head**
+(``lib.scheduler.workload``). For identical jobs on workers of different
+speeds this greedy is optimal for the makespan, and the rest of the queue is
+costed like the head: it is usually the same generation. The plan is then used for one thing only: if it gives a job to a
 worker that is free **now**, the head of the queue goes there; if it gives
 none, the head waits.
 
 Two inputs need care:
 
-* **A busy worker's remaining time** is its expected held time minus how long
-  it has been running. A run past ``OVERDUE_FACTOR`` times its expectation is
+* **A busy worker's remaining time** is the expected held time of the job it
+  is running — not of the one being placed — minus how long it has been
+  running. A run past ``OVERDUE_FACTOR`` times its expectation is
   not counted on at all: the estimate has failed for it, and waiting on a
   worker that may be stuck would stall the queue behind it.
 * **A machine's limit** caps how many of its workers can run at once. Its
   occupied workers count first, because they hold the capacity already; only
   the fastest of its free workers fit in what is left.
 
-A worker never measured is sampled before anything is planned, as the other
-speed-aware policy does: the plan cannot reason about a duration it does not
-have, and one run gives it one.
+A worker never measured on this workload, or not recently, is sampled before
+anything is planned, as the other speed-aware policy does: the plan cannot
+reason about a duration it does not have, and one run gives it one.
+
+A scalability benchmark does not come here at all: the dispatcher places it
+as soon as a worker is free, because holding it would change what it measures.
 """
 from __future__ import annotations
 
@@ -72,13 +76,14 @@ def _slots(loads: list[HostLoad], limits: dict[str, int]) -> list[Slot]:
     slots: list[Slot] = []
     for machine, hosts in sorted(by_machine.items()):
         for load in hosts:
-            for expected, elapsed in load.occupied:
-                if expected is None or expected <= 0:
+            next_job = load.occupied_durations or [e for e, _ in load.occupied]
+            for (expected, elapsed), duration in zip(load.occupied, next_job):
+                if expected is None or expected <= 0 or not duration:
                     continue
                 running = max(0.0, elapsed or 0.0)
                 if running > OVERDUE_FACTOR * expected:
                     continue
-                slots.append(Slot(load, float(expected),
+                slots.append(Slot(load, float(duration),
                                   max(0.0, expected - running), False))
 
         free = sorted(

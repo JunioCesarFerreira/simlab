@@ -57,7 +57,9 @@ const props = defineProps<{
 defineEmits<{ (e: "select", individual: IndividualDto): void }>();
 
 const opening = ref(false);
-const penalized = computed(() => isPenalized(props.individual.objectives));
+const penalized = computed(() =>
+  isPenalized(props.individual.objectives, props.individual.completeness),
+);
 const simCount = computed(() =>
   props.individual.simulations_ids ? props.individual.simulations_ids.length : null,
 );

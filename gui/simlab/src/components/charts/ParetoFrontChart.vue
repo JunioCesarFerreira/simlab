@@ -163,7 +163,7 @@ const populationData = computed<ChartPoint[]>(() => {
       if (seen.has(ind.individual_id)) continue;
       seen.add(ind.individual_id);
 
-      if (isPenalized(ind.objectives)) continue;
+      if (isPenalized(ind.objectives, ind.completeness)) continue;
 
       const x = ind.objectives[xIdx.value];
       const y = ind.objectives[yIdx.value];

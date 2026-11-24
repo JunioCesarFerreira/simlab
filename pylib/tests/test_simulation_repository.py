@@ -143,6 +143,17 @@ class TestAttemptGuards:
 
         assert coll.update_one.call_args.args[0]["attempt_id"] == ATTEMPT
 
+    def test_done_carries_what_the_result_lacks(self, simulations):
+        repo, coll = simulations
+        coll.update_one.return_value = MagicMock(matched_count=1)
+
+        repo.mark_done(SIM_OID, None, None, {"latency": float("nan")},
+                       attempt_id=ATTEMPT, system_message="not computable: latency")
+        assert coll.update_one.call_args.args[1]["$set"]["system_message"] == "not computable: latency"
+
+        repo.mark_done(SIM_OID, None, None, {}, attempt_id=ATTEMPT)
+        assert "system_message" not in coll.update_one.call_args.args[1]["$set"]
+
     def test_error_is_guarded(self, simulations):
         repo, coll = simulations
         coll.update_one.return_value = MagicMock(matched_count=1)
@@ -640,3 +651,37 @@ class TestPlacementDistribution:
 
         assert out["placed"] == 2
         assert {h["host_name"] for h in out["hosts"]} == {"local", "vm7"}
+
+
+class TestTopologyPicture:
+    """The picture is stored on the individual; the simulation names it."""
+
+    def repo(self, simulation, individual):
+        from pylib.db.repositories.simulation import SimulationRepository
+        connection = MagicMock()
+        db = connection.connect.return_value.__enter__.return_value
+        collections = {"simulations": MagicMock(), "individuals": MagicMock()}
+        collections["simulations"].find_one.return_value = simulation
+        collections["individuals"].find_one.return_value = individual
+        db.__getitem__.side_effect = lambda name: collections[name]
+        return SimulationRepository(connection), collections
+
+    def test_it_is_found_through_the_individual(self):
+        gen, picture = ObjectId(), ObjectId()
+        repo, collections = self.repo({"generation_id": gen, "individual_id": "h"},
+                                      {"topology_picture_id": picture})
+        assert repo.get_topology_pic_file_id(str(SIM_OID)) == picture
+        assert collections["individuals"].find_one.call_args.args[0] == {
+            "generation_id": gen, "individual_id": "h"}
+
+    def test_a_stored_string_is_returned_as_an_id(self):
+        picture = ObjectId()
+        repo, _ = self.repo({"generation_id": ObjectId(), "individual_id": "h"},
+                            {"topology_picture_id": str(picture)})
+        assert repo.get_topology_pic_file_id(str(SIM_OID)) == picture
+
+    def test_nothing_missing_is_invented(self):
+        assert self.repo(None, None)[0].get_topology_pic_file_id(str(SIM_OID)) is None
+        repo, _ = self.repo({"generation_id": ObjectId(), "individual_id": "h"},
+                            {"topology_picture_id": None})
+        assert repo.get_topology_pic_file_id(str(SIM_OID)) is None

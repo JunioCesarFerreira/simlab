@@ -44,7 +44,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--mongo-uri",
-                   default=os.getenv("MONGO_URI", "mongodb://localhost:27017/?replicaSet=rs0"),
+                   default=os.getenv("MONGO_URI", "mongodb://localhost:27017/?directConnection=true"),
                    help="MongoDB connection URI  [env: MONGO_URI]")
     p.add_argument("--db-name", default=os.getenv("DB_NAME", "simlab"),
                    help="MongoDB database name  [env: DB_NAME]")

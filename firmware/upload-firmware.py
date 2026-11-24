@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # pip install requests
 import os
+import sys
 
 import requests
 from pathlib import Path
@@ -26,7 +27,8 @@ VERIFY_TLS = (
 
 API_URL = f"{API_BASE}/sources/"
 API_KEY = os.getenv("SIMLAB_API_KEY", "simlab-api-key42")  # keep in sync with SIMLAB_API_KEY in .env
-FIRMWARE_DIR = Path(".")  # run in firmware/ directory containing rpl-udp-csma/ and rpl-udp-tsch/
+# The rpl-udp-* directories sit next to this script: it runs from any directory.
+FIRMWARE_DIR = Path(__file__).resolve().parent
 
 # ============================================================
 # Helpers
@@ -100,34 +102,37 @@ def create_repository(name: str, description: str, directory: Path):
 # MAIN
 # ============================================================
 
+# The repository name is the directory name. v1 is what the published results
+# used and must not be edited (its digests are pinned by a test); v2 changes
+# how the metrics are obtained. See docs/markdown/FIRMWARE_METRICS.md.
+# rpl-udp-tsch-6o is an older variant that no experiment used and is not uploaded.
+REPOSITORIES = {
+    "rpl-udp-csma": "RPL UDP firmware using CSMA MAC layer (v1)",
+    "rpl-udp-tsch": "RPL UDP firmware using TSCH MAC layer (v1)",
+    "rpl-udp-csma-v2": "RPL UDP firmware using CSMA MAC layer (v2: no probes, one-way latency, cumulative counters, 64-entry tables)",
+    "rpl-udp-tsch-v2": "RPL UDP firmware using TSCH MAC layer (v2: no probes, one-way latency, cumulative counters, shared cell every 3 slots, 64-entry tables)",
+}
+
+
 def main():
+    """Upload the repositories named on the command line, or all of them."""
+    names = sys.argv[1:] or list(REPOSITORIES)
 
-    csma_dir = FIRMWARE_DIR / "rpl-udp-csma"
-    tsch_dir = FIRMWARE_DIR / "rpl-udp-tsch"
+    unknown = [n for n in names if n not in REPOSITORIES]
+    if unknown:
+        raise SystemExit(f"Unknown repository: {', '.join(unknown)}. Known: {', '.join(REPOSITORIES)}")
 
-    if not csma_dir.exists():
-        raise RuntimeError("Directory rpl-udp-csma not found")
+    # Check every directory before uploading any, so a typo does not leave half the set uploaded.
+    for name in names:
+        if not (FIRMWARE_DIR / name).exists():
+            raise RuntimeError(f"Directory {name} not found")
 
-    if not tsch_dir.exists():
-        raise RuntimeError("Directory rpl-udp-tsch not found")
-
-    # --------------------------------------------------------
-    # POST 1 — CSMA
-    # --------------------------------------------------------
-    create_repository(
-        name="rpl-udp-csma",
-        description="RPL UDP firmware using CSMA MAC layer",
-        directory=csma_dir,
-    )
-
-    # --------------------------------------------------------
-    # POST 2 — TSCH
-    # --------------------------------------------------------
-    create_repository(
-        name="rpl-udp-tsch",
-        description="RPL UDP firmware using TSCH MAC layer",
-        directory=tsch_dir,
-    )
+    for name in names:
+        create_repository(
+            name=name,
+            description=REPOSITORIES[name],
+            directory=FIRMWARE_DIR / name,
+        )
 
 
 if __name__ == "__main__":

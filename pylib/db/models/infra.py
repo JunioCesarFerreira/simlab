@@ -252,6 +252,11 @@ class CoojaResource(TypedDict, total=False):
     remote_pid: Optional[int]
     reserved_at: Optional[datetime]
     started_at: Optional[datetime]
+    # What the job it holds was expected to take, written at the reservation.
+    expected_sec: Optional[float]
+    # Held time per workload: {key: {"mean", "samples", "at"}}. The key is the
+    # master-node's (lib/scheduler/workload.py).
+    durations: dict[str, dict]
     probe: ResourceProbe
     origin: str                    # "discovered" | "manual"
     last_check: Optional[datetime]

@@ -2,55 +2,43 @@
 
 🌍 *[**English**](README.md) ∙ [Português](README_pt.md)*
 
- This repository hosts a scalable multi-objective optimization simulation system for sensor networks, built on **Cooja/Contiki-NG**, **Docker** and **MongoDB/GridFS**.
- It orchestrates the end-to-end experiment lifecycle: solution generation (mo-engine), parallel simulation in containers (master-node), and reproducible result collection/storage—driven by MongoDB **Change Streams** and exposed through a **REST API** (Swagger UI).
+This repository hosts a scalable multi-objective optimization simulation system for sensor networks, built on **Cooja/Contiki-NG**, **Docker** and **MongoDB/GridFS**.
+It orchestrates the end-to-end experiment lifecycle: solution generation (mo-engine), parallel simulation in containers (master-node), and traceable result collection/storage, driven by MongoDB **Change Streams**. It is operated through a **web GUI** and a **REST API** (Swagger UI).
 
- ---
+---
 
 ## System Architecture
-The system is composed of five main components:
 
-1. **API**
-   - Provides a RESTful interface for creating and managing experiments.
-   - Full CRUD operations for **source repositories**, **experiments**, **generations** and **simulations** in MongoDB.
-   - Enables uploading source/configuration files to be used in simulations (source repositories).
-   - Supports downloading of logs and output files stored in MongoDB/GridFS.
-   - Ensures compatibility with external clients.
+SimLab has six main components, plus a reverse proxy and a monitoring stack.
 
-2. **database (MongoDB + GridFS)**
-   - Central data lake for storing experiments, generations, and simulation metadata.
-   - Uses GridFS to manage large files (e.g., logs, Cooja `.csc` configs, `.dat` position files).
-   - Provides Change Streams to trigger workflows when new experiments or results are available.
+1. **REST API** ([rest-api/](rest-api/README.md))
+   - Creates and manages experiments, campaigns, saved problems and source repositories.
+   - Reads generations, individuals and simulations, and serves their files from GridFS.
+   - Computes quality indicators and serves the infrastructure inventory.
 
-3. **mo-engine**
-   - Runs evolutionary algorithms (e.g., NSGA-II/III, MOEA/D, EDA, MCTS).
-   - Generates new candidate solutions and enqueues simulations into MongoDB.
-   - Implements strategies (random generation, iterative refinement, Pareto-based search).
-   - Listens to MongoDB Change Streams for simulation results to decide the next steps (e.g., generating new generations or updating experiment status).
+2. **Database (MongoDB + GridFS)**
+   - Stores experiments, generations, individuals, simulations and the host/worker inventory.
+   - Uses GridFS for files (logs, CSVs, generated Cooja `.csc` and `.dat` inputs, firmware).
+   - Provides the Change Streams that trigger the other services, which is why it runs as a replica set.
 
-4. **master-node**
-   - Observes the **generations** collection via Change Streams to build the simulation queue.
-   - Dynamically manages the lifecycle of Docker containers for distributed simulations.
-   - Transfers simulation input data to containers via **SCP**.
-   - Monitors running simulations via **SSH**.
-   - Collects logs and output files and registers results back into MongoDB/GridFS.
-   - Ensures scalability by dispatching simulations across available workers.
+3. **mo-engine** ([mo-engine/](mo-engine/README.md))
+   - Runs the strategies: NSGA-II and NSGA-III (native, DEAP and pymoo selection), random search, batch evaluation and the scalability benchmark.
+   - Writes candidate solutions and their simulations to MongoDB.
+   - Reacts to finished generations to select, vary and enqueue the next one.
 
-5. **Cooja Simulation Containers**
-   - Each container runs a dedicated Cooja instance for a single simulation task.
-   - Receives experiment input files from the master-node.
-   - Executes the Contiki-NG firmware under controlled conditions.
-   - Generates logs and measurement data (latency, energy, RSSI, hops, packet loss, etc.).
-   - Returns results to the master-node for persistence in MongoDB/GridFS.
+4. **master-node** ([master-node/](master-node/README.md))
+   - Observes the **simulations** collection and places each waiting simulation on a worker.
+   - Keeps the inventory of hosts and Cooja containers and measures their health. It does not create or destroy containers.
+   - Sends inputs via **SCP**, starts Cooja detached via **SSH**, and follows it.
+   - Converts the log to metrics and stores the results in MongoDB/GridFS.
 
----
+5. **Cooja simulation containers**
+   - Each container runs one simulation at a time.
+   - Builds the Contiki-NG firmware from its sources, runs it, and produces the `COOJA.testlog` that the metrics come from.
 
-## Features
-- **Distributed Processing:** Parallel execution of multiple simulations.
-- **Seamless Data Flow:** Integration with MongoDB for real-time result processing.
-- **Automation:** End-to-end automated execution from algorithm evolution to result collection.
-
----
+6. **GUI** ([gui/simlab/](gui/simlab/README.md))
+   - Designs problems, launches and follows experiments, compares results and manages the infrastructure.
+   - Talks only to the REST API.
 
 ### System Topology
 
@@ -58,42 +46,47 @@ The system is composed of five main components:
 %%{init: {"flowchart": {"curve": "stepAfter"}}}%%
 flowchart LR
     user([User])
-    subgraph SIMLAB["simlab<br/>docker-compose"]
+    subgraph SIMLAB["simlab<br/>docker compose"]
         direction LR
+        proxy["Reverse proxy"]
+        gui["GUI<br/><i>static SPA</i>"]
+        api["REST API"]
+        db[(MongoDB + GridFS)]
         mo["mo-engine<br/><i>optimization logic</i>"]
-        db[(Database)]
-        api["API"]
-        gui["GUI"]
-        proxy["Proxy Reverse"]
         master["master-node<br/><i>simulation orchestration</i>"]
-        subgraph workers["Simulator Workers<br/>"]
+        monitor["cAdvisor + Prometheus<br/>+ Grafana"]
+        subgraph workers["Local workers"]
             w1["Worker 1"]
             w2["..."]
             w3["Worker N"]
         end
     end
+    subgraph remote["Other machines"]
+        host["Host sshd"]
+        r1["Remote workers"]
+    end
 
     user --- proxy
-
-    mo --- db
-
-    proxy --- api
     proxy --- gui
-
+    proxy --- api
+    proxy --- monitor
     api --- db
-    gui --- db
-
-
+    api --- monitor
+    mo --- db
+    mo --- monitor
     db --- master
-
     master --- w1
     master --- w2
     master --- w3
+    master --- host
+    host --- r1
 ```
+
+The GUI is served as static files: its API calls are made by the browser, through the proxy.
 
 ### SimLab Work Sequence
 
-Below is a simplified diagram of the SimLab workflow:
+A simplified view of an experiment that runs in Cooja:
 
 ```mermaid
 sequenceDiagram
@@ -103,39 +96,48 @@ sequenceDiagram
     participant MasterNode
     participant SimWorker as Simulation Worker
 
-    Note over MO-Engine: On startup: enqueue any<br/>pending WAITING experiments
-    Note over MasterNode: On startup: recover stuck RUNNING<br/>simulations + enqueue pending WAITING
+    Note over MO-Engine: On startup: start Waiting experiments<br/>and resume Running ones
+    Note over MasterNode: On startup: adopt or recover held runs,<br/>then enqueue Waiting simulations
 
     API->>Database: Create source repository
-    API->>Database: Create experiment (status: WAITING)
+    API->>Database: Create experiment (Waiting)
 
-    Database->>+MO-Engine: Change stream:<br/>WAITING experiment detected
+    Database->>MO-Engine: Change stream: Waiting experiment
+    MO-Engine->>Database: Claim it (Running) and copy its firmware
 
-    MO-Engine->>Database: Mark experiment as STARTING
-
-    loop Iterative optimization (e.g. NSGA-III strategy)
+    loop Each generation
         MO-Engine->>MO-Engine: Generate candidate solutions
-        MO-Engine->>Database: Insert generation, batch<br/>and simulations (status: WAITING)
+        MO-Engine->>Database: Insert generation, individuals<br/>and simulations (Waiting)
+        Database->>MasterNode: Change stream: Waiting simulation
 
-        Database->>MasterNode: Change stream:<br/>New WAITING simulation(s) detected
-        MasterNode->>MasterNode: Enqueue simulation(s)
-
-        loop For each available worker (parallel)
-            MasterNode->>Database: Download CSC, positions<br/>and source files from GridFS
-            MasterNode->>SimWorker: Transfer files via SCP
-            MasterNode->>Database: Mark simulation RUNNING
-            MasterNode->>SimWorker: Execute Cooja via SSH
-            SimWorker-->>MasterNode: Simulation finished<br/>(collect COOJA.testlog via SCP)
-            MasterNode->>MasterNode: Convert log to CSV<br/>Calculate objectives/metrics
-            MasterNode->>Database: Upload log + CSV to GridFS<br/>Mark simulation DONE or ERROR
-            MasterNode->>Database: If all batch simulations finished:<br/>mark batch DONE or ERROR
+        loop For each simulation (in parallel)
+            MasterNode->>Database: Reserve a worker, download inputs
+            MasterNode->>SimWorker: Send files via SCP
+            MasterNode->>Database: Mark simulation Running
+            MasterNode->>SimWorker: Start Cooja detached and poll it
+            SimWorker-->>MasterNode: COOJA.testlog via SCP
+            MasterNode->>MasterNode: Convert to CSV, compute metrics
+            MasterNode->>Database: Store files, mark simulation Done or Error
+            MasterNode->>Database: Nothing active left: close generation
         end
 
-        Database->>+MO-Engine: Change stream:<br/>Batch DONE detected
+        Database->>MO-Engine: Change stream: generation Done or Error
+        MO-Engine->>Database: Repeat failed replicas,<br/>or store objectives
     end
 
-    MO-Engine->>-Database: Mark experiment DONE
+    MO-Engine->>Database: Mark experiment Done
 ```
+
+---
+
+## Features
+
+- **Distributed processing:** parallel simulations on one or several machines.
+- **Event-driven coordination:** MongoDB Change Streams, with periodic fallbacks for missed events.
+- **Automation:** end-to-end execution, from evolution to result collection.
+- **Evidence kept with results:** replica completeness, a firmware snapshot per experiment and the host/container of each simulation.
+- **Benchmarks without Cooja:** DTLZ2, ZDT1 and SCH1, evaluated by the mo-engine (by the master-node for a batch).
+- **Infrastructure measurement:** a Universal Scalability Law benchmark and per-experiment CPU/memory telemetry.
 
 ---
 
@@ -143,25 +145,51 @@ sequenceDiagram
 
 ### Directories and Files
 
-- `docs/`: supplementary documentation such as notes, images and diagrams.
-- `master-node/`: Python code for the Master-Node orchestrator.
-- `mo-engine/`: Python code for the evolutionary engine.
-- `pylib/`: shared Python library used across components.
-- `rest-api/`: Python REST API.
-- `util/`: utility scripts for development, deployment and monitoring.
-- `Dockerfiles`: Dockerfiles and `docker-compose` configurations to build and run the system.
+| Path | Content |
+| --- | --- |
+| [`rest-api/`](rest-api/README.md) | FastAPI REST service |
+| [`mo-engine/`](mo-engine/README.md) | Optimization engine: [strategies](mo-engine/lib/strategy/README.md) and [problems](mo-engine/lib/problem/README.md) |
+| [`master-node/`](master-node/README.md) | Simulation orchestrator |
+| [`pylib/`](pylib/README.md) | Python library shared by the services |
+| [`gui/simlab/`](gui/simlab/README.md) | Vue web application |
+| [`firmware/`](firmware/README.md) | Contiki-NG applications that run in the motes |
+| [`pareto-analysis/`](pareto-analysis/README.md) | Offline Pareto and indicator CLIs, also used by the API |
+| [`util/`](util/README.md) | Operator and maintenance scripts |
+| [`nginx/`](nginx/README.md) | TLS reverse proxy |
+| `monitoring/`, `grafana-provisioning/` | Prometheus configuration and Grafana dashboards |
+| [`baseline/`](baseline/README.md) | Script-based orchestrator used for comparison |
+| `experiments/` | Standalone studies and dated reports: [NSGA-III benchmark](experiments/external-nsga3-benchmark/README.md), [metrics audit](experiments/nsga-metrics-audit/README.md), [chart performance](experiments/chart-performance/README.md) |
+| [`debug/`](debug/README.md) | Development compose files, request examples and fault-validation scripts |
+| `docs/` | Guides (below), diagrams and images |
+| `docker-compose.yaml`, `Dockerfile.*`, `.env.example` | Build and deployment |
+
+### Documentation
+
+| Guide | Subject | Kind |
+| --- | --- | --- |
+| [Firmware metrics](docs/markdown/FIRMWARE_METRICS.md) | How every network metric is obtained and what it can support | Reference |
+| [Firmware traceability](docs/markdown/FIRMWARE_TRACEABILITY.md) | The per-experiment copy of the firmware | Reference |
+| [Runtime metrics](docs/markdown/RUNTIME_METRICS.md) | CPU/memory telemetry per experiment | Reference |
+| [Synthetic mode](docs/markdown/SYNTHETIC_MODE.md) | Benchmarks and convergence indicators | Reference |
+| [Seed study](docs/markdown/SEED_STUDY.md) | How many seeds an instance needs to report a value and to rank solutions | Reference |
+| [GridFS storage](docs/markdown/GRIDFS_STORAGE.md) | Compression, and the measurements behind it | Reference and dated analysis |
+| [Provenance guide](docs/markdown/PROVENANCE_GUIDE.md) | Recording code and images, releasing with a DOI | Plan, not implemented |
+| [Campaign v2](docs/markdown/CAMPAIGN_V2.md) | The experiments planned for the thesis and the papers | Plan |
+| [Changelog](CHANGELOG.md) | What changed, and why | History |
 
 ---
 
 ## Installation
+
 ### Prerequisites
-- Docker & Docker Compose
-- Python (>= 3.12)
-- MongoDB
-- [Docker Image Cooja (Contiki-NG environment)](https://github.com/JunioCesarFerreira/Cooja-Docker-VM-Setup)
+
+- Docker with Docker Compose v2 (`docker compose`)
+- [Docker Image Cooja (Contiki-NG environment)](https://github.com/JunioCesarFerreira/Cooja-Docker-VM-Setup) (`juniocesarferreira/simulation-cooja:v1.1`)
+- Only to run components or scripts outside Docker: Python 3.12+ and Node.js 20.19+ or 22.12+
+
+MongoDB does not need to be installed: the compose file provides it.
 
 ### Setup Instructions
-
 
 Follow these steps to get SimLab up and running locally using Docker.
 
@@ -187,34 +215,38 @@ example settings and edit them:
 cp .env.example .env
 ```
 
-| Variable | Purpose |
-| --- | --- |
-| `SIMLAB_PUBLIC_URL` | Base URL users type in. **Must include the port** when HTTPS is not on 443. |
-| `SIMLAB_HTTP_PORT` / `SIMLAB_HTTPS_PORT` | Host ports for the proxy — change these if 80/443 are taken. |
-| `SIMLAB_TLS_CN` / `SIMLAB_TLS_SAN` | Hostname baked into the self-signed certificate generated on first start. |
-| `SIMLAB_API_KEY`, `GRAFANA_ADMIN_PASSWORD` | Credentials. Change both before exposing SimLab beyond localhost. |
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SIMLAB_PUBLIC_URL` | `https://localhost` | Base URL users type in. **Must include the port** when HTTPS is not on 443. |
+| `SIMLAB_HTTP_PORT` / `SIMLAB_HTTPS_PORT` | `80` / `443` | Host ports for the proxy. Change these if 80/443 are taken. |
+| `SIMLAB_TLS_CN` / `SIMLAB_TLS_SAN` / `SIMLAB_TLS_DAYS` | `localhost` / `DNS:localhost,IP:127.0.0.1` / `825` | Name and validity of the self-signed certificate generated on first start. |
+| `SIMLAB_API_KEY` | `simlab-api-key42` | API key. It is also built into the GUI, so a change needs `docker compose up -d --build`. |
+| `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD` | `simlab` / `simlab123` | Grafana login. Change it, and the API key, before exposing SimLab beyond localhost. |
+| `SIM_TIMEOUT_SEC` | `10800` | Wall-clock limit of one simulation. |
 
 Every variable has a working default, so the stack also comes up without a
 `.env` file. See [nginx/README.md](nginx/README.md) for the full proxy setup,
 including how to install a CA-issued certificate.
 
-In `docker-compose.yaml` itself you still set the **number of Cooja simulators
-on this machine**: add or remove `cooja*` services and keep the master node's
-`NUMBER_OF_CONTAINERS` in sync.
+In `docker-compose.yaml` itself you set the **number of Cooja simulators on
+this machine** (8 by default): add or remove `cooja*` services and keep the
+master-node's `NUMBER_OF_CONTAINERS` in sync. Each simulation is also given a
+4 GB JVM heap (`COOJA_JVM_XMS` / `COOJA_JVM_XMX`), so size both to the
+machine.
 
-That variable now **seeds** the local host's workers on the first start rather
-than sizing a worker pool. Capacity comes from an inventory of hosts and
-workers in the database, maintained by Docker discovery and the health cycle,
-and more machines are added from the **Infrastructure** page without touching
-the compose file — see
-[Distributed Cooja Resources](#distributed-cooja-resources).
+`NUMBER_OF_CONTAINERS` **seeds** the local host's workers rather than sizing a
+pool: every start adds the ones that are missing and never overwrites an
+existing one. Capacity comes from an inventory of hosts and workers in the
+database, maintained by Docker discovery and the health cycle, and more
+machines are added from the **Infrastructure** page without touching the
+compose file. See [Distributed Cooja Resources](#distributed-cooja-resources).
 
 #### 4. Launch the full stack with Docker Compose
 
 Run:
 
 ```bash
-docker-compose up --build -d
+docker compose up --build -d
 ```
 
 This command will build (if needed) and start all containers in detached mode.
@@ -222,7 +254,7 @@ This command will build (if needed) and start all containers in detached mode.
 If you want to see logs in real time, you can omit `-d`:
 
 ```bash
-docker-compose up --build
+docker compose up --build
 ```
 
 #### 5. Verify that all containers are running as expected
@@ -230,34 +262,28 @@ docker-compose up --build
 Use:
 
 ```bash
-docker-compose ps
+docker compose ps -a
 ```
 
-You should see a list of containers with their state (e.g. `Up`) and mapped ports. Confirm that:
+Confirm that:
 
-* The **simlab_proxy** container is running and publishing `80` and `443` — it is the only way into the stack
-* The **rest_api** container is running (no published port: it is reached through the proxy)
-* The **mo_engine** container is running
-* The **master_node** container is running
-* Any auxiliary services (e.g. database, cooja's) are running
+* **simlab_proxy** is running and publishing `80` and `443`: it is the only way into the stack
+* **simlab_gui** and **rest_api** are running (no published port: they are reached through the proxy)
+* **mo_engine** and **master_node** are running
+* **mongodb**, **prometheus**, **cadvisor**, **grafana** and the `cooja*` containers are running
+* **simlab_proxy_certs** has exited with code 0: it only generates the certificate
 
-If any container is not up (e.g. `Exited`), inspect its logs:
+If any other container is not up, inspect its logs. The argument is the service
+name, which is not always the container name (`moengine`, `masternode`,
+`restapi`, `proxy`, `gui`):
 
 ```bash
-docker-compose logs <service-name>
+docker compose logs <service-name>
 ```
-
-to debug the issue (missing dependency, port conflict, environment variable error, etc.).
-
-Once all containers are running, your SimLab environment should be operational and ready to accept simulation experiment requests via the REST API.
 
 ---
 
 ## Usage
-
-> This section will be updated soon as the GUI develops.
-
-Once the environment is fully running (as described in the **Setup Instructions**), the system can be operated primarily through the **Swagger UI** exposed by the REST API.
 
 ### 1. Access SimLab
 
@@ -272,48 +298,58 @@ is reachable from outside the machine. With the default settings:
 | Grafana | `https://localhost/grafana/` |
 
 The certificate generated on first start is self-signed, so the browser warns
-on the first visit — accept it, or install a CA-issued certificate as described
+on the first visit: accept it, or install a CA-issued certificate as described
 in [nginx/README.md](nginx/README.md).
 
-Open `https://localhost/docs` to launch the **Swagger UI**, which provides an
-interactive interface for all available REST endpoints.
-
-Command-line tools point at the same proxy and verify TLS against
-`nginx/certs/simlab.crt`, so no flags are needed from a checkout:
+Every API route needs the `X-API-Key` header (in Swagger, use *Authorize*).
+Collection routes end in a slash:
 
 ```bash
-curl --cacert nginx/certs/simlab.crt https://localhost/api/v1/experiments
+curl --cacert nginx/certs/simlab.crt \
+     -H "X-API-Key: simlab-api-key42" \
+     https://localhost/api/v1/experiments/
 ```
 
-### 2. Upload Source Files
+### 2. Register the Firmware
 
-Use the `POST /repositories` endpoint to create a **Source Repository** and upload the files required for your simulations.
-These may include:
+A **source repository** holds the files that are copied into the Cooja
+container and built there: `root.c`, `node.c`, their headers and the
+`Makefile`. The `.csc` and position files are generated by the mo-engine and
+are not uploaded.
 
-* Cooja `.csc` configuration files
-* Contiki-NG firmware binaries (`.elf`, `.sky`, etc.)
-* Node position or parameter files (`.dat`, `.json`)
+Use the **Sources** page, `POST /api/v1/sources/`, or the script that registers
+the repositories shipped here (it needs `requests`):
 
-Each uploaded repository becomes available for reference in subsequent experiments.
+```bash
+python firmware/upload-firmware.py rpl-udp-csma-v2 rpl-udp-tsch-v2
+```
 
 ### 3. Create and Launch an Experiment
 
-Use the `POST /experiments` endpoint to define a new **Experiment**, referencing the source repository created in the previous step.
-Experiments specify:
+From the GUI:
 
-* The optimization strategy (e.g., `random_generation`, `nsga3_iteration`)
-* Objective functions and constraints
-* Simulation parameters and limits
+* **Problems**: draw the problem, then use 🚀 to open the five-step launch wizard. Afterwards the experiment can be added to a campaign.
+* **Synthetic**: define a DTLZ2, ZDT1 or SCH1 instance and launch it. No Cooja is needed.
+* **Scalability**: launch a benchmark of the infrastructure.
 
-Once created, the **mo-engine** and **master-node** components automatically detect the new experiment through MongoDB Change Streams and begin distributed execution.
+Or use `POST /api/v1/experiments/`. An experiment specifies:
 
-### 4. Monitor Simulations
+* The strategy: `nsga3`, `nsga3_deap`, `nsga3_pymoo`, `nsga2`, `nsga2_deap`, `nsga2_pymoo`, `random_search`, or `batch` with its chromosomes ([strategies](mo-engine/lib/strategy/README.md#batch)). A scalability benchmark is created from the Scalability page or `POST /api/v1/scalability/`
+* The problem, and the objectives with their direction and seed aggregator
+* The simulation seeds and the simulated duration
+* The source repository of each MAC protocol and the data conversion
 
-You can monitor the progress of simulations using one or more of the following methods:
+> **`simulation.duration` is in simulated minutes:** `180` simulates three hours.
 
-* **Swagger:** query the `/simulations`, `/generations`, and `/experiments` endpoints to check current states and metrics.
-* **MongoDB Shell or Compass:** directly inspect documents in the `simlab` database.
-* **Docker CLI:** use commands such as
+Once created, the **mo-engine** and **master-node** detect the experiment through MongoDB Change Streams and begin execution.
+
+### 4. Monitor
+
+* **GUI:** the experiment page updates while it runs. *Topology* shows what each worker is doing.
+* **Grafana:** container dashboards at `/grafana/`.
+* **Swagger:** `/api/v1/experiments/`, `/api/v1/generations/by-experiment/{id}`, `/api/v1/simulations/by-status/{status}`.
+* **MongoDB shell or Compass:** the `simlab` database, on `mongodb://localhost:27017/?directConnection=true`.
+* **Docker CLI:**
 
   ```bash
   docker ps
@@ -321,31 +357,18 @@ You can monitor the progress of simulations using one or more of the following m
   docker exec -it <container-name> bash
   ```
 
-  to monitor the `master-node`, `mo-engine`, or active Cooja simulation containers in real time.
+> **Connecting from the machine that hosts the stack.** The replica set
+> advertises `mongodb:27017`, a name that only resolves inside Docker. Scripts
+> run on the host need
+> `MONGO_URI='mongodb://localhost:27017/?directConnection=true'`.
 
 ### 5. Retrieve Results
 
-When simulations complete, use the **Swagger UI** again to:
+* From the experiment page: charts, individual details, analysis and topology ZIPs, and the firmware that ran.
+* From the API: `GET /api/v1/simulations/{id}/file/{field_name}` (for example `log_cooja_id`, `csv_log_id`) or `GET /api/v1/files/{file_id}/as/{extension}`.
+* Offline: [pareto-analysis/](pareto-analysis/README.md).
 
-* Download simulation outputs and logs via the `/simulations/{id}/file/{field_name}` or `/files/{file_id}/as/{extension}` endpoints.
-* Analyze results with external tools or scripts (e.g., Python notebooks, statistical analysis, or plotting utilities).
-
-All raw outputs, logs, and metadata are stored in MongoDB/GridFS for reproducibility and traceability.
-
-
-### 6. Additional Resources
-
-* **Synthetic Problems Guide**
-  A detailed usage guide for running synthetic benchmark problems (DTLZ2, ZDT1, SCH1) without requiring Cooja is available in the [documentation directory](./docs/markdown/SYNTHETIC_MODE.md). Synthetic instances are defined visually from the **Synthetic Instances** page in the GUI (sidebar → *Synthetic*) and encoded as the analytical problem P0, which the mo-engine evaluates **in-process** — no simulation jobs are created and the master-node is not involved (the master-node retains a synthetic fallback for the `batch` strategy, legacy experiments, and the `ENABLE_DATA_SYNTHETIC` override).
-
-* **Firmware Traceability Guide**
-  Every experiment keeps an immutable copy of the firmware it ran with, stored in GridFS and owned by that experiment alone — see [docs/markdown/FIRMWARE_TRACEABILITY.md](./docs/markdown/FIRMWARE_TRACEABILITY.md). The snapshot is taken when the experiment starts, survives later edits or deletion of the shared source repository, and is browsable and downloadable from the experiment page in the GUI.
-
-* **Seed Study Guide**
-  How many seeds an instance needs to report a value and to rank solutions, measured from the **Seed Study** page — see [docs/markdown/SEED_STUDY.md](./docs/markdown/SEED_STUDY.md).
-
-* **Changelog**
-  Recent updates and feature additions are documented in the [`CHANGELOG.md`](./CHANGELOG.md) file.
+Read [Firmware metrics](docs/markdown/FIRMWARE_METRICS.md) before quoting a network metric.
 
 ---
 
@@ -354,27 +377,28 @@ All raw outputs, logs, and metadata are stored in MongoDB/GridFS for reproducibi
 Simulations can run on Cooja containers hosted on other machines. The
 master-node keeps an inventory of **hosts** (machines) and their **workers**
 (Cooja containers), measures each one before giving it work, and places every
-simulation on the host carrying the fewest active simulations. A container on
-another machine is reached through that host's own SSH session, so no
-container port has to be published on the network. A single-machine
-deployment needs nothing new: its local containers are seeded as before.
+simulation according to a [placement policy](master-node/README.md#placement-policies).
+A container on another machine is reached through that host's own SSH session,
+so no container port has to be published on the network. A single-machine
+deployment needs nothing new: its local containers are seeded automatically.
 
 Each simulation records the host and container it ran on, and the experiment
 page shows how a run was spread across them (*Work distribution*). The
 **Topology** page draws the pool as a graph, live: which hosts the
 master-node reaches, which workers are free or running, and which experiment
-each one is running.
+each one is running. The **Scalability** page measures how the pool and each
+physical machine scale.
 
 ### Adding a machine
 
 From the GUI, **Infrastructure → Register host**:
 
-1. **Host access** — address, port and SSH user of the machine.
-2. **Credential** — a private key (recommended) or a password. It is sealed in
+1. **Host access**: address, port and SSH user of the machine.
+2. **Credential**: a private key (recommended) or a password. It is sealed in
    the browser before it leaves the page, and only the master-node can open it.
-3. **Container access** — default user and port of the containers, and how
+3. **Container access**: default user and port of the containers, and how
    each container's address is obtained.
-4. **Workers** — *Ask Docker on the host*, or *Configure each one by hand* when
+4. **Workers**: *Ask Docker on the host*, or *Configure each one by hand* when
    the SSH user cannot reach the Docker daemon. A hand-configured worker's
    address is the one its sshd answers on **from inside the host**: usually
    `127.0.0.1` with the published port, or the container IP with port 22.
@@ -382,6 +406,7 @@ From the GUI, **Infrastructure → Register host**:
 The same can be scripted with [`util/register_host.py`](util/README.md):
 
 ```bash
+export MONGO_URI='mongodb://localhost:27017/?directConnection=true'
 python util/register_host.py add lab-01 \
     --address 192.168.0.42 --user simlab --key ~/.ssh/simlab_lab01
 python util/register_host.py list
@@ -393,17 +418,24 @@ python util/register_host.py list
 
 ### Configuration
 
-Master-node environment variables, all with working defaults:
+The master-node variables most often changed. The "compose" column is what
+`docker-compose.yaml` sets; the full list is in
+[master-node/README.md](master-node/README.md#configuration-environment-variables).
 
-| Variable | Default | Role |
-|---|---|---|
-| `SCHED_POLICY` | `least_loaded_host` | Placement policy. `fastest_then_least_loaded` also avoids hosts measured as meaningfully slower when there is spare capacity — see [master-node/README.md](master-node/README.md#placement-policies) |
-| `INFRA_CHECK_INTERVAL_SEC` | `30` | Interval of the health cycle that measures hosts and workers |
-| `INFRA_FAILURE_THRESHOLD` | `3` | Consecutive failures before a host is marked `offline` |
-| `RESERVATION_TTL_SEC` | `600` | After this, a reservation nobody renews is reclaimed |
-| `RUN_POLL_INTERVAL_SEC` | `5` | How often a running simulation is followed |
-| `NUMBER_OF_CONTAINERS` | `8` | Only seeds the local host's workers on the first start |
-| `INFRA_KEY_PATH` | `/run/secrets/simlab-infra/x25519.json` | The private key, inside the `infra_keys` volume |
+| Variable | Code default | Compose | Role |
+|---|---|---|---|
+| `SCHED_POLICY` | `least_loaded_host` | `earliest_completion` | Placement policy: `least_loaded_host`, `fastest_then_least_loaded` or `earliest_completion` |
+| `NUMBER_OF_CONTAINERS` | `8` | `8` | Local workers to seed |
+| `SIM_TIMEOUT_SEC` | `10800` | from `.env` | Wall-clock limit of one simulation |
+| `COOJA_JVM_XMS` / `COOJA_JVM_XMX` | `1g` / `2g` | `4g` / `4g` | JVM heap of each simulation |
+| `INFRA_CHECK_INTERVAL_SEC` | `30` | not set | Interval of the health cycle that measures hosts and workers |
+| `INFRA_FAILURE_THRESHOLD` | `3` | not set | Consecutive failures before a host is marked `offline` |
+| `RESERVATION_TTL_SEC` | `600` | not set | After this, a reservation nobody renews is reclaimed |
+| `RUN_POLL_INTERVAL_SEC` | `5` | not set | How often a running simulation is followed |
+| `INFRA_KEY_PATH` | `/run/secrets/simlab-infra/x25519.json` | same | The private key, inside the `infra_keys` volume |
+
+A variable in `.env` reaches a service only if that service's `environment:`
+block passes it through.
 
 ### Behaviour changes worth knowing
 
@@ -415,11 +447,24 @@ These alter results compared with earlier versions, and are listed in
   individual gets the worst objective. Set `incomplete_objective: accept` in
   the experiment's simulation configuration for the previous behaviour, with
   the completeness recorded next to the objective.
+- **A non-finite metric is treated as missing**, and a front with no valid
+  solution is reported as such (`pareto_front_validity`).
+- **With a single firmware, the MAC gene is pinned** to the protocol that runs.
 - **A generation's status counts seeds, not simulation documents**, so one
   whose failed replica was repeated closes `Done`. Generations created before
   the replica plan was recorded keep the previous rule.
 - **Timestamps are timezone-aware UTC.** Stored values without a timezone are
   read as UTC; no data was migrated.
+- **The default data conversion reads firmware v2.** Running v1 needs the
+  changes in [Firmware metrics §9](docs/markdown/FIRMWARE_METRICS.md#9-using-results-across-versions).
+- **Each mobile mote repeats its own path for the whole simulation**, and a
+  closed path returns to its start, in the simulation and in the coverage of P1
+  and P2. Runs from before are not comparable on mobility.
+- **P3 penalises an infeasible individual** instead of simulating it, and
+  repairs the degree `g`; **P4 runs**, with its data constraints enforced
+  ([problems](mo-engine/lib/problem/README.md)).
+- **A run in which no report reached the root is a result** (`Done`, counts
+  at 0), no longer a collection failure.
 
 ### Limitations
 
@@ -430,31 +475,31 @@ These alter results compared with earlier versions, and are listed in
   read it, and `docker-compose.yaml` falls back to a known default when
   `SIMLAB_API_KEY` is unset. HTTPS and credential sealing do not replace user
   authentication.
+- **Container SSH uses the image's default login** unless a credential is
+  stored, and container host keys are not pinned. Only the host's key is.
 - **Runtime telemetry covers local containers only.** cAdvisor scrapes this
   machine, so CPU and memory of remote hosts are not measured.
 - **No end-to-end *exactly once*.** What is guaranteed is that one container
   runs one attempt at a time and that a stale attempt cannot publish. A crash
   between storing a result's files and recording them leaves GridFS blobs that
   nothing references, and nothing collects them.
-- **A result that could not be collected is recovered by hand.** The worker
-  is held and the files are preserved on the container;
-  [`util/recover_result.py`](util/README.md) brings them back and only then
-  releases the worker.
+- **A result that could not be collected is recovered by hand.** If the bytes
+  could be copied aside on the container, the worker returns to the pool; if
+  not, it is held. [`util/recover_result.py`](util/README.md) handles both.
 - **Duplicate registrations are detected by address, not by machine.** One
   container registered twice under the same address is refused; the same
   machine reached through a DNS alias, a tunnel or a different published port
   is not recognised as the same.
+- **Cancelling an experiment takes effect at the next generation boundary.**
+  Simulations already queued still run.
 
 ### Next steps
 
 - **Telemetry on remote hosts** (for instance a node-exporter on each machine),
   to explain why remote workers slow down when a host runs more than one
-  container — and before tuning the placement policy any further.
-- **Evaluate `fastest_then_least_loaded`** with that telemetry. It is off by
-  default: in the measured runs the wait for the last remote simulation of a
-  generation was under 2% of the execution time.
-- **Benchmark against a local-only baseline**, with repeated runs per
-  configuration, to quantify the gain of distributing.
+  container, before tuning the placement policies any further.
+- **Compare the placement policies** with that telemetry, with repeated runs
+  per configuration and against a local-only baseline.
 - **Automatic recovery of preserved results** and a **sweep of unreferenced
   GridFS blobs**, both currently manual.
 - **More than one master-node**, which needs an atomic claim of the simulation
@@ -462,23 +507,28 @@ These alter results compared with earlier versions, and are listed in
 
 ---
 
+## Known Issues
+
+Defects in the current code that affect what can be run or how a result is
+read, each described in its module's README. None are known at present; the
+architectural limits are under [Limitations](#limitations).
+
+---
+
 ## Future Enhancements
 
-- Complete documentation of setup and deployment workflows
-- Additional testing and CI automation  
-- Extended examples of experiment submission and monitoring  
-- Benchmark dataset publication and performance validation  
-- Development of a graphical user interface (GUI) in Vue.js to simplify experiment configuration, execution monitoring, and result visualization  
-- English and Portuguese documentation parity  
+- Extended examples of experiment submission and monitoring
+- Benchmark dataset publication and performance validation
+- Code and image provenance per experiment, and citable releases ([guide](docs/markdown/PROVENANCE_GUIDE.md))
 
 ---
 
 ## Releases
 
+`main` is ahead of the last release. See the *Unreleased* sections of the [changelog](CHANGELOG.md).
 
 * [`v1.1.0`](https://github.com/JunioCesarFerreira/simlab/releases/tag/v1.1.0) (*2026-02-13*):
   Introduces the first consolidated layer of **problem adapters and abstraction interfaces** for multiple Wireless Sensor Network (WSN) optimization formulations. At this stage, problems **P1, P2, and P3** are fully integrated into the experimental pipeline and can be instantiated, evaluated, and benchmarked through the **NSGA-III optimization loop**. This release enables the generation of the first reproducible and analytically viable multi-objective results within the SimLab environment.
-
 
 * [`v1.0.0`](https://github.com/JunioCesarFerreira/simlab/releases/tag/v1.0.0) (*2025-10-12*):
   Initial stable release establishing the **foundational execution workflow** of the platform, including the integration between the **MO-Engine**, **Master-Node orchestration layer**, and **MongoDB persistence infrastructure**. This version marks the architectural baseline of SimLab, consolidating the core services required for distributed simulation management and optimization experiment lifecycle control.
@@ -486,34 +536,25 @@ These alter results compared with earlier versions, and are listed in
 ---
 
 ## License
+
 This project is licensed under the [MIT License](./LICENSE).
 
 ---
 
 ## Contributing
 
-Contributions are welcome!  
-SimLab is an open research and development project designed to support distributed multi-objective simulation workflows.  
+Contributions are welcome!
+SimLab is an open research and development project designed to support distributed multi-objective simulation workflows.
 If you want to contribute with code, documentation, bug reports, or experiments, please read the following guidelines.
 
-### Repository structure
-
-SimLab is composed of several main modules:
-
-- **rest-api/** — FastAPI-based REST service for experiment and simulation management  
-- **mo-engine/** — Multi-objective optimization engine (Python)  
-- **master-node/** — Simulation orchestrator that manages Cooja containers via SSH/SCP  
-- **pylib/** — Shared Python utilities (MongoDB, DTOs, statistics, etc.)  
-- **debug/** — Lightweight Docker Compose environments for local testing and debugging  
-- **docs/** — Documentation, Diagrams and Markdown guides (e.g., synthetic data, setup)  
-
-When contributing, please make sure changes are consistent with this modular architecture.
+The modules are listed in [Repository Organization](#repository-organization). Please keep changes consistent with that modular architecture.
 
 ### How to contribute
 
 1. **Fork** the repository on GitHub
 
-2. **Create a branch** for your feature or fix  
+2. **Create a branch** for your feature or fix
+
    ```bash
    git checkout -b feature/my-new-feature
    ```
@@ -523,57 +564,63 @@ When contributing, please make sure changes are consistent with this modular arc
    * Add comments or docstrings where relevant
    * For new modules, include minimal working examples or usage notes
 
-4. **Test locally** using one of the debug setups
-   ```bash
-   cd debug/simple
-   docker-compose up --build
-   ```
+4. **Test locally** (see [Testing and debugging](#testing-and-debugging))
+
 5. **Commit using clear messages**
 
    ```bash
    git commit -m "Add feature: synthetic benchmark support in master-node"
    ```
-6. **Push your branch** and open a Pull Request (PR)
 
+6. **Push your branch** and open a Pull Request (PR)
    * Describe the purpose of your changes
    * Include relevant logs, screenshots, or results if applicable
    * If fixing an issue, reference it (e.g., “Fixes #42”)
 
 ### Code quality and style
 
-* **Python:** follow conventions
-* **C/C++:** prefer clarity, small functions, and no external dependencies
+* **Python:** follow the conventions of the surrounding module
+* **TypeScript/Vue:** `npm run lint` and `npm run type-check` must pass
+* **C (firmware):** prefer clarity, small functions, and no external dependencies; follow the [firmware rules](firmware/README.md#rules-for-changes)
 * **Docker:** build images reproducibly; keep images small and self-contained
 * Use consistent **logging** (as already done with `logging` in master-node)
 * Always handle exceptions gracefully and mark MongoDB simulation states properly
 
 ### Testing and debugging
 
-* Use the setups under `debug/` for local runs:
+The CI ([ci.yml](.github/workflows/ci.yml)) runs each suite from its own
+directory, with the dependencies of that module. The unit suites need neither
+MongoDB nor Cooja:
+
+```bash
+(cd mo-engine       && pytest -q)   # also needs moocore==0.3.1
+(cd pylib           && pytest -q)   # pylib/requirements-test.txt
+(cd master-node     && pytest -q)
+(cd rest-api        && pytest -q)   # rest-api/requirements-test.txt
+(cd pareto-analysis && pytest -q)
+(cd gui/simlab      && npm ci && npm run type-check && npm run lint && npm test && npm run build)
+```
+
+* For local runs, use one of the setups under [`debug/docker/`](debug/docker/README.md):
 
   ```bash
-  cd debug/local
-  docker-compose up --build
+  cd debug/docker/minimal-infra
+  docker compose up --build
   ```
-* Run synthetic mode for validation without Cooja — either launch a P0
-  experiment from the GUI *Synthetic Instances* page (evaluated in-process by
-  the mo-engine, no master-node needed), or force the master-node fallback for
-  experiments without a per-experiment `synthetic` block:
 
-  ```bash
-  export ENABLE_DATA_SYNTHETIC=true
-  docker-compose up master-node
-  ```
-* Make sure simulations complete and update states correctly in MongoDB.
+* To validate the pipeline without Cooja, launch an experiment from the GUI's
+  *Synthetic Instances* page. The mo-engine evaluates it in-process. The
+  master-node also has a [synthetic fallback](docs/markdown/SYNTHETIC_MODE.md#global-fallback-environment-variables),
+  which has to be set in the service's `environment:` block.
 
 ### Pull request checklist
 
 Before submitting a PR:
 
-- [ ] Code compiles and runs locally
+- [ ] The affected test suites pass
 - [ ] No breaking changes introduced to API or DTOs
 - [ ] All modified files follow the style conventions
-- [ ] Documentation updated (README, Setup, or Usage as needed)
+- [ ] Documentation updated (module README, and both main READMEs if affected)
 - [ ] Changelog entry added if relevant (`CHANGELOG.md`)
 - [ ] Commit messages are clear and descriptive
 
@@ -592,11 +639,11 @@ If you find a bug or inconsistency:
 ---
 
 ## Citing or referencing SimLab
->
->If you use SimLab in academic work, please cite the corresponding publication once available.
->Until then, you may reference the project as:
+
+> If you use SimLab in academic work, please cite the corresponding publication once available.
+> Until then, you may reference the project as follows (metadata in [CITATION.cff](CITATION.cff)):
 >
 > Junio Cesar Ferreira.
-> SimLab: A Distributed Simulation Framework for Multi-objective Optimization.
+> SimLab: A Distributed Framework for Large-Scale Multi-Objective WSN Simulation and Optimization.
 > Institute of Mathematical and Computer Sciences (ICMC), University of São Paulo (USP).
 > GitHub: https://github.com/JunioCesarFerreira/simlab

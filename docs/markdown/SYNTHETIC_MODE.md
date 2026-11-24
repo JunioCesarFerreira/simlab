@@ -19,7 +19,7 @@ the code:
 | **2. Master-node synthetic** — legacy / fallback | any (see triggers below) | **master-node** ([`lib/synthetic_data.py`](../../master-node/lib/synthetic_data.py)) | Yes — enqueued as usual, but without CSC/firmware artifacts |
 
 **Path 1** is what you get today when you launch an experiment from the
-**Synthetic Instances** GUI page with any of the evolutionary or random-search
+**Synthetic Instances** GUI page, which offers the evolutionary and random-search
 strategies. The benchmark is a closed-form function of the decision vector, so
 the mo-engine evaluates it directly in its own process: no `Simulation`
 document is written, no Change-Stream round-trip happens, and the master-node
@@ -29,16 +29,19 @@ never sees the experiment.
 
 1. **`batch` strategy** — `BatchStrategy` has no analytical fast-path; it
    always enqueues `Simulation` documents (skipping only the CSC/firmware
-   artifacts), and the master-node evaluates them synthetically.
+   artifacts), and the master-node evaluates them synthetically. A batch is
+   [created through the API](../../mo-engine/lib/strategy/README.md#batch), not
+   from the GUI.
 2. **Legacy P1-encoded synthetic experiments** — older experiments where the
    benchmark variables were encoded as relay coordinates of a `problem1`
    instance. The master-node reconstructs the genome from
    `simulationElements.fixedMotes` and normalizes it to `[0,1]ⁿ` via the
    region bounding box.
-3. **Global env-var override** — setting `ENABLE_DATA_SYNTHETIC=true` on the
-   master-node turns *any* incoming simulation into a synthetic one,
-   regardless of how the experiment was created (used e.g. for pipeline-wide
-   validation runs).
+3. **Global env-var fallback** — setting `ENABLE_DATA_SYNTHETIC=true` on the
+   master-node turns an incoming simulation into a synthetic one unless the
+   experiment's `synthetic` block sets `enabled` itself (used e.g. for
+   pipeline-wide validation runs). The mo-engine does not know about it: it
+   still generates the CSC files and resolves the firmware repository.
 
 > ⚠️ **Do not remove the master-node synthetic module** while any of the three
 > scenarios above is still supported. Conversely, if you are adding a new
@@ -54,7 +57,7 @@ There are two configuration scopes; the per-experiment block always wins:
 | Scope | Where it is configured | Precedence |
 | ----- | ---------------------- | ---------- |
 | **Per-experiment** (recommended) | `parameters.simulation.synthetic` in the experiment document — set through the **Synthetic Instances** GUI editor | Highest |
-| **Global fallback** | `ENABLE_DATA_SYNTHETIC` / `BENCH` / `NOISE_STD` environment variables on the master-node | Used only when the experiment has no `synthetic` block |
+| **Global fallback** | `ENABLE_DATA_SYNTHETIC` / `BENCH` / `NOISE_STD` environment variables on the master-node | Used field by field, for what the experiment's `synthetic` block does not set |
 
 ### Per-experiment configuration (GUI)
 
@@ -68,16 +71,17 @@ The editor produces an experiment whose `parameters` contain:
 {
   "simulation": {
     "duration": 1,
-    "random_seeds": [42],
+    "random_seeds": [42],      // the GUI uses the algorithm's random seed
     "synthetic": {
       "enabled": true,
       "bench": "DTLZ2",      // "DTLZ2" | "ZDT1" | "SCH1"
       "noise_std": 0.0
+      // "sch1_domain": [-5, 5]   optional; the GUI does not send it
     }
   },
   "problem": {
     "name": "problem0",       // pure analytical benchmark problem
-    "n": 12                   // decision-vector length
+    "n": 10                   // decision-vector length
   }
 }
 ```
@@ -91,8 +95,8 @@ over the unit interval.
 > Historical note: earlier versions encoded synthetic instances as a **P1
 > problem** (relay placement), mapping each pair of decision variables to a
 > relay `(x, y)` position and normalizing through the region bounding box.
-> Experiments created that way are still evaluated correctly — by the
-> master-node legacy path (§3) — but new instances always use P0.
+> Experiments created that way are still evaluated — by the master-node legacy
+> path (§3) — but new instances always use P0.
 
 When an experiment has `synthetic.enabled = true`:
 
@@ -122,7 +126,8 @@ if self._problem_adapter.is_analytical:
     _, obj_min = analytical_objectives(
         self._problem_adapter, genome, genome_hash,
         bench=self._bench, noise_std=self._noise_std,
-        seeds=self._sim_rand_seeds, ...
+        seeds=self._sim_rand_seeds,
+        aggregators=self._aggregators, ...
     )
     # insert the Individual with objectives already filled,
     # update the genome cache — and enqueue NO simulation.
@@ -133,8 +138,9 @@ Key properties of this path:
 
 - **No `Simulation` documents** are created; the generation completes through
   the existing "no simulations pending → mark generation DONE" logic.
-- The benchmark is evaluated **once per simulation seed and averaged (mean)**,
-  matching the multi-seed aggregation used for simulation-based problems.
+- The benchmark is evaluated **once per simulation seed**, and each objective is
+  collapsed with its seed aggregator (mean unless configured), as for
+  simulation-based problems.
 - **Noise is reproducible**: the Gaussian-noise RNG is seeded with
   `f"{seed}:{genome_hash}"`, so the same genome under the same seed always
   yields the same objectives and the genome cache stays consistent.
@@ -154,16 +160,17 @@ Strategy support matrix:
 ## 3. Path 2 — Master-node synthetic evaluation (legacy / fallback)
 
 Implemented in [`master-node/lib/synthetic_data.py`](../../master-node/lib/synthetic_data.py).
-For every dequeued simulation, the worker resolves the synthetic mode
-(per-experiment config first, env vars second) and, when enabled, calls
-`run_synthetic_simulation()` instead of the Cooja pipeline:
+For every dequeued simulation, before a container is chosen, the dispatcher
+resolves the synthetic mode (per-experiment config first, env vars second) and,
+when enabled, calls `run_synthetic_simulation()` instead of the Cooja pipeline:
 
 ```python
-# master-node.py (simplified)
+# master-node.py, _run_synthetic_if_requested (simplified)
 mode, bench, noise_std = resolve_synthetic_settings(exp_doc)
-if mode:
-    run_synthetic_simulation(sim, mongo, bench=bench, noise_std=noise_std)
-    continue
+if not mode:
+    return False          # placed on a Cooja worker as usual
+run_synthetic_simulation(sim, mongo, bench=bench, noise_std=noise_std)
+return True               # no container is reserved
 ```
 
 `run_synthetic_simulation()` supports **both encodings**:
@@ -178,32 +185,31 @@ if mode:
 
 ### Global fallback (environment variables)
 
-When an experiment does **not** carry a `synthetic` block, the master-node
-falls back to environment variables inside its worker loop:
+For what an experiment's `synthetic` block does **not** set, or when it has
+none, the master-node falls back to environment variables:
 
 | Variable                | Meaning / effect                                | Default   |
 | ----------------------- | ----------------------------------------------- | --------- |
-| `ENABLE_DATA_SYNTHETIC` | Enable synthetic mode globally (`True`/`False`) | `"False"` |
+| `ENABLE_DATA_SYNTHETIC` | Enable synthetic mode globally (only `true`, in any case, enables it) | `"False"` |
 | `BENCH`                 | Benchmark function: `DTLZ2`, `ZDT1`, `SCH1`     | `"DTLZ2"` |
 | `NOISE_STD`             | Std-dev of additive Gaussian noise per objective| `"0.0"`   |
 
-`docker-compose.yaml` (master-node service):
+`docker-compose.yaml` (master-node service; add to the existing list). Exporting
+them in the shell or writing them in `.env` does not reach the container:
 
 ```yaml
 services:
   masternode:
     environment:
+      # ... the existing variables ...
       - ENABLE_DATA_SYNTHETIC=True
       - BENCH=DTLZ2
       - NOISE_STD=0.05
-      - MONGO_URI=mongodb://mongodb:27017/?replicaSet=rs0
-      - DB_NAME=simlab
-      - IS_DOCKER=True
 ```
 
-> Note: per-experiment config always wins. The env vars only apply to
-> experiments that were created without a `synthetic` block (e.g. legacy
-> experiments). Also note that the env vars can only affect simulations that
+> Note: per-experiment config always wins. The env vars apply to what the
+> block leaves unset, which for most experiments is everything (they have no
+> `synthetic` block). Also note that the env vars can only affect simulations that
 > **reach** the master-node — P0 experiments evaluated in-process by the
 > mo-engine never do.
 
@@ -252,7 +258,7 @@ Notes:
 | Generation 0 | the initial population, evaluated and counted as a generation |
 | Evaluation budget | `population_size × (number_of_generations + 1)` distinct genomes at most, since generation 0 is evaluated too |
 | Mutation | `prob_mt` (per child) × `per_gene_prob` (per variable) — the two COMPOSE |
-| NSGA-III divisions | derived from `M` and the population, not fixed |
+| NSGA-III divisions | the synthetic wizard derives its initial value from `M` and a population of 50; the engine's fallback is 10 |
 
 Two of these are easy to get wrong when reproducing a result:
 
@@ -264,8 +270,9 @@ protocol that counts only the offspring batches.
 **The two mutation probabilities compose.** `prob_mt = 0.1` with
 `per_gene_prob = 0.05` over 10 variables mutates one variable every twenty
 children — a search driven almost entirely by crossover, which is what the GUI
-used to send. The defaults are now the textbook convention (`prob_mt = 1.0`,
-`per_gene_prob = 1/n`), and the launch wizard shows the expected number of
+used to send. The synthetic wizard's defaults are now the textbook convention
+(`prob_mt = 1.0`, `per_gene_prob = 1/n`; the WSN wizard and the engine's fallbacks
+have their own), and that wizard shows the expected number of
 mutated variables per child so the composition cannot hide. Note that the two
 knobs are not redundant even at equal products: concentrating mutations in few
 children is not the same search as spreading them thinly across all of them.
@@ -278,18 +285,19 @@ children is not the same search as spreading them thinly across all of them.
 descriptors (id, label, min/max objectives, description, `n_min_formula`). The
 GUI uses it to render the benchmark selector.
 
-The experiment list endpoint (`GET /experiments/by-status/{status}`) also
-returns `is_synthetic` and `synthetic_bench` for each experiment, so the GUI
+The experiment list endpoints (`GET /experiments/` and
+`GET /experiments/by-status/{status}`) also return `is_synthetic` and `synthetic_bench` for each experiment, so the GUI
 can render the synthetic badge without fetching the full document.
 
 ---
 
 ## 6. Flow comparison
 
-* **Real mode**: the mo-engine enqueues `Simulation` documents → a master-node
-  worker downloads simulation files via GridFS → SCP to a Cooja container →
-  runs Cooja over SSH → retrieves logs → converts to CSV → computes
-  metrics/objectives → marks the simulation done.
+* **Real mode**: the mo-engine enqueues `Simulation` documents → the master-node
+  reserves a container and downloads the simulation files via GridFS → SCP to
+  the container → starts Cooja detached over SSH → retrieves logs → converts to
+  CSV → computes metrics → marks the simulation done. The mo-engine turns the
+  metrics of the seeds into objectives.
 
 * **Synthetic, in-process (P0 + evolutionary/random-search strategies)**: the
   mo-engine evaluates the benchmark directly on the decision vector inside
@@ -298,15 +306,18 @@ can render the synthetic badge without fetching the full document.
   closed by the "no simulations pending" path. The master-node is idle.
 
 * **Synthetic, master-node (batch / legacy P1 / env override)**: the mo-engine
-  enqueues `Simulation` documents without CSC/firmware artifacts; the worker
+  enqueues `Simulation` documents, without CSC/firmware artifacts if the
+  experiment has `synthetic.enabled`; the master-node
   calls `run_synthetic_simulation(sim, mongo, bench, noise_std)`, which:
 
   1. Marks the simulation **running**.
   2. Obtains the decision vector — verbatim (`decisionVector`, P0) or by
      extracting relay coordinates and normalizing via the region (P1 legacy).
-  3. Evaluates the benchmark (+ optional reproducible Gaussian noise).
+  3. Evaluates the benchmark (+ optional reproducible Gaussian noise). A
+     configuration it cannot evaluate (DTLZ2 with `n < M−1`, for instance)
+     marks the simulation **Error** with the reason and goes straight to step 5.
   4. Writes objectives keyed by `metric_name` and marks the simulation **done**.
-  5. Closes the generation when all its simulations are done.
+  5. Closes the generation when nothing in it is still waiting or running.
 
 ---
 
@@ -322,15 +333,18 @@ python compute_hv_gd.py --expid <id> \
   --true-front-bench DTLZ2 --true-front-m 3
 ```
 
-Without `--true-front-bench` the behavior is unchanged (self-reference front).
-With it, the HV reference point is the benchmark's fixed `1.1 × nadir` — the
-same one `/hv-gd` and `plot_pareto_results.py` use. `compute_hv_gd.py` used to
-derive it from the observed worst point regardless, so the same experiment
-reported one hypervolume on the CLI and another in the GUI.
+The analytical front is used without `--true-front-bench` too, as `/hv-gd`
+does: for a synthetic experiment whose objectives are all minimised and all
+requested (in any order). The HV reference point is then the benchmark's fixed
+`1.1 × nadir`, the same in the CLI, the plots and the GUI.
+
+`--population` is the endpoint's `population`, survivors by default, so the
+CLI's series equal `/hv-gd`'s; checked series by series on NSGA-III runs.
 
 > **Self-reference measures agreement with this run, not the true optimum.**
-> The stored final front is built from the selected final survivors. Measuring
-> those same survivors against it gives zero GD/IGD (within numerical tolerance).
+> In NSGA-II/III the stored final front is built from the selected final survivors.
+> Measuring those same survivors against it gives zero GD/IGD (within numerical tolerance).
+> In random search it is built from the archive.
 > Offspring or archive series can differ from that reference and need not reach
 > zero. These empirical-reference distances describe progress towards this run's
 > own result; they are not comparable across runs or distances to the true optimum.
@@ -423,8 +437,9 @@ For the **master-node path** (batch / legacy / env override):
 1. **Logs** — `docker compose logs masternode` shows
    `Starting benchmark simulation <oid> (bench=… noise_std=…)` and *no*
    SSH/Cooja activity.
-2. **Database** — simulations reach `done` with a populated `objectives` map,
-   with `csc_file_id`/`pos_file_id`/`source_repository_id` set to `null`.
+2. **Database** — simulations reach `Done` with a populated `network_metrics`
+   map keyed by objective name. With `synthetic.enabled` on the experiment,
+   `csc_file_id`/`pos_file_id`/`source_repository_id` are `null`.
 
 In both cases:
 

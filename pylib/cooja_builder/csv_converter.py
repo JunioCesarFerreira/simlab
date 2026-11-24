@@ -33,6 +33,13 @@ def cooja_log_to_csv(cooja_log_input: Path, csv_output: Path) -> pd.DataFrame:
     # -------------------------- DataFrame bruto --------------------------------
     df = pd.DataFrame(rows)
 
+    if df.empty:
+        # No report reached the root. pandas would write one blank line, which
+        # is not empty by size and cannot be read back; an empty file is the
+        # answer the reader expects.
+        csv_output.write_text("")
+        return df
+
     REQUIRED_COLUMNS = {"node", "root_time_now"}
     missing = REQUIRED_COLUMNS - set(df.columns)
     if not missing:

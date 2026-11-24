@@ -76,8 +76,12 @@
 
     <datalist id="metric-suggestions">
       <option value="energy" />
+      <option value="power_mw" />
       <option value="latency" />
+      <option value="latency_p95" />
       <option value="throughput" />
+      <option value="delivery_ratio" />
+      <option value="node_coverage" />
       <option value="coverage" />
       <option value="packet_loss" />
       <option value="lifetime" />

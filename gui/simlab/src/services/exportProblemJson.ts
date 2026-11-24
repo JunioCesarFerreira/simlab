@@ -1,9 +1,52 @@
-import type { ProblemDraft, ExportedProblemFile } from '../types/problem'
-import { hasCandidates, hasTargets, hasCoverageConstraint } from '../types/problem'
+import type { ProblemDraft, ExportedProblemFile, ExportedSojourn } from '../types/problem'
+import { DEFAULT_P4, hasCandidates, hasTargets, hasCoverageConstraint } from '../types/problem'
 import { buildSegmentExpressions } from './segmentExpressionBuilder'
+
+/**
+ * P4 in the shape of pylib's ProblemP4. The sink is the base and sojourn 0;
+ * candidate j is sojourn j + 1; the targets are the sensor motes. The sink can
+ * move between any two stops, and a stop sees the motes within reach.
+ */
+function exportP4(draft: ProblemDraft & { sink: { x: number; y: number } }): ExportedProblemFile {
+  const s = { ...DEFAULT_P4, ...draft.p4 }
+  const base: [number, number] = [draft.sink.x, draft.sink.y]
+  const nodes = draft.targets.map(t => [t.x, t.y] as [number, number])
+  const stops: Array<[number, number]> = [base, ...draft.candidates.map(c => [c.x, c.y] as [number, number])]
+  const sojourns: ExportedSojourn[] = stops.map((position, id) => ({
+    id,
+    position,
+    adjacency: stops.map((_, j) => j).filter(j => j !== id),
+    visibleNodes: nodes
+      .map((n, k) => [k, Math.hypot(n[0] - position[0], n[1] - position[1])] as const)
+      .filter(([, d]) => d <= draft.radiusOfReach)
+      .map(([k]) => k),
+  }))
+  return {
+    problem: {
+      name: draft.name,
+      radius_of_reach: draft.radiusOfReach,
+      radius_of_inter: draft.radiusOfInter,
+      region: draft.region,
+      sink: base,
+      nodes,
+      sink_base: base,
+      sojourns,
+      initial_energy: s.initialEnergy,
+      buffer_capacity: s.bufferCapacity,
+      data_rate: s.dataRate,
+      speed: s.speed,
+      time_step: s.timeStep,
+      max_route_length: s.maxRouteLength,
+      tau_bounds: [s.tauMin, s.tauMax],
+      // The sink's path comes from the route; P4 has no other mobile mote.
+      mobile_nodes: [],
+    },
+  }
+}
 
 export function exportProblem(draft: ProblemDraft): ExportedProblemFile {
   if (!draft.sink) throw new Error('Cannot export: sink is not defined')
+  if (draft.name === 'problem4') return exportP4({ ...draft, sink: draft.sink })
 
   const candidatesOrSensors = hasCandidates(draft.name)
     ? { candidates: draft.candidates.map(c => [c.x, c.y] as [number, number]) }
@@ -13,6 +56,7 @@ export function exportProblem(draft: ProblemDraft): ExportedProblemFile {
     ? {
         radius_of_cover: draft.radiusOfCover,
         k_required: draft.kRequired,
+        g_required: draft.gRequired ?? 1,
         targets: draft.targets.map(t => [t.x, t.y] as [number, number]),
       }
     : {}

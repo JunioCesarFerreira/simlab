@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 """Register a remote host for distributed simulation, from the command line.
 
-Does exactly what the Infrastructure page will do once it exists, through the
-same path: seals the SSH credential against the master-node's published public
-key and stores only the ciphertext. The plaintext never reaches MongoDB and
-never leaves this process.
-
-Available before the REST API and the GUI so a multi-host setup can be
-exercised early.
+The command-line alternative to the Infrastructure page. It writes to MongoDB
+directly, without the API's validation, and seals the SSH credential the same
+way: against the master-node's published public key, storing only the
+ciphertext. The plaintext never reaches MongoDB and never leaves this process.
 
 Usage
 -----
@@ -28,7 +25,7 @@ Usage
 
 Environment
 -----------
-    MONGO_URI   default mongodb://localhost:27017/?replicaSet=rs0
+    MONGO_URI   default mongodb://localhost:27017/?directConnection=true
     DB_NAME     default simlab
 
 Notes
@@ -64,7 +61,7 @@ DEFAULT_LABEL_FILTER = "simlab.type=cooja"
 
 def factory():
     return create_mongo_repository_factory(
-        os.getenv("MONGO_URI", "mongodb://localhost:27017/?replicaSet=rs0"),
+        os.getenv("MONGO_URI", "mongodb://localhost:27017/?directConnection=true"),
         os.getenv("DB_NAME", "simlab"),
     )
 

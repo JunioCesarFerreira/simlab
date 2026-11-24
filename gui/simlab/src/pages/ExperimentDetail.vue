@@ -242,7 +242,7 @@
                 class="param-row"
               >
                 <span class="pk">{{ m.name }}</span>
-                <span class="pv">{{ m.kind }} / {{ m.column }}</span>
+                <span class="pv">{{ m.kind }} / {{ m.column }}<template v-if="m.denominator"> ÷ {{ m.denominator }}</template></span>
               </div>
             </div>
           </details>
@@ -473,6 +473,7 @@ import { isPenalized } from "../types/simlab";
 import { effectiveSeedAggregator, formatSeedAggregator } from "../lib/seedAggregator";
 import { computeRanks } from "../utils/nonDominatedSort";
 import { useParetoRanks } from "../composables/useParetoRanks";
+import { plannedGenerations, plannedSimulations } from "../services/generationTotals";
 
 const props = defineProps<{ id: string }>();
 const store = useExperimentDetailStore();
@@ -638,7 +639,7 @@ const rankInput = computed(() => {
     for (const ind of gen.population) {
       if (seen.has(ind.individual_id)) continue;
       seen.add(ind.individual_id);
-      if (isPenalized(ind.objectives)) continue;
+      if (isPenalized(ind.objectives, ind.completeness)) continue;
       points.push({ id: ind.individual_id, objectives: [...ind.objectives] });
     }
   }
@@ -663,7 +664,7 @@ const displayedParetoFront = computed<ParetoFrontItemDto[] | null | undefined>((
     objectives: Object.fromEntries(ind.objectives.map((v, i) => [names[i] ?? `obj${i}`, v])),
   });
 
-  const valid = gen.population.filter((ind) => !isPenalized(ind.objectives));
+  const valid = gen.population.filter((ind) => !isPenalized(ind.objectives, ind.completeness));
   // Without goals domination can't be evaluated — fall back to all feasible points
   if (goals.length === 0) return valid.map(toItem);
 
@@ -679,11 +680,11 @@ const finishedCount = computed(
   () => sortedGenerations.value.filter((g) => g.status === "Done").length,
 );
 
-const totalGenerations = computed(
-  () =>
-    store.experiment?.parameters?.algorithm?.number_of_generations ??
-    store.experiment?.generations.length ??
-    0,
+const totalGenerations = computed(() =>
+  plannedGenerations(
+    store.experiment?.parameters?.algorithm,
+    store.experiment?.generations.length ?? 0,
+  ),
 );
 
 const progressPct = computed(() => {
@@ -729,12 +730,9 @@ const totalSimulations = computed(() => {
 const expectedSimulations = computed<number | null>(() => {
   const exp = store.experiment;
   if (!exp) return null;
-  const popSize = exp.parameters.algorithm?.population_size ?? 0;
-  const numGens = exp.parameters.algorithm?.number_of_generations ?? 0;
   const seedsCount =
     simulationSeeds.value.length || exp.parameters.simulation?.random_seeds_count || 0;
-  if (!popSize || !numGens || !seedsCount) return null;
-  return popSize * numGens * seedsCount;
+  return plannedSimulations(exp.parameters.algorithm, seedsCount);
 });
 
 // Inline name editing

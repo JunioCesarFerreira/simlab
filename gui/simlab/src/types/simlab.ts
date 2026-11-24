@@ -1,17 +1,46 @@
 /* -------------------------------------------------------
- * Penalty (infeasible individuals)
- * Objectives above this threshold are penalty values injected
- * by the engine when a chromosome violates a hard constraint
- * (e.g. trajectory coverage in P2).  These individuals must
- * never appear on the Pareto front and should be visually
- * distinguished from feasible ones in the UI.
+ * Penalty / placeholder vectors
+ * The engine stores the evidence next to every vector: the
+ * `completeness` record on an individual, the `evaluation`
+ * summary on a Pareto item. A vector is excluded when that
+ * evidence says it is a constraint penalty (`infeasible`), a
+ * placeholder the engine refused (`refused`), or a vector the
+ * replica policy did not use. The magnitude threshold below
+ * applies ONLY to documents written before the evidence
+ * existed. Mirrors pylib/evaluation_validity.py.
  * ----------------------------------------------------- */
 
 export const PENALTY_THRESHOLD = 1e8;
 
-/** Returns true when at least one objective is a penalty value. */
-export function isPenalized(objectives: number[]): boolean {
-  return objectives.some((v) => v >= PENALTY_THRESHOLD);
+/** Evidence a verdict can be read from: an individual's completeness or a Pareto item's evaluation. */
+export interface EvaluationEvidence {
+  state?: string;
+  objective_used?: boolean;
+  refused?: string;
+  valid?: boolean;
+}
+
+/** Whether the evidence says the vector is a measurement. */
+export function isValidEvaluation(evidence?: EvaluationEvidence | null): boolean {
+  if (!evidence) return true;
+  if (evidence.valid !== undefined) return Boolean(evidence.valid);
+  if (evidence.state === "infeasible") return false;
+  if (evidence.refused) return false;
+  return evidence.objective_used ?? true;
+}
+
+/**
+ * True when the vector must stay out of fronts and indicators: non-finite,
+ * excluded by its evidence, or — for legacy documents without evidence —
+ * at or beyond the magnitude marker.
+ */
+export function isPenalized(
+  objectives: number[],
+  evidence?: EvaluationEvidence | null,
+): boolean {
+  if (objectives.some((v) => !Number.isFinite(v))) return true;
+  if (evidence && Object.keys(evidence).length > 0) return !isValidEvaluation(evidence);
+  return objectives.some((v) => Math.abs(v) >= PENALTY_THRESHOLD);
 }
 
 /* -------------------------------------------------------
@@ -49,6 +78,8 @@ export interface MetricItem {
   column: string;
   q?: number;
   scale?: number;
+  /** CSV column the ratio kinds divide by (ratio_sum, ratio_sum_max). */
+  denominator?: string;
 }
 
 export interface DataConversionConfigDto {
@@ -125,6 +156,15 @@ export interface ParametersDto {
 export interface ParetoFrontItemDto {
   chromosome: JsonObject;
   objectives: FloatMap; // { metric_name: value }
+  /** Whether the vector is a measurement; absent on fronts written before it was recorded. */
+  evaluation?: { state: string; objective_used: boolean; valid: boolean } | null;
+}
+
+export interface ParetoFrontValidityDto {
+  items: number;
+  valid: number;
+  infeasible: number;
+  refused: number;
 }
 
 /* -------------------------------------------------------
@@ -313,6 +353,8 @@ export interface CompletenessDto {
   per_metric?: Record<string, number>;
   attempts?: number;
   objective_used?: boolean;
+  /** Set when the engine could not turn the measurements into a vector; the objectives are a placeholder. */
+  refused?: string;
   policy?: string;
   /**
    * Carried over from an earlier evaluation of the same genome, with that
@@ -384,6 +426,7 @@ export interface ExperimentDto {
   source_repository_options: Record<string, ID>;
   data_conversion_config: DataConversionConfigDto;
   pareto_front?: ParetoFrontItemDto[] | null;
+  pareto_front_validity?: ParetoFrontValidityDto | null;
   analysis_files?: Record<string, ID>;
   runtime_metrics?: RuntimeMetricsDto | null;
   firmware_snapshot?: FirmwareSnapshotDto | null;

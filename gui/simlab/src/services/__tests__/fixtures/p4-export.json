@@ -1,0 +1,28 @@
+{
+  "problem": {
+    "name": "problem4",
+    "radius_of_reach": 50,
+    "radius_of_inter": 60,
+    "region": [-100, -100, 100, 100],
+    "sink": [0, 0],
+    "nodes": [[60, 0], [-80, 10]],
+    "sink_base": [0, 0],
+    "sojourns": [
+      {"id": 0, "position": [0, 0], "adjacency": [1, 2], "visibleNodes": []},
+      {"id": 1, "position": [40, 0], "adjacency": [0, 2], "visibleNodes": [0]},
+      {"id": 2, "position": [-40, 0], "adjacency": [0, 1], "visibleNodes": [1]}
+    ],
+    "initial_energy": 1000,
+    "buffer_capacity": 4096,
+    "data_rate": 1.61,
+    "speed": 10,
+    "time_step": 1,
+    "max_route_length": 20,
+    "tau_bounds": [0, 200],
+    "mobile_nodes": []
+  },
+  "chromosome": {
+    "problem_name": "problem4",
+    "chromosome": {"mac_protocol": 0, "route": [0, 1, 2, 0], "sojourn_times": [0, 5, 5, 0]}
+  }
+}

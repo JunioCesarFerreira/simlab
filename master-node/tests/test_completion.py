@@ -212,7 +212,7 @@ class TestReadingTheSnapshot:
             "schedulable": True,
             "access": {"address": "Andromeda.Example", "port": 2191},
             "free_durations": [61.5],
-            "occupied_workers": [{"mean_duration_sec": 58.0,
+            "occupied_workers": [{"mean_duration_sec": 58.0, "expected_sec": 58.0,
                                   "started_at": self.NOW - timedelta(seconds=20)}],
         }
 
@@ -224,7 +224,8 @@ class TestReadingTheSnapshot:
 
     def test_a_reserved_worker_has_not_started(self):
         row = {"_id": "h", "name": "h", "free": 0, "active": 1, "schedulable": True,
-               "occupied_workers": [{"mean_duration_sec": 30.0, "started_at": None}]}
+               "occupied_workers": [{"mean_duration_sec": 30.0, "expected_sec": 30.0,
+                                     "started_at": None}]}
 
         [load] = snapshot_loads(self.Repo([row]), now=self.NOW)
 
@@ -235,3 +236,46 @@ class TestReadingTheSnapshot:
                "schedulable": True, "access": {"address": "gw.example"}}
 
         assert snapshot_loads(self.Repo([row]))[0].machine == "rack-2"
+
+
+class TestEstimatesAreOfOneWorkload:
+    """The estimate of a free worker and the remaining time of a busy one are
+    about different jobs: the one being placed, and the one it is running."""
+
+    def test_a_busy_worker_is_costed_with_the_job_being_placed(self):
+        # Running a short job (10 of 21 s) and 1400 s for the one waiting: a
+        # free worker that does it in 900 s is sooner.
+        busy = HostLoad(
+            host_id="a", name="busy", free=0, active=1, schedulable=True,
+            machine="a", occupied=((21.0, 10.0),), occupied_durations=(1400.0,))
+
+        plan = plan_completion([busy, host("free", free=(900.0,))], waiting=1)
+
+        assert plan.host.name == "free"
+
+    def test_a_busy_worker_never_measured_on_this_job_is_not_waited_on(self):
+        busy = HostLoad(
+            host_id="a", name="busy", free=0, active=1, schedulable=True,
+            machine="a", occupied=((21.0, 10.0),), occupied_durations=(None,))
+
+        plan = plan_completion([busy, host("free", free=(900.0,))], waiting=1)
+
+        assert plan.host.name == "free"
+
+    def test_the_snapshot_keeps_the_two_apart(self):
+        class Repo:
+            asked = None
+
+            def inventory_snapshot(self, *, workload=None):
+                self.asked = workload
+                return [{
+                    "_id": "h", "name": "h", "free": 0, "active": 1, "schedulable": True,
+                    "occupied_workers": [{"mean_duration_sec": 1400.0, "expected_sec": 21.0,
+                                          "started_at": None}]}]
+
+        repo = Repo()
+        [load] = snapshot_loads(repo, workload="w1")
+
+        assert repo.asked == "w1"
+        assert load.occupied[0][0] == 21.0
+        assert load.occupied_durations == (1400.0,)

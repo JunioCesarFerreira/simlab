@@ -43,7 +43,11 @@ class IndividualRepository:
     ) -> dict[ObjectId, list[Individual]]:
         """Read all generations in one indexed query, omitting heavy chart-irrelevant data."""
         projection = (
-            {"_id": 0, "generation_id": 1, "individual_id": 1, "objectives": 1}
+            {"_id": 0, "generation_id": 1, "individual_id": 1, "objectives": 1,
+             # The verdict on the vector, not the whole record: enough for
+             # pylib.evaluation_validity to decide what a chart may plot.
+             "completeness.state": 1, "completeness.objective_used": 1,
+             "completeness.refused": 1}
             if objectives_only else None
         )
         grouped: dict[ObjectId, list[Individual]] = {}

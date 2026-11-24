@@ -24,7 +24,8 @@ class SimulationElements(TypedDict):
     fixedMotes: list[FixedMote]
     mobileMotes: list[MobileMote]
     # Present only for analytical (synthetic) problems: the benchmark decision
-    # vector x ∈ [0,1]^n, evaluated directly by the master-node with no motes.
+    # vector x ∈ [0,1]^n, with no motes. The mo-engine evaluates it in-process;
+    # the master-node only for batch and the legacy synthetic path.
     decisionVector: NotRequired[list[float]]
     # Present only for P3: sensing target positions [x, y]. Targets are not
     # motes — the Cooja builder ignores them; they exist so topology plots can
@@ -34,7 +35,7 @@ class SimulationElements(TypedDict):
 
 class SimulationConfig(TypedDict):
     name: str
-    duration: float
+    duration: float       # simulated minutes
     randomSeed: int
     radiusOfReach: float  # Cooja only accepts homogeneous networks.
     radiusOfInter: float  # Cooja only accepts homogeneous networks.

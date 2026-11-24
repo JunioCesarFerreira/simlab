@@ -24,6 +24,37 @@ def test_penalty_threshold_matches():
     assert metrics.PENALTY_THRESHOLD == canonical.PENALTY_THRESHOLD
 
 
+_RECORDS = [
+    None, {}, {"state": "complete", "objective_used": True},
+    {"state": "infeasible"}, {"state": "complete", "refused": "nan"},
+    {"state": "partial", "objective_used": False}, {"valid": True}, {"valid": False},
+]
+_VECTORS = [[1.0, 2.0], [2e8, 1.0], [1e9, 1e9], [float("nan"), 1.0], [float("inf"), 0.0]]
+
+
+@pytest.mark.parametrize("record", _RECORDS)
+def test_validity_rule_matches(record):
+    assert metrics.is_valid_evaluation(record) == canonical.is_valid_evaluation(record)
+    for vector in _VECTORS:
+        assert metrics.is_excluded(vector, record) == canonical.is_excluded(vector, record)
+
+
+def test_sanitize_with_records_matches():
+    rows = [[2e8, 0.1], [1.0, 2.0], [0.5, 3.0], [1e9, 1e9]]
+    records = [{"valid": True}, None, {"valid": False}, None]
+    assert np.array_equal(
+        metrics.sanitize_reference_front(rows, records=records),
+        canonical.sanitize_reference_front(rows, records=records),
+    )
+
+
+def test_legacy_threshold_is_lifted_only_when_every_row_has_evidence():
+    import math
+    assert metrics.legacy_threshold_for([{"valid": True}, {"valid": True}]) == math.inf
+    assert metrics.legacy_threshold_for([{"valid": True}, None]) == metrics.PENALTY_THRESHOLD
+    assert metrics.legacy_threshold_for([]) == metrics.PENALTY_THRESHOLD
+
+
 @pytest.mark.parametrize("normalized", [True, False])
 @pytest.mark.parametrize("name", ["gd", "igd", "igd_plus"])
 def test_indicator_matches_canonical(sets, name, normalized):

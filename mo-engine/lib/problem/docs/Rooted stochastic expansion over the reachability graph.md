@@ -12,8 +12,8 @@ Here, we describe its theoretical foundation.
 
 Let:
 
-* $Q = {q_0, q_1, \dots, q_{J-1}}$ be the set of candidate positions;
-* $q_0$ be the **sink** (root);
+* $Q = \{q_0, q_1, \dots, q_{J-1}\}$ be the set of candidate positions;
+* $\sigma$ be the **sink**, a virtual root that is not an element of $Q$;
 * $r > 0$ be the reachability radius (`radius_of_reach`);
 * The induced geometric graph:
 $$
@@ -23,7 +23,7 @@ $$
 **Algorithm objective:**
 
 * Construct a subset $P \subseteq Q$;
-* Such that the induced subgraph $G[P]$ is **connected**;
+* Such that the graph induced by $\{\sigma\} \cup P$ is **connected**;
 * With **stochastic and sparse** cardinality and spatial distribution.
 
 ---
@@ -49,12 +49,14 @@ $$
 
 * **Frontier** $A \subseteq S$: active nodes that may still expand.
 
-**Initialization:**
+**Initialization (expansion from the sink):**
 
-* $S = {q_0}$;
-* $A = {q_0}$;
-* $F = Q \setminus {q_0}$;
-* $D = \emptyset$.
+* $N(\sigma) = \{v \in Q \mid \lVert \sigma - v \rVert \le r\}$;
+* if $N(\sigma) = \emptyset$, the result is the empty mask;
+* otherwise sample $c$ uniformly in $\{1, \dots, |N(\sigma)|\}$ and choose $C \subseteq N(\sigma)$ with $|C| = c$;
+* $S = A = C$;
+* $D = N(\sigma) \setminus C$;
+* $F = Q \setminus N(\sigma)$.
 
 ---
 
@@ -66,7 +68,7 @@ While $A \neq \emptyset$:
 
 2. Define the set of free reachable candidates:
 $$
-N(u) = {v \in F \mid \lVert u - v \rVert \le r}.
+N(u) = \{v \in F \mid \lVert u - v \rVert \le r\}.
 $$
 
 3. If $N(u) = \emptyset$:
@@ -76,12 +78,12 @@ $$
 
 4. Sample:
 $$
-c \sim \mathcal{U}{1, |N(u)|};
+c \sim \mathcal{U}\{1, \dots, |N(u)|\};
 $$
 
 5. Randomly choose:
 $$
-C \subset N(u), \quad |C| = c;
+C \subseteq N(u), \quad |C| = c;
 $$
 
 6. Update states:
@@ -123,8 +125,8 @@ $$
 
 Every node added to $S$:
 
-* lies within the reachability radius of some node already in $S$;
-* therefore, the induced subgraph is connected (a tree with possible cycles).
+* lies within the reachability radius of the sink or of some node already in $S$;
+* therefore, the induced subgraph, sink included, is connected (a tree with possible cycles).
 
 ---
 
@@ -138,7 +140,7 @@ Every node added to $S$:
 
 ### 5.3 Structural Diversity
 
-* Two individuals with the same random seed rarely generate identical masks;
+* Successive draws from one random stream generally give different masks; the same seed reproduces the same mask;
 * Expansion order and sampled values of $c$ induce distinct topologies.
 
 ---
@@ -158,14 +160,14 @@ This algorithm can be interpreted as:
 Let $J = |Q|$.
 
 * Each candidate changes state **at most once**;
-* Neighborhood computation can be:
+* Neighborhood computation can be (the implementation uses the naive one):
 
   * $O(J)$ in a naive implementation;
-  * $O(\log J)$ using spatial data structures (e.g., KD-tree).
+  * faster with spatial data structures (e.g., KD-tree), $O(\log J)$ plus the neighbours returned.
 
 **Overall complexity:**
 $$
-O(J^2) \text{ (naive)} \quad\text{or}\quad O(J \log J).
+O(J^2) \text{ (naive)}.
 $$
 
 ---

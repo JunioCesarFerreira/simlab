@@ -53,8 +53,13 @@ export function importChromosomeJson(json: string): ChromosomeImportResult {
   }
 
   if (file.problem_name === 'problem4') {
-    const route = Array.isArray(c.route) ? (c.route as unknown[]).map(i => Number(i)) : []
-    const sojournTimes = Array.isArray(c.sojourn_times) ? (c.sojourn_times as unknown[]).map(t => Number(t)) : []
+    // The inverse of exportChromosome: drop the visits to the base (sojourn 0)
+    // and number the other stops from the first candidate.
+    const stops = Array.isArray(c.route) ? (c.route as unknown[]).map(i => Number(i)) : []
+    const times = Array.isArray(c.sojourn_times) ? (c.sojourn_times as unknown[]).map(t => Number(t)) : []
+    const kept = stops.map((s, i) => [s, times[i] ?? 0] as const).filter(([s]) => s !== 0)
+    const route = kept.map(([s]) => s - 1)
+    const sojournTimes = kept.map(([, t]) => t)
     return {
       ok: true,
       chromosome: {

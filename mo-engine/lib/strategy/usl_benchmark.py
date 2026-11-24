@@ -129,13 +129,8 @@ class UslBenchmarkStrategy(EngineStrategy):
             for k, v in src_repo_opts.items()
         }
 
+        # A benchmark has no operator settings: the adapter's defaults apply.
         self._adapter: ProblemAdapter = build_adapter(problem_config, {}, self._rng)
-        # `build_adapter` hands the RNG over only together with GA operator
-        # settings, and a benchmark has none — so the generator would draw
-        # from an attribute that was never set. Every adapter reads those
-        # settings with defaults, so an empty mapping gives it the RNG and
-        # nothing else.
-        self._adapter.set_ga_operator_configs(self._rng, {})
 
         self._exp_id: Optional[ObjectId] = None
         self._workload: Optional[Chromosome] = None
@@ -158,8 +153,10 @@ class UslBenchmarkStrategy(EngineStrategy):
              if g.get("benchmark")),
             key=lambda g: g["benchmark"].get("wave", 0))
 
+        has_waves = bool(existing)
+        existing = self._set_aside_cut(existing)
         try:
-            self._workload = self._load_or_choose_workload(resume=bool(existing))
+            self._workload = self._load_or_choose_workload(resume=has_waves)
         except Exception as error:
             logger.exception("[USL] Cannot choose a workload for %s", self._exp_id)
             self._finish(EnumStatus.ERROR, str(error))
@@ -168,8 +165,9 @@ class UslBenchmarkStrategy(EngineStrategy):
         self._start_watchers()
         with self._lock:
             if not existing:
-                self.mongo.experiment_repo.update(str(self._exp_id), {
-                    "status": EnumStatus.RUNNING, "start_time": utc_now()})
+                if self._cut is None:
+                    self.mongo.experiment_repo.update_unless_cancelled(str(self._exp_id), {
+                        "status": EnumStatus.RUNNING, "start_time": utc_now()})
                 self._enqueue(0)
                 return
             # Resuming after a restart: pick up at the last wave written.
@@ -282,12 +280,12 @@ class UslBenchmarkStrategy(EngineStrategy):
             "end_time": None,
             "benchmark": {"level": level, "repetition": repetition, "wave": wave},
         }
-        self.mongo.generation_repo.insert(generation)
+        genome = self._workload
+        genome_hash = genome.get_hash()
+        gen_oid = self._open_generation(generation, [genome_hash])
         self._current_wave = wave
         self._current_generation = gen_oid
 
-        genome = self._workload
-        genome_hash = genome.get_hash()
         individual: Individual = {
             "experiment_id": exp_oid,
             "generation_id": gen_oid,
@@ -296,11 +294,14 @@ class UslBenchmarkStrategy(EngineStrategy):
             "objectives": [],
             "topology_picture_id": None,
         }
-        self.mongo.individual_repo.insert(individual)
+        self._insert_individual(individual)
 
-        for copy in range(level):
+        # Every copy has the same seed, so they are counted, not told apart. A
+        # wave finished this way did not run at once and measures as invalid.
+        for copy in range(self._written_replicas.get((genome_hash, self._seed), 0), level):
             config = self._simulation_config(wave, copy)
             self._insert_simulation(genome, exp_oid, gen_oid, config)
+        self._generation_written(gen_oid)
         logger.info("[USL] %s wave %d/%d: %d simulation(s), repetition %d",
                     exp_oid, wave + 1, len(self._waves), level, repetition)
 
@@ -333,6 +334,8 @@ class UslBenchmarkStrategy(EngineStrategy):
             "pos_file_id": files.get("pos_file_id", ""),
             "csc_file_id": files.get("csc_file_id", ""),
             "source_repository_id": self._source_id,
+            # Never held for a faster worker: see the dispatcher.
+            "benchmark": True,
             "log_cooja_id": "",
             "runtime_log_id": "",
             "csv_log_id": "",
@@ -348,6 +351,9 @@ class UslBenchmarkStrategy(EngineStrategy):
         what makes the second delivery a no-op.
         """
         if gen_oid != self._current_generation or gen_oid in self._handled:
+            return
+        if self._stop_if_cancelled():
+            logger.info("[USL] %s cancelled; no further wave.", self._exp_id)
             return
         self._handled.add(gen_oid)
 
@@ -374,7 +380,7 @@ class UslBenchmarkStrategy(EngineStrategy):
 
     def _finish(self, status: str, message: str) -> None:
         if self._exp_id is not None:
-            self.mongo.experiment_repo.update(str(self._exp_id), {
+            self.mongo.experiment_repo.update_unless_cancelled(str(self._exp_id), {
                 "status": status, "end_time": utc_now(), "system_message": message})
         log = logger.info if status == EnumStatus.DONE else logger.error
         log("[USL] %s: %s", self._exp_id, message)
@@ -383,7 +389,8 @@ class UslBenchmarkStrategy(EngineStrategy):
     # ── watchers ───────────────────────────────────────────────────────────
 
     def _start_watchers(self) -> None:
-        self._stop_flag = False
+        if self._stop_flag:
+            return
 
         def watch() -> None:
             def callback(gen_doc: dict) -> None:
@@ -393,7 +400,8 @@ class UslBenchmarkStrategy(EngineStrategy):
                     self.event_generation_done(gen_doc)
                 except Exception:
                     logger.exception("[USL] Generation watcher callback error")
-            self.mongo.generation_repo.watch_status_terminal(callback)
+            self.mongo.generation_repo.watch_status_terminal(
+                callback, should_stop=lambda: self._stop_flag)
 
         def poll() -> None:
             # The change stream is the fast path; this is the backstop that
@@ -404,6 +412,8 @@ class UslBenchmarkStrategy(EngineStrategy):
                 if self._stop_flag or self._current_generation is None:
                     continue
                 try:
+                    if self._stop_if_cancelled():
+                        break
                     gen = self.mongo.generation_repo.get(str(self._current_generation))
                     if gen and gen.get("status") in (EnumStatus.DONE, EnumStatus.ERROR):
                         with self._lock:

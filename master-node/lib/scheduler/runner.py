@@ -19,6 +19,7 @@ from typing import Any, Callable, Optional
 from bson import ObjectId
 
 from lib.detached import RUN_ARTIFACTS, LiveRunPresent, assert_no_live_run
+from lib.scheduler.workload import workload_of
 from lib.transport import TransportError, build_transport
 from pylib.db.models.infra import operator_configured
 from pylib.timeutil import utc_now
@@ -90,6 +91,9 @@ class RunReport:
     confirmed: bool = True
     #: Why it is unconfirmed, for the simulation's ``system_message``.
     reason: str = ""
+    #: What a confirmed result lacks (metrics stored as NaN), for the
+    #: ``system_message`` of the simulation published Done.
+    note: str = ""
 
 
 class _PrepareFailed(Exception):
@@ -286,7 +290,7 @@ class SimulationRunner:
         with self._following_lock:
             self._following.add(attempt_id)
 
-    def _record_duration(self, resource: dict, seconds: float) -> None:
+    def _record_duration(self, sim: dict, resource: dict, seconds: float) -> None:
         """Feed one completed run into the worker's occupancy estimate.
 
         Advisory, and isolated for that reason: this number only chooses
@@ -296,7 +300,8 @@ class SimulationRunner:
         making.
         """
         try:
-            self._mongo.resource_repo.record_duration(resource["_id"], seconds)
+            self._mongo.resource_repo.record_duration(
+                resource["_id"], seconds, workload=workload_of(sim))
         except Exception:
             log.warning(
                 "Could not record the duration of %s (%.1fs); the estimate "
@@ -467,7 +472,7 @@ class SimulationRunner:
                 # Only here: a run that reached this line produced a result
                 # and published it. Timing a failure that aborted in five
                 # seconds would make the worst worker look like the best.
-                self._record_duration(resource, time.monotonic() - started_at)
+                self._record_duration(sim, resource, time.monotonic() - started_at)
         except _PrepareFailed:
             log.warning("[%s] Skipping simulation %s (prepare failed)", where, sim_oid)
             self._fail(sim, sim_oid, "Failed to prepare simulation files", attempt_id)
@@ -799,6 +804,7 @@ class SimulationRunner:
                     getattr(report, "csv_id", None),
                     getattr(report, "metrics", None) or {},
                     getattr(report, "dodag", None),
+                    system_message=getattr(report, "note", "") or None,
                     attempt_id=attempt_id,
                 ))
             except Exception:
@@ -1136,7 +1142,7 @@ class SimulationRunner:
         *,
         held_for: Optional[dict] = None,
     ) -> None:
-        """Take a worker out of the pool until a person says otherwise.
+        """Take a worker out of the pool until an operator or a probe resolves it.
 
         ``enabled = False`` is the right lever: it is administrative, so a
         successful probe cannot undo it, and the page already explains a

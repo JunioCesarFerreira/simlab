@@ -45,6 +45,9 @@ class CompletenessDto(TypedDict, total=False):
     #: read without it: a generation whose every planned seed finished can be
     #: partial because one result came back without a metric.
     reason: str
+    #: Why the engine refused the vector (a metric missing or non-finite).
+    #: The stored objectives are then a placeholder, not a measurement.
+    refused: str
 
 
 class IndividualDto(TypedDict):
@@ -67,3 +70,6 @@ class GenerationDto(TypedDict):
     start_time: Optional[datetime]
     end_time: Optional[datetime]
     population: list[IndividualDto]
+    #: Chromosome hashes of the population environmental selection kept (P_t).
+    #: Absent when the generation predates the record or never closed.
+    survivors: NotRequired[list[str]]

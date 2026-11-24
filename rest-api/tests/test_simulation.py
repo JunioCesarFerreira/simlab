@@ -1,3 +1,4 @@
+import pytest
 from bson import ObjectId
 
 from tests.conftest import EXP_ID, GEN_ID, SIM_ID, FILE_ID, sample_simulation
@@ -245,11 +246,21 @@ class TestGetSimulation:
 
 # ── PUT /{sim_id} ─────────────────────────────────────────────────────────────
 class TestUpdateSimulation:
-    def test_success(self, client, mock_factory):
+    def test_a_message_can_be_written(self, client, mock_factory):
         mock_factory.simulation_repo.update.return_value = True
-        resp = client.put(f"{BASE}/{SIM_ID}", json={"status": "Running"})
+        resp = client.put(f"{BASE}/{SIM_ID}", json={"system_message": "checked by hand"})
         assert resp.status_code == 200
         assert resp.json() is True
+        assert mock_factory.simulation_repo.update.call_args.args[1] == {"system_message": "checked by hand"}
+
+    @pytest.mark.parametrize("updates", [
+        {"status": "Running"}, {"network_metrics": {"latency": 1}},
+        {"system_message": "x", "status": "Done"}, {"system_message": 3}, {},
+    ])
+    def test_results_cannot_be_rewritten(self, client, mock_factory, updates):
+        resp = client.put(f"{BASE}/{SIM_ID}", json=updates)
+        assert resp.status_code == 422
+        mock_factory.simulation_repo.update.assert_not_called()
 
 
 # ── DELETE /{sim_id} ──────────────────────────────────────────────────────────
@@ -315,3 +326,8 @@ class TestUpdateSimulationStatus:
         mock_factory.simulation_repo.update_status.side_effect = RuntimeError("db error")
         resp = client.patch(f"{BASE}/{SIM_ID}/status", params={"new_status": "Running"})
         assert resp.status_code == 500
+
+    def test_an_unknown_status_is_refused(self, client, mock_factory):
+        resp = client.patch(f"{BASE}/{SIM_ID}/status", params={"new_status": "Finished"})
+        assert resp.status_code == 422
+        mock_factory.simulation_repo.update_status.assert_not_called()

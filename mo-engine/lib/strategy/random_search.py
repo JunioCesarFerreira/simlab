@@ -10,6 +10,7 @@ from bson import ObjectId
 from typing import Optional
 
 from .base import EngineStrategy
+from .library_rng import dump_random_state, load_random_state
 from .simulation_seeds import resolve_simulation_seeds
 
 from pylib.db import EnumStatus
@@ -17,11 +18,14 @@ from pylib.db.models import Generation, Individual, Simulation
 from pylib.config.simulator import SimulationConfig
 from pylib import plot_network
 
+from lib.util import background
 from lib.util.build_input_sim_cooja import create_files
 
 from lib.nsga import fast_nondominated_sort
 from lib.problem.adapter import ProblemAdapter, Chromosome
+from lib.problem.chromosomes import chromosome_from_dict
 from lib.problem.resolve import build_adapter
+from lib.problem.mac_gene import pin_mac_gene
 from .analytical import analytical_objectives
 from pylib import benchmarks
 from pylib.timeutil import utc_now
@@ -32,7 +36,13 @@ from lib.strategy.completeness import (
     ReplicaGate,
     ReplicaPolicy,
     annotate,
+    decided_at_enqueue,
+    evaluation_of,
+    front_validity,
+    front_warning,
     is_usable,
+    objective_vector,
+    refuse,
     reused,
     without_simulations,
 )
@@ -52,14 +62,19 @@ class RandomSearchStrategy(EngineStrategy):
     Random search strategy.
 
     Baseline algorithm-agnostic generator: at each generation, samples
-    ``population_size`` candidate solutions uniformly from the problem's
-    decision space ``X`` via :py:meth:`ProblemAdapter.random_individual_generator`.
+    ``population_size`` candidate solutions with the problem's own random
+    generator, :py:meth:`ProblemAdapter.random_individual_generator`. That
+    generator need not be uniform over the decision space ``X``.
     No selection, no crossover, no mutation.
 
     Genome cache and penalty objectives behave identically to NSGA-III, so
     chromosomes already evaluated in earlier generations (or earlier runs
     of the same experiment) are not re-simulated, and infeasible candidates
     are penalised in the same gradient-of-deficit scheme.
+
+    A restart continues the same run: the population in flight, the archive
+    the final front is built from and the random stream are all restored
+    from what was persisted (see :py:meth:`_resume_existing_generation`).
 
     Purpose:
         Provide a minimal, algorithm-agnostic reference that highlights the
@@ -109,13 +124,18 @@ class RandomSearchStrategy(EngineStrategy):
         self._max_gen: int = int(algorithm_config.get("number_of_generations", 5))
 
         # Random search has no genetic operators, but the adapter still needs a
-        # rng (e.g. for random_individual_generator); pass an empty config so it
-        # falls back to safe defaults.
+        # rng (e.g. for random_individual_generator). It is handed over with the
+        # algorithm config, whose operator keys fall back to safe defaults.
         self._problem_adapter: ProblemAdapter = build_adapter(
             problem_config,
             algorithm_config,
             self._rng,
         )
+        # With a single firmware source the MAC gene cannot express anything;
+        # pin it where chromosomes are made so the stored gene is the one that
+        # ran and two phenotypes never hash apart. See lib/problem/mac_gene.py.
+        self._problem_adapter = pin_mac_gene(
+            self._problem_adapter, self.source_repository_options)
 
         self._metric_conv_config = experiment.get("data_conversion_config", {}) or {}
 
@@ -186,33 +206,21 @@ class RandomSearchStrategy(EngineStrategy):
         self._gen_index = 0
         self._load_genome_cache_from_db()
 
-        existing_generations = self.mongo.generation_repo.find_by_experiment(self._exp_id)
+        existing_generations = self._set_aside_cut(
+            self.mongo.generation_repo.find_by_experiment(self._exp_id),
+            inserted=self._inserted_genomes,
+            caches=(self._genome_objectives_cache, self._genome_completeness_cache),
+        )
         if existing_generations:
-            last = existing_generations[-1]
-            self._generation_id = last["_id"]
-            self._gen_index = int(last["index"])
-            status = last.get("status")
-            logger.info(
-                "[RandomSearch] Resuming experiment %s from generation %s (index=%d, status=%s).",
-                self._exp_id, self._generation_id, self._gen_index, status,
-            )
-            self.mongo.experiment_repo.update(str(self._exp_id), {
-                "status": EnumStatus.RUNNING,
-            })
-            self._start_watcher()
-            self._start_generation_poll()
-            if status in (EnumStatus.DONE, EnumStatus.ERROR):
-                # Replay terminal generation so the loop continues.
-                with self._lock:
-                    self._handle_generation_done(self._generation_id)
-            return
-
-        self._current_population = self._problem_adapter.random_individual_generator(self._pop_size)
-        self._generation_enqueue()
+            self._resume_existing_generation(existing_generations)
+        else:
+            self._current_population = self._problem_adapter.random_individual_generator(self._pop_size)
+            self._generation_enqueue()
         self._start_watcher()
         self._start_generation_poll()
-        # Catch-up: a fast (e.g. synthetic) generation may already be terminal
-        # before the change-stream watcher subscribed. Reconcile once at startup.
+        # Catch-up: the generation may already be terminal before the change-stream
+        # watcher subscribed — a fast (e.g. synthetic) one, or one that closed
+        # while the engine was down. Reconcile once at startup.
         self._reconcile_current_generation()
 
     def event_simulation_done(self, sim_doc: dict):
@@ -267,16 +275,99 @@ class RandomSearchStrategy(EngineStrategy):
             )
 
     # ------------------------------
+    # Resume
+    # ------------------------------
+    def _resume_existing_generation(self, generations: list[Generation]) -> None:
+        """Rebuild what the loop holds in memory, at the last generation.
+
+        Unlike NSGA, the whole run matters and not only the last two
+        generations: the final front is that of everything evaluated.
+
+        In the last generation, only what was decided at enqueue (reused,
+        analytical, infeasible) is restored as evaluated. What rests on
+        simulations is derived from them again, even if the previous process
+        had already written it: that process may have died halfway through
+        the write, and a refusal is only known to the code that derives it.
+        """
+        last = generations[-1]
+        last_index = int(last["index"])
+        by_generation = self.mongo.individual_repo.find_grouped_by_experiment(self._exp_id)
+        if not by_generation.get(last["_id"]):
+            raise RuntimeError(
+                f"Cannot resume generation {last['_id']}: no individuals were found."
+            )
+
+        pending = 0
+        for generation in generations:
+            in_flight = generation["_id"] == last["_id"]
+            # Population order; insertion order on documents written before
+            # ``index`` was recorded.
+            documents = sorted(
+                by_generation.get(generation["_id"], []),
+                key=lambda d: (d.get("index") is None, d.get("index", 0), d["_id"]),
+            )
+            for document in documents:
+                h = document["individual_id"]
+                genome = chromosome_from_dict(self._problem_name, document["chromosome"])
+                stored = document.get("objectives")
+                record = document.get("completeness")
+                if in_flight:
+                    self._current_population.append(genome)
+                    if not (stored and decided_at_enqueue(record)):
+                        self._genome_objectives_cache.pop(h, None)
+                        self._genome_completeness_cache.pop(h, None)
+                        pending += 1
+                        continue
+                    self._generation_completeness[h] = record
+                elif not stored:
+                    logger.warning(
+                        "[RandomSearch] Genome %s of generation %s has no objectives; "
+                        "it is left out of the archive.", h, generation["index"],
+                    )
+                    continue
+                objectives = self._genome_objectives_cache.setdefault(
+                    h, self._objectives_list_to_minimization(stored))
+                self._genome_completeness_cache.setdefault(h, record)
+                self._map_genome_objectives.setdefault(genome, objectives)
+
+        if not load_random_state(self._rng, last.get("rng_state")):
+            # A fresh stream would draw generation 0 again and spend the rest of
+            # the budget on genomes already evaluated. Nothing but the generator
+            # draws from this stream, so drawing again puts it where it was.
+            for _ in range(last_index + 1):
+                self._problem_adapter.random_individual_generator(self._pop_size)
+            logger.warning(
+                "[RandomSearch] Generation %s carries no usable RNG snapshot; the "
+                "earlier draws were repeated to position the stream. That matches "
+                "the uninterrupted run only if the generator has not changed since.",
+                last_index,
+            )
+
+        self._generation_id = last["_id"]
+        self._gen_index = last_index + 1
+        self._count_sims_inserted = pending * len(self._sim_rand_seeds)
+        logger.info(
+            "[RandomSearch] Resuming experiment %s from generation %s (index=%d, status=%s): "
+            "%d genomes in the archive, %d awaiting their simulations.",
+            self._exp_id, self._generation_id, last_index, last.get("status"),
+            len(self._map_genome_objectives), pending,
+        )
+        self.mongo.experiment_repo.update_unless_cancelled(str(self._exp_id), {
+            "status": EnumStatus.RUNNING,
+        })
+        if not pending and last.get("status") == EnumStatus.WAITING:
+            # Nothing to simulate, and killed before the enqueue could close it:
+            # the master closes only generations that have simulations.
+            self.mongo.generation_repo.mark_done(self._generation_id)
+
+    # ------------------------------
     # Watchers
     # ------------------------------
     def _start_watcher(self):
-        self._stop_flag = False
-
-        for t in (self._watch_thread, self._sim_watch_thread):
-            if t and t.is_alive():
-                self._stop_flag = True
-                t.join(timeout=1.0)
-                self._stop_flag = False
+        # The flag is not cleared here: a run with nothing to simulate can
+        # finish, and stop, before start() reaches this.
+        if self._stop_flag:
+            return
 
         def _run_generation_watcher():
             def _callback(gen_doc: dict):
@@ -288,7 +379,8 @@ class RandomSearchStrategy(EngineStrategy):
                     logger.exception("[RandomSearch] Generation watcher callback error.")
 
             logger.info("[RandomSearch] Starting Generation watcher (DONE or ERROR).")
-            self.mongo.generation_repo.watch_status_terminal(_callback)
+            self.mongo.generation_repo.watch_status_terminal(
+                _callback, should_stop=lambda: self._stop_flag)
 
         def _run_simulation_watcher():
             def _callback(sim_doc: dict):
@@ -300,7 +392,8 @@ class RandomSearchStrategy(EngineStrategy):
                     logger.exception("[RandomSearch] Simulation watcher callback error.")
 
             logger.info("[RandomSearch] Starting Simulation watcher (DONE or ERROR).")
-            self.mongo.simulation_repo.watch_status_terminal(_callback)
+            self.mongo.simulation_repo.watch_status_terminal(
+                _callback, should_stop=lambda: self._stop_flag)
 
         self._watch_thread = Thread(
             target=_run_generation_watcher, daemon=True, name="randsearch-gen-watcher",
@@ -328,7 +421,7 @@ class RandomSearchStrategy(EngineStrategy):
             return
         if gen and gen.get("status") in (EnumStatus.DONE, EnumStatus.ERROR):
             logger.warning(
-                "[RandomSearch] Generation %s already %s at startup; processing (watcher race).",
+                "[RandomSearch] Generation %s already %s at startup; processing.",
                 self._generation_id, gen.get("status"),
             )
             with self._lock:
@@ -343,6 +436,8 @@ class RandomSearchStrategy(EngineStrategy):
                 if self._stop_flag or self._generation_id is None:
                     continue
                 try:
+                    if self._stop_if_cancelled():
+                        break
                     gen = self.mongo.generation_repo.get(str(self._generation_id))
                     if gen and gen.get("status") in (EnumStatus.DONE, EnumStatus.ERROR):
                         logger.warning(
@@ -368,6 +463,9 @@ class RandomSearchStrategy(EngineStrategy):
         individual_id: str,
         config_snapshot: dict,
     ) -> None:
+        if self._has_picture(individual_id):
+            return
+
         def _do():
             try:
                 topo_id = self._plot_topology(exp_oid, gen_index, ind_idx, config_snapshot)
@@ -380,7 +478,7 @@ class RandomSearchStrategy(EngineStrategy):
                     gen_index, ind_idx,
                 )
 
-        Thread(target=_do, daemon=True, name=f"topo-rs-g{gen_index}-{ind_idx}").start()
+        background.submit(_do)
 
     # ------------------------------
     # Generation / Queuing
@@ -407,19 +505,23 @@ class RandomSearchStrategy(EngineStrategy):
             "status": EnumStatus.WAITING,
             "start_time": utc_now(),
             "end_time": None,
+            # After this generation's draw and before the next one's: where a
+            # resume has to put the stream back. Enqueueing itself never draws.
+            "rng_state": dump_random_state(self._rng),
         }
         # Increment before inserting so the change-stream callback always sees
         # the already-updated index.
         self._gen_index += 1
-        self._generation_id = self.mongo.generation_repo.insert(gen_doc)
+        self._generation_id = gen_oid = self._open_generation(
+            gen_doc, [genome.get_hash() for genome in population], self._sim_rand_seeds)
         # Completeness is measured against this, not against the
         # documents that end up existing: a replica whose creation
         # failed is invisible to a count of what was created.
         self._replica_gate.record_plan(
             self._generation_id, self._sim_rand_seeds)
 
-        if gen_index == 0:
-            self.mongo.experiment_repo.update(str(exp_oid), {
+        if gen_index == 0 and self._adopted is None:
+            self.mongo.experiment_repo.update_unless_cancelled(str(exp_oid), {
                 "status": EnumStatus.RUNNING,
                 "start_time": utc_now(),
             })
@@ -451,6 +553,7 @@ class RandomSearchStrategy(EngineStrategy):
                     "experiment_id": exp_oid,
                     "generation_id": gen_oid,
                     "individual_id": genome_hash,
+                    "index": i,
                     "chromosome": genome.to_dict(),
                     "objectives": self._objectives_list_to_original(cached_obj),
                     "topology_picture_id": None,
@@ -460,7 +563,7 @@ class RandomSearchStrategy(EngineStrategy):
                     # have anything to count for this genome.
                     "completeness": carried,
                 }
-                self.mongo.individual_repo.insert(ind_doc)
+                self._insert_individual(ind_doc)
                 config_topo = self._convert_genome_to_sim_config(
                     genome=genome, gen_index=gen_index, ind_idx=i, seed=first_seed,
                 )
@@ -488,10 +591,11 @@ class RandomSearchStrategy(EngineStrategy):
                     STATE_ANALYTICAL,
                     "the problem is analytical; no simulation was run")
                 self._generation_completeness[genome_hash] = analytical_record
-                self.mongo.individual_repo.insert({
+                self._insert_individual({
                     "experiment_id": exp_oid,
                     "generation_id": gen_oid,
                     "individual_id": genome_hash,
+                    "index": i,
                     "chromosome": genome.to_dict(),
                     "objectives": self._objectives_list_to_original(obj_min),
                     "topology_picture_id": None,
@@ -504,7 +608,7 @@ class RandomSearchStrategy(EngineStrategy):
                 self._genome_completeness_cache[genome_hash] = (
                     analytical_record)
                 try:
-                    self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
+                    self._insert_cache_entry(genome_hash, genome.to_dict())
                     self.mongo.genome_cache_repo.set_objectives(
                         self._exp_id, genome_hash, obj_min,
                         without_simulations(STATE_ANALYTICAL, "the problem is analytical; no simulation was run"))
@@ -530,14 +634,15 @@ class RandomSearchStrategy(EngineStrategy):
                     "experiment_id": exp_oid,
                     "generation_id": gen_oid,
                     "individual_id": genome_hash,
+                    "index": i,
                     "chromosome": genome.to_dict(),
                     "objectives": self._objectives_list_to_original(penalty),
                     "topology_picture_id": None,
                     "completeness": penalty_record,
                 }
-                self.mongo.individual_repo.insert(ind_doc)
+                self._insert_individual(ind_doc)
                 self._inserted_genomes.add(genome_hash)
-                self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
+                self._insert_cache_entry(genome_hash, genome.to_dict())
                 self.mongo.genome_cache_repo.set_objectives(
                     self._exp_id, genome_hash, penalty,
                     without_simulations(
@@ -569,21 +674,25 @@ class RandomSearchStrategy(EngineStrategy):
                 "experiment_id": exp_oid,
                 "generation_id": gen_oid,
                 "individual_id": genome_hash,
+                "index": i,
                 "chromosome": genome.to_dict(),
                 "objectives": [],
                 "topology_picture_id": None,
             }
-            self.mongo.individual_repo.insert(ind_doc)
+            self._insert_individual(ind_doc)
             self._inserted_genomes.add(genome_hash)
-            self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
+            self._insert_cache_entry(genome_hash, genome.to_dict())
 
             for seed in self._sim_rand_seeds:
                 config["randomSeed"] = seed
-                self._insert_simulation_db(genome_hash, exp_oid, gen_oid, config)
+                if not self._replica_written(genome_hash, seed):
+                    self._insert_simulation_db(genome_hash, exp_oid, gen_oid, config)
                 sims_inserted += 1
                 logger.info("[RandomSearch] SIM inserted SEED=%s genome=%s", seed, genome_hash)
 
             self._upload_topology_async(exp_oid, gen_oid, gen_index, i, genome_hash, dict(config))
+
+        self._generation_written(gen_oid)
 
         all_cached = sims_inserted == 0
         if all_cached:
@@ -672,6 +781,8 @@ class RandomSearchStrategy(EngineStrategy):
                     ind.get_hash(),
                 )
                 self._map_genome_objectives[ind] = worst_objectives
+                completeness[ind.get_hash()] = refuse(
+                    record, "no aggregated metrics for this individual")
                 continue
             obj_vector = self._extract_objectives_to_minimization(ind_metrics)
             if obj_vector is None:
@@ -680,6 +791,8 @@ class RandomSearchStrategy(EngineStrategy):
                     ind.get_hash(),
                 )
                 self._map_genome_objectives[ind] = worst_objectives
+                completeness[ind.get_hash()] = refuse(
+                    record, "a metric is missing or not a finite number")
             else:
                 self._map_genome_objectives[ind] = obj_vector
 
@@ -694,6 +807,7 @@ class RandomSearchStrategy(EngineStrategy):
                     pareto_items.append({
                         "chromosome": genome.to_dict(),
                         "objectives": self._objectives_to_original(objectives),
+                        "evaluation": evaluation_of(self._genome_completeness_cache.get(genome.get_hash())),
                     })
                     all_objectives.append(objectives)
                 pareto_fronts = fast_nondominated_sort(all_objectives)
@@ -707,7 +821,7 @@ class RandomSearchStrategy(EngineStrategy):
             self._finalize_experiment(pareto_front=first_pareto_front)
             return
 
-        # Otherwise, sample the next generation uniformly from X.
+        # Otherwise, draw the next generation with the problem's random generator.
         self._current_population = self._problem_adapter.random_individual_generator(self._pop_size)
         self._generation_enqueue()
         logger.info("[RandomSearch] New random generation enqueued; waiting for results.")
@@ -763,6 +877,10 @@ class RandomSearchStrategy(EngineStrategy):
     def _objectives_list_to_original(self, vec: list[float]) -> list[float]:
         return [float(v * s) for v, s in zip(vec, self._objective_goals)]
 
+    def _objectives_list_to_minimization(self, vec: list[float]) -> list[float]:
+        # The goals are ±1, so the same product converts both ways.
+        return self._objectives_list_to_original(vec)
+
     def _objectives_to_original(self, vec: list[float]) -> dict[str, float]:
         return {
             k: float(v * s)
@@ -772,14 +890,13 @@ class RandomSearchStrategy(EngineStrategy):
     def _extract_objectives_to_minimization(
         self, sim_metrics_map: dict[str, float],
     ) -> Optional[list[float]]:
-        obj_vector: list[float] = []
-        for key, goal in zip(self._objective_keys, self._objective_goals):
-            metric_value = sim_metrics_map.get(key)
-            if metric_value is None:
-                logger.warning("[RandomSearch] Missing metric '%s'.", key)
-                return None
-            obj_vector.append(metric_value * goal)
-        return obj_vector
+        # NaN and infinity are refused here, not only None: a NaN vector is
+        # never dominated, so it would enter front 0 and corrupt the sort.
+        vector, reason = objective_vector(
+            sim_metrics_map, self._objective_keys, self._objective_goals)
+        if vector is None:
+            logger.warning("[RandomSearch] Cannot compute objective vector: %s.", reason)
+        return vector
 
     # ------------------------------
     # Simulation and topology helpers
@@ -878,18 +995,24 @@ class RandomSearchStrategy(EngineStrategy):
     ) -> None:
         assert self._exp_id is not None
         if pareto_front is not None:
+            validity = front_validity(pareto_front)
+            warning = front_warning(validity)
+            if warning:
+                logger.warning("[RandomSearch] Experiment %s: %s", self._exp_id, warning)
+                system_msg = f"{system_msg} {warning}" if system_msg else warning
             logger.info("[RandomSearch] Experiment %s completed.", self._exp_id)
-            self.mongo.experiment_repo.update(str(self._exp_id), {
+            self.mongo.experiment_repo.update_unless_cancelled(str(self._exp_id), {
                 "status": EnumStatus.DONE,
                 "end_time": utc_now(),
                 "system_message": system_msg
                     if system_msg is not None
                     else f"Experiment {self._exp_id} completed.",
                 "pareto_front": pareto_front,
+                "pareto_front_validity": validity,
             })
         else:
             logger.error("[RandomSearch] Experiment %s finished with error.", self._exp_id)
-            self.mongo.experiment_repo.update(str(self._exp_id), {
+            self.mongo.experiment_repo.update_unless_cancelled(str(self._exp_id), {
                 "status": EnumStatus.ERROR,
                 "system_message": system_msg
                     if system_msg is not None

@@ -42,7 +42,8 @@ nginx/
 
 On first `docker compose up`, the `proxy-certs` init container writes a
 self-signed pair into `certs/` and exits. It **skips itself whenever
-`certs/simlab.crt` already exists**, so installing a real certificate is just:
+`certs/simlab.crt` and `certs/simlab.key` both exist and are not empty**, so
+installing a real certificate is just:
 
 ```bash
 cp fullchain.pem nginx/certs/simlab.crt
@@ -92,7 +93,10 @@ URLs) point off the proxy.
 `util/`, `firmware/` and `pareto-analysis/` default to
 `https://localhost/api/v1` and verify TLS against `nginx/certs/simlab.crt`,
 which is why the self-signed certificate does not force `verify=False`
-anywhere. Override with:
+anywhere. The key is sent from `SIMLAB_API_KEY`, which defaults to
+`simlab-api-key42`, Compose's default; set it when the deployment uses another
+([util/README.md](../util/README.md#before-running)). Override the endpoint and
+the verification with:
 
 | Variable | Effect |
 | --- | --- |
@@ -138,8 +142,9 @@ unavailable address family aborts startup.
 
 ## Remaining exposure
 
-Everything else is bound to `127.0.0.1` rather than removed, so local debugging
-still works while nothing is reachable off-box:
+The other ports Compose publishes are bound to `127.0.0.1` rather than removed
+(the API, the GUI and Grafana publish none), so local debugging still works
+while nothing is reachable off-box:
 
 | Service | Bind | Reach it remotely with |
 | --- | --- | --- |
@@ -148,6 +153,10 @@ still works while nothing is reachable off-box:
 | MongoDB | `127.0.0.1:27017` | `ssh -L 27017:localhost:27017 <vm>` |
 | mo-engine / master-node SSH | `127.0.0.1:2219`, `:2220` | `ssh -J <vm> ...` |
 | cooja SSH (one port per container) | `127.0.0.1:2231`+ | `ssh -J <vm> ...` |
+
+A MongoDB client on the host or behind the tunnel needs
+`mongodb://localhost:27017/?directConnection=true`: the replica set advertises
+`mongodb:27017`, a name that only resolves inside the Compose network.
 
 Known gaps that this proxy does **not** close:
 

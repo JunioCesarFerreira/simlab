@@ -61,6 +61,10 @@ class Store:
                 return next((g for g in outer.generations
                              if str(g["_id"]) == str(gen_id)), None)
 
+            def update(self, gen_id, fields):
+                self.get(gen_id).update(fields)
+                return True
+
             def record_plan(self, gen_id, seeds):
                 self.get(gen_id)["expected_seeds"] = list(seeds)
 
@@ -93,7 +97,7 @@ class Store:
                 self.get(gen_id)["status"] = EnumStatus.RUNNING
                 return True
 
-            def close_if_finished(self, gen_id):
+            def close_if_finished(self, gen_id, *, require_simulations=False):
                 return None
 
             def get_simulations_metrics_by_individual(self, generation_id, metrics, aggregators):
@@ -111,6 +115,9 @@ class Store:
             def insert(self, ind):
                 outer.individuals.append(dict(ind))
                 return ObjectId()
+
+            def find_by_generation(self, gen_id):
+                return [i for i in outer.individuals if i["generation_id"] == gen_id]
 
             def update_evaluation(self, individual_id, generation_id, objectives, record):
                 for ind in outer.individuals:
@@ -144,6 +151,10 @@ class Store:
                 outer.simulations.append(doc)
                 return doc["_id"]
 
+            def find_replicas(self, gen_id):
+                return [{"individual_id": s["individual_id"], "random_seed": s["random_seed"]}
+                        for s in outer.simulations if s["generation_id"] == gen_id]
+
             def find_terminal_by_generation(self, gen_id):
                 return [s for s in outer.simulations if s["generation_id"] == gen_id
                         and s["status"] == EnumStatus.ERROR]
@@ -161,6 +172,12 @@ class Store:
             def update(self, exp_id, fields):
                 outer.experiments.setdefault(str(exp_id), {}).update(fields)
                 return True
+
+            def update_unless_cancelled(self, exp_id, fields):
+                # The engine's status writes: refused once somebody cancelled.
+                if outer.cancelled:
+                    return False
+                return self.update(exp_id, fields)
 
             def is_cancelled(self, exp_id):
                 return outer.cancelled

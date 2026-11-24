@@ -32,6 +32,7 @@ from pylib.db.models.infra import (
     HOSTS_COLLECTION,
 )
 from pylib.db.repositories.infra import (
+    DURATION_FRESH_SEC,
     _REASSIGNABLE as _REASSIGNABLE_FOR_TEST,
     CoojaResourceRepository,
     HostWithdrawing,
@@ -41,6 +42,7 @@ from pylib.db.repositories.infra import (
     HostRepository,
     InfraCryptoRepository,
     released_status_expression,
+    duration_estimate,
 )
 
 #: Stands in for a client session. Identity is what the tests compare, so a
@@ -2480,3 +2482,77 @@ class TestSnapshotCarriesWorkerDetail:
         fields = pipeline[1]["$set"]
         assert lookup["started_at"] == 1
         assert "free_durations" in fields and "occupied_workers" in fields
+
+
+class TestHeldTimeIsKeptPerWorkload:
+    """One mean per worker compared a 21 s job with a 1400 s one, and the
+    planner never placed on the workers that had last run the long one."""
+
+    KEY = "wsrc_60m_n16"
+
+    def test_a_workload_has_a_mean_of_its_own(self, resources):
+        repo, coll = resources
+        coll.find_one.return_value = {
+            "_id": RES_ID, "mean_duration_sec": 1400.0, "duration_samples": 9}
+
+        repo.record_duration(RES_ID, 21.0, workload=self.KEY)
+
+        written = coll.update_one.call_args.args[1]["$set"]
+        stored = written[f"durations.{self.KEY}"]
+        assert stored["mean"] == 21.0 and stored["samples"] == 1
+        assert "mean_duration_sec" in written, "the worker-wide mean is still published"
+
+    def test_it_is_weighted_with_its_own_history_only(self, resources):
+        repo, coll = resources
+        coll.find_one.return_value = {
+            "_id": RES_ID, "mean_duration_sec": 1400.0,
+            "durations": {self.KEY: {"mean": 100.0, "samples": 4, "at": utc_now()}}}
+
+        assert repo.record_duration(RES_ID, 200.0, workload=self.KEY) == pytest.approx(120.0)
+
+    def test_a_stale_mean_is_replaced_not_averaged(self, resources):
+        """Sampled once a day, an average would take ten days to forget."""
+        repo, coll = resources
+        old = utc_now() - timedelta(seconds=DURATION_FRESH_SEC + 60)
+        coll.find_one.return_value = {
+            "_id": RES_ID, "durations": {self.KEY: {"mean": 1000.0, "samples": 9, "at": old}}}
+
+        assert repo.record_duration(RES_ID, 130.0, workload=self.KEY) == 130.0
+
+    @pytest.mark.parametrize("worker", [
+        {},
+        {"mean_duration_sec": 50.0},
+        {"durations": {"wother": {"mean": 50.0, "at": utc_now()}}},
+        {"durations": {"wsrc_60m_n16": {
+            "mean": 50.0, "at": utc_now() - timedelta(days=2)}}},
+    ])
+    def test_unknown_for_the_workload_is_unknown(self, worker):
+        assert duration_estimate(worker, self.KEY) is None
+
+    def test_a_fresh_measurement_is_the_estimate(self):
+        worker = {"durations": {self.KEY: {"mean": 50.0, "at": utc_now()}}}
+
+        assert duration_estimate(worker, self.KEY) == 50.0
+
+    def test_the_fastest_for_this_job_is_offered_first(self, resources):
+        repo, coll = resources
+        now = utc_now()
+        coll.find.return_value = [
+            {"name": "a", "mean_duration_sec": 5.0,
+             "durations": {self.KEY: {"mean": 90.0, "at": now}}},
+            {"name": "b", "mean_duration_sec": 900.0,
+             "durations": {self.KEY: {"mean": 30.0, "at": now}}},
+            {"name": "c", "mean_duration_sec": 1.0},
+        ]
+
+        offered = repo.find_free_by_host(HOST_ID, prefer_fastest=True, workload=self.KEY)
+
+        # Unmeasured on this job first: one run gives it a number.
+        assert [worker["name"] for worker in offered] == ["c", "b", "a"]
+
+    def test_the_reservation_keeps_what_its_job_should_take(self, resources):
+        repo, coll = resources
+
+        repo.reserve(RES_ID, ObjectId(), "attempt", expected_sec=21.0)
+
+        assert coll.find_one_and_update.call_args.args[1]["$set"]["expected_sec"] == 21.0

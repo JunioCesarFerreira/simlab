@@ -6,21 +6,24 @@ NSGA-III implementations integrated as benchmarks:
   * nsga3_deap_func   — DEAP's selNSGA3
   * nsga3_pymoo_func  — pymoo's NSGA3
 
-Metrics: Hypervolume (HV), Generational Distance (GD), Inverted GD (IGD),
-Coverage C(A, B) where A is the implementation's Pareto front and B is
-the reference front sampled from the analytical DTLZ2 surface.
+Metrics, on the non-dominated set of each final population: Hypervolume (HV),
+Generational Distance (GD), Inverted GD (IGD) and IGD+, against the
+analytical DTLZ2 front. Each method is compared with the native one by the
+two-sided Mann–Whitney U test on the per-run IGD, with the Â12 effect size.
 
 This is the standalone counterpart of the SimLab platform's evaluation —
 no MongoDB, no master-node, just three algorithms on the same problems
 with shared metrics so the comparison is apples-to-apples.
 
 Usage:
-    python regenerate_table3.py [--seeds 5] [--pop-size 92] [--generations 400] \
+    python regenerate_table3.py [--seeds 5] [--generations 400] \
+                                [--pop-size N] [--divisions P] \
                                 [--out results/table3.csv]
 """
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import time
 from pathlib import Path
@@ -32,13 +35,15 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from metrics import (
-    coverage,
+    a12_lower,
     dtlz2_reference_front,
     generational_distance,
     hypervolume,
+    igd_plus,
     inverted_generational_distance,
+    mann_whitney_pvalue,
+    non_dominated,
     summary,
-    wilcoxon_pvalue,
 )
 from run_native import run_native
 
@@ -73,16 +78,40 @@ TABLE3_GRID: list[tuple[int, int]] = [
     (6, 14),
 ]
 
+#: Das & Dennis divisions per number of objectives. M = 3 and M = 5 are the
+#: settings of Deb & Jain (2014) for DTLZ; the others are chosen the same way,
+#: for a number of directions H of the same order. A single setting (12
+#: divisions, 92 individuals) gave 455 to 6188 directions for M >= 4, more than
+#: the population, and NSGA-III's niching then has a direction per individual
+#: at best.
+DIVISIONS: dict[int, int] = {2: 99, 3: 12, 4: 7, 5: 6, 6: 4}
 
-def evaluate_front(front: np.ndarray, M: int) -> dict[str, float]:
+
+def reference_directions(M: int, divisions: int) -> int:
+    """H, the number of Das & Dennis directions: C(p + M − 1, M − 1)."""
+    return math.comb(divisions + M - 1, M - 1)
+
+
+def population_for(M: int, divisions: int) -> int:
+    """Deb & Jain's rule: the smallest multiple of four above H."""
+    return (reference_directions(M, divisions) // 4 + 1) * 4
+
+
+#: HV reference point: 1.1 × the DTLZ2 nadir (1, …, 1), the same for every
+#: method and seed, as the platform's /hv-gd. One derived from each run's own
+#: worst point made HV incomparable between the rows of the table.
+HV_REFERENCE = 1.1
+
+
+def evaluate_front(population: np.ndarray, M: int) -> dict[str, float]:
+    """Indicators of the non-dominated set of a final population."""
+    front = non_dominated(population)
     ref = dtlz2_reference_front(M, n_points=2000)
-    # Reference point for HV: slightly beyond the worst observed value per dim
-    worst = front.max(axis=0) + 0.1
     return {
-        "hv": hypervolume(front, worst),
+        "hv": hypervolume(front, np.full(M, HV_REFERENCE)),
         "gd": generational_distance(front, ref),
         "igd": inverted_generational_distance(front, ref),
-        "coverage": coverage(front, ref),
+        "igd_plus": igd_plus(front, ref),
     }
 
 
@@ -90,9 +119,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seeds", type=int, default=5,
                         help="Number of independent seeds per (method, M, k) cell (default: 5)")
-    parser.add_argument("--pop-size", type=int, default=92)
     parser.add_argument("--generations", type=int, default=400)
-    parser.add_argument("--divisions", type=int, default=12)
+    parser.add_argument("--pop-size", type=int, default=None,
+                        help="One population size for every M (default: Deb & Jain's rule per M)")
+    parser.add_argument("--divisions", type=int, default=None,
+                        help="One number of divisions for every M (default: DIVISIONS per M)")
     parser.add_argument("--methods", nargs="+",
                         default=["native", "deap", "pymoo"],
                         choices=["native", "deap", "pymoo"])
@@ -118,23 +149,25 @@ def main() -> None:
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Statistical significance is reported against the SimLab native method.
+    # Each method is compared with the SimLab native one.
     BASELINE = "nsga3_func"
-    KEYS = ("hv", "gd", "igd", "coverage")
+    KEYS = ("hv", "gd", "igd", "igd_plus")
 
     rows: list[dict] = []
     for M, k in TABLE3_GRID:
+        divisions = args.divisions if args.divisions is not None else DIVISIONS[M]
+        pop_size = args.pop_size if args.pop_size is not None else population_for(M, divisions)
         cell_rows: list[dict] = []
-        cell_igd: dict[str, list[float]] = {}   # per-seed IGD for the paired test
+        cell_igd: dict[str, list[float]] = {}   # per-run IGD for the comparison
         for method, runner in runners.items():
             per_seed: dict[str, list[float]] = {key: [] for key in KEYS}
             t0 = time.time()
             for seed_offset in range(args.seeds):
                 front = runner(
                     M=M, k=k,
-                    pop_size=args.pop_size,
+                    pop_size=pop_size,
                     n_generations=args.generations,
-                    divisions=args.divisions,
+                    divisions=divisions,
                     seed=42 + seed_offset,
                 )
                 m = evaluate_front(np.asarray(front), M)
@@ -145,11 +178,14 @@ def main() -> None:
             s = {key: summary(per_seed[key]) for key in KEYS}
             cell_rows.append({
                 "M": M, "k": k, "method": method,
+                "divisions": divisions,
+                "directions": reference_directions(M, divisions),
+                "pop_size": pop_size,
                 "mean_hv": round(s["hv"]["mean"], 3), "std_hv": round(s["hv"]["std"], 3),
                 "mean_gd": round(s["gd"]["mean"], 4), "std_gd": round(s["gd"]["std"], 4),
                 "mean_igd": round(s["igd"]["mean"], 4), "std_igd": round(s["igd"]["std"], 4),
-                "mean_coverage": round(s["coverage"]["mean"], 3),
-                "std_coverage": round(s["coverage"]["std"], 3),
+                "mean_igd_plus": round(s["igd_plus"]["mean"], 4),
+                "std_igd_plus": round(s["igd_plus"]["std"], 4),
                 "elapsed_s": round(elapsed, 1),
                 "n_seeds": args.seeds,
             })
@@ -157,15 +193,18 @@ def main() -> None:
                   f"HV={s['hv']['mean']:.3f}±{s['hv']['std']:.3f}  "
                   f"GD={s['gd']['mean']:.4f}  "
                   f"IGD={s['igd']['mean']:.4f}±{s['igd']['std']:.4f}  "
-                  f"Cov={s['coverage']['mean']:.3f}  ({elapsed:.1f}s)")
+                  f"IGD+={s['igd_plus']['mean']:.4f}  ({elapsed:.1f}s)")
 
-        # Paired Wilcoxon (per-seed IGD) of each method vs the native baseline.
+        # Unpaired: the runs of two methods share nothing but a seed number.
         for row in cell_rows:
             if BASELINE in cell_igd and row["method"] != BASELINE:
-                p = wilcoxon_pvalue(cell_igd[row["method"]], cell_igd[BASELINE])
+                p = mann_whitney_pvalue(cell_igd[row["method"]], cell_igd[BASELINE])
+                a12 = a12_lower(cell_igd[row["method"]], cell_igd[BASELINE])
                 row["igd_p_vs_native"] = round(p, 4) if p == p else float("nan")
+                row["igd_a12_vs_native"] = round(a12, 3) if a12 == a12 else float("nan")
             else:
                 row["igd_p_vs_native"] = float("nan")
+                row["igd_a12_vs_native"] = float("nan")
         rows.extend(cell_rows)
 
     df = pd.DataFrame(rows)

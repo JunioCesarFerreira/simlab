@@ -21,10 +21,15 @@ def _seconds(value: Any) -> Optional[float]:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
-def snapshot_loads(host_repo: Any, *, now: Optional[datetime] = None) -> list[HostLoad]:
-    """Current per-host capacity and occupancy."""
+def snapshot_loads(
+    host_repo: Any, *, now: Optional[datetime] = None, workload: Optional[str] = None
+) -> list[HostLoad]:
+    """Current per-host capacity and occupancy, with the held times of ``workload``."""
+    rows = (host_repo.inventory_snapshot(workload=workload) if workload is not None
+            else host_repo.inventory_snapshot())
     loads: list[HostLoad] = []
-    for document in host_repo.inventory_snapshot():
+    for document in rows:
+        occupied = document.get("occupied_workers") or ()
         loads.append(HostLoad(
             host_id=document["_id"],
             name=str(document.get("name") or "?"),
@@ -41,9 +46,10 @@ def snapshot_loads(host_repo: Any, *, now: Optional[datetime] = None) -> list[Ho
             free_durations=tuple(
                 _seconds(d) for d in document.get("free_durations") or ()),
             occupied=tuple(
-                (_seconds(w.get("mean_duration_sec")),
+                (_seconds(w.get("expected_sec")),
                  elapsed_since(w.get("started_at"), now=now))
-                for w in document.get("occupied_workers") or ()),
+                for w in occupied),
+            occupied_durations=tuple(_seconds(w.get("mean_duration_sec")) for w in occupied),
         ))
     return loads
 

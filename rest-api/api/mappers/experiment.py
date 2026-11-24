@@ -17,18 +17,24 @@ from api.domain.generation import GenerationDto
 from api.mappers.helpers import oid_to_str, str_to_oid, pop_id, dict_oid_to_str, dict_str_to_oid
 
 
+def _pareto_item(item: dict) -> dict:
+    out = {"chromosome": item.get("chromosome", {}), "objectives": item.get("objectives", {})}
+    # Carried when present: it is what tells a penalty from a measurement.
+    if item.get("evaluation") is not None:
+        out["evaluation"] = item["evaluation"]
+    return out
+
+
 def _pareto_from_mongo(pf: Optional[list[dict]]) -> Optional[list[ParetoFrontItemDto]]:
     if not pf:
         return None
-    return [{"chromosome": item.get("chromosome", {}), "objectives": item.get("objectives", {})}
-            for item in pf]
+    return [_pareto_item(item) for item in pf]  # type: ignore[misc]
 
 
 def _pareto_to_mongo(pf: Optional[list[ParetoFrontItemDto]]) -> Optional[list[dict]]:
     if not pf:
         return None
-    return [{"chromosome": item.get("chromosome", {}), "objectives": item.get("objectives", {})}
-            for item in pf]
+    return [_pareto_item(dict(item)) for item in pf]
 
 
 def _analysis_files_to_str(d: dict) -> dict[str, str]:
@@ -105,6 +111,14 @@ def firmware_snapshot_from_mongo(fw: Optional[dict]) -> Optional[FirmwareSnapsho
     return dto
 
 
+def _parameters_from_mongo(parameters: dict) -> dict:
+    """``algorithm`` is always present on the way out: a batch written straight
+    to MongoDB has none, and readers iterate over it."""
+    if not parameters:
+        return parameters
+    return {**parameters, "algorithm": parameters.get("algorithm") or {}}
+
+
 def experiment_from_mongo(doc: dict) -> ExperimentDto:
     id_str, d = pop_id(doc)
     return {
@@ -115,10 +129,11 @@ def experiment_from_mongo(doc: dict) -> ExperimentDto:
         "created_time": d.get("created_time"),
         "start_time": d.get("start_time"),
         "end_time": d.get("end_time"),
-        "parameters": d.get("parameters", {}),
+        "parameters": _parameters_from_mongo(d.get("parameters", {})),
         "source_repository_options": dict_oid_to_str(d.get("source_repository_options", {})),
         "data_conversion_config": d.get("data_conversion_config", {}),
         "pareto_front": _pareto_from_mongo(d.get("pareto_front")),
+        "pareto_front_validity": d.get("pareto_front_validity"),
         "analysis_files": _analysis_files_to_str(d.get("analysis_files", {})),
         "runtime_metrics": _runtime_metrics_from_mongo(d.get("runtime_metrics")),
         "firmware_snapshot": firmware_snapshot_from_mongo(d.get("firmware_snapshot")),

@@ -16,7 +16,7 @@ JVMs behind, and releasing their containers would both throw away work and
 risk placing a second simulation onto a container that is already busy.
 
 So each held container is asked a question before anything is decided, and the
-three possible answers are kept apart:
+possible answers are kept apart:
 
 ===========================  ==========================  ==========================
 Simulation                   Probe                       Action
@@ -24,12 +24,13 @@ Simulation                   Probe                       Action
 already finished or failed   —                           release the container
 non-terminal, no PID         —                           fail it, release
 non-terminal                 the process is alive        **adopt**: leave it be
-non-terminal                 the process is gone         fail it, release
+non-terminal                 gone, result collectable    **adopt**: collect it
+non-terminal                 gone, nothing to collect    fail it, release
 non-terminal                 container unreachable       leave it be, fail nothing
 ===========================  ==========================  ==========================
 
 The last row is the specification's requirement that losing contact is not the
-same as the run failing. The fourth is why the probe exists at all.
+same as the run failing. The two **adopt** rows are why the probe exists at all.
 
 Adoption hands the run to ``on_adopt``, which resumes *following* it — so a
 simulation that outlived a restart has its result collected when it finishes

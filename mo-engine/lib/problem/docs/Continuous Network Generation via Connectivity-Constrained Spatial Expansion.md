@@ -11,7 +11,8 @@ It is designed to generate **connected geometric graphs** with good spatial cove
 Let:
 
 * $\Omega = [x_{\min}, x_{\max}] \times [y_{\min}, y_{\max}] \subset \mathbb{R}^2$ be a rectangular region;
-* $N \in \mathbb{Z}_+$ be the desired number of points;
+* $N \in \mathbb{Z}_+$ be the desired number of points, the sink not included;
+* $\sigma \in \Omega$ be the sink;
 * $r > 0$ be a fixed communication radius.
 
 For a finite set of points $P \subset \Omega$, define the induced geometric graph:
@@ -25,11 +26,11 @@ $$
 
 Construct a set of points
 $$
-P = {p_1, \dots, p_N} \subset \Omega
+P = \{p_1, \dots, p_N\} \subset \Omega
 $$
 such that:
 
-1. The graph $G(P)$ is **connected**;
+1. The graph $G(\{\sigma\} \cup P)$ is **connected**;
 2. Points are **spatially well distributed**, i.e., new points tend to maximize their minimum distance to existing points;
 3. Connectivity is preserved at every insertion step.
 
@@ -39,15 +40,17 @@ This is a **constructive heuristic** balancing coverage and connectivity in cont
 
 ## 3. Initialization
 
-The algorithm begins with a single root point placed at the geometric center of the region:
+The algorithm begins with a single root point, the sink (the geometric center of the region is used only when no sink is given):
 $$
-p_1 = \left( \frac{x_{\min} + x_{\max}}{2}, \frac{y_{\min} + y_{\max}}{2} \right).
+p_0 = \sigma .
 $$
 
-At iteration $k$, the current point set is:
+At iteration $k$, the working point set includes the root:
 $$
-P_k = {p_1, \dots, p_k}.
+P_k = \{p_0, p_1, \dots, p_k\}.
 $$
+
+The root is removed from what the function returns.
 
 ---
 
@@ -61,13 +64,13 @@ Connectivity is tested using a breadth-first search (BFS) over the adjacency rel
 
 ## 5. Incremental Point Generation Strategy
 
-While $|P_k| < N$, the algorithm attempts to insert a new point according to the following prioritized strategy.
+While $k < N$, the algorithm attempts to insert a new point according to the following prioritized strategy.
 
 ---
 
 ### 5.1 Candidate Generation Around Anchors
 
-For each insertion step, the algorithm performs up to $T$ trials (where $T =$ `max_attempts`):
+For each insertion step, the algorithm performs $T$ trials (where $T =$ `max_attempts`, default 100):
 
 1. Randomly select an **anchor point** $a \in P_k$;
 2. Sample:
@@ -79,7 +82,7 @@ For each insertion step, the algorithm performs up to $T$ trials (where $T =$ `m
    p = a + d \cdot (\cos \theta, \sin \theta).
    $$
 
-The candidate is accepted for evaluation only if $p \in \Omega$ and $G(P_k \cup {p})$ remains connected.
+The candidate is accepted for evaluation only if $p \in \Omega$ and $G(P_k \cup \{p\})$ remains connected.
 
 ---
 
@@ -107,7 +110,7 @@ If no valid candidate satisfying the above constraints is found:
 2. If multiple components exist, two components $C_1$ and $C_2$ are selected;
 3. A new point is inserted near the midpoint between randomly chosen points from each component:
    $$
-   m = \frac{p_1 + p_2}{2}, \quad p_1 \in C_1,; p_2 \in C_2;
+   m = \frac{a + b}{2}, \quad a \in C_1, \; b \in C_2;
    $$
 4. A small perturbation orthogonal to the connecting direction is applied;
 5. The resulting point is clipped to remain inside $\Omega$.
@@ -118,7 +121,7 @@ This step explicitly **repairs connectivity** by bridging components.
 
 ## 7. Final Fallback: Random Local Insertion
 
-If component bridging is not applicable, the algorithm inserts a point uniformly at random within distance $r$ of a randomly chosen anchor:
+If component bridging is not applicable, the algorithm inserts a point at a random angle and distance from a randomly chosen anchor, clipped to $\Omega$:
 $$
 p = a + d \cdot (\cos \theta, \sin \theta),
 \quad d \sim \mathcal{U}(0, r).
@@ -130,16 +133,20 @@ This guarantees progress and termination.
 
 ## 8. Final Connectivity Enforcement
 
-After all $N$ points are generated, a final connectivity check is performed.
+After all $N$ points are generated, a final connectivity check is performed, with the root included.
 
 If $G(P)$ is not connected:
 
 * The algorithm iteratively inserts midpoint nodes between disconnected components until global connectivity is achieved.
 
-This ensures the output always satisfies:
+This ensures:
 $$
-G(P) \text{ is connected}.
+G(\{\sigma\} \cup P) \text{ is connected}.
 $$
+
+$G(P)$ alone may be disconnected, since relays can be linked only through the
+sink. The repair would add points beyond $N$; growth from a root inside
+$\Omega$ keeps the graph connected, so it is a safety net.
 
 ---
 
@@ -164,7 +171,7 @@ Let $N$ be the number of generated points.
 
 Overall worst-case complexity:
 $$
-O(N^3) \quad \text{(naive connectivity checks)}.
+O(T N^3) \quad \text{(naive connectivity checks)}.
 $$
 
 In practice, $T$ is small and $N$ is moderate, making the method effective for initialization purposes.
@@ -173,7 +180,7 @@ In practice, $T$ is small and $N$ is moderate, making the method effective for i
 
 ## 11. Key Properties
 
-* **Guaranteed connectivity** of the final point set;
+* **Guaranteed connectivity** of the final point set with the sink;
 * **Bias toward uniform spatial coverage**;
 * **No optimality guarantees**, by design;
 * **Well suited as a feasibility generator**, not as a final optimizer.
@@ -191,21 +198,22 @@ It is suitable for inclusion in a **Methods** or **Algorithm Description** secti
 
 * Target number of points $N$
 * Rectangular region $\Omega \subset \mathbb{R}^2$
+* Sink $\sigma \in \Omega$
 * Communication radius $r$
 * Maximum number of attempts per insertion $T$
 
 **Output:**
 
-* A connected set of points $P \subset \Omega$ with $|P| = N$
+* A set of points $P \subset \Omega$ with $|P| = N$, connected together with $\sigma$
 
 ### Pseudo-code
 
 ```
-Algorithm ContinuousNetworkGeneration(N, Ω, r, T)
+Algorithm ContinuousNetworkGeneration(N, Ω, σ, r, T)
 
-1:  Initialize P ← { center(Ω) }
+1:  Initialize P ← { σ }
 
-2:  while |P| < N do
+2:  while |P| < N + 1 do
 3:      best_candidate ← null
 4:      best_score ← 0
 
@@ -237,7 +245,7 @@ Algorithm ContinuousNetworkGeneration(N, Ω, r, T)
 27:             p ← midpoint(p₁, p₂) with small random perturbation
 28:         else
 29:             Select anchor a ∈ P
-30:             Sample p uniformly within distance r of a
+30:             Sample angle in [0, 2π) and distance in [0, r] from a
 31:         end if
 32:         Clip p to Ω
 33:         P ← P ∪ {p}
@@ -251,7 +259,7 @@ Algorithm ContinuousNetworkGeneration(N, Ω, r, T)
 40:     end while
 41: end if
 
-42: return P
+42: return P without σ
 ```
 
 The implementation is available in `lib.util.random_network`, in the function `continuous_network_gen`.

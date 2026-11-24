@@ -39,6 +39,710 @@ reliability of the ranking is 0.70 to 0.83.
 
 ---
 
+## [Unreleased] — The documentation says what the code does
+
+### Fixed
+
+- **Docs that still described the behaviour before these fixes.** The READMEs
+  no longer say the GUI labels the duration in seconds; they list `batch` and
+  the scalability benchmark among the strategies, and say a batch's benchmark
+  is evaluated by the master-node. RUNTIME_METRICS no longer says the sweep
+  fails to collect `unavailable`/`failed` runs. FIRMWARE_METRICS says an
+  uncomputable metric is named in `system_message`. SYNTHETIC_MODE says an
+  invalid synthetic configuration closes its generation at once. The status
+  table of the NSGA metrics audit says the CLIs read objectives by name and
+  measure the set `/hv-gd` measures. The nginx README no longer says the
+  scripts' API-key defaults differ.
+- **Smaller gaps.** The master-node layout lists `scheduler/workload.py`;
+  `pylib/README.md` lists `trajectory.py` and says which mote is the root
+  when none runs `sink.c`. The problem READMEs describe P4's random
+  generation and mutation as the code does. PROVENANCE_GUIDE names
+  `process_experiment` instead of a line number.
+
+---
+
+## [Unreleased] — The request examples run
+
+### Fixed
+
+- **`post-nsga3-experiment-p3.json` produces the objectives it declares** and
+  gives its seed under `random_seeds`; the engine read neither. A test now runs
+  every `post-*` example through the engine's checks.
+
+---
+
+## [Unreleased] — The offline indicators equal the GUI's
+
+### Fixed
+
+- **The CLIs measure the set `/hv-gd` measures.** They measured each
+  generation's offspring while the API and the GUI default to survivors.
+  `--population` (`survivors` by default, `offspring`, `archive`) follows the
+  endpoint, and the generations now publish their `survivors`.
+- **Objectives are read by name.** Stored vectors were paired with
+  `--objectives` by position: another order, or a subset, gave wrong numbers
+  without an error. An unknown name stops the tool.
+- **A synthetic experiment is measured against its analytical front by
+  default**, under the endpoint's conditions, and a permuted request is measured
+  in the declared order, aligned with that front.
+- **`lib/stats.py` computes the 95% interval with Student's t**; the normal
+  quantile understated it by 31% with five runs.
+
+Checked on three NSGA-III runs (engine, API and disposable MongoDB): every
+series of `compute_hv_gd.py` equals `/hv-gd`'s, for the full set and for a
+reordered subset.
+
+---
+
+## [Unreleased] — Host tools work from where they are run
+
+### Fixed
+
+- **`firmware/upload-firmware.py` runs from any directory.** It looked for the
+  repositories in the working directory and failed with `Directory ... not
+  found` anywhere but `firmware/`.
+- **The host-side utilities reach MongoDB by default.** Their default URI named
+  the replica set (`?replicaSet=rs0`), whose member address only resolves
+  inside Docker; they default to `?directConnection=true`, as `gridfs_compact.py`
+  already did. The services keep theirs.
+- `run_pareto_analysis.py` defaults to the API key of `docker-compose.yaml`, as
+  the other scripts do.
+
+---
+
+## [Unreleased] — A strategy that cannot start says why
+
+### Fixed
+
+- **An experiment whose strategy fails to start says why.** It ended in `Error`
+  with no message and no end time, so the reason was only in the engine's log
+  and the telemetry skipped it. The experiment now carries the exception in
+  `system_message` and an `end_time`.
+
+---
+
+## [Unreleased] — The API serves topologies and guards its writes
+
+### Fixed
+
+- **`GET /files/simulations/{id}/topology` serves the picture.** It called
+  `simulation_repo.get_topology_pic_file_id`, which did not exist, and answered
+  500; the tests mocked it. The repository finds the picture on the
+  simulation's individual.
+- **A running experiment cannot be put back to `Waiting`.** The engine started
+  it a second time. A client may cancel what waits or runs and put what ended
+  back to `Waiting`; `Running`, `Done` and `Error` are the engine's. The write
+  is conditional on the current status.
+- **Writes are limited to what a client owns.** `PUT /experiments/{id}` took any
+  field, the firmware snapshot included; it renames. `PUT /simulations/{id}`
+  could rewrite a result; it annotates (`system_message`). The status of a
+  generation or simulation must be one of the five.
+- **A benchmark's plan is returned** on reading an experiment
+  (`parameters.benchmark`), and still taken only from `POST /scalability/`.
+
+---
+
+## [Unreleased] — Telemetry retries, and averages only numbers
+
+### Fixed
+
+- **The sweep retries `unavailable` and `failed` collections.** Its query did
+  not project `runtime_metrics`, so it never forced past the claim, which
+  refuses an existing block: those runs were picked up every pass and never
+  collected.
+- **A NaN sample no longer makes an average NaN.** It stays in the raw
+  artifact and is left out of the summary, which counts it in
+  `non_finite_samples`.
+
+---
+
+## [Unreleased] — A run that delivered nothing is a result
+
+### Fixed
+
+- **A run in which no report reached the root no longer fails at collection.**
+  Its log converted to a CSV of one blank line, which reading back rejected
+  (`EmptyDataError`): the run went through the collection retry, ended in
+  `Error` with `unfetched_result`, and its testlog was not kept. The converter
+  writes an empty file, and the run is published `Done` with its counts and
+  `node_coverage` at 0, the other metrics NaN, and its testlog kept.
+- **A metric that could not be computed is named.** It is still stored as NaN,
+  and the simulation's `system_message` lists it.
+- **A synthetic simulation with an invalid configuration closes its
+  generation** at once, instead of after the health cycle's 300 s grace.
+
+---
+
+## [Unreleased] — P3 repairs the degree
+
+### Fixed
+
+- **A P3 mote short of `g` neighbours gets them.** After the k-coverage and
+  connectivity repairs, the operators switch on the nearest candidates within
+  reach of each such mote, until none is short or none is left. Every candidate
+  switched on is next to a connected mote, so coverage and connectivity hold. A
+  mote with too few candidates around it stays infeasible and is penalised, as
+  before. The stored P3 runs (g = 1) are unaffected.
+
+---
+
+## [Unreleased] — Mobile motes move as their paths say
+
+### Fixed
+
+- **Each mobile mote repeats its own path for the whole simulation.** Cooja's
+  Mobility plugin replays the positions file with the period of its longest
+  trajectory, so a mote with a shorter path stood at its end until the longest
+  one finished (in the shared scenario, a 43-s path waited ~70 s per cycle).
+  The file spans the least common multiple of the periods when that is shorter
+  than the simulation, and the whole simulation otherwise: about 285 KB stored
+  per simulation instead of 2 KB for the stored scenarios.
+- **`is_closed` is honoured.** A closed path whose segments do not end where
+  they begin returns to its start in a straight line, in the coverage sampling
+  and in the simulation (`pylib/trajectory.py`). Five stored P2 mobile nodes are
+  closed and open; the others are ellipses, which close by themselves.
+
+The CSC files of 622 stored simulations regenerate byte-identical, and the
+first pass of every mobile mote in their positions files is unchanged.
+
+---
+
+## [Unreleased] — The GUI launches P4 and labels what it shows
+
+### Fixed
+
+- **P4 can be designed and launched in the GUI.** The export wrote none of the
+  fields P4 needs. The sink is the base, the candidates are the stops and the
+  targets the sensor motes; a form takes the scalars. The export writes the
+  sojourns (base first, any stop reachable from any other, the motes each stop
+  sees), and a P4 chromosome is exported with the base at both ends. Import does
+  the reverse. `gui/simlab/src/services/__tests__/fixtures/p4-export.json` is
+  checked by the GUI's tests and run by the engine's.
+- **P3's `g`** has a field, exported as `g_required`.
+- **Simulated duration is labelled in minutes**, which it is: launch wizard,
+  comparison table and benchmark form said seconds.
+- **The totals count generation 0.** *Completed generations* read 11 / 10 at the
+  end of a 10-step run, and *expected* simulations was one population short.
+- The *pm_tau* hint says what it is: the probability that a child's whole
+  dwell-time vector gets noise.
+
+---
+
+## [Unreleased] — P4 runs
+
+### Fixed
+
+- **P4 accepts JSON.** `assert_problem` required tuples, and JSON and BSON give
+  lists, so every P4 experiment created through the API failed at start.
+- **The mobile sink is the RPL root.** The Cooja builder made the first fixed
+  mote, a sensor, mote 1, which runs the root firmware and whose lines the log
+  reader takes as the root's. The mote whose source is `sink.c` is mote 1 now,
+  fixed or mobile. For P0–P3 the files are byte-identical: 622 stored
+  simulations regenerated with the old and the new code. In Cooja, a P4 run's
+  mobile root received reports from all 12 sensors of the example.
+- **Routes stay on the mobility graph.** The repair appended the base after the
+  first invalid move, even where that last move did not exist. It returns to
+  the base by the shortest walk over the adjacency, within `max_route_length`.
+- **Sojourn ids must equal their indices**, as the route assumed; a mismatch is
+  refused instead of mapping genes to the wrong stops. `max_route_length` and
+  `tau_bounds` are validated.
+- **Buffer and data rate are enforced.** A route that never collects a mote, or
+  lets a buffer overflow between two collections, is penalised instead of
+  simulated. Energy stays a measured objective, not a constraint.
+- The request example `debug/requests/post-nsga3-experiment-p4.json` is a valid
+  P4 instance, with `random_seeds`.
+
+---
+
+## [Unreleased] — Table 3 measures what separates the methods
+
+### Changed
+
+- **IGD+ replaces Coverage.** Coverage was C(A, R) against the true DTLZ2
+  front, 0 by construction: no feasible point dominates a Pareto-optimal one.
+- **Methods are compared with an unpaired test.** `igd_p_vs_native` is the
+  two-sided Mann–Whitney U and `igd_a12_vs_native` the Vargha–Delaney Â12; the
+  paired Wilcoxon paired runs that share only a seed number.
+- **Population and divisions depend on M**, as in Deb & Jain: the population is
+  the smallest multiple of four above the number of directions. One setting
+  (12 divisions, 92 individuals) gave 455 to 6188 directions for M ≥ 4.
+
+---
+
+## [Unreleased] — P3 enforces its constraints
+
+### Fixed
+
+- **An infeasible P3 individual is penalised instead of simulated.** The
+  adapter had no penalty, so a mask cut off from the sink or leaving a target
+  under-covered ran and competed on its objectives. It now gets
+  `1e9 × (1 + deficit)`, as in P1 and P2.
+- **`g_required` is read** (optional, default 1, the sink counts as a
+  neighbour); a mote with fewer neighbours makes the individual infeasible.
+- **The repairs no longer undo each other.** The k-coverage repair ran after the
+  connectivity repair and could switch on a sensor out of reach. It runs first
+  now; both only switch candidates on.
+- **The random generation judges connectivity with the sink.** Two sensors
+  joined only through the sink were rejected, and a group out of its reach was
+  accepted.
+
+The stored P3 runs are unaffected: all 639 distinct individuals of the two P3
+experiments, and every item of their fronts, are feasible under the new rule.
+
+---
+
+## [Unreleased] — Table 3 compares the three NSGA-III alike
+
+### Fixed
+
+- **`regenerate_table3.py` runs.** It imported `deap.tools._hypervolume`,
+  which DEAP 1.4.4 does not have. HV is now exact with `moocore`, as on the
+  platform.
+- **The three runners vary alike.** pymoo mutated 1/n² of the variables
+  (`PM(prob=1/n)` is per individual) instead of 1/n, picked parents at random
+  and removed duplicates; DEAP had no mating selection. All three now use a
+  binary tournament on rank, SBX 0.9 per pair and 0.5 per variable, mutation
+  1/n per variable, and keep duplicates.
+- **The three are measured on the same set.** pymoo returned part of the
+  first front of the combined population, taken before survival (127 points
+  for a population of 92 at M = 5); the others, the whole population. Each
+  runner returns its final population, and the indicators use its
+  non-dominated set.
+- **HV is comparable between methods.** Its reference point came from each
+  run's own worst point; it is 1.1 × the DTLZ2 nadir for all, as `/hv-gd`.
+
+---
+
+## [Unreleased] — The baseline runs one simulation per container
+
+### Fixed
+
+- **The baseline no longer sends a simulation to a busy container.** When any
+  run ended, the next simulation went to the next container in the round-robin,
+  busy or not. Two JVMs then shared a directory: reproduced with real Cooja runs,
+  3 of 5 logs differed from the same bundle run alone. Each container now takes
+  the next simulation only once its own has ended.
+- **A run that hits `SIM_TIMEOUT_SEC` is stopped.** The limit ended the local
+  `ssh` only, and the JVM ran on into the next simulation and past the end of
+  the script. It is applied in the container now, and a failed run is followed
+  by killing what is left there.
+- **A failed run no longer gets the previous run's log.** The container is
+  cleaned before each run, as the master-node does, and each run writes its exit
+  code to `.exit`; the console counts the simulations that exited 0 with a log.
+- **`docker-compose.baseline.yaml` publishes SSH on 127.0.0.1 only.** The login
+  is root/root, and it was reachable on every interface.
+- `prepare_workload.py --duration` is described in minutes, which it is.
+
+---
+
+## [Unreleased] — A batch can be created through the API
+
+### Fixed
+
+- **`POST /experiments/` creates a batch.** The model dropped
+  `parameters.chromosomes` and `parameters.random_seed` and required an
+  `algorithm` that batch does not read, so the strategy could only be used by
+  writing to MongoDB. For the other strategies `algorithm` is still required and
+  the two keys are still dropped.
+- **A batch can be read back.** `GET /experiments/{id}` and `/full` left both
+  keys out, and answered 500 for a batch stored without `algorithm`, as did the
+  campaign holding it. The answer now always has `algorithm`. Scalability
+  benchmarks also show their `random_seed`.
+
+### Added
+
+- **Batch input is checked when created** (`pylib/batch_input.py`): a list, gene
+  shapes per problem, the seed and a source for each MAC gene. The engine read a
+  missing mask as no relays and a bit of 2 as not installed, and found a mask of
+  the wrong length only with the generation open.
+
+---
+
+## [Unreleased] — An empty algorithm block runs on the defaults
+
+### Fixed
+
+- **`parameters.algorithm: {}` no longer fails at start** with
+  `AttributeError: ... '_rng'`. `build_adapter` handed the random generator
+  over only with a non-empty configuration; it always does now.
+
+---
+
+## [Unreleased] — Cancelled stays cancelled
+
+### Fixed
+
+- **Cancelling a scalability benchmark stops it.** It never read the status,
+  ran every wave and wrote `Done` over `Cancelled`.
+- **No strategy writes a status over `Cancelled`.** A cancellation that came
+  while a generation was being processed, or while a run was resuming, was
+  overwritten. The engine's status writes are now conditional
+  (`update_unless_cancelled`).
+- **A deleted experiment stops too**, instead of waiting for a generation that
+  will never close, or creating more.
+
+---
+
+## [Unreleased] — The mo-engine releases what finished experiments held
+
+### Fixed
+
+- **A finished experiment gives back its threads and connections.** Its change
+  streams never returned. They now end within about a second of the strategy
+  stopping (`watch_collection(should_stop=...)`), also when a start fails. A
+  strategy that finished before it began watching is no longer restarted by it.
+- **Topology pictures are drawn by two threads**, not by one per individual,
+  which kept every pending canvas in memory at once.
+- Measured with 50 experiments in a row: 8 threads and 6 MongoDB connections
+  at the end (before: 406 and 306), 308 MB (before: 1.8 GB). A burst of 80
+  that reached 4 GB stays at 352 MB.
+
+---
+
+## [Unreleased] — An engine killed at any write resumes the same run
+
+### Fixed
+
+- **A generation cut while being enqueued is finished on resume.** NSGA-II/III
+  and batch evaluated the fragment as if it were whole or waited on it for
+  ever; a benchmark did the same with a wave; random search refused it. All
+  now write what is missing and nothing twice, and end identical to a run
+  that was never killed. A fragment that cannot be reproduced (the code or the
+  experiment changed since) ends in `Error`, saying what differs.
+- **A generation with nothing to simulate is closed on resume** in NSGA-II/III
+  and batch: killed before closing it, the engine left it `Waiting` for ever.
+
+---
+
+## [Unreleased] — A resume keeps the evidence behind every vector
+
+### Fixed
+
+- **NSGA-II/III no longer turn a penalty into a measurement on resume.** The
+  infeasible, analytical and reused individuals of the generation in flight
+  were rewritten as `unknown` and used. They are read back with their own
+  evidence, and what rests on simulations is derived from them again, so a
+  refusal (a 1e12 placeholder) stays refused.
+- **A resumed batch keeps its penalties.** They were not read back, and were
+  replaced by the refusal placeholder.
+- A resumed run now stores the same documents and the same front as one never
+  interrupted. No experiment of these strategies in the reference database was
+  ever resumed, so no stored result is affected.
+
+---
+
+## [Unreleased] — Placement compares like with like, and a benchmark runs at N
+
+### Fixed
+
+- **`earliest_completion` no longer starves the pool after a change of
+  workload.** A worker had one mean held time for every kind of job, and kinds
+  differ by up to 70x here. After long runs, the first worker to run a short job
+  looked up to 100 times faster than the rest, which were then held back and
+  never measured again. The estimate is now kept per workload (firmware,
+  simulated duration, network size to within a factor of two), and one older
+  than 24 hours is sampled again. A busy worker's remaining time is that of the
+  job it runs.
+- **A scalability wave runs at its N.** Its simulations are never held for a
+  faster worker: only capacity and machine limits can make them wait.
+- **A wave that did not run at N is not a measurement.** It is reported invalid
+  with the concurrency it reached, and does not extend the tested range.
+  - The benchmark of 2026-11-22 (`scalability · p1-ind1`) ran at most two
+    simulations at once: 56 of its 65 waves are no longer counted.
+  - The five earlier benchmarks in the reference database ran every wave at
+    N, and their analysis is unchanged.
+
+Deploy the master-node and the mo-engine together. The estimates start empty,
+so each worker is sampled once per workload after the deploy.
+
+---
+
+## [Unreleased] — One strategy per experiment when the engine starts
+
+### Fixed
+
+- **An experiment `Waiting` when the mo-engine starts is no longer started
+  twice.** The engine claimed it, which makes it `Running`, and then resumed
+  everything `Running`, itself included: two strategies drove one experiment,
+  with duplicate generations, lost objectives or a run that never ended. What a
+  previous process left `Running` is now read before anything is started.
+- **An experiment created while the engine starts is no longer missed.**
+  `Waiting` was scanned before the change stream was listening, so what was
+  created in between waited until the next restart (12 of 16 experiments in
+  the reproduction). The scan now runs once the stream is open, and again when
+  it reopens: `watch_collection` takes an optional `on_open` for that.
+
+---
+
+## [Unreleased] — Random search resumes the run it was running
+
+### Fixed
+
+- **A restart of the mo-engine no longer breaks a random search.** The resume
+  restored neither the population nor the next index, the archive or the random
+  stream: the next generation collided with the last index, and the results in
+  flight never became objectives. It now continues the interrupted run exactly:
+  same individuals, simulations, evidence and final front.
+  - Generations record `rng_state` and `enqueue_complete`, and individuals
+    record `index`. Older checkpoints remain resumable: their draws are
+    repeated to position the stream.
+  - A generation that closed while the engine was down, or whose enqueue had
+    nothing to simulate, is processed at startup.
+  - A generation cut in the middle of its enqueue is refused, with the reason in
+    `system_message`, instead of finishing on fewer evaluations.
+  - A run that is never interrupted is unchanged. The four random-search runs
+    in the reference database were never resumed and are not affected.
+
+---
+
+## [Unreleased] — Problem 2 counts the sink as coverage
+
+### Fixed
+
+- **In P2 the sink now covers the trajectory, as in P1.** The coverage matrix
+  held only the candidates, so a point within range of the sink alone counted
+  as uncovered: the same geometry could be feasible in P1 and infeasible in P2.
+  The sink is now an always-active column of the matrix. It is not a gene, and
+  the chromosome and its hash are unchanged.
+  - **Effect on a verdict:** coverage can only stay equal or rise. An instance
+    whose trajectory only the sink reaches accepts a network without relays.
+  - **Effect on a search:** the greedy coverage repair no longer counts as gain
+    what the sink already covers, so it can activate different candidates. The
+    same seed therefore does not reproduce a P2 run made before this change,
+    even where no verdict changes.
+  - **Stored results:** recomputed over the eight P2 experiments in the
+    reference database (2,357 individuals): no coverage value and no
+    feasibility verdict changes. `p2-sc nsga3 1seed` stays infeasible: four of
+    its 404 samples are out of range of every candidate and of the sink.
+
+---
+
+## [Unreleased] — Firmware v2 runs several times faster in Cooja, same output
+
+### Changed
+
+- **The v2 firmware's neighbour and route tables hold 64 entries instead of the
+  Cooja platform's 300** (`NBR_TABLE_CONF_MAX_NEIGHBORS`,
+  `NETSTACK_MAX_ROUTE_ENTRIES` in the shared `project-conf.h` of
+  `rpl-udp-csma-v2` and `rpl-udp-tsch-v2`).
+  - **Why it was slow:** on every tick, Cooja copies a mote's whole RAM into the
+    native library and back. A 180-minute TSCH run spent 87% of its time on that
+    copy. The tables made up most of that RAM: a TSCH node's `.bss` falls from
+    272 KB to 118 KB.
+  - **The output does not change.** Five instances replayed with both builds
+    printed the same mote lines at the same simulation times: three TSCH and two
+    CSMA, 26 nodes each, 180 simulated minutes. The repository's build also
+    produces the same binaries as the build that was validated.
+  - **Speed:** under the load of eight production simulations, a TSCH run took
+    816 to 1,167 s, against about 100 minutes for the 300-entry build. Most of the
+    old build's slowness came from memory-bandwidth contention, so the gain is
+    smaller on an idle machine.
+  - **The output stays identical up to 63 motes, root included.** Past that, a
+    full table evicts neighbours. The largest problem in the reference database
+    has 53 nodes.
+  - Details: `firmware/README.md`, "Simulation speed". Test:
+    `test_v2_tables_hold_64_entries`.
+  - The change only reaches experiments after the `-v2` repositories are
+    uploaded again (from `firmware/`: `python upload-firmware.py rpl-udp-csma-v2
+    rpl-udp-tsch-v2`). The upload creates new records next to the old ones, under
+    the same name; the new descriptions end in "64-entry tables". v2 experiments
+    that already ran keep the old `project-conf.h` in their snapshot. Their
+    results are what the new build prints too.
+
+---
+
+## [Unreleased] — Validity guards: NaN, infeasible fronts, the MAC gene, penalty filtering
+
+Found in the repository review of 2026-11-18. None of them affected the stored
+results of the papers (no finished simulation has a non-finite metric), but each
+one could silently change a future result.
+
+### Fixed
+
+- **A non-finite metric can no longer reach the optimiser.** `statistics` returns
+  NaN for an absent or empty column and the master publishes the simulation as
+  `Done`; the completeness count took the NaN as present and the aggregate
+  averaged it, and the strategies rejected only `None`. A NaN vector is never
+  dominated, so it entered front 0 and randomised NSGA-III niching through the
+  ideal point. Now a non-finite value is *absent* for the completeness count and
+  the seed aggregate (`pylib/db/repositories/generation.py`), and the four
+  strategies refuse a non-finite objective (`objective_vector` in
+  `mo-engine/lib/strategy/completeness.py`). A vector the strategy had to replace
+  by the worst placeholder is now recorded with `refused` and
+  `objective_used: false`; before, the record said the placeholder was used.
+- **A front made only of penalties is no longer reported as a plain success.**
+  Every Pareto item carries `evaluation` (`state`, `objective_used`, `valid`), and
+  the experiment carries `pareto_front_validity` (`items`, `valid`, `infeasible`,
+  `refused`). When no item is valid the system message says so ("Completed
+  WITHOUT a valid solution…"). A P2 run with 100% coverage required had ended
+  `Done`, "completed", with 63 front items at ~1e9.
+- **The MAC gene is the one that ran.** With a single firmware source the
+  strategies kept only the source id and threw away the adjusted chromosome, so
+  the stored gene drifted (152 of 210 individuals recorded "TSCH" in a CSMA-only
+  P2 run) and two hashes could share one phenotype. The gene is now pinned where
+  chromosomes are made (`mo-engine/lib/problem/mac_gene.py`), and batch input is
+  pinned on load. Chromosomes read back on a resume are not touched.
+- **Penalties are filtered by their evidence, not their size.** The REST
+  indicators, `pareto-analysis` and the GUI dropped any vector with an objective
+  ≥ 1e8, which also drops a legitimate value (energy already reaches 1.8e7) and
+  keeps a placeholder below it. They now read the `completeness` record of an
+  individual and the `evaluation` of a Pareto item (`pylib/evaluation_validity.py`,
+  mirrored in `pareto-analysis/lib/metrics.py` and `gui/simlab/src/types/simlab.ts`);
+  the magnitude rule remains only for documents written before the evidence existed.
+  Non-finite vectors are always excluded. Batch infeasible individuals now store
+  their `infeasible` record too.
+
+---
+
+## [Unreleased] — Workers held for a simulation that was deleted
+
+### Fixed
+
+- **A worker no longer stays `busy` for good when its simulation is deleted.**
+  The resolver of held workers (`resolve_held_workers` in
+  `master-node/lib/health.py`) refused to free any worker whose container still
+  had a `COOJA.testlog`, to protect an uncollected result. When the simulation
+  itself had been deleted, nothing could ever collect those bytes —
+  `util/recover_result.py` publishes onto the simulation — so the worker was
+  re-probed every cycle and never released. Four workers (`vm1`–`vm4-cooja1`)
+  sat like that for a day after their experiment was deleted. The resolver now
+  clears the hold when the simulation is confirmed absent. A failed read, a hold
+  without a simulation id, or a process still alive keep the worker held as
+  before.
+
+---
+
+## [Unreleased] — Firmware v2 and how each metric is obtained
+
+An audit of the firmware every experiment had run so far (`rpl-udp-csma`, 97.5%
+of the 29,630 simulations in the reference database, and `rpl-udp-tsch`) found
+that several metrics did not measure what their names say. The largest: under
+CSMA the root's burst of pings overflowed the MAC's two neighbour queues and
+dropped many of them without a log line (78% in the instance replayed in
+Cooja); nodes that never got one reported a latency of 0, which the mean
+averaged in. On 60 simulations the share of zero rows correlated −0.90 with
+`latency`. The three latencies the firmware reported (`rtt_latency`, `r2n_latency`,
+`n2r_latency`) could not be compared across MACs: the one-way pair subtracted clocks
+that start at each mote's own boot, up to 1 s apart. The other findings, with their
+measurements, are in the new document below.
+
+Firmware v1 is not touched: the snapshot of every finished experiment holds its
+digests and three papers cite its results. The fixes are a new firmware version.
+
+### Added
+
+- **Firmware v2**: `firmware/rpl-udp-csma-v2` and `firmware/rpl-udp-tsch-v2`. The two
+  hold the same sources, byte for byte, and differ only in the MAC in the
+  `Makefile`. Compared with v1:
+  - The nodes report raw cumulative counters, and the root derives energy and
+    per-report deltas from them. A lost report no longer takes the energy of its
+    interval with it, the energy is no longer truncated to whole mJ (v1 recorded a
+    quarter of the TX energy in the run measured), and it includes the supply
+    voltage that v1 left out.
+  - **One latency**: the one-way delay of each report, node to root. The node writes
+    the Cooja simulation time (`RTIMER_NOW()`, the same on every mote and under both
+    MACs) into the report; the root subtracts it from the time the report arrives and
+    prints `latency`. The root sends no probes any more, so `rtt_latency`,
+    `r2n_latency` and `n2r_latency` are gone, and so is the ping traffic that the
+    MACs handled so differently: on one TSCH instance the same firmware with the
+    probes delivered 617 reports from 21 nodes, and without them 6,416 from 20.
+    The firmware refuses to build outside Cooja, where this clock is not shared.
+  - `bytes_tx` and `server_bytes_rx` are cumulative, so their growth is no
+    longer always 0. `throughput` counts reports only; v1 also counted the pongs
+    (32% of it on average). `hops` counts links, one more than in v1. The columns
+    that existed only because of the probes (`node_time`, `total_received`, `bytes_rx`,
+    `server_sent`) are gone.
+  - Packets carry a type byte and fixed-width fields; the root no longer dereferences
+    a null pointer past 100 nodes (the limit is now 200); the report jitter is drawn
+    again every period; the node prints its address once.
+  - Each record carries `"fw_version":2`.
+- **`docs/markdown/FIRMWARE_METRICS.md`**: how each metric is obtained, from the mote
+  to the objective, with the default conversion metric by metric, what v1 and v2
+  measure, the limitations that remain, what can and cannot be compared between CSMA
+  and TSCH (section 8, measured on two topologies replayed under both MACs), and how
+  to compare results across versions.
+- **`pylib/tests/test_firmware_v2.py`** pins the digests of v1, checks that the two v2
+  variants share their sources, that the root prints every column the default
+  conversion reads, that there is exactly one latency and it uses the simulation
+  clock on both ends, and runs real v2 log lines through the converter and the
+  conversion.
+- **`upload-firmware.py` takes repository names** (`python upload-firmware.py
+  rpl-udp-csma-v2`) and uploads the four repositories when given none.
+
+### Changed
+
+- **The default data conversion has 16 metrics, and says how much of the network the
+  others describe.** Out: `rtt_latency`, `r2n_latency`, `n2r_latency`, `total_received`,
+  `bytes_rx` and `server_sent`, because the columns they read came from the probes
+  (`server_sent` also read `server_received`, so it was a copy of `throughput`). In:
+  - `latency` is the **median** one-way delay; `latency_mean` and `latency_p95` keep the
+    tail in view. Under TSCH the mean was about four times the median.
+  - `power_mw`: mean power of a node that reported, its energy over the node-time that
+    energy covers (the root prints the new column `energy_time_ms`). Unlike `energy`, it
+    does not grow with how many nodes reported or for how long.
+  - `delivery_ratio` (reports received over generated) and `node_coverage` (fraction of
+    the sensor nodes heard from at all). Latency, power and hops exist only for the
+    reports and nodes these two count.
+  - Counters (`throughput`, `total_sent`, `bytes_tx`, `server_bytes_rx`) are summed with
+    the new `sum_max`, which counts every report; `sum_last_minus_first` left each node's
+    first out, a larger share under TSCH, where a node may deliver a few dozen.
+  The wizard's default objectives are now `latency` (median), `power_mw` and
+  `throughput`. Applies to experiments created from now on; the stored conversion of
+  finished experiments is not rewritten. **With the v1 firmware the latency metrics and
+  `power_mw` are NaN under the default conversion** (v1 has `rtt_latency` and no
+  `energy_time_ms`): repoint them in steps 4 and 5 of the launch wizard
+  (FIRMWARE_METRICS.md §9).
+- **New data conversion kinds** in `pylib/statistics.py`: `sum_max`, `ratio_sum`,
+  `ratio_sum_max` (a second column in the new `denominator` field) and `node_coverage`.
+  The master-node counts the sensor motes in the testlog and passes the number to
+  `evaluate_config`, because the CSV has no row for a node that never reached the root.
+  `denominator` is declared in the API's `MetricItemDto`; undeclared, validation would
+  drop it and the metric would be NaN.
+- **The wizard offers the kinds the evaluator knows, and nothing else**
+  (`gui/simlab/src/services/metricKinds.ts`). It offered `max`, `min`, `last` and
+  `percentile`, which `statistics.py` never had, so a metric using one was NaN without
+  failing the run; it did not offer `median` or `quantile`, which it had. No stored
+  experiment used the missing ones. A Python test compares the two lists; step 5 shows
+  the fields each kind uses (`q`, `denominator`, `scale`) and validates them.
+- **`rpl-udp-tsch-v2` uses one shared TSCH cell every 3 slots**
+  (`TSCH_SCHEDULE_CONF_DEFAULT_LENGTH 3` in the `project-conf.h` the two v2 variants
+  share; CSMA builds do not read it). Contiki-NG's default of 7 congests at this load
+  (Investigated, below). A test pins the setting.
+- **`firmware/README.md`** describes each firmware directory and lists what v2 changes
+  from v1.
+- **`SIM_TIMEOUT_SEC` defaults to 10800 s (was 3600)**, in the master-node and in
+  `baseline/run_baseline.sh`; `docker-compose.yaml` passes it through, so `.env` can set
+  it. With a shared cell every 3 slots, a TSCH simulation of 27 motes and 180 min took
+  3,585–3,589 s with 12 running at once (TSCH v1: median 1,058 s), and the first v2
+  experiment lost 10 of its first 12 TSCH simulations to the 3600 s limit.
+
+### Investigated
+
+- **Why TSCH nodes go silent** (FIRMWARE_METRICS.md §8.1). Under Contiki-NG's default
+  minimal schedule (one shared cell every 7 slots) the queues toward the relays fill up
+  while the network forms (6,690 drops for a full queue in one 180-minute run), the
+  DAO-ACK misses RPL-lite's retransmission window, and the node repairs locally, drops
+  its route and stops reporting; 169 of the 176 long gaps of that run contain such a
+  repair. Keepalives wait in the same queues, so nodes also lose synchronisation and
+  leave the network. With a shared cell every 3 slots, the value of Contiki-NG's own
+  6TiSCH example, there was no full queue, and in six runs (two topologies, three seeds
+  each) TSCH delivered what CSMA delivers (all 26 nodes, 886–894 reports per node, 97%
+  delivery) at a fifth of the power (12.0–12.4 mW against 64.5), with a median latency of
+  86–92 ms against 60–68 ms. With the default, the same runs ranged from 46 to 321
+  reports per node.
+  Orchestra with its default rules used the least power and delivered less (§8 has both
+  tables). `rpl-udp-tsch-v2` now uses a shared cell every 3 slots (Changed, above).
+
+### Not done
+
+- v2 has been validated in Cooja (180-minute simulations of two topologies, three
+  seeds each, under both MACs, built without warnings, every default metric finite
+  through the real converter) but no experiment had used it at the time of this entry. Moving an experiment
+  to v2 changes the objective values, and so may the ordering the optimiser saw;
+  replay a sample of v1 individuals under v2 before comparing.
+
+---
+
 ## [Unreleased] — Choosing the seed aggregator per objective
 
 The engine has long accepted `parameters.simulation.aggregator` (Ψa) — how the
@@ -577,7 +1281,8 @@ containers seeded as before.
   stuck outside SSH needs to return or the master needs to be restarted.
 - **Nothing comes back for a preserved result on its own.**
   `unfetched_result` records the host, worker, container, attempt, directory,
-  file and pid, and the worker is held until a person decides. Automating the
+  file and pid. The worker is held until a person decides only when no copy
+  could be made; with a copy it returns to the pool. Automating the
   collection is deliberately not done: deciding what a half-collected result
   is worth is not a decision to take quietly.
 - **Two registrations for one physical worker are compared over configured

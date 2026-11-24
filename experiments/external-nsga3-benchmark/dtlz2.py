@@ -1,8 +1,8 @@
 """
 DTLZ2 (Deb et al., 2002) — scalable multi-objective benchmark.
 
-The same definition is used by ``master-node/lib/synthetic_data.py`` in the
-SimLab dummy backend, kept here as a self-contained reference so the
+The same definition is used by the platform (``pylib/benchmarks.py``),
+kept here as a self-contained reference so the
 external benchmark does not depend on the running platform.
 """
 from __future__ import annotations

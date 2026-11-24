@@ -2,7 +2,7 @@
 
 Comparing metaheuristic implementations (or the same implementation across
 configurations) requires *multiple independent runs* and reporting central
-tendency AND dispersion — mean ± std / 95% CI — plus a paired significance test
+tendency AND dispersion — mean ± std / 95% CI — plus a significance test
 between methods. Reporting a single run, or only the mean of several, is not
 enough to claim one method is better than another.
 
@@ -16,11 +16,32 @@ import math
 import numpy as np
 
 
+#: Two-sided 95% quantiles of Student's t for 1 to 30 degrees of freedom.
+_T975 = (12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228,
+         2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086,
+         2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042)
+
+
+def t975(df: int) -> float:
+    """The 97.5% quantile of Student's t with ``df`` degrees of freedom.
+
+    Tabulated up to 30, then the Cornish-Fisher expansion around the normal
+    quantile, within 1e-3 of the exact value from 30 on. The normal quantile
+    (1.96) understates the interval for few runs: by 31% with 5.
+    """
+    if df < 1:
+        raise ValueError("df must be at least 1")
+    if df <= len(_T975):
+        return _T975[df - 1]
+    z = 1.959964
+    return z + (z**3 + z) / (4 * df) + (5 * z**5 + 16 * z**3 + 3 * z) / (96 * df**2)
+
+
 def summary(values) -> dict:
     """Return ``{n, mean, std, ci95}`` for a 1-D sample.
 
     ``std`` is the sample standard deviation (ddof=1); ``ci95`` is the half-width
-    of the 95% confidence interval of the mean (normal approximation).
+    of the 95% confidence interval of the mean, with Student's t.
     """
     a = np.asarray(list(values), dtype=float)
     a = a[np.isfinite(a)]
@@ -28,7 +49,7 @@ def summary(values) -> dict:
     if n == 0:
         return {"n": 0, "mean": float("nan"), "std": float("nan"), "ci95": float("nan")}
     std = float(a.std(ddof=1)) if n > 1 else 0.0
-    ci95 = 1.96 * std / math.sqrt(n) if n > 1 else 0.0
+    ci95 = t975(n - 1) * std / math.sqrt(n) if n > 1 else 0.0
     return {"n": n, "mean": float(a.mean()), "std": std, "ci95": ci95}
 
 

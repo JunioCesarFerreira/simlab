@@ -22,6 +22,8 @@ are skipped once they do — whatever the policy. And a policy that **plans
 completion** may decide that a busy, faster worker will finish the job before
 any free one would; the job then waits for it, and new work arriving wakes
 the decision, since a longer queue can make the slower worker worth using.
+A scalability benchmark is never held that way: it measures what happens
+when N simulations run at once, and waiting is what would make them not.
 """
 import logging
 import queue
@@ -34,8 +36,10 @@ from bson import ObjectId
 
 from lib.scheduler.inventory import apply_machine_limits, describe_loads, snapshot_loads
 from lib.scheduler.policy import Policy, build_policy
+from lib.scheduler.workload import workload_of
 from pylib.db.models.enums import EnumStatus
 from pylib.db.models.infra import operator_configured
+from pylib.db.repositories.infra import duration_estimate
 
 log = logging.getLogger(__name__)
 
@@ -89,9 +93,13 @@ class Dispatcher:
         self._held_failures = 0
         self._rr_cursor = 0
         self._stop = threading.Event()
-        self._last_starved_log = 0.0
-        self._last_deferred_log = 0.0
-        self._last_rescan = 0.0
+        # "Never", not zero. `time.monotonic()` counts from the machine's boot,
+        # so zero meant "at boot": on a machine up for less than the interval
+        # — a CI runner, a host that just restarted — the first rescan and
+        # the first log were withheld until the clock caught up.
+        self._last_starved_log = float("-inf")
+        self._last_deferred_log = float("-inf")
+        self._last_rescan = float("-inf")
         # Set while the held job is waiting for a faster worker rather than
         # for any worker: new work is then a reason to decide again.
         self._deferred = False
@@ -270,8 +278,12 @@ class Dispatcher:
             return False
 
         limits = self._machine_limits()
-        loads = apply_machine_limits(snapshot_loads(self._mongo.host_repo), limits)
-        planner = getattr(self._policy, "plan", None)
+        workload = workload_of(sim)
+        loads = apply_machine_limits(
+            snapshot_loads(self._mongo.host_repo, workload=workload), limits)
+        # A benchmark takes any free worker, the fastest first; only capacity
+        # and machine limits can make it wait.
+        planner = None if sim.get("benchmark") else getattr(self._policy, "plan", None)
         self._deferred = False
         if planner is not None:
             plan = planner(loads, waiting=self.pending, limits=limits,
@@ -287,7 +299,7 @@ class Dispatcher:
             self._log_starvation(sim_id, loads)
             return _NO_CAPACITY
 
-        placement = self._claim(chosen, sim_oid)
+        placement = self._claim(chosen, sim_oid, workload)
         if placement is None:
             # The host looked free a moment ago and no longer is. Re-deciding
             # beats waiting: another host may still have room.
@@ -389,7 +401,9 @@ class Dispatcher:
             return False
         return True
 
-    def _claim(self, chosen: Any, sim_oid: ObjectId) -> Optional[tuple[dict, dict, str]]:
+    def _claim(
+        self, chosen: Any, sim_oid: ObjectId, workload: str
+    ) -> Optional[tuple[dict, dict, str]]:
         """Reserve a free container on the chosen host, atomically.
 
         Walks that host's free containers because another dispatcher — or the
@@ -419,11 +433,12 @@ class Dispatcher:
         # finishing soonest must not then be handed its slowest container.
         prefer_fastest = bool(getattr(self._policy, "prefers_fastest", False))
         for candidate in self._mongo.resource_repo.find_free_by_host(
-                chosen.host_id, prefer_fastest=prefer_fastest):
+                chosen.host_id, prefer_fastest=prefer_fastest, workload=workload):
             attempt_id = uuid.uuid4().hex
             reserved = self._mongo.resource_repo.reserve(
                 candidate["_id"], sim_oid, attempt_id,
-                expect_config_version=config_version)
+                expect_config_version=config_version,
+                expected_sec=duration_estimate(candidate, workload))
             if reserved is None:
                 continue  # lost the race for this one; try the next
 

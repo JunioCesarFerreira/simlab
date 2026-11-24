@@ -1,5 +1,5 @@
 <template>
-  <div class="shell">
+  <div class="shell" :class="{ 'page-scroll': route.meta.pageScroll }">
     <Sidebar class="sidebar" />
     <div class="main">
       <Topbar class="topbar" />
@@ -60,6 +60,21 @@ html.dark .shell {
   padding: 0;
   overflow: hidden;
 }
+/* The document scrolls instead of .content (sidebar and topbar stay sticky). */
+.shell.page-scroll {
+  height: auto;
+  min-height: 100vh;
+}
+
+.shell.page-scroll .main {
+  height: auto;
+  overflow: visible;
+}
+
+.shell.page-scroll .content {
+  overflow-y: visible;
+}
+
 @media (max-width: 760px) {
   .shell {
     grid-template-columns: minmax(0, 1fr);

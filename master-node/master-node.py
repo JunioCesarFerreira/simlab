@@ -117,7 +117,10 @@ class Settings:
             hostnames = ["localhost" for _ in range(default_n)]
             ports = [2231 + i for i in range(default_n)]
 
-        sim_timeout_sec = int(os.getenv("SIM_TIMEOUT_SEC", "3600"))
+        # 3 h: the longest simulated duration in use (180 min) run at real
+        # time. A TSCH simulation of 27 motes and 180 min takes about an hour
+        # on a loaded machine, which the previous 3600 s cut off.
+        sim_timeout_sec = int(os.getenv("SIM_TIMEOUT_SEC", "10800"))
         jvm_xms = os.getenv("COOJA_JVM_XMS", "1g")
         jvm_xmx = os.getenv("COOJA_JVM_XMX", "2g")
 
@@ -591,18 +594,31 @@ def run_cooja_simulation(
         log.info("[%s] Log converted CSV and saved with ID: %s", where, csv_id)
 
         csv_file = Path(csv_path)
-        if csv_file.exists() and csv_file.stat().st_size != 0:
+        if csv_file.exists():
+            # An empty CSV is a run in which no report reached the root: a
+            # result (nothing was delivered), not a failure to repeat.
+            nothing_reported = csv_file.stat().st_size == 0
             # Still collection, not execution. Reading the CSV back or
             # evaluating the metric configuration can fail for reasons that
             # have nothing to do with the run — and falling through to the
             # generic handler wrote the simulation off while its testlog sat
             # in GridFS, referenced by nothing.
+            # How many sensor nodes the run had, for the node_coverage kind:
+            # the CSV has rows only for nodes whose reports reached the root.
+            # Best-effort; without it that one kind gives NaN.
             try:
-                df = pd.read_csv(csv_path)
+                deployed = rpl_dodag.count_deployed_nodes(log_path) or None
+            except Exception:
+                log.exception("[%s] could not count the deployed nodes", where)
+                deployed = None
+            try:
+                df = pd.DataFrame() if nothing_reported else pd.read_csv(csv_path)
                 exp_id = sim["experiment_id"]
                 cfg = mongo.experiment_repo.get_metrics_data_conversion(
                     str(exp_id))
-                net_meas = statistics.evaluate_config(df, cfg, log)
+                net_meas = statistics.evaluate_config(
+                    df, cfg, log, deployed_nodes=deployed,
+                    nothing_reported=nothing_reported)
             except Exception as error:
                 raise CollectionFailed(
                     f"the result was stored but could not be evaluated: {error}",
@@ -626,6 +642,14 @@ def run_cooja_simulation(
             except Exception:
                 log.exception("[%s] DODAG analysis failed", where)
 
+            missing = statistics.unavailable(net_meas)
+            note = "; ".join(filter(None, (
+                "no report reached the root: counts and node_coverage are 0"
+                if nothing_reported else "",
+                f"not computable, stored as NaN: {', '.join(missing)}" if missing else "",
+            )))
+            if note:
+                log.warning("[%s] %s", where, note)
             return RunReport(
                 log_id=log_id, csv_id=csv_id, metrics=net_meas, dodag=dodag,
                 confirmed=confirmed,
@@ -633,17 +657,18 @@ def run_cooja_simulation(
                     "the run process ended without recording an exit code, so "
                     "this result is not confirmed"
                 ),
+                note=note,
             )
 
         log.warning(
-            "[%s] CSV file is missing or empty for simulation %s", where, sim_oid)
+            "[%s] CSV file is missing for simulation %s", where, sim_oid)
         # Not a plain failure any more: the testlog is in GridFS and it is the
         # only evidence of what happened. Previously it was uploaded and then
         # orphaned, with the simulation marked in error and nothing to read.
         return RunReport(
             log_id=log_id, csv_id=csv_id, metrics={}, dodag=None,
             confirmed=False,
-            reason="the converted CSV was empty, so no metrics could be computed",
+            reason="the testlog converted to no CSV, so no metrics could be computed",
         )
     finally:
         # Only what this function created locally. The remote artifacts are

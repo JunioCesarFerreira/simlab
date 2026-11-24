@@ -45,6 +45,10 @@ class HostLoad:
     #: Each occupied worker as ``(expected held time, seconds since it
     #: started)``; either may be ``None``.
     occupied: tuple[tuple[Optional[float], Optional[float]], ...] = ()
+    #: What the job being placed would take on each occupied worker, in the
+    #: order of ``occupied`` — whose expected time is of the job it *runs*.
+    #: Empty means the same time for both.
+    occupied_durations: tuple[Optional[float], ...] = ()
     #: Its machine is running as many simulations as its limit allows.
     capped: bool = False
 

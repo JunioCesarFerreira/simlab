@@ -12,8 +12,8 @@ streams, or workers. A run is a pure function of `(config, seed)`.
 
 Frozen grid: native NSGA-II and NSGA-III × DTLZ2 (M=3, n=10), ZDT1 (M=2, n=10),
 and SCH1 (M=2, n=1) × seeds 1, 2, 3, 5, 7 — population 50, 20 generations,
-zero noise, **launch wizard defaults**. The defaults track what the interface
-actually sends, so the baseline continues to measure the platform as shipped;
+zero noise, **defaults of the synthetic launch wizard**. They track what that
+interface sends (the WSN wizard has its own), so the baseline continues to measure the platform as shipped;
 Phase 6 changed them to `prob_mt=1.0`, `per_gene_prob=1/n`, and `divisions`
 derived from M and the population size.
 
@@ -45,10 +45,12 @@ of children. The final front corresponds to the selected survivors.
 
 ```bash
 cd mo-engine
-../.venv/bin/python -m tests.regression.baseline --summary   # baseline table
-../.venv/bin/python -m tests.regression.baseline --check     # compare (exit 1 on mismatch)
-../.venv/bin/python -m tests.regression.baseline --write     # freeze a new baseline
-../.venv/bin/python -m pytest tests/regression -q
+# any Python with mo-engine/requirements.txt, moocore==0.3.1 and pytest
+export PYTHONPATH=..                                # pylib lives in the repository root
+python -m tests.regression.baseline --summary       # baseline table
+python -m tests.regression.baseline --check         # compare (exit 1 on mismatch)
+python -m tests.regression.baseline --write         # freeze a new baseline
+python -m pytest tests/regression -q
 ```
 
 When changing operators or metrics, run `--check`, **read the diff and confirm

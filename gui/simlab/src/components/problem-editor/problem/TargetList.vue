@@ -1,11 +1,11 @@
 <template>
   <div class="target-list">
     <div class="list-header">
-      <span>Targets ({{ targets.length }})</span>
+      <span>{{ label }} ({{ targets.length }})</span>
     </div>
 
     <div v-if="targets.length === 0" class="empty">
-      No targets — use the ◇ tool on the canvas
+      None yet — use the ◇ tool on the canvas
     </div>
 
     <div v-for="t in targets" :key="t.id" class="target-row">
@@ -30,9 +30,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useProblemStore } from '../../../app/stores/problemStore'
+import { targetsLabel } from '../../../types/problem'
 
 const problemStore = useProblemStore()
 const targets = computed(() => problemStore.draft.targets)
+const label = computed(() => targetsLabel(problemStore.draft.name))
 
 function update(id: string, axis: 'x' | 'y', value: number) {
   const t = problemStore.draft.targets.find(t => t.id === id)

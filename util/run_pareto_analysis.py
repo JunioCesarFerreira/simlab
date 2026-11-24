@@ -10,8 +10,8 @@ Usage:
 
 Examples:
     python run_pareto_analysis.py
-    python run_pareto_analysis.py --api-base http://server:8000/api/v1
-    MONGO_URI=mongodb://remote:27017/ python run_pareto_analysis.py
+    python run_pareto_analysis.py --api-base https://server/api/v1
+    MONGO_URI='mongodb://localhost:27017/?directConnection=true' python run_pareto_analysis.py
 """
 
 import argparse
@@ -79,7 +79,7 @@ def main():
     )
     parser.add_argument(
         "--uri",
-        default=os.getenv("MONGO_URI", "mongodb://localhost:27017/?replicaSet=rs0"),
+        default=os.getenv("MONGO_URI", "mongodb://localhost:27017/?directConnection=true"),
         help="MongoDB connection URI  [env: MONGO_URI]",
     )
     parser.add_argument(
@@ -94,7 +94,7 @@ def main():
     )
     parser.add_argument(
         "--api-key",
-        default=os.getenv("SIMLAB_API_KEY", "api-password"),
+        default=os.getenv("SIMLAB_API_KEY", "simlab-api-key42"),
         help="SimLab API key  [env: SIMLAB_API_KEY]",
     )
     parser.add_argument(

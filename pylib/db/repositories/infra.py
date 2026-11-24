@@ -19,7 +19,7 @@ Five repositories:
   how many simulations it runs at once across all of its hosts.
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable, Iterable, Optional
 
 from bson import ObjectId, errors
@@ -28,7 +28,7 @@ from pymongo.errors import OperationFailure
 
 from pylib.crypto.envelope import SecretEnvelope
 from pylib.db.connection import MongoDBConnection
-from pylib.timeutil import utc_now
+from pylib.timeutil import elapsed_since, utc_now
 from pylib.db.models.infra import (
     CRYPTO_COLLECTION,
     MACHINES_COLLECTION,
@@ -89,6 +89,27 @@ class HostWithdrawing(RuntimeError):
 #: effectively the last ~10 runs: slow enough that one unlucky simulation does
 #: not move it, fast enough to follow a machine that got busier.
 DURATION_ALPHA = 0.2
+
+#: How long a worker's estimate for a workload stands in for a measurement.
+#: Past it the worker is sampled again: one that looked slow is not placed on,
+#: so without an expiry it would never get the run that could correct it.
+DURATION_FRESH_SEC = 24 * 3600.0
+
+
+def duration_estimate(
+    worker: dict, workload: str, *, now: Optional[datetime] = None
+) -> Optional[float]:
+    """What this worker is expected to take on ``workload``; ``None`` = unknown.
+
+    Never the worker-wide mean: held times of different workloads differ by
+    up to two orders of magnitude, so a number from another one is not an
+    estimate of this one.
+    """
+    measured = (worker.get("durations") or {}).get(workload) or {}
+    age = elapsed_since(measured.get("at"), now=now)
+    if measured.get("mean") is None or age is None or age > DURATION_FRESH_SEC:
+        return None
+    return float(measured["mean"])
 
 _OCCUPIED = [s.value for s in OCCUPIED_STATUSES]
 _SCHEDULABLE = [s.value for s in SCHEDULABLE_HOST_STATUSES]
@@ -706,8 +727,13 @@ class HostRepository:
 
     # ── inventory ──────────────────────────────────────────────────────────
 
-    def inventory_snapshot(self) -> list[dict[str, Any]]:
+    def inventory_snapshot(self, *, workload: Optional[str] = None) -> list[dict[str, Any]]:
         """Per-host occupancy, in one round trip.
+
+        With ``workload``, the held times are the estimates for that workload
+        (``duration_estimate``), and each occupied worker also says what the
+        job it is running should take. Without, they are the worker-wide
+        means, which the interface shows.
 
         The scheduler's placement decision and the GUI's overview read the same
         document, so what an operator sees is what the scheduler used.
@@ -722,6 +748,20 @@ class HostRepository:
         def count_where(cond: dict) -> dict:
             return {"$size": {"$filter": {"input": "$_res", "as": "r", "cond": cond}}}
 
+        if workload is None:
+            estimate: dict = {"$ifNull": ["$$r.mean_duration_sec", None]}
+            expected: dict = estimate
+        else:
+            measured = f"$$r.durations.{workload}"
+            since = utc_now() - timedelta(seconds=DURATION_FRESH_SEC)
+            # A missing `at` sorts below any date, so it reads as unknown.
+            estimate = {"$cond": [
+                {"$gte": [f"{measured}.at", since]},
+                {"$ifNull": [f"{measured}.mean", None]},
+                None,
+            ]}
+            expected = {"$ifNull": ["$$r.expected_sec", None]}
+
         pipeline: list[dict[str, Any]] = [
             {
                 "$lookup": {
@@ -731,6 +771,7 @@ class HostRepository:
                     "as": "_res",
                     "pipeline": [{"$project": {
                         "status": 1, "enabled": 1, "mean_duration_sec": 1,
+                        "durations": 1, "expected_sec": 1,
                         "started_at": 1}}],
                 }
             },
@@ -812,12 +853,10 @@ class HostRepository:
                             "cond": {"$and": [
                                 {"$eq": ["$$r.enabled", True]},
                                 {"$eq": ["$$r.status", available]},
-                                {"$ne": [
-                                    {"$ifNull": ["$$r.mean_duration_sec", None]},
-                                    None]},
+                                {"$ne": [estimate, None]},
                             ]},
                         }},
-                        "as": "r", "in": "$$r.mean_duration_sec",
+                        "as": "r", "in": estimate,
                     }}},
                     # Per worker, for a policy that plans when work will
                     # finish: what each free worker is expected to take, and
@@ -834,7 +873,7 @@ class HostRepository:
                             ]},
                         }},
                         "as": "r",
-                        "in": {"$ifNull": ["$$r.mean_duration_sec", None]},
+                        "in": estimate,
                     }},
                     "occupied_workers": {"$map": {
                         "input": {"$filter": {
@@ -843,8 +882,9 @@ class HostRepository:
                         }},
                         "as": "r",
                         "in": {
-                            "mean_duration_sec": {
-                                "$ifNull": ["$$r.mean_duration_sec", None]},
+                            # The next job on it, and the one it is running.
+                            "mean_duration_sec": estimate,
+                            "expected_sec": expected,
                             "started_at": {"$ifNull": ["$$r.started_at", None]},
                         },
                     }},
@@ -957,7 +997,8 @@ class CoojaResourceRepository:
             return list(db[RESOURCES_COLLECTION].find({"host_id": oid}, sort=[("name", 1)]))
 
     def find_free_by_host(
-        self, host_id: Any, *, prefer_fastest: bool = False
+        self, host_id: Any, *, prefer_fastest: bool = False,
+        workload: Optional[str] = None,
     ) -> list[CoojaResource]:
         """Candidates for placement on one host.
 
@@ -965,8 +1006,9 @@ class CoojaResourceRepository:
 
         * by ``last_check`` (the default) spreads work across a host's
           containers instead of hammering whichever one sorts first;
-        * by ``mean_duration_sec`` puts the container that *finishes* soonest
-          first. Under saturation this changes nothing — every container is
+        * by the held time (``duration_estimate`` for ``workload`` when one is
+          given, else ``mean_duration_sec``) puts the container that *finishes*
+          soonest first. Under saturation this changes nothing — every container is
           busy and the list has one entry — and when there is slack it is the
           whole point: an idle fast container should take the work before an
           idle slow one.
@@ -986,7 +1028,7 @@ class CoojaResourceRepository:
         sort = ([("mean_duration_sec", 1), ("name", 1)] if prefer_fastest
                 else [("last_check", 1), ("name", 1)])
         with self.connection.connect() as db:
-            return list(db[RESOURCES_COLLECTION].find(
+            workers = list(db[RESOURCES_COLLECTION].find(
                 {
                     "host_id": oid,
                     "enabled": True,
@@ -994,9 +1036,23 @@ class CoojaResourceRepository:
                 },
                 sort=sort,
             ))
+        if prefer_fastest and workload is not None:
+            # Here and not in the query: what is stale counts as unknown, and
+            # unknown has to sort first.
+            def fastest_first(worker: dict) -> tuple:
+                known = duration_estimate(worker, workload)
+                return (known is not None, known or 0.0, str(worker.get("name") or ""))
+            workers.sort(key=fastest_first)
+        return workers
 
-    def record_duration(self, resource_id: Any, seconds: float) -> Optional[float]:
+    def record_duration(
+        self, resource_id: Any, seconds: float, *, workload: Optional[str] = None
+    ) -> Optional[float]:
         """Fold one completed run into this worker's occupancy estimate.
+
+        With ``workload``, the estimate is that workload's own
+        (``durations.<workload>``), and it is what placement reads. The
+        worker-wide mean is still written, for display.
 
         How long a container is *held* — connection, upload, run, collection —
         is what decides throughput, so that is what is measured, rather than
@@ -1008,8 +1064,9 @@ class CoojaResourceRepository:
         below sets how fast it forgets.
 
         What this estimate **cannot** separate is a slow worker from a worker
-        that happened to receive harder simulations: duration varies more
-        between individuals than between machines. It converges anyway,
+        that happened to receive harder simulations of the same workload:
+        duration varies more between individuals than between machines. It
+        converges anyway,
         because placement is uncorrelated with difficulty and the differences
         worth acting on are large — measured on a three-host pool, the same
         genome with the same seed took 1.22–1.25x longer on the remote hosts,
@@ -1018,25 +1075,42 @@ class CoojaResourceRepository:
         Only a run that *succeeded* is recorded. A failure that aborted in
         five seconds would otherwise make the worst worker look like the best.
 
-        Returns the new mean, or ``None`` when nothing was written.
+        Returns the new mean (the workload's, when given), or ``None`` when
+        nothing was written.
         """
         oid = _oid(resource_id)
         if oid is None or not seconds or seconds <= 0:
             return None
         with self.connection.connect() as db:
             current = db[RESOURCES_COLLECTION].find_one(
-                {"_id": oid}, {"mean_duration_sec": 1, "duration_samples": 1})
+                {"_id": oid},
+                {"mean_duration_sec": 1, "duration_samples": 1, "durations": 1})
             if current is None:
                 return None
+            now = utc_now()
             previous = current.get("mean_duration_sec")
             updated = (float(seconds) if previous is None
                        else (1 - DURATION_ALPHA) * float(previous)
                        + DURATION_ALPHA * float(seconds))
-            db[RESOURCES_COLLECTION].update_one({"_id": oid}, {"$set": {
+            fields: dict[str, Any] = {
                 "mean_duration_sec": round(updated, 3),
                 "duration_samples": int(current.get("duration_samples") or 0) + 1,
-                "duration_measured_at": utc_now(),
-            }})
+                "duration_measured_at": now,
+            }
+            if workload is not None:
+                known = duration_estimate(current, workload, now=now)
+                samples = 0
+                if known is None:
+                    # Nothing, or nothing recent: replaced rather than
+                    # averaged. A worker sampled once a day would otherwise
+                    # take ten days to lose a bad number.
+                    updated = float(seconds)
+                else:
+                    updated = (1 - DURATION_ALPHA) * known + DURATION_ALPHA * float(seconds)
+                    samples = int(current["durations"][workload].get("samples") or 0)
+                fields[f"durations.{workload}"] = {
+                    "mean": round(updated, 3), "samples": samples + 1, "at": now}
+            db[RESOURCES_COLLECTION].update_one({"_id": oid}, {"$set": fields})
             return updated
 
     def find_occupied(self) -> list[CoojaResource]:
@@ -1081,8 +1155,13 @@ class CoojaResourceRepository:
         attempt_id: str,
         *,
         expect_config_version: Optional[int] = None,
+        expected_sec: Optional[float] = None,
     ) -> Optional[CoojaResource]:
         """Claim a container for a simulation, atomically.
+
+        ``expected_sec`` is how long this job should hold it. Kept on the
+        worker, because while it runs that is what says when it frees up —
+        not its estimate for whatever job is being placed next.
 
         Returns the updated document, or ``None`` if someone else got there
         first. The filter is the whole mechanism: ``available`` is a state only
@@ -1128,6 +1207,7 @@ class CoojaResourceRepository:
                     "attempt_id": attempt_id,
                     "reserved_at": now,
                     "started_at": None,
+                    "expected_sec": expected_sec,
                     "remote_pid": None,
                     "updated_time": now,
                 }},

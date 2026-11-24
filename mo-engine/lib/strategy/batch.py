@@ -17,12 +17,14 @@ from pylib.db.models import Generation, Individual, Simulation
 from pylib.config.simulator import SimulationConfig
 from pylib import plot_network
 
+from lib.util import background
 from lib.util.build_input_sim_cooja import create_files
 
 from lib.nsga import fast_nondominated_sort
 from lib.problem.adapter import ProblemAdapter, Chromosome
 from lib.problem.chromosomes import chromosome_from_dict
 from lib.problem.resolve import build_adapter
+from lib.problem.mac_gene import pin_mac, pinned_mac_protocol
 from pylib.timeutil import utc_now
 from pylib.seed_aggregation import objective_aggregators
 from lib.strategy.completeness import (
@@ -31,7 +33,13 @@ from lib.strategy.completeness import (
     ReplicaGate,
     ReplicaPolicy,
     annotate,
+    decided_at_enqueue,
+    evaluation_of,
+    front_validity,
+    front_warning,
     is_usable,
+    objective_vector,
+    refuse,
     reused,
     without_simulations,
 )
@@ -137,6 +145,10 @@ class BatchStrategy(EngineStrategy):
         self._count_sims_inserted: int = 0
         self._map_genome_objectives: dict[Chromosome, list[float]] = {}
         self._inserted_genomes: set[str] = set()
+        #: Hash -> the completeness record stored with that genome's vector.
+        #: The Pareto items read it to say whether they are a measurement, a
+        #: constraint penalty or a placeholder.
+        self._evidence: dict[str, Optional[dict]] = {}
 
     def _input_chromosomes(self, experiment: dict) -> list[Chromosome]:
         """The chromosomes of the batch, overridden by strategies that choose them.
@@ -155,7 +167,14 @@ class BatchStrategy(EngineStrategy):
                 "Batch strategy requires a non-empty list of chromosomes "
                 "in parameters.chromosomes."
             )
-        return [chromosome_from_dict(self._problem_name, c) for c in raw_chromosomes]
+        # With a single firmware source the MAC gene of an input chromosome
+        # cannot be honoured; store the gene that will run, not the one that
+        # was asked for. See lib/problem/mac_gene.py.
+        mac = pinned_mac_protocol(self.source_repository_options)
+        return [
+            pin_mac(chromosome_from_dict(self._problem_name, c), mac)
+            for c in raw_chromosomes
+        ]
 
     # ------------------------------
     # EngineStrategy interface
@@ -169,7 +188,8 @@ class BatchStrategy(EngineStrategy):
         if not isinstance(self._exp_id, ObjectId):
             self._exp_id = ObjectId(str(self.experiment.get("_id")))
 
-        existing_generations = self.mongo.generation_repo.find_by_experiment(self._exp_id)
+        existing_generations = self._set_aside_cut(
+            self.mongo.generation_repo.find_by_experiment(self._exp_id))
         if existing_generations:
             last = existing_generations[-1]
             self._generation_id = last["_id"]
@@ -178,6 +198,11 @@ class BatchStrategy(EngineStrategy):
                 "[Batch] Experiment %s already has generation %s (status=%s); resuming.",
                 self._exp_id, self._generation_id, status,
             )
+            self._restore_decided_at_enqueue()
+            if status == EnumStatus.WAITING and not self._count_sims_inserted:
+                # All penalised, and killed before the enqueue could close it.
+                self.mongo.generation_repo.mark_done(self._generation_id)
+                status = EnumStatus.DONE
             self._start_watcher()
             self._start_generation_poll()
             if status in (EnumStatus.DONE, EnumStatus.ERROR):
@@ -220,10 +245,40 @@ class BatchStrategy(EngineStrategy):
         self._sim_watch_thread = None
 
     # ------------------------------
+    # Resume
+    # ------------------------------
+    def _restore_decided_at_enqueue(self) -> None:
+        """Read back the penalties written at enqueue, with their evidence.
+
+        They have no simulations, so the handler would find nothing for them
+        and put the refusal placeholder in their place. What does rest on
+        simulations is left to the handler, which derives it from them.
+        """
+        stored = {
+            document["individual_id"]: document
+            for document in self.mongo.individual_repo.find_by_generation(self._generation_id)
+        }
+        simulated: set[str] = set()
+        for genome in self._chromosomes:
+            genome_hash = genome.get_hash()
+            document = stored.get(genome_hash) or {}
+            vector, record = document.get("objectives"), document.get("completeness")
+            if vector and decided_at_enqueue(record):
+                # The goals are ±1: the same product converts both ways.
+                self._map_genome_objectives[genome] = self._objectives_list_to_original(vector)
+                self._evidence[genome_hash] = record
+            else:
+                simulated.add(genome_hash)
+        self._count_sims_inserted = len(simulated) * len(self._sim_rand_seeds)
+
+    # ------------------------------
     # Watchers
     # ------------------------------
     def _start_watcher(self):
-        self._stop_flag = False
+        # The flag is not cleared here: a run with nothing to simulate can
+        # finish, and stop, before start() reaches this.
+        if self._stop_flag:
+            return
 
         def _run_generation_watcher():
             def _callback(gen_doc: dict):
@@ -235,7 +290,8 @@ class BatchStrategy(EngineStrategy):
                     logger.exception("[Batch] Generation watcher callback error.")
 
             logger.info("[Batch] Starting Generation watcher (DONE or ERROR).")
-            self.mongo.generation_repo.watch_status_terminal(_callback)
+            self.mongo.generation_repo.watch_status_terminal(
+                _callback, should_stop=lambda: self._stop_flag)
 
         def _run_simulation_watcher():
             def _callback(sim_doc: dict):
@@ -247,7 +303,8 @@ class BatchStrategy(EngineStrategy):
                     logger.exception("[Batch] Simulation watcher callback error.")
 
             logger.info("[Batch] Starting Simulation watcher (DONE or ERROR).")
-            self.mongo.simulation_repo.watch_status_terminal(_callback)
+            self.mongo.simulation_repo.watch_status_terminal(
+                _callback, should_stop=lambda: self._stop_flag)
 
         self._watch_thread = Thread(
             target=_run_generation_watcher, daemon=True, name="batch-gen-watcher"
@@ -290,6 +347,8 @@ class BatchStrategy(EngineStrategy):
                 if self._stop_flag or self._generation_id is None:
                     continue
                 try:
+                    if self._stop_if_cancelled():
+                        break
                     gen = self.mongo.generation_repo.get(str(self._generation_id))
                     if gen and gen.get("status") in (EnumStatus.DONE, EnumStatus.ERROR):
                         logger.warning(
@@ -327,17 +386,19 @@ class BatchStrategy(EngineStrategy):
             "start_time": utc_now(),
             "end_time": None,
         }
-        self._generation_id = self.mongo.generation_repo.insert(gen_doc)
+        self._generation_id = gen_oid = self._open_generation(
+            gen_doc, [genome.get_hash() for genome in self._chromosomes], self._sim_rand_seeds)
         # Completeness is measured against this, not against the
         # documents that end up existing: a replica whose creation
         # failed is invisible to a count of what was created.
         self._replica_gate.record_plan(
             self._generation_id, self._sim_rand_seeds)
 
-        self.mongo.experiment_repo.update(str(exp_oid), {
-            "status": EnumStatus.RUNNING,
-            "start_time": utc_now(),
-        })
+        if self._adopted is None:
+            self.mongo.experiment_repo.update_unless_cancelled(str(exp_oid), {
+                "status": EnumStatus.RUNNING,
+                "start_time": utc_now(),
+            })
 
         sims_inserted = 0
         self._sim_done_count = 0
@@ -358,6 +419,10 @@ class BatchStrategy(EngineStrategy):
             )
             if penalty is not None:
                 self._map_genome_objectives[genome] = penalty
+                penalty_record = without_simulations(
+                    STATE_INFEASIBLE,
+                    "the individual violates a constraint; no simulation was run")
+                self._evidence[genome_hash] = penalty_record
                 ind_doc: Individual = {
                     "experiment_id": exp_oid,
                     "generation_id": gen_oid,
@@ -365,8 +430,11 @@ class BatchStrategy(EngineStrategy):
                     "chromosome": genome.to_dict(),
                     "objectives": self._objectives_list_to_original(penalty),
                     "topology_picture_id": None,
+                    # Without it the vector was told from a measurement only
+                    # by its magnitude.
+                    "completeness": penalty_record,
                 }
-                self.mongo.individual_repo.insert(ind_doc)
+                self._insert_individual(ind_doc)
                 self._inserted_genomes.add(genome_hash)
                 config_topo = self._convert_genome_to_sim_config(
                     genome=genome, gen_index=gen_index, ind_idx=i, seed=first_seed
@@ -393,12 +461,13 @@ class BatchStrategy(EngineStrategy):
                 "objectives": [],
                 "topology_picture_id": None,
             }
-            self.mongo.individual_repo.insert(ind_doc)
+            self._insert_individual(ind_doc)
             self._inserted_genomes.add(genome_hash)
 
             for seed in self._sim_rand_seeds:
                 config["randomSeed"] = seed
-                self._insert_simulation_db(genome_hash, exp_oid, gen_oid, config)
+                if not self._replica_written(genome_hash, seed):
+                    self._insert_simulation_db(genome_hash, exp_oid, gen_oid, config)
                 sims_inserted += 1
                 logger.info(
                     "[Batch] SIM inserted SEED=%s genome=%s", seed, genome_hash
@@ -407,6 +476,8 @@ class BatchStrategy(EngineStrategy):
             self._upload_topology_async(
                 exp_oid, gen_oid, gen_index, i, genome_hash, dict(config)
             )
+
+        self._generation_written(gen_oid)
 
         all_penalised = sims_inserted == 0
         if all_penalised:
@@ -496,6 +567,8 @@ class BatchStrategy(EngineStrategy):
                     ind.get_hash(),
                 )
                 self._map_genome_objectives[ind] = worst_objectives
+                completeness[ind.get_hash()] = refuse(
+                    record, "no aggregated metrics for this individual")
                 continue
             obj_vector = self._extract_objectives_to_minimization(ind_metrics)
             if obj_vector is None:
@@ -504,6 +577,8 @@ class BatchStrategy(EngineStrategy):
                     ind.get_hash(),
                 )
                 self._map_genome_objectives[ind] = worst_objectives
+                completeness[ind.get_hash()] = refuse(
+                    record, "a metric is missing or not a finite number")
             else:
                 self._map_genome_objectives[ind] = obj_vector
 
@@ -516,6 +591,7 @@ class BatchStrategy(EngineStrategy):
                 pareto_items.append({
                     "chromosome": genome.to_dict(),
                     "objectives": self._objectives_to_original(objectives),
+                    "evaluation": evaluation_of(self._evidence.get(genome.get_hash())),
                 })
                 all_objectives.append(objectives)
 
@@ -541,6 +617,16 @@ class BatchStrategy(EngineStrategy):
                 continue
             genome_hash = genome.get_hash()
             record = (completeness or {}).get(genome_hash)
+            if record is None:
+                # An infeasible genome has no simulations to count; its record
+                # was written at enqueue and must not be replaced by `unknown`.
+                record = self._evidence.get(genome_hash)
+            evidence = annotate(
+                record,
+                usable=is_usable(record, self._replica_policy),
+                policy=self._replica_policy,
+            )
+            self._evidence[genome_hash] = evidence
             # The objectives and the evidence behind them in one write: stored
             # separately, a reader could see a vector whose completeness had
             # not been written yet and have no way to know that.
@@ -548,11 +634,7 @@ class BatchStrategy(EngineStrategy):
                 genome_hash,
                 self._generation_id,
                 self._objectives_list_to_original(objectives),
-                annotate(
-                    record,
-                    usable=is_usable(record, self._replica_policy),
-                    policy=self._replica_policy,
-                ),
+                evidence,
             )
 
     # ------------------------------
@@ -568,16 +650,15 @@ class BatchStrategy(EngineStrategy):
         }
 
     def _extract_objectives_to_minimization(
-        self, sim_metrics_map: dict[str, float]
+        self, sim_metrics_map: dict[str, float],
     ) -> Optional[list[float]]:
-        obj_vector: list[float] = []
-        for key, goal in zip(self._objective_keys, self._objective_goals):
-            metric_value = sim_metrics_map.get(key)
-            if metric_value is None:
-                logger.warning("[Batch] Missing metric '%s'.", key)
-                return None
-            obj_vector.append(metric_value * goal)
-        return obj_vector
+        # NaN and infinity are refused here, not only None: a NaN vector is
+        # never dominated, so it would enter front 0 and corrupt the sort.
+        vector, reason = objective_vector(
+            sim_metrics_map, self._objective_keys, self._objective_goals)
+        if vector is None:
+            logger.warning("[Batch] Cannot compute objective vector: %s.", reason)
+        return vector
 
     # ------------------------------
     # Simulation and topology helpers
@@ -652,6 +733,9 @@ class BatchStrategy(EngineStrategy):
         individual_id: str,
         config_snapshot: dict,
     ) -> None:
+        if self._has_picture(individual_id):
+            return
+
         def _do():
             try:
                 topo_id = self._plot_topology(exp_oid, gen_index, ind_idx, config_snapshot)
@@ -664,7 +748,7 @@ class BatchStrategy(EngineStrategy):
                     gen_index, ind_idx,
                 )
 
-        Thread(target=_do, daemon=True, name=f"topo-batch-{ind_idx}").start()
+        background.submit(_do)
 
     def _plot_topology(
         self,
@@ -699,18 +783,24 @@ class BatchStrategy(EngineStrategy):
     ) -> None:
         assert self._exp_id is not None
         if pareto_front is not None:
+            validity = front_validity(pareto_front)
+            warning = front_warning(validity)
+            if warning:
+                logger.warning("[Batch] Experiment %s: %s", self._exp_id, warning)
+                system_msg = f"{system_msg} {warning}" if system_msg else warning
             logger.info("[Batch] Experiment %s completed.", self._exp_id)
-            self.mongo.experiment_repo.update(str(self._exp_id), {
+            self.mongo.experiment_repo.update_unless_cancelled(str(self._exp_id), {
                 "status": EnumStatus.DONE,
                 "end_time": utc_now(),
                 "system_message": system_msg
                     if system_msg is not None
                     else f"Experiment {self._exp_id} completed.",
                 "pareto_front": pareto_front,
+                "pareto_front_validity": validity,
             })
         else:
             logger.error("[Batch] Experiment %s finished with error.", self._exp_id)
-            self.mongo.experiment_repo.update(str(self._exp_id), {
+            self.mongo.experiment_repo.update_unless_cancelled(str(self._exp_id), {
                 "status": EnumStatus.ERROR,
                 "system_message": system_msg
                     if system_msg is not None

@@ -17,6 +17,7 @@ from pylib.db.models import Generation, Individual, Simulation
 from pylib.config.simulator import SimulationConfig
 from pylib import plot_network
 
+from lib.util import background
 from lib.util.build_input_sim_cooja import create_files
 
 # NSGA utils
@@ -27,6 +28,7 @@ from lib.genetic_operators.selection import tournament_selection, compute_indivi
 from lib.problem.adapter import ProblemAdapter, Chromosome
 from lib.problem.chromosomes import chromosome_from_dict
 from lib.problem.resolve import build_adapter
+from lib.problem.mac_gene import pin_mac_gene
 from .library_rng import dump_random_state, load_random_state
 from .analytical import analytical_objectives
 from pylib import benchmarks
@@ -38,7 +40,13 @@ from lib.strategy.completeness import (
     ReplicaGate,
     ReplicaPolicy,
     annotate,
+    decided_at_enqueue,
+    evaluation_of,
+    front_validity,
+    front_warning,
     is_usable,
+    objective_vector,
+    refuse,
     reused,
     without_simulations,
 )
@@ -58,11 +66,11 @@ class NSGA3LoopStrategy(EngineStrategy):
     """
     NSGA-III loop strategy integrated with SimLab.
 
-    - Generates an initial population (fixed 2D mote positions).
+    - Generates an initial population with the problem adapter.
     - Queues simulations in MongoDB (Change Streams trigger execution on the master node).
     - Upon receiving the results (DONE status on the Generation), calculates the objectives,
         performs NSGA-III selection with reference point niching,
-        creates the next generation (offspring via SBX + Polynomial Mutation),
+        creates the next generation (offspring via the adapter's operators),
         and repeats until `number_of_generations` is reached.
     """
     def __init__(self, experiment: dict, mongo):
@@ -85,7 +93,8 @@ class NSGA3LoopStrategy(EngineStrategy):
         }
 
         # Synthetic mode: when enabled, CSC files and source-repo lookups are skipped.
-        # Objectives are evaluated by the master-node using a mathematical benchmark.
+        # Objectives come from a mathematical benchmark: in-process for P0,
+        # on the master-node for any other problem.
         syn_cfg: dict = simulation_config.get("synthetic", {}) or {}
         self._is_synthetic: bool = bool(syn_cfg.get("enabled", False))
         if self._is_synthetic:
@@ -113,6 +122,11 @@ class NSGA3LoopStrategy(EngineStrategy):
             algorithm_config,
             self._ga_rng
         )
+        # With a single firmware source the MAC gene cannot express anything;
+        # pin it where chromosomes are made so the stored gene is the one that
+        # ran and two phenotypes never hash apart. See lib/problem/mac_gene.py.
+        self._problem_adapter = pin_mac_gene(
+            self._problem_adapter, self.source_repository_options)
 
         self._metric_conv_config = experiment.get("data_conversion_config", {}) or {}
 
@@ -197,7 +211,11 @@ class NSGA3LoopStrategy(EngineStrategy):
         # genomes already evaluated are never re-submitted to Cooja.
         self._load_genome_cache_from_db()
 
-        existing_generations = self.mongo.generation_repo.find_by_experiment(self._exp_id)
+        existing_generations = self._set_aside_cut(
+            self.mongo.generation_repo.find_by_experiment(self._exp_id),
+            inserted=self._inserted_genomes,
+            caches=(self._genome_objectives_cache, self._genome_completeness_cache),
+        )
         if existing_generations:
             should_process_terminal = self._resume_existing_generation(existing_generations)
             self._start_watcher()
@@ -303,12 +321,16 @@ class NSGA3LoopStrategy(EngineStrategy):
             if ind_metrics is None:
                 logger.warning("No metrics for genome %s; assigning worst objectives.", ind.get_hash())
                 self._map_genome_objectives[ind] = worst_objectives
+                completeness[ind.get_hash()] = refuse(
+                    record, "no aggregated metrics for this individual")
                 continue
 
             obj_vector = self._extract_objectives_to_minimization(ind_metrics)
             if obj_vector is None:
                 logger.warning("Could not extract objective vector for genome %s; assigning worst.", ind.get_hash())
                 self._map_genome_objectives[ind] = worst_objectives
+                completeness[ind.get_hash()] = refuse(
+                    record, "a metric is missing or not a finite number")
             else:
                 self._map_genome_objectives[ind] = obj_vector
 
@@ -374,6 +396,11 @@ class NSGA3LoopStrategy(EngineStrategy):
         self._restore_population_state(generations, last_generation)
 
         status = last_generation.get("status")
+        if status == EnumStatus.WAITING and not self._count_sims_inserted:
+            # Nothing to simulate, and killed before the enqueue could close it:
+            # the master closes only generations that have simulations.
+            self.mongo.generation_repo.mark_done(self._generation_id)
+            status = EnumStatus.DONE
         if status in (EnumStatus.WAITING, EnumStatus.RUNNING):
             logger.info(
                 "[NSGA-III] Resuming experiment %s from existing generation %s (index=%d, status=%s).",
@@ -382,7 +409,7 @@ class NSGA3LoopStrategy(EngineStrategy):
                 last_generation["index"],
                 status,
             )
-            self.mongo.experiment_repo.update(str(self._exp_id), {
+            self.mongo.experiment_repo.update_unless_cancelled(str(self._exp_id), {
                 "status": EnumStatus.RUNNING,
             })
             return False
@@ -393,7 +420,7 @@ class NSGA3LoopStrategy(EngineStrategy):
                 self._generation_id,
                 last_generation["index"],
             )
-            self.mongo.experiment_repo.update(str(self._exp_id), {
+            self.mongo.experiment_repo.update_unless_cancelled(str(self._exp_id), {
                 "status": EnumStatus.RUNNING,
             })
             return True
@@ -410,7 +437,7 @@ class NSGA3LoopStrategy(EngineStrategy):
         current_index = int(current_generation["index"])
         self._restore_selection_state(current_generation)
         self._current_population, current_map, pending_individuals = self._load_generation_population(
-            current_generation["_id"]
+            current_generation["_id"], in_flight=True
         )
         self._map_genome_objectives.update(current_map)
         self._count_sims_inserted = pending_individuals * len(self._sim_rand_seeds)
@@ -489,9 +516,14 @@ class NSGA3LoopStrategy(EngineStrategy):
 
             stored = document.get("objectives")
             if stored:
-                objectives_map[chromosome] = self._objectives_list_to_minimization(
+                vector = self._objectives_list_to_minimization(
                     [float(value) for value in stored]
                 )
+                objectives_map[chromosome] = vector
+                # The cache write follows the individual's, so it can be missing.
+                self._genome_objectives_cache.setdefault(individual_id, vector)
+                self._genome_completeness_cache.setdefault(
+                    individual_id, document.get("completeness"))
                 continue
             cached = self._genome_objectives_cache.get(individual_id)
             if cached:
@@ -502,7 +534,15 @@ class NSGA3LoopStrategy(EngineStrategy):
     def _load_generation_population(
         self,
         generation_id: ObjectId,
+        *,
+        in_flight: bool = False,
     ) -> tuple[list[Chromosome], dict[Chromosome, list[float]], int]:
+        """A generation's population, with the vectors that stand.
+
+        ``in_flight`` is the generation being resumed: there only what was
+        decided at enqueue stands, with the evidence the handler will write
+        back (see ``decided_at_enqueue``).
+        """
         individuals = self.mongo.individual_repo.find_by_generation(generation_id)
         if not individuals:
             raise RuntimeError(f"Cannot resume generation {generation_id}: no individuals were found.")
@@ -524,10 +564,21 @@ class NSGA3LoopStrategy(EngineStrategy):
             population.append(chromosome)
 
             individual_objectives = ind.get("objectives")
+            genome_hash, record = ind["individual_id"], ind.get("completeness")
+            if in_flight:
+                if not (individual_objectives and decided_at_enqueue(record)):
+                    self._genome_objectives_cache.pop(genome_hash, None)
+                    self._genome_completeness_cache.pop(genome_hash, None)
+                    pending_individuals += 1
+                    continue
+                self._generation_completeness[genome_hash] = record
             if individual_objectives:
-                objectives_map[chromosome] = self._objectives_list_to_minimization(
+                vector = self._objectives_list_to_minimization(
                     [float(value) for value in individual_objectives]
                 )
+                objectives_map[chromosome] = vector
+                self._genome_objectives_cache.setdefault(genome_hash, vector)
+                self._genome_completeness_cache.setdefault(genome_hash, record)
                 continue
 
             cache_objectives = self._genome_objectives_cache.get(ind["individual_id"])
@@ -542,14 +593,10 @@ class NSGA3LoopStrategy(EngineStrategy):
 # Watcher (Change Stream) + Polling fallback
 # ------------------------------
     def _start_watcher(self):
-        self._stop_flag = False
-
-        # Stop any existing threads
-        for t in (self._watch_thread, self._sim_watch_thread):
-            if t and t.is_alive():
-                self._stop_flag = True
-                t.join(timeout=1.0)
-                self._stop_flag = False
+        # The flag is not cleared here: a run with nothing to simulate can
+        # finish, and stop, before start() reaches this.
+        if self._stop_flag:
+            return
 
         # --- Generation watcher: controls flow ---
         def _run_generation_watcher():
@@ -562,7 +609,8 @@ class NSGA3LoopStrategy(EngineStrategy):
                     logger.exception("[NSGA-III] Generation watcher callback error.")
 
             logger.info("[NSGA-III] Starting Generation watcher (DONE or ERROR).")
-            self.mongo.generation_repo.watch_status_terminal(_callback)
+            self.mongo.generation_repo.watch_status_terminal(
+                _callback, should_stop=lambda: self._stop_flag)
 
         # --- Simulation watcher: accounting only ---
         def _run_simulation_watcher():
@@ -575,7 +623,8 @@ class NSGA3LoopStrategy(EngineStrategy):
                     logger.exception("[NSGA-III] Simulation watcher callback error.")
 
             logger.info("[NSGA-III] Starting Simulation watcher (DONE or ERROR).")
-            self.mongo.simulation_repo.watch_status_terminal(_callback)
+            self.mongo.simulation_repo.watch_status_terminal(
+                _callback, should_stop=lambda: self._stop_flag)
 
         self._watch_thread = Thread(target=_run_generation_watcher, daemon=True, name="nsga3-gen-watcher")
         self._sim_watch_thread = Thread(target=_run_simulation_watcher, daemon=True, name="nsga3-sim-watcher")
@@ -621,6 +670,8 @@ class NSGA3LoopStrategy(EngineStrategy):
                 if self._stop_flag or self._generation_id is None:
                     continue
                 try:
+                    if self._stop_if_cancelled():
+                        break
                     gen = self.mongo.generation_repo.get(str(self._generation_id))
                     if gen and gen.get("status") in (EnumStatus.DONE, EnumStatus.ERROR):
                         logger.warning(
@@ -645,9 +696,12 @@ class NSGA3LoopStrategy(EngineStrategy):
         config_snapshot: dict,
     ) -> None:
         """
-        Generates and uploads the topology image for one individual in a background thread,
+        Generates and uploads the topology image for one individual on the background queue,
         then updates topology_picture_id on the Individual document.
         """
+        if self._has_picture(individual_id):
+            return
+
         def _do():
             try:
                 topo_id = self._plot_topology(exp_oid, gen_index, ind_idx, config_snapshot)
@@ -657,7 +711,7 @@ class NSGA3LoopStrategy(EngineStrategy):
                     "[NSGA-III] Topology upload failed for gen=%s ind=%s", gen_index, ind_idx
                 )
 
-        Thread(target=_do, daemon=True, name=f"topo-g{gen_index}-{ind_idx}").start()
+        background.submit(_do)
 
 
 # ------------------------------
@@ -706,15 +760,16 @@ class NSGA3LoopStrategy(EngineStrategy):
         # Increment before inserting so the change-stream callback (which fires
         # asynchronously) always sees the already-updated index.
         self._gen_index += 1
-        self._generation_id = self.mongo.generation_repo.insert(gen_doc)
+        self._generation_id = gen_oid = self._open_generation(
+            gen_doc, [genome.get_hash() for genome in population], self._sim_rand_seeds)
         # Completeness is measured against this, not against the
         # documents that end up existing: a replica whose creation
         # failed is invisible to a count of what was created.
         self._replica_gate.record_plan(
             self._generation_id, self._sim_rand_seeds)
 
-        if gen_index == 0:
-            self.mongo.experiment_repo.update(str(exp_oid), {
+        if gen_index == 0 and self._adopted is None:
+            self.mongo.experiment_repo.update_unless_cancelled(str(exp_oid), {
                 "status": EnumStatus.RUNNING,
                 "start_time": utc_now()
             })
@@ -760,7 +815,7 @@ class NSGA3LoopStrategy(EngineStrategy):
                     # have anything to count for this genome.
                     "completeness": carried,
                 }
-                self.mongo.individual_repo.insert(ind_doc)
+                self._insert_individual(ind_doc)
                 config_topo = self._convert_genome_to_sim_config(
                     genome=genome, gen_index=gen_index, ind_idx=i, seed=first_seed
                 )
@@ -790,7 +845,7 @@ class NSGA3LoopStrategy(EngineStrategy):
                     STATE_ANALYTICAL,
                     "the problem is analytical; no simulation was run")
                 self._generation_completeness[genome_hash] = analytical_record
-                self.mongo.individual_repo.insert({
+                self._insert_individual({
                     "experiment_id": exp_oid,
                     "generation_id": gen_oid,
                     "individual_id": genome_hash,
@@ -807,7 +862,7 @@ class NSGA3LoopStrategy(EngineStrategy):
                 self._genome_completeness_cache[genome_hash] = (
                     analytical_record)
                 try:
-                    self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
+                    self._insert_cache_entry(genome_hash, genome.to_dict())
                     self.mongo.genome_cache_repo.set_objectives(
                         self._exp_id, genome_hash, obj_min,
                         without_simulations(STATE_ANALYTICAL, "the problem is analytical; no simulation was run"))
@@ -841,9 +896,9 @@ class NSGA3LoopStrategy(EngineStrategy):
                     "topology_picture_id": None,
                     "completeness": penalty_record,
                 }
-                self.mongo.individual_repo.insert(ind_doc)
+                self._insert_individual(ind_doc)
                 self._inserted_genomes.add(genome_hash)
-                self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
+                self._insert_cache_entry(genome_hash, genome.to_dict())
                 self.mongo.genome_cache_repo.set_objectives(
                     self._exp_id, genome_hash, penalty,
                     without_simulations(
@@ -880,17 +935,20 @@ class NSGA3LoopStrategy(EngineStrategy):
                 "objectives": [],
                 "topology_picture_id": None,
             }
-            self.mongo.individual_repo.insert(ind_doc)
+            self._insert_individual(ind_doc)
             self._inserted_genomes.add(genome_hash)
-            self.mongo.genome_cache_repo.insert(exp_oid, genome_hash, genome.to_dict())
+            self._insert_cache_entry(genome_hash, genome.to_dict())
 
             for seed in self._sim_rand_seeds:
                 config["randomSeed"] = seed
-                self._insert_simulation_db(genome_hash, exp_oid, gen_oid, config)
+                if not self._replica_written(genome_hash, seed):
+                    self._insert_simulation_db(genome_hash, exp_oid, gen_oid, config)
                 sims_inserted += 1
                 logger.info("SIM inserted SEED=%s genome=%s", seed, genome_hash)
 
             self._upload_topology_async(exp_oid, gen_oid, gen_index, i, genome_hash, dict(config))
+
+        self._generation_written(gen_oid)
 
         # When every genome already had cached objectives (or was penalised)
         # there are no simulations to wait for. Mark the generation DONE and fire
@@ -1010,15 +1068,16 @@ class NSGA3LoopStrategy(EngineStrategy):
         }
 
 
-    def _extract_objectives_to_minimization(self, sim_metrics_map: dict[str, float]) -> Optional[list[float]]:
-        obj_vector: list[float] = []
-        for key, goal in zip(self._objective_keys, self._objective_goals):
-            metric_value = sim_metrics_map.get(key)
-            if metric_value is None:
-                logger.warning(f"Missing metric '{key}'; cannot compute objective vector.")
-                return None
-            obj_vector.append(metric_value * goal)
-        return obj_vector
+    def _extract_objectives_to_minimization(
+        self, sim_metrics_map: dict[str, float],
+    ) -> Optional[list[float]]:
+        # NaN and infinity are refused here, not only None: a NaN vector is
+        # never dominated, so it would enter front 0 and corrupt the sort.
+        vector, reason = objective_vector(
+            sim_metrics_map, self._objective_keys, self._objective_goals)
+        if vector is None:
+            logger.warning("[NSGA-III] Cannot compute objective vector: %s.", reason)
+        return vector
 
 
 # ---------------------------------------
@@ -1355,6 +1414,7 @@ class NSGA3LoopStrategy(EngineStrategy):
             pareto_items.append({
                 "chromosome": genome.to_dict(),
                 "objectives": self._objectives_to_original(objectives),
+                "evaluation": evaluation_of(self._genome_completeness_cache.get(genome.get_hash())),
             })
             all_objectives.append(objectives)
         if not all_objectives:
@@ -1372,16 +1432,22 @@ class NSGA3LoopStrategy(EngineStrategy):
     ) -> None:
         assert self._exp_id is not None
         if pareto_front is not None:
+            validity = front_validity(pareto_front)
+            warning = front_warning(validity)
+            if warning:
+                logger.warning("[NSGA-III] Experiment %s: %s", self._exp_id, warning)
+                system_msg = f"{system_msg} {warning}" if system_msg else warning
             logger.info(f"[NSGA-III] Experiment {self._exp_id} completed.")
-            self.mongo.experiment_repo.update(str(self._exp_id), {
+            self.mongo.experiment_repo.update_unless_cancelled(str(self._exp_id), {
                 "status": EnumStatus.DONE,
                 "end_time": utc_now(),
                 "system_message": system_msg if system_msg is not None else f"Experiment {self._exp_id} completed.",
-                "pareto_front": pareto_front
+                "pareto_front": pareto_front,
+                "pareto_front_validity": validity,
             })
         else:
             logger.error(f"[NSGA-III] Experiment {self._exp_id} finished with error.")
-            self.mongo.experiment_repo.update(str(self._exp_id), {
+            self.mongo.experiment_repo.update_unless_cancelled(str(self._exp_id), {
                 "status": EnumStatus.ERROR,
                 "system_message": system_msg if system_msg is not None else f"Experiment {self._exp_id} finished.",
                 "end_time": utc_now()

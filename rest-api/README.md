@@ -4,7 +4,9 @@ Read and write access to SimLab's data: experiments, generations,
 individuals, simulations, files, and the host/worker inventory the
 master-node schedules on.
 
-FastAPI, served under `/api/v1`. The OpenAPI document is at `/docs`.
+FastAPI, served under `/api/v1`. Swagger UI is at `/docs`, ReDoc at `/redoc` and
+the OpenAPI document at `/openapi.json`. Collection routes end in a slash
+(`/experiments/`): without it the API answers 307.
 
 ---
 
@@ -12,8 +14,12 @@ FastAPI, served under `/api/v1`. The OpenAPI document is at `/docs`.
 
 ```bash
 pip install -r requirements.txt
-PYTHONPATH=.. uvicorn main:app --reload --port 8000
+PYTHONPATH=.. MONGO_URI='mongodb://localhost:27017/?directConnection=true' \
+    uvicorn main:app --reload --port 8000
 ```
+
+`directConnection` is needed against the compose MongoDB, whose replica set
+advertises a name that only resolves inside Docker.
 
 `PYTHONPATH=..` is how `pylib` is imported — it is shared by path rather than
 installed. In the Compose deployment the API sits behind the reverse proxy and
@@ -21,9 +27,14 @@ is not published directly; see [nginx/README.md](../nginx/README.md).
 
 | Variable | Default | Description |
 |---|---|---|
-| `MONGO_URI` | `mongodb://localhost:27017/?replicaSet=rs0` | Replica set required, for change streams |
+| `MONGO_URI` | `mongodb://localhost:27017/?replicaSet=rs0` | The deployment is a replica set: the API uses transactions and the other services change streams |
 | `DB_NAME` | `simlab` | |
-| `SIMLAB_API_KEY` | `api-password` | Required on every request, as `X-API-Key` |
+| `SIMLAB_API_KEY` | `api-password` (compose: `simlab-api-key42`) | Required on every `/api/v1` request, as `X-API-Key`. `/health` and the documentation pages do not ask for it |
+| `PROMETHEUS_URL` | `http://localhost:9090`, or `http://prometheus:9090` with `IS_DOCKER` | Used by the manual runtime-metrics collection |
+| `SIMLAB_PARETO_SCRIPT` | `../pareto-analysis/plot_pareto_results.py` | The script behind `plot-pareto` |
+| `SIMLAB_PARETO_PYTHON` | the API's interpreter | Runs that script |
+| `UVICORN_RELOAD` | unset | `1` enables auto-reload under `python main.py` |
+| `GRIDFS_COMPRESSION` / `GRIDFS_COMPRESSION_LEVEL` | `zstd` / `12` | Compression of uploads |
 
 > The key is **not** user authentication. It is embedded in the GUI bundle, so
 > anyone who can load the application can read it and call the administrative
@@ -37,13 +48,42 @@ is not published directly; see [nginx/README.md](../nginx/README.md).
 
 | Prefix | What it covers |
 |---|---|
-| `/experiments` | Experiments, their generations and individuals, Pareto fronts, analysis files, firmware snapshots and the distribution of work over hosts/workers |
-| `/simulations` | One simulation's record, including **where it ran** — host, worker, container, attempt |
-| `/generations`, `/individuals` | Reading the optimisation's structure |
-| `/files` | GridFS: upload, download, conversion to PNG |
+| `/experiments` | Experiments, with their generations and individuals (`/{id}/full`), Pareto fronts, quality indicators (`/{id}/hv-gd`), Pareto plots, analysis files, firmware snapshots, runtime metrics and the distribution of work over hosts/workers |
+| `/simulations` | One simulation's record, including **where it ran** — host, worker, container, attempt — and the files it references |
+| `/generations` | Generations, each with its individuals. Individuals have no routes of their own |
+| `/files` | GridFS downloads: one file, and ZIPs of an experiment's analysis, topologies or firmware. Uploads go through the routes that own each file |
 | `/sources` | Source-code repositories and firmware |
-| `/problems`, `/synthetic`, `/campaigns` | Problem definitions and synthetic instances |
-| `/infra` | Hosts, workers, the inventory overview, and the public key credentials are sealed against |
+| `/problems` | Saved problems and their background images |
+| `/campaigns` | Named groups of experiments |
+| `/synthetic` | The catalogue of synthetic benchmarks |
+| `/scalability` | Creating, listing and analysing USL benchmarks |
+| `/infra` | Hosts, workers, machine limits, the topology, the inventory overview, and the public key credentials are sealed against |
+
+The complete list, with schemas, is the Swagger UI.
+
+### What `POST /experiments/` keeps
+
+`parameters` is a typed model:
+
+| Key | `batch` | The other strategies |
+|---|---|---|
+| `strategy`, `simulation`, `problem`, `objectives` | required | required |
+| `algorithm` | optional, stored as `{}` when absent (batch does not read it) | required |
+| `chromosomes` | required | dropped |
+| `random_seed` | optional; batch draws seeds from it when `simulation.random_seeds` is absent | dropped (theirs is `algorithm.random_seed`) |
+| `benchmark` | dropped | dropped: a benchmark is created by `POST /scalability/`, and its plan is returned on reading |
+
+**Any other key in it is dropped without an error**, on the way in and on the
+way out. The contents of `algorithm`, `simulation` and `problem` are stored as
+sent. `simulation.duration` is in simulated minutes.
+
+Two inputs are validated here, with a 422 that names the field: the seed
+aggregators, and what a [batch](../mo-engine/lib/strategy/README.md#batch)
+brings (`pylib/batch_input.py`). The rest is validated by the engine when the
+experiment starts.
+
+On reading, `algorithm` is always present: `{}` for an experiment stored without
+one.
 
 ---
 
@@ -61,7 +101,7 @@ private key and no crypto library.
 **Work the API cannot do itself is recorded as a request.** Checking a host or
 discovering its containers needs a route to the container network and the key
 that opens a credential, and the API has neither. `POST /infra/hosts/{id}/check`
-and `/discovery` therefore answer **202** with a timestamp, and the
+and `/discover` therefore answer **202** with a timestamp, and the
 master-node's health cycle carries them out — within one cycle, not instantly.
 
 ### Status codes these routes actually use
@@ -170,3 +210,24 @@ cover is the contract against a real database; the round-trip tests in
 are the exception — they drive endpoint, mapper and repository over a store
 that applies `$set`, because asserting on a 200 is how a defect that erased
 credentials passed review once.
+
+---
+
+## What a client may change
+
+| Route | Accepts |
+|---|---|
+| `PUT /experiments/{id}` | `name` only (a non-empty string). Everything else is the engine's |
+| `PATCH /experiments/{id}/status` | `Cancelled` from `Waiting` or `Running`; `Waiting` from `Done`, `Error` or `Cancelled`. `Running`, `Done` and `Error` are the engine's (422); any other move is 409, and asking for the current status is a no-op |
+| `PUT /simulations/{id}` | `system_message` only. Status, metrics and files are the master-node's |
+| `PATCH /simulations/{id}/status`, `PATCH /generations/{id}/status` | one of the five statuses (422 otherwise) |
+
+A running experiment cannot be put back to `Waiting`: the engine would start it
+a second time.
+
+`GET /files/simulations/{id}/topology` serves the topology picture, which is
+stored on the simulation's individual.
+
+## Known issues
+
+None known.

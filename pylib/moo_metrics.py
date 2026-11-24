@@ -50,15 +50,23 @@ References
 """
 from __future__ import annotations
 
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 import numpy as np
 import moocore
 
+from pylib.evaluation_validity import (  # noqa: F401  (re-exported)
+    LEGACY_PENALTY_THRESHOLD,
+    is_excluded,
+    is_valid_evaluation,
+)
+
 # Objectives at or above this magnitude mark an infeasible ("penalised")
-# individual rather than a measurement. Mirrors the REST API's
-# ``_PENALTY_THRESHOLD`` and the frontend's ``PENALTY_THRESHOLD``.
-PENALTY_THRESHOLD = 1.0e8
+# individual rather than a measurement — **for documents without an evidence
+# record only**. Anything written since the engine stores `completeness` /
+# `evaluation` next to the vector is filtered by that record instead
+# (:func:`is_excluded`). Mirrors the frontend's ``PENALTY_THRESHOLD``.
+PENALTY_THRESHOLD = LEGACY_PENALTY_THRESHOLD
 
 
 def is_penalized(objectives: Sequence[float], threshold: float = PENALTY_THRESHOLD) -> bool:
@@ -70,10 +78,15 @@ def sanitize_reference_front(
     rows: Iterable[Sequence[float]],
     *,
     penalty_threshold: float = PENALTY_THRESHOLD,
+    records: Optional[Sequence[Optional[Mapping[str, Any]]]] = None,
 ) -> np.ndarray:
     """Turn raw stored rows into a usable reference front (minimisation space).
 
-    Drops penalised rows, deduplicates, and keeps only the non-dominated ones.
+    Drops penalised and non-finite rows, deduplicates, and keeps only the
+    non-dominated ones. ``records`` — parallel to ``rows`` — carries each
+    row's evidence (a Pareto item's ``evaluation``); a row with one is kept or
+    dropped by it, and only a row without one falls back to the magnitude
+    rule.
 
     All three steps are load-bearing for IGD, and the first one especially:
     IGD averages over the *reference*, so a single penalised row at 1e9 drags
@@ -88,9 +101,10 @@ def sanitize_reference_front(
     """
     kept: list[list[float]] = []
     seen: set[tuple] = set()
-    for row in rows:
+    for index, row in enumerate(rows):
         vals = [float(v) for v in row]
-        if is_penalized(vals, penalty_threshold):
+        record = records[index] if records is not None else None
+        if is_excluded(vals, record, legacy_threshold=penalty_threshold):
             continue
         key = tuple(vals)
         if key in seen:

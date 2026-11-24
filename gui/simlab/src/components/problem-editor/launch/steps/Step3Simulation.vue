@@ -1,7 +1,7 @@
 <template>
   <div class="step">
     <div class="field-group">
-      <label class="field-label" for="sim-duration">Simulation duration (seconds) <span class="required">*</span></label>
+      <label class="field-label" for="sim-duration">Simulated duration (minutes) <span class="required">*</span></label>
       <input
         id="sim-duration"
         :value="modelValue.duration"

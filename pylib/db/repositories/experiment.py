@@ -80,11 +80,38 @@ class ExperimentRepository:
             result = db["experiments"].update_one({"_id": ObjectId(experiment_id)}, {"$set": updates})
             return result.modified_count > 0
 
+    def update_unless_cancelled(self, experiment_id: str, updates: dict) -> bool:
+        """``update``, unless somebody cancelled the experiment meanwhile.
+
+        For the engine's status writes. One conditional write: reading and
+        then writing would let a cancellation in between be overwritten.
+        """
+        updates["id"] = experiment_id
+        with self.connection.connect() as db:
+            result = db["experiments"].update_one(
+                {"_id": ObjectId(experiment_id), "status": {"$ne": EnumStatus.CANCELLED}},
+                {"$set": updates})
+            return result.matched_count > 0
+
     def update_status(self, experiment_id: str, status: str) -> bool:
         return self.update(experiment_id, {"status": status})
 
+    def update_status_from(self, experiment_id: str, status: str, allowed_from) -> bool:
+        """Set ``status`` only while the current one is in ``allowed_from``.
+
+        One conditional write, so a status that changes in between is not
+        overwritten: the API moving a running experiment back to Waiting let
+        the engine start it a second time.
+        """
+        with self.connection.connect() as db:
+            result = db["experiments"].update_one(
+                {"_id": ObjectId(experiment_id), "status": {"$in": list(allowed_from)}},
+                {"$set": {"status": status}},
+            )
+            return result.matched_count > 0
+
     def is_cancelled(self, experiment_id: str) -> bool:
-        """True when the experiment has been marked CANCELLED (e.g. from the GUI).
+        """True when the experiment was marked CANCELLED (e.g. from the GUI) or deleted.
 
         Used by the engine strategies to cooperatively stop a running experiment
         at the next generation boundary instead of driving it to completion.
@@ -96,7 +123,7 @@ class ExperimentRepository:
             return False
         with self.connection.connect() as db:
             doc = db["experiments"].find_one({"_id": oid}, {"status": 1})
-            return bool(doc) and doc.get("status") == EnumStatus.CANCELLED
+            return doc is None or doc.get("status") == EnumStatus.CANCELLED
 
     def update_starting(self, experiment_id: str) -> bool:
         with self.connection.connect() as db:
@@ -260,7 +287,10 @@ class ExperimentRepository:
                             {"$in": list(self._RETRYABLE_RUNTIME_METRICS_STATUS)}},
                     ],
                 },
-                {"_id": 1, "start_time": 1, "end_time": 1}
+                # The status tells the sweep a block exists: a retry has to
+                # force past the claim, which refuses an existing block. Left
+                # out, unavailable and failed were picked up and never retried.
+                {"_id": 1, "start_time": 1, "end_time": 1, "runtime_metrics.status": 1}
             ))
 
     def watch_status_finished(self, on_change: Callable[[dict], None]):
@@ -443,7 +473,11 @@ class ExperimentRepository:
 
             return file_id
 
-    def watch_status_waiting(self, on_change: Callable[[dict], None]):
+    def watch_status_waiting(
+        self,
+        on_change: Callable[[dict], None],
+        on_open: Optional[Callable[[], None]] = None,
+    ):
         log.info("[ExperimentRepository] Waiting new experiments...")
         pipeline = [
             {
@@ -457,5 +491,6 @@ class ExperimentRepository:
             "experiments",
             pipeline,
             on_change,
-            full_document="updateLookup"
+            full_document="updateLookup",
+            on_open=on_open,
         )

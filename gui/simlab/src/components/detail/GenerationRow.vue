@@ -64,7 +64,9 @@ defineEmits<{ (e: "select", individual: IndividualDto): void }>();
 const open = ref(props.defaultOpen ?? false);
 
 const penalizedCount = computed(
-  () => props.generation.population.filter((ind) => isPenalized(ind.objectives)).length,
+  () =>
+    props.generation.population.filter((ind) => isPenalized(ind.objectives, ind.completeness))
+      .length,
 );
 
 function formatTime(iso: string): string {

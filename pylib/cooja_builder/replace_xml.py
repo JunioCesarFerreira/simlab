@@ -5,8 +5,8 @@ import xml.dom.minidom as minidom
 logger = logging.getLogger(__name__)
 
 def update_simulation_xml(
-    fixed_positions: list[tuple[float, float]],
-    mobile_positions: list[tuple[float, float]],
+    positions: list[tuple[float, float]],
+    has_mobile: bool,
     root_motes: list[int],
     simulation_time: float,
     tx_range: float,
@@ -18,8 +18,8 @@ def update_simulation_xml(
     """Atualiza arquivo XML de simulação com novos parâmetros.
     
     Args:
-        fixed_positions: Lista de tuplas (x, y) com posições fixas
-        mobile_positions: Lista de tuplas (x, y) com posições iniciais dos móveis
+        positions: Posição inicial (x, y) de cada mote, na ordem dos IDs
+        has_mobile: Se há motes móveis (mantém o plugin de mobilidade)
         root_motes: Lista de IDs dos motes servidores
         simulation_time: Tempo de simulação em minutos
         tx_range: Alcance de transmissão
@@ -72,7 +72,7 @@ def update_simulation_xml(
         for mote in motetype_client.findall("mote"):
             motetype_client.remove(mote)
     
-    for i, (x, y) in enumerate(fixed_positions + mobile_positions):
+    for i, (x, y) in enumerate(positions):
         mote_type = motetype_root if i + 1 in root_motes else motetype_client
         if mote_type is not None:
             mote = ET.SubElement(mote_type, "mote")
@@ -85,7 +85,7 @@ def update_simulation_xml(
             id_config.text = "org.contikios.cooja.contikimote.interfaces.ContikiMoteID"
             ET.SubElement(id_config, "id").text = str(i + 1)
             
-    if mobile_positions is None or len(mobile_positions) == 0:
+    if not has_mobile:
         # Remove o plugin de mobilidade, se existir
         for plugin in root.findall(".//plugin"):
             if plugin.text and "org.contikios.cooja.plugins.Mobility" in plugin.text:

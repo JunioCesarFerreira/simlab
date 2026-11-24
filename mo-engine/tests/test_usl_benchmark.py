@@ -62,6 +62,17 @@ class Store:
                 return next((g for g in outer.generations
                              if str(g["_id"]) == str(gen_id)), None)
 
+            def update(self, gen_id, fields):
+                self.get(gen_id).update(fields)
+                return True
+
+            def close_if_finished(self, gen_id, *, require_simulations=False):
+                sims = outer.wave_simulations(gen_id)
+                if not sims or any(s["status"] == EnumStatus.WAITING for s in sims):
+                    return None
+                self.get(gen_id)["status"] = EnumStatus.DONE
+                return EnumStatus.DONE
+
             def watch_status_terminal(self, callback):
                 return None
 
@@ -69,6 +80,9 @@ class Store:
             def insert(self, ind):
                 outer.individuals.append(dict(ind))
                 return ObjectId()
+
+            def find_by_generation(self, gen_id):
+                return [i for i in outer.individuals if i["generation_id"] == gen_id]
 
         class Collection:
             def count_documents(self, flt):
@@ -94,6 +108,9 @@ class Store:
                 outer.simulations.append(doc)
                 return doc["_id"]
 
+            def find_replicas(self, gen_id):
+                return outer.wave_simulations(gen_id)
+
         class Experiments:
             def get(self, exp_id):
                 return outer.experiments.get(str(exp_id))
@@ -101,6 +118,13 @@ class Store:
             def update(self, exp_id, fields):
                 outer.experiments.setdefault(str(exp_id), {}).update(fields)
                 return True
+
+            def is_cancelled(self, exp_id):
+                return outer.experiments.get(str(exp_id), {}).get(
+                    "status") == EnumStatus.CANCELLED
+
+            def update_unless_cancelled(self, exp_id, fields):
+                return not self.is_cancelled(exp_id) and self.update(exp_id, fields)
 
         self.generation_repo = Generations()
         self.individual_repo = Individuals()
@@ -241,6 +265,12 @@ class TestTheFirstWave:
         gen = store.generations[0]
         assert gen["benchmark"]["level"] == 3
         assert len(store.wave_simulations(gen["_id"])) == 3
+
+    def test_its_simulations_tell_the_scheduler_they_are_a_benchmark(self, store):
+        """A wave only measures N if the scheduler does not queue it."""
+        started(store, levels=(3,))
+
+        assert all(sim["benchmark"] is True for sim in store.simulations)
 
     def test_the_generation_is_written_before_its_simulations(self, store):
         """A fast worker can finish a simulation before the last one is
@@ -435,3 +465,58 @@ class TestTheRecordedWorkloadIsTheOneThatRuns:
             workload["genome_hash"]}
         assert {s["source_repository_id"] for s in store.simulations} == {TSCH}
         assert store.individuals[0]["individual_id"] == workload["genome_hash"]
+
+
+class TestAWaveCutWhileEnqueueing:
+    @pytest.mark.parametrize("wave", [0, 1])
+    @pytest.mark.parametrize("written", [0, 1, 3, 4])
+    def test_the_restart_finishes_writing_it(self, store, wave, written):
+        levels = (4, 5)
+        strategy = started(store, levels=levels, repetitions=1)
+        if wave:
+            strategy.event_generation_done(store.close(store.generations[0]["_id"]))
+        generation = store.generations[-1]
+        # As the engine left it: some copies written, and not marked as whole.
+        generation["enqueue_complete"] = False
+        keep = {s["_id"] for s in store.wave_simulations(generation["_id"])[:written]}
+        store.simulations = [
+            s for s in store.simulations
+            if s["generation_id"] != generation["_id"] or s["_id"] in keep]
+
+        started(store, levels=levels, repetitions=1)
+
+        assert len(store.generations) == wave + 1
+        assert len(store.wave_simulations(generation["_id"])) == levels[wave]
+        assert len(store.individuals) == wave + 1
+        assert generation["enqueue_complete"] is True
+
+
+class TestCancelling:
+    def cancel(self, store):
+        store.experiment_repo.update(EXP_ID, {"status": EnumStatus.CANCELLED})
+
+    def test_no_wave_follows_a_cancellation(self, store):
+        strategy = started(store, levels=(1, 2, 4), repetitions=1)
+        self.cancel(store)
+
+        strategy.event_generation_done(store.close(store.generations[0]["_id"]))
+
+        assert len(store.generations) == 1
+        assert strategy._stop_flag
+
+    def test_the_last_wave_does_not_turn_cancelled_into_done(self, store):
+        strategy = started(store, levels=(1,), repetitions=1)
+        self.cancel(store)
+
+        strategy.event_generation_done(store.close(store.generations[0]["_id"]))
+
+        assert store.experiments[str(EXP_ID)]["status"] == EnumStatus.CANCELLED
+
+    def test_a_wave_without_results_does_not_turn_it_into_error(self, store):
+        strategy = started(store, levels=(2,), repetitions=1)
+        self.cancel(store)
+
+        strategy.event_generation_done(
+            store.close(store.generations[0]["_id"], EnumStatus.ERROR))
+
+        assert store.experiments[str(EXP_ID)]["status"] == EnumStatus.CANCELLED

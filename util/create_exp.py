@@ -58,7 +58,7 @@ body = {
         },
         "objectives": [
             {"metric_name": "latency", "goal": "min"},
-            {"metric_name": "energy", "goal": "min"},
+            {"metric_name": "power_mw", "goal": "min"},
             {"metric_name": "throughput", "goal": "max"}
         ],
         "problem": {
@@ -151,23 +151,23 @@ body = {
         "node_col": "node",
         "time_col": "root_time_now",
         "metrics": [
-            {"name": "latency", "kind": "mean", "column": "rtt_latency"},
+            # Same list as gui/simlab/src/services/defaultDataConversion.ts (firmware v2 columns).
+            {"name": "latency", "kind": "median", "column": "latency"},
+            {"name": "latency_mean", "kind": "mean", "column": "latency"},
+            {"name": "latency_p95", "kind": "quantile", "column": "latency", "q": 0.95},
             {"name": "energy", "kind": "sum_all", "column": "total_energy_mj"},
-            {"name": "throughput", "kind": "sum_last_minus_first", "column": "server_received"},
+            {"name": "power_mw", "kind": "ratio_sum", "column": "total_energy_mj", "denominator": "energy_time_ms", "scale": 1000},
+            {"name": "throughput", "kind": "sum_max", "column": "server_received"},
+            {"name": "delivery_ratio", "kind": "ratio_sum_max", "column": "server_received", "denominator": "total_sent"},
+            {"name": "node_coverage", "kind": "node_coverage", "column": "node"},
             {"name": "cpu_energy_mj", "kind": "sum_all", "column": "cpu_energy_mj"},
             {"name": "lpm_energy_mj", "kind": "sum_all", "column": "lpm_energy_mj"},
             {"name": "radio_tx_energy_mj", "kind": "sum_all", "column": "radio_tx_energy_mj"},
             {"name": "radio_rx_energy_mj", "kind": "sum_all", "column": "radio_rx_energy_mj"},
-            {"name": "total_sent", "kind": "sum_last_minus_first", "column": "total_sent"},
-            {"name": "total_received", "kind": "sum_last_minus_first", "column": "total_received"},
-            {"name": "server_sent", "kind": "sum_last_minus_first", "column": "server_received"},
-            {"name": "bytes_tx", "kind": "sum_last_minus_first", "column": "bytes_tx"},
-            {"name": "bytes_rx", "kind": "sum_last_minus_first", "column": "bytes_rx"},
-            {"name": "server_bytes_rx", "kind": "sum_last_minus_first", "column": "server_bytes_rx"},
-            {"name": "r2n_latency", "kind": "mean", "column": "r2n_latency"},
-            {"name": "n2r_latency", "kind": "mean", "column": "n2r_latency"},
-            {"name": "hops", "kind": "mean", "column": "hops"},
-            {"name": "rtt_latency", "kind": "mean", "column": "rtt_latency"}
+            {"name": "total_sent", "kind": "sum_max", "column": "total_sent"},
+            {"name": "bytes_tx", "kind": "sum_max", "column": "bytes_tx"},
+            {"name": "server_bytes_rx", "kind": "sum_max", "column": "server_bytes_rx"},
+            {"name": "hops", "kind": "mean", "column": "hops"}
         ]
     },
     "pareto_front": None
