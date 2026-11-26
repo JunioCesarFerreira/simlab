@@ -5,6 +5,27 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — A wait on an unreachable host says so
+
+### Changed
+
+- **Runs waiting on a host that does not answer are reported as a wait.** The
+  master-node logged one `could not be reached` warning per container per
+  cycle, which read like a failure. It now logs one summary per pass — host,
+  number of runs, longest wait — saying nothing has failed and that these
+  simulations are not to be marked failed by hand. The per-container line is
+  `info` and carries the host and how long the run has been going.
+  `ReconcileReport` gains `waiting`.
+
+### Added
+
+- **Operational procedure for a power or connection loss**
+  (`master-node/README.md`): what happens to local and remote simulations,
+  what the engine does with the replicas that were lost, and what not to
+  touch.
+
+---
+
 ## [Unreleased] — The documentation says what the code does
 
 ### Fixed

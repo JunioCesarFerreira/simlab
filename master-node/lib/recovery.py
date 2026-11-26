@@ -80,6 +80,10 @@ class ReconcileReport:
     #: the container may let one of these go.
     held: list[str] = field(default_factory=list)
     failed_simulations: list[str] = field(default_factory=list)
+    #: The runs behind ``unreachable``, with what is needed to say how long
+    #: they have been waiting: ``container``, ``host``, ``simulation`` and
+    #: ``waited_sec`` (``None`` when the start was never recorded).
+    waiting: list[dict] = field(default_factory=list)
 
     @property
     def total(self) -> int:
@@ -169,7 +173,49 @@ def reconcile_occupied_resources(
             log.exception(
                 "Failed to reconcile container %s", resource.get("name", "?"))
     announce("Reconciliation done: %s", report.describe())
+    _announce_waiting(report)
     return report
+
+
+def format_wait(seconds: Optional[float]) -> str:
+    """``5h 12m``, ``12m`` or ``under 1m``; ``unknown time`` without a start."""
+    if seconds is None or seconds < 0:
+        return "unknown time"
+    minutes = int(seconds // 60)
+    if minutes < 1:
+        return "under 1m"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m" if hours else f"{minutes}m"
+
+
+def _announce_waiting(report: ReconcileReport) -> None:
+    """Say, once per pass, which runs are waiting on a host that does not answer.
+
+    The per-container line says only that a container "could not be reached",
+    four times over, and reads like a failure. It is not one: the run is
+    detached and keeps going on the worker, and its result is collected when
+    the host answers again — after a five-hour outage of the *master-node's*
+    connection, the four runs waiting on the remote hosts had finished on
+    their own and were collected within minutes of the connection returning.
+    So this names the hosts and the time, and says what to leave alone.
+    """
+    if not report.waiting:
+        return
+    by_host: dict[str, list[dict]] = {}
+    for entry in report.waiting:
+        by_host.setdefault(str(entry.get("host") or "?"), []).append(entry)
+    parts = []
+    for host_name, entries in sorted(by_host.items()):
+        known = [e["waited_sec"] for e in entries if e.get("waited_sec") is not None]
+        longest = format_wait(max(known) if known else None)
+        parts.append(f"{host_name}: {len(entries)} run(s), up to {longest}")
+    log.warning(
+        "%d simulation(s) waiting on host(s) that do not answer - %s. Nothing "
+        "has failed: the runs continue there and are collected when the host "
+        "answers. Check the connection to those hosts; do not mark these "
+        "simulations as failed by hand.",
+        len(report.waiting), "; ".join(parts),
+    )
 
 
 def _split_preparing(
@@ -304,11 +350,19 @@ def _reconcile_one(
         # Unreachable says nothing about the run. Touching either the
         # container or the simulation here is exactly what the specification
         # forbids.
-        log.warning(
-            "Container %s could not be reached; leaving simulation %s as it is",
-            name, sim_oid,
+        waited = elapsed_since(simulation.get("start_time"))
+        host_name = (host or {}).get("name")
+        log.info(
+            "Container %s%s could not be reached; leaving simulation %s as it "
+            "is (running for %s)",
+            name, f" on {host_name}" if host_name else "", sim_oid,
+            format_wait(waited),
         )
         report.unreachable.append(name)
+        report.waiting.append({
+            "container": name, "host": host_name,
+            "simulation": str(sim_oid), "waited_sec": waited,
+        })
         return
 
     # The container first, and only under the attempt that was read. Between

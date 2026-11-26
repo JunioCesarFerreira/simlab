@@ -24,7 +24,9 @@ from unittest.mock import MagicMock
 from bson import ObjectId
 
 from lib.detached import RunState
-from lib.recovery import RECOVERY_MESSAGE, reconcile_occupied_resources
+import logging
+
+from lib.recovery import RECOVERY_MESSAGE, format_wait, reconcile_occupied_resources
 from pylib.timeutil import utc_now
 
 #: The probe's answers, named.
@@ -668,3 +670,57 @@ class TestThePidIsFoundWhereverItWasRecorded:
 
         # The probe is never asked: there is nothing to ask about.
         mongo.resource_repo.force_release.assert_called_once()
+
+
+class TestWaitingOnUnreachableHosts:
+    """An unreachable host is a wait, not a failure, and the log should say so.
+
+    After a long outage of the master-node's own connection, runs on remote
+    hosts had finished by themselves and were collected once the connection
+    came back. The only thing the log said meanwhile was one "could not be
+    reached" line per container, every cycle.
+    """
+
+    def test_format_wait(self):
+        assert format_wait(None) == "unknown time"
+        assert format_wait(20) == "under 1m"
+        assert format_wait(12 * 60) == "12m"
+        assert format_wait(5 * 3600 + 12 * 60) == "5h 12m"
+
+    def test_the_report_says_which_host_and_for_how_long(self):
+        started = utc_now() - timedelta(hours=5, minutes=12)
+        sim = simulation("Running")
+        sim["start_time"] = started
+        mongo = FakeMongo(occupied=[resource()], simulation=sim)
+        mongo.host_repo.get.return_value = {"_id": "HOST", "name": "vm1"}
+
+        report = reconcile_occupied_resources(mongo, probe=lambda h, r, pid: None)
+
+        assert len(report.waiting) == 1
+        entry = report.waiting[0]
+        assert entry["host"] == "vm1" and entry["container"] == "cooja1"
+        assert 5 * 3600 + 11 * 60 < entry["waited_sec"] < 5 * 3600 + 14 * 60
+        mongo.simulation_repo.mark_error.assert_not_called()
+
+    def test_one_summary_warning_per_pass_not_one_per_container(self, caplog):
+        mongo = FakeMongo(
+            occupied=[resource(RES_1, "cooja1"), resource(RES_2, "cooja2")],
+            simulation=simulation("Running"))
+        mongo.host_repo.get.return_value = {"_id": "HOST", "name": "vm1"}
+
+        with caplog.at_level(logging.INFO, logger="lib.recovery"):
+            reconcile_occupied_resources(mongo, probe=lambda h, r, pid: None, quiet=True)
+
+        summaries = [r for r in caplog.records
+                     if "waiting on host(s) that do not answer" in r.getMessage()]
+        assert len(summaries) == 1
+        assert summaries[0].levelno == logging.WARNING
+        assert "vm1: 2 run(s)" in summaries[0].getMessage()
+        assert "do not mark" in summaries[0].getMessage()
+
+    def test_no_summary_when_every_host_answers(self, caplog):
+        mongo = FakeMongo(occupied=[resource()], simulation=simulation("Running"))
+        with caplog.at_level(logging.INFO, logger="lib.recovery"):
+            report = reconcile_occupied_resources(mongo, probe=lambda h, r, pid: ALIVE)
+        assert report.waiting == []
+        assert not any("do not answer" in r.getMessage() for r in caplog.records)

@@ -791,6 +791,44 @@ fingerprints in the message — the intended response to a key that changed.
 Clients that connect by hand (`ssh` from a terminal) will also report the
 change, and need their `known_hosts` entry removed (`ssh-keygen -R`).
 
+### The machine lost power, or lost its connection
+
+Symptom: after the machine comes back, an experiment sits at `Running` with its
+last generation short of its simulations, and the master-node log repeats
+`N simulation(s) waiting on host(s) that do not answer`.
+
+What the two kinds of simulation do:
+
+- **Local ones** died with the machine. They are marked `Error` with
+  `Unconfirmed result: the run process ended without recording an exit code`
+  as soon as the master-node starts. Their artifacts are kept, the result is
+  not published, and they count as missing replicas.
+- **Remote ones** are detached, so they keep running on the host when only the
+  machine is down, and finish by themselves. They stay `Running` until the
+  master-node can reach the host, then are adopted and collected. Nothing
+  marks them failed while the host is silent — `SIM_TIMEOUT_SEC` applies only
+  after the container has answered — and that is deliberate: the result is
+  there, and failing the run would throw it away.
+
+Once the generation closes, the engine repeats the missing replicas
+(`replica_policy: repeat`, once per generation by default) and only then
+gives an incomplete individual its worst objectives. An outage therefore
+costs time, not data.
+
+What to do:
+
+1. Check `docker ps` and that the machine can reach the remote hosts' SSH
+   ports (`bash -c 'echo > /dev/tcp/<host>/<port>'`). Wi-Fi coming up late, a
+   VPN, or DNS in the master-node are the usual causes; see the next
+   procedure for the last one.
+2. Wait. The summary line names each host, how many runs wait on it and for
+   how long. Collection happens within a health cycle of the host answering.
+3. **Do not mark those simulations as `Error` by hand.** That is the one
+   intervention that loses results that exist. Do it only if the host is gone
+   for good, and say so in the experiment's notes.
+4. Check `util/recover_result.py list` afterwards: a collection that failed
+   twice is preserved there rather than lost.
+
 ### The master-node cannot resolve host names
 
 Symptom: every host registered **by name** goes unmeasured at once, the
